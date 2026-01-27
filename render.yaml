@@ -13,7 +13,7 @@ services:
       - key: MONGO_URI
         sync: false
       - key: USE_IN_MEMORY_DB
-        value: true
+        value: false
       - key: KEEP_ALIVE
         value: true
       - key: KEEP_ALIVE_URL

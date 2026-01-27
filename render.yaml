@@ -3,7 +3,7 @@ services:
     name: whatsapp-news-bot
     runtime: node
     plan: free
-    buildCommand: npm install && npm run build:client && npm run build:server
+    buildCommand: npm install --include=dev && npm run build:client && npm run build:server
     startCommand: npm run start:server
     envVars:
       - key: NODE_ENV

@@ -11,14 +11,14 @@ services:
       - key: PORT
         value: 10000
       - key: MONGO_URI
-        sync: false
+        value: mongodb+srv://anashreporter_db_user:2RN6wvmQqd1m42z1@cluster0.72fu0sn.mongodb.net/wabot?retryWrites=true&w=majority
       - key: USE_IN_MEMORY_DB
         value: false
       - key: KEEP_ALIVE
         value: true
       - key: KEEP_ALIVE_URL
-        sync: false
+        value: https://whatsapp-news-bot-xx8j.onrender.com/ping
       - key: BASE_URL
-        sync: false
+        value: https://whatsapp-news-bot-xx8j.onrender.com
     healthCheckPath: /health
     autoDeploy: true

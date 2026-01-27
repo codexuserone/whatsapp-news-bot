@@ -6,11 +6,15 @@ if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 }
 
+const isProd = process.env.NODE_ENV === 'production';
+const baseUrl =
+  process.env.BASE_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:10000';
+
 const env = {
   PORT: process.env.PORT || 10000,
   MONGO_URI: process.env.MONGO_URI,
-  USE_IN_MEMORY_DB: process.env.USE_IN_MEMORY_DB === 'true',
-  BASE_URL: process.env.BASE_URL || 'http://localhost:10000',
+  USE_IN_MEMORY_DB: !isProd && process.env.USE_IN_MEMORY_DB === 'true',
+  BASE_URL: baseUrl,
   KEEP_ALIVE: process.env.KEEP_ALIVE === 'true',
   KEEP_ALIVE_URL: process.env.KEEP_ALIVE_URL,
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
@@ -20,7 +24,7 @@ const env = {
 };
 
 // In production, we require MONGO_URI unless explicitly using in-memory DB
-if (process.env.NODE_ENV === 'production' && !env.MONGO_URI && !env.USE_IN_MEMORY_DB) {
+if (isProd && !env.MONGO_URI) {
   throw new Error('MONGO_URI is required in production');
 }
 

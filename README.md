@@ -56,6 +56,9 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
    npm run dev:client
    ```
 
+   If your API is running on a different port/host, set `VITE_API_URL` for the client
+   (for example, `VITE_API_URL=http://localhost:5000`).
+
 4. **Open the app**: http://localhost:5173
 
 ## Render Deployment

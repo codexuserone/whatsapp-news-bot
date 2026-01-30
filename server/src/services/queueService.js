@@ -23,7 +23,7 @@ const formatTemplateValue = (value) => {
 };
 
 const applyTemplate = (templateBody, data) => {
-  return templateBody.replace(/{{\s*([\w.-]+)\s*}}/g, (_, key) => {
+  return templateBody.replace(/{{\s*([\w.\-\[\]]+)\s*}}/g, (_, key) => {
     const value = getPath(data, key);
     return formatTemplateValue(value);
   });

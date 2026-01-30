@@ -7,11 +7,12 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 const isProd = process.env.NODE_ENV === 'production';
+const port = Number(process.env.PORT || 5000);
 const baseUrl =
-  process.env.BASE_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:10000';
+  process.env.BASE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`;
 
 const env = {
-  PORT: process.env.PORT || 10000,
+  PORT: port,
   MONGO_URI: process.env.MONGO_URI,
   USE_IN_MEMORY_DB: !isProd && process.env.USE_IN_MEMORY_DB === 'true',
   BASE_URL: baseUrl,

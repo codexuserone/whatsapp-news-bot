@@ -17,8 +17,9 @@ const Breadcrumbs = () => {
   });
 
   if (location.hash) {
-    const hashLabel = navLookup[`/settings${location.hash}`] || titleCase(location.hash.slice(1));
-    crumbs.push({ label: hashLabel, to: `${location.pathname}${location.hash}` });
+    const hashKey = `${location.pathname}${location.hash}`;
+    const hashLabel = navLookup[hashKey] || titleCase(location.hash.slice(1));
+    crumbs.push({ label: hashLabel, to: hashKey });
   }
 
   return (

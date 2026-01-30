@@ -34,7 +34,11 @@ const fetchAndProcessFeed = async (feed) => {
       url: item.url,
       description: item.description,
       imageUrl: item.imageUrl,
+      videoUrl: item.videoUrl,
+      audioUrl: item.audioUrl,
+      mediaType: item.mediaType,
       publishedAt: item.publishedAt ? new Date(item.publishedAt) : undefined,
+      variables: item.variables || {},
       normalizedTitle: normalizeText(item.title),
       normalizedUrl: normalizeUrl(item.url),
       hash: `${normalizeText(item.title)}|${normalizeUrl(item.url)}`

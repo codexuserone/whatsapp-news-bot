@@ -8,15 +8,36 @@ const { isDuplicateInChat } = require('./dedupeService');
 const sleep = require('../utils/sleep');
 const logger = require('../utils/logger');
 
+const getPath = (obj, path) => {
+  if (!path) return undefined;
+  const parts = path.replace(/\[(\w+)\]/g, '.$1').split('.');
+  return parts.reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), obj);
+};
+
+const formatTemplateValue = (value) => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(formatTemplateValue).filter(Boolean).join(', ');
+  return JSON.stringify(value);
+};
+
 const applyTemplate = (templateBody, data) => {
-  return templateBody.replace(/{{\s*(\w+)\s*}}/g, (_, key) => (data[key] !== undefined ? data[key] : ''));
+  return templateBody.replace(/{{\s*([\w.-]+)\s*}}/g, (_, key) => {
+    const value = getPath(data, key);
+    return formatTemplateValue(value);
+  });
 };
 
 const buildMessageData = (feedItem) => ({
+  ...(feedItem.variables || {}),
   title: feedItem.title,
   url: feedItem.url,
   description: feedItem.description,
   imageUrl: feedItem.imageUrl,
+  videoUrl: feedItem.videoUrl,
+  audioUrl: feedItem.audioUrl,
+  mediaType: feedItem.mediaType,
   publishedAt: feedItem.publishedAt ? feedItem.publishedAt.toISOString() : ''
 });
 
@@ -32,11 +53,34 @@ const sendMessageWithTemplate = async (whatsappClient, target, template, feedIte
     throw new Error('WhatsApp socket not connected');
   }
 
+  if (feedItem.videoUrl) {
+    if (target.type === 'status') {
+      return socket.sendMessage(
+        'status@broadcast',
+        { video: { url: feedItem.videoUrl }, caption: text },
+        { statusJidList: [target.jid] }
+      );
+    }
+    return socket.sendMessage(target.jid, { video: { url: feedItem.videoUrl }, caption: text });
+  }
+
   if (feedItem.imageUrl) {
     if (target.type === 'status') {
-      return socket.sendMessage('status@broadcast', { image: { url: feedItem.imageUrl }, caption: text }, { statusJidList: [target.jid] });
+      return socket.sendMessage(
+        'status@broadcast',
+        { image: { url: feedItem.imageUrl }, caption: text },
+        { statusJidList: [target.jid] }
+      );
     }
     return socket.sendMessage(target.jid, { image: { url: feedItem.imageUrl }, caption: text });
+  }
+
+  if (feedItem.audioUrl) {
+    if (target.type === 'status') {
+      return socket.sendMessage('status@broadcast', { text }, { statusJidList: [target.jid] });
+    }
+    await socket.sendMessage(target.jid, { audio: { url: feedItem.audioUrl } });
+    return socket.sendMessage(target.jid, { text });
   }
 
   if (target.type === 'status') {

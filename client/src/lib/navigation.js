@@ -42,9 +42,27 @@ export const navSections = [
         to: '/settings',
         icon: Settings,
         children: [
-          { label: 'Retention', to: '/settings#retention' },
-          { label: 'Delays', to: '/settings#delays' },
-          { label: 'Dedupe', to: '/settings#dedupe' }
+          {
+            label: 'Retention',
+            to: '/settings#retention',
+            children: [
+              { label: 'Log retention', to: '/settings#retention-logs' },
+              { label: 'Auth retention', to: '/settings#retention-auth' }
+            ]
+          },
+          {
+            label: 'Delays',
+            to: '/settings#delays',
+            children: [
+              { label: 'Inter-target', to: '/settings#delays-inter' },
+              { label: 'Intra-target', to: '/settings#delays-intra' }
+            ]
+          },
+          {
+            label: 'Dedupe',
+            to: '/settings#dedupe',
+            children: [{ label: 'Threshold', to: '/settings#dedupe-threshold' }]
+          }
         ]
       }
     ]

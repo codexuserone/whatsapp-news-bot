@@ -10,13 +10,14 @@ import { Button } from '../components/ui/button';
 import { Checkbox } from '../components/ui/checkbox';
 import { Badge } from '../components/ui/badge';
 import { Label } from '../components/ui/label';
-import { Settings, Clock, MapPin, Loader2 } from 'lucide-react';
+import { Settings, Clock, MapPin, Loader2, Shield, Copy } from 'lucide-react';
 
 const schema = z.object({
   app_name: z.string().min(1),
   default_timezone: z.string().min(1),
   log_retention_days: z.coerce.number().min(1),
-  message_delay_ms: z.coerce.number().min(100)
+  message_delay_ms: z.coerce.number().min(100),
+  dedupeThreshold: z.coerce.number().min(0).max(1).optional()
 });
 
 const PRESET_LOCATIONS = [
@@ -51,7 +52,8 @@ const SettingsPage = () => {
       app_name: 'WhatsApp News Bot',
       default_timezone: 'UTC',
       log_retention_days: 30,
-      message_delay_ms: 2000
+      message_delay_ms: 2000,
+      dedupeThreshold: 0.88
     }
   });
 
@@ -144,6 +146,40 @@ const SettingsPage = () => {
               <Label htmlFor="log_retention_days">Log Retention (days)</Label>
               <Input id="log_retention_days" type="number" {...form.register('log_retention_days', { valueAsNumber: true })} />
               <p className="text-xs text-muted-foreground">How long to keep message logs</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card id="dedupe">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Copy className="h-5 w-5" />
+              Duplicate Detection
+            </CardTitle>
+            <CardDescription>Prevent sending duplicate articles</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="dedupeThreshold">Similarity Threshold</Label>
+              <Input 
+                id="dedupeThreshold" 
+                type="number" 
+                step="0.01"
+                min="0"
+                max="1"
+                {...form.register('dedupeThreshold', { valueAsNumber: true })} 
+              />
+              <p className="text-xs text-muted-foreground">
+                0.88 = strict (88% similar titles are duplicates). Lower = more aggressive deduplication.
+              </p>
+            </div>
+            <div className="rounded-lg border bg-muted/50 p-4 space-y-2 text-sm">
+              <p className="font-medium">How it works:</p>
+              <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+                <li>Exact URL matches are always detected</li>
+                <li>Similar titles are compared using fuzzy matching</li>
+                <li>Only items within the retention period are checked</li>
+              </ul>
             </div>
           </CardContent>
         </Card>

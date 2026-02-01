@@ -4,10 +4,16 @@ import { api } from '../lib/api';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
-import { RefreshCw, Power, CheckCircle, QrCode, Users, Radio, Loader2 } from 'lucide-react';
+import { RefreshCw, Power, CheckCircle, QrCode, Users, Radio, Loader2, Send, MessageSquare } from 'lucide-react';
+import { Input } from '../components/ui/input';
+import { Textarea } from '../components/ui/textarea';
+import { Label } from '../components/ui/label';
+import { Select } from '../components/ui/select';
 
 const WhatsAppPage = () => {
   const queryClient = useQueryClient();
+  const [testTarget, setTestTarget] = React.useState('');
+  const [testMessage, setTestMessage] = React.useState('Hello from WhatsApp News Bot!');
 
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['whatsapp-status'],
@@ -61,6 +67,13 @@ const WhatsAppPage = () => {
   const addTarget = useMutation({
     mutationFn: (payload) => api.post('/api/targets', payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] })
+  });
+
+  const sendTestMessage = useMutation({
+    mutationFn: (payload) => api.post('/api/whatsapp/send-test', payload),
+    onSuccess: () => {
+      setTestMessage('Hello from WhatsApp News Bot!');
+    }
   });
 
   const isConnected = status?.status === 'connected';
@@ -179,6 +192,69 @@ const WhatsAppPage = () => {
           </CardContent>
         </Card>
       </div>
+
+      {/* Test Message */}
+      {isConnected && existingTargets.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <MessageSquare className="h-5 w-5" />
+              Send Test Message
+            </CardTitle>
+            <CardDescription>Send a test message to verify your setup</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="testTarget">Target</Label>
+                <Select 
+                  id="testTarget" 
+                  value={testTarget} 
+                  onChange={(e) => setTestTarget(e.target.value)}
+                >
+                  <option value="">Select a target...</option>
+                  {existingTargets.filter(t => t.active).map((target) => (
+                    <option key={target.id} value={target.phone_number}>
+                      {target.name} ({target.type})
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="testMessage">Message</Label>
+                <Textarea
+                  id="testMessage"
+                  value={testMessage}
+                  onChange={(e) => setTestMessage(e.target.value)}
+                  rows={3}
+                  placeholder="Enter your test message..."
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <Button
+                onClick={() => sendTestMessage.mutate({ jid: testTarget, message: testMessage })}
+                disabled={sendTestMessage.isPending || !testTarget || !testMessage}
+              >
+                {sendTestMessage.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="mr-2 h-4 w-4" />
+                )}
+                Send Test
+              </Button>
+              {sendTestMessage.isSuccess && (
+                <span className="text-sm text-green-600">Message sent successfully!</span>
+              )}
+              {sendTestMessage.isError && (
+                <span className="text-sm text-destructive">
+                  Failed: {sendTestMessage.error?.message || 'Unknown error'}
+                </span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Status Broadcast */}
       <Card>

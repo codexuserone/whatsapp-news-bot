@@ -49,6 +49,80 @@ const sendMessageWithTemplate = async (whatsappClient, target, template, feedIte
   return socket.sendMessage(jid, { text });
 };
 
+const queueExistingItemsForSchedule = async (scheduleId, { limit = 50 } = {}) => {
+  const supabase = getSupabaseClient();
+  if (!supabase) return { queued: 0 };
+
+  try {
+    const { data: schedule, error: scheduleError } = await supabase
+      .from('schedules')
+      .select('*')
+      .eq('id', scheduleId)
+      .single();
+
+    if (scheduleError || !schedule || !schedule.active) {
+      return { queued: 0 };
+    }
+
+    if (!schedule.feed_id || !Array.isArray(schedule.target_ids) || schedule.target_ids.length === 0) {
+      return { queued: 0 };
+    }
+
+    const { data: feedItems, error: feedItemsError } = await supabase
+      .from('feed_items')
+      .select('id')
+      .eq('feed_id', schedule.feed_id)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (feedItemsError) throw feedItemsError;
+    if (!feedItems || feedItems.length === 0) {
+      return { queued: 0 };
+    }
+
+    const feedItemIds = feedItems.map((item) => item.id);
+    const { data: existingLogs, error: logsError } = await supabase
+      .from('message_logs')
+      .select('feed_item_id, target_id')
+      .eq('schedule_id', schedule.id)
+      .in('feed_item_id', feedItemIds)
+      .in('target_id', schedule.target_ids);
+
+    if (logsError) throw logsError;
+
+    const existingSet = new Set(
+      (existingLogs || []).map((log) => `${log.feed_item_id}:${log.target_id}`)
+    );
+
+    const pendingLogs = [];
+    for (const feedItemId of feedItemIds) {
+      for (const targetId of schedule.target_ids) {
+        const key = `${feedItemId}:${targetId}`;
+        if (existingSet.has(key)) continue;
+        pendingLogs.push({
+          feed_item_id: feedItemId,
+          target_id: targetId,
+          schedule_id: schedule.id,
+          template_id: schedule.template_id,
+          status: 'pending'
+        });
+      }
+    }
+
+    if (pendingLogs.length) {
+      const { error: insertError } = await supabase
+        .from('message_logs')
+        .insert(pendingLogs);
+      if (insertError) throw insertError;
+    }
+
+    return { queued: pendingLogs.length };
+  } catch (error) {
+    logger.error({ error, scheduleId }, 'Failed to queue existing feed items');
+    return { queued: 0, error: error.message };
+  }
+};
+
 const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
   const supabase = getSupabaseClient();
   if (!supabase) return { sent: 0 };
@@ -167,6 +241,14 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
               whatsapp_message_id: response?.key?.id
             })
             .eq('id', log.id);
+
+          await supabase
+            .from('feed_items')
+            .update({
+              sent: true,
+              sent_at: feedItem.sent_at || new Date().toISOString()
+            })
+            .eq('id', feedItem.id);
           
           sentCount += 1;
 
@@ -199,5 +281,6 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
 };
 
 module.exports = {
-  sendQueuedForSchedule
+  sendQueuedForSchedule,
+  queueExistingItemsForSchedule
 };

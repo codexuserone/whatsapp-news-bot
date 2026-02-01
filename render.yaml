@@ -3,17 +3,17 @@ services:
     name: whatsapp-news-bot
     runtime: node
     plan: free
-    buildCommand: npm install && npm run build:client && npm run build:server
+    buildCommand: ./scripts/npm-safe.sh install && ./scripts/npm-safe.sh run build:client && ./scripts/npm-safe.sh run build:server
     startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 10000
-      - key: MONGO_URI
-        sync: false
-      - key: USE_IN_MEMORY_DB
-        value: false
+      - key: SUPABASE_URL
+        value: https://uqtqezwhcgyuyxiucfpm.supabase.co
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        value: sb_secret_ih0nqDTdR4M4jmGSVHLvEA_3KpLvEsx
       - key: KEEP_ALIVE
         value: true
       - key: KEEP_ALIVE_URL

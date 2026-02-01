@@ -7,7 +7,10 @@ const logRoutes = () => {
   router.get('/', async (req, res) => {
     const { status } = req.query;
     const query = status ? { status } : {};
-    const logs = await MessageLog.find(query).sort({ createdAt: -1 }).limit(200);
+    const logs = await MessageLog.find(query, {
+      orderBy: { column: 'created_at', ascending: false },
+      limit: 200
+    });
     res.json(logs);
   });
 

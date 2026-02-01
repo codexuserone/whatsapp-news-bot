@@ -53,7 +53,8 @@ const scheduleSenders = async (whatsappClient) => {
     }
 
     if (schedule.mode === 'times') {
-      schedule.times.forEach((time) => {
+      const times = Array.isArray(schedule.times) ? schedule.times : [];
+      times.forEach((time) => {
         const [hour, minute] = time.split(':').map((value) => Number(value));
         if (Number.isNaN(hour) || Number.isNaN(minute)) return;
         const expression = `${minute} ${hour} * * *`;

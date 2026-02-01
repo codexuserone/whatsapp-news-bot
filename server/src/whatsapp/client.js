@@ -5,7 +5,7 @@ const {
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode');
 const logger = require('../utils/logger');
-const useMongoAuthState = require('./authStore');
+const useSupabaseAuthState = require('./authStore');
 const { saveIncomingMessages } = require('../services/messageService');
 
 class WhatsAppClient {
@@ -19,7 +19,7 @@ class WhatsAppClient {
   }
 
   async init() {
-    this.authStore = await useMongoAuthState('primary');
+    this.authStore = await useSupabaseAuthState('primary');
     await this.connect();
   }
 

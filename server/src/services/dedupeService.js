@@ -14,7 +14,10 @@ const isDuplicateFeedItem = async ({ title, url, threshold, since }) => {
 
   if (exact) return true;
 
-  const recent = await FeedItem.find({ createdAt: { $gte: since } }).select('normalizedTitle');
+  const recent = await FeedItem.find(
+    { createdAt: { $gte: since } },
+    { select: ['normalizedTitle'] }
+  );
   return recent.some((item) => fuzzy(normalizedTitle, item.normalizedTitle) >= threshold);
 };
 
@@ -27,7 +30,10 @@ const isDuplicateInChat = async ({ jid, title, url, threshold, since }) => {
     if (match) return true;
   }
 
-  const recent = await ChatMessage.find({ jid, createdAt: { $gte: since } }).select('normalizedText');
+  const recent = await ChatMessage.find(
+    { jid, createdAt: { $gte: since } },
+    { select: ['normalizedText'] }
+  );
   return recent.some((entry) => fuzzy(normalizedTitle, entry.normalizedText || '') >= threshold);
 };
 

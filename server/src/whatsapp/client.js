@@ -19,6 +19,8 @@ class WhatsAppClient {
     this.authStore = null;
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 5;
+    this.isConnecting = false;
+    this.reconnectTimer = null;
   }
 
   async init() {
@@ -32,8 +34,72 @@ class WhatsAppClient {
     }
   }
 
+  // Handle uncaught errors from the socket to prevent crashes
+  setupErrorHandlers() {
+    if (!this.socket) return;
+    
+    // Catch all unhandled errors on the socket
+    this.socket.ev.on('error', (err) => {
+      logger.error({ err }, 'WhatsApp socket error');
+      this.lastError = err?.message || 'Socket error';
+    });
+
+    // Handle process-level uncaught exceptions from crypto errors
+    process.removeAllListeners('uncaughtException');
+    process.on('uncaughtException', async (err) => {
+      // Check if it's a crypto/auth error
+      if (err.message?.includes('authenticate data') || 
+          err.message?.includes('Unsupported state') ||
+          err.message?.includes('crypto')) {
+        logger.error({ err }, 'Crypto error detected - clearing auth state');
+        this.status = 'error';
+        this.lastError = 'Session corrupted. Please scan QR code again.';
+        
+        // Clear the corrupted auth state
+        if (this.authStore?.clearState) {
+          await this.authStore.clearState();
+        }
+        
+        // Don't crash - schedule a reconnect to get new QR
+        this.scheduleReconnect(5000);
+      } else {
+        // For other errors, log and exit
+        logger.error({ err }, 'Uncaught exception');
+        process.exit(1);
+      }
+    });
+  }
+
+  scheduleReconnect(delay) {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
+  }
+
   async connect() {
+    // Prevent concurrent connection attempts
+    if (this.isConnecting) {
+      logger.warn('Connection already in progress, skipping');
+      return;
+    }
+    this.isConnecting = true;
+
     try {
+      // Clean up existing socket
+      if (this.socket) {
+        try {
+          this.socket.ev.removeAllListeners();
+          this.socket.end();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+        this.socket = null;
+      }
+
       const { state, saveCreds } = this.authStore;
       
       let version;
@@ -53,8 +119,11 @@ class WhatsAppClient {
         browser: ['WhatsApp News Bot', 'Chrome', '120.0.0'],
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: undefined,
-        keepAliveIntervalMs: 30000
+        keepAliveIntervalMs: 30000,
+        retryRequestDelayMs: 500
       });
+      
+      this.setupErrorHandlers();
 
       this.socket.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
@@ -83,6 +152,7 @@ class WhatsAppClient {
         }
 
         if (connection === 'open') {
+          this.isConnecting = false;
           this.status = 'connected';
           this.qrCode = null;
           this.lastError = null;
@@ -95,6 +165,7 @@ class WhatsAppClient {
         }
 
         if (connection === 'close') {
+          this.isConnecting = false;
           const statusCode = lastDisconnect?.error?.output?.statusCode;
           const reason = lastDisconnect?.error?.output?.payload?.message || lastDisconnect?.error?.message;
           this.status = 'disconnected';
@@ -102,22 +173,37 @@ class WhatsAppClient {
           
           logger.warn({ statusCode, reason }, 'WhatsApp connection closed');
 
+          // Handle specific disconnect reasons
           if (statusCode === DisconnectReason.loggedOut) {
             logger.info('Logged out, clearing credentials');
             await this.authStore.clearState();
             this.reconnectAttempts = 0;
+            // Schedule reconnect to get new QR
+            this.scheduleReconnect(2000);
+            return;
+          }
+
+          // Connection conflict - another device logged in
+          if (statusCode === 440 || reason?.includes('conflict')) {
+            logger.warn('Connection conflict detected - another session is active');
+            this.lastError = 'Another session is active. Please close other WhatsApp Web sessions or click Hard Refresh.';
+            // Don't auto-reconnect on conflict - let user decide
+            if (this.authStore.updateStatus) {
+              await this.authStore.updateStatus('conflict');
+            }
+            return;
           }
 
           if (this.authStore.updateStatus) {
             await this.authStore.updateStatus('disconnected');
           }
 
-          // Auto-reconnect with exponential backoff
+          // Auto-reconnect with exponential backoff for other errors
           if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
-            const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 60000);
+            const delay = Math.min(2000 * Math.pow(2, this.reconnectAttempts), 60000);
             logger.info({ attempt: this.reconnectAttempts, delay }, 'Reconnecting...');
-            setTimeout(() => this.connect(), delay);
+            this.scheduleReconnect(delay);
           } else {
             logger.error('Max reconnect attempts reached');
             this.lastError = 'Max reconnect attempts reached. Click Hard Refresh to retry.';
@@ -136,9 +222,20 @@ class WhatsAppClient {
         }
       });
     } catch (error) {
+      this.isConnecting = false;
       logger.error({ error }, 'Error connecting to WhatsApp');
       this.lastError = error.message;
       this.status = 'error';
+      
+      // If it's a crypto/auth error, clear state and retry
+      if (error.message?.includes('authenticate data') || 
+          error.message?.includes('Unsupported state')) {
+        logger.warn('Auth state corrupted, clearing and retrying');
+        if (this.authStore?.clearState) {
+          await this.authStore.clearState();
+        }
+        this.scheduleReconnect(3000);
+      }
     }
   }
 
@@ -240,13 +337,34 @@ class WhatsAppClient {
   }
 
   async hardRefresh() {
+    // Clear any pending reconnect
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    
+    // Cleanup existing socket
     if (this.socket) {
-      this.socket.end();
+      try {
+        this.socket.ev.removeAllListeners();
+        this.socket.end();
+      } catch (e) {
+        // Ignore cleanup errors
+      }
       this.socket = null;
     }
-    await this.authStore.clearState();
+    
+    // Reset state
+    this.isConnecting = false;
+    this.reconnectAttempts = 0;
     this.status = 'disconnected';
     this.qrCode = null;
+    this.lastError = null;
+    
+    // Clear auth state to force new QR
+    await this.authStore.clearState();
+    
+    // Reconnect
     await this.connect();
   }
 }

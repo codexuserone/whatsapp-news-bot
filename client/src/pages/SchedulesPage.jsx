@@ -94,20 +94,25 @@ const SchedulesPage = () => {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Schedules</h1>
-        <p className="text-muted-foreground">Control delivery timing, intervals, and batch dispatch rules.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Automations</h1>
+          <p className="text-muted-foreground">Create automated schedules to send feed content to your WhatsApp targets.</p>
+        </div>
+        <Badge variant="outline" className="text-sm">
+          {schedules.length} Automation{schedules.length !== 1 ? 's' : ''}
+        </Badge>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_400px]">
-        <Card>
-          <CardHeader>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card className="border-2 border-dashed border-primary/20">
+          <CardHeader className="bg-primary/5">
             <CardTitle className="flex items-center gap-2">
-              <CalendarClock className="h-5 w-5" />
-              {active ? 'Edit Schedule' : 'Create Schedule'}
+              <CalendarClock className="h-5 w-5 text-primary" />
+              {active ? 'Edit Automation' : 'Create New Automation'}
             </CardTitle>
             <CardDescription>
-              Configure when and where to send messages
+              Set up an automation to send messages on a schedule or immediately
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -205,9 +210,9 @@ const SchedulesPage = () => {
               />
 
               <div className="flex gap-2">
-                <Button type="submit" disabled={saveSchedule.isPending}>
+                <Button type="submit" disabled={saveSchedule.isPending} size="lg">
                   {saveSchedule.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  {active ? 'Update Schedule' : 'Save Schedule'}
+                  {active ? 'Update Automation' : 'Create Automation'}
                 </Button>
                 {active && (
                   <Button type="button" variant="outline" onClick={() => { setActive(null); form.reset(); }}>
@@ -219,11 +224,11 @@ const SchedulesPage = () => {
           </CardContent>
         </Card>
 
-        {/* Saved Schedules */}
+        {/* Saved Automations */}
         <Card>
           <CardHeader>
-            <CardTitle>Saved Schedules</CardTitle>
-            <CardDescription>{schedules.length} schedule{schedules.length !== 1 ? 's' : ''}</CardDescription>
+            <CardTitle>Your Automations</CardTitle>
+            <CardDescription>Click "Dispatch" to run immediately, or let scheduled automations run automatically.</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
@@ -264,9 +269,13 @@ const SchedulesPage = () => {
                 </div>
               ))}
               {schedules.length === 0 && (
-                <p className="text-center text-muted-foreground py-8">
-                  No schedules yet. Create one above.
-                </p>
+                <div className="text-center py-12 px-4">
+                  <CalendarClock className="h-12 w-12 text-muted-foreground/50 mx-auto mb-4" />
+                  <h3 className="font-medium text-lg mb-1">No automations yet</h3>
+                  <p className="text-muted-foreground text-sm">
+                    Create your first automation using the form on the left to start sending messages automatically.
+                  </p>
+                </div>
               )}
             </div>
           </CardContent>

@@ -25,17 +25,6 @@ const QueuePage = () => {
     refetchInterval: 60000
   });
 
-  // Fetch schedules for display names
-  const { data: schedules = [] } = useQuery({
-    queryKey: ['schedules'],
-    queryFn: () => api.get('/api/schedules')
-  });
-
-  const getScheduleName = (id) => {
-    const schedule = schedules.find(s => s.id === id);
-    return schedule?.name || 'Unknown Schedule';
-  };
-
   // Delete queue item
   const deleteItem = useMutation({
     mutationFn: (id) => api.delete(`/api/queue/${id}`),
@@ -160,7 +149,7 @@ const QueuePage = () => {
                       <div className="flex items-center gap-2 mb-1">
                         {getStatusBadge(item.status)}
                         <span className="text-xs text-muted-foreground">
-                          {getScheduleName(item.schedule_id)}
+                          {item.schedule_name || 'Unknown Schedule'}
                         </span>
                       </div>
                       <p className="font-medium truncate">{item.title || 'No title'}</p>
@@ -198,6 +187,9 @@ const QueuePage = () => {
                   {/* Metadata */}
                   <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
                     <span>Created: {formatDate(item.created_at)}</span>
+                    {item.target_name && (
+                      <span>Target: {item.target_name}</span>
+                    )}
                     {item.scheduled_for && (
                       <span>Scheduled: {formatDate(item.scheduled_for)}</span>
                     )}

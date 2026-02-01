@@ -2,6 +2,7 @@ const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
 const { sendQueuedForSchedule } = require('../services/queueService');
 const { initSchedulers } = require('../services/schedulerService');
+const { validate, schemas } = require('../middleware/validation');
 
 const scheduleRoutes = () => {
   const router = express.Router();
@@ -47,7 +48,7 @@ const scheduleRoutes = () => {
     }
   });
 
-  router.post('/', async (req, res) => {
+  router.post('/', validate(schemas.schedule), async (req, res) => {
     try {
       const { data: schedule, error } = await getDb()
         .from('schedules')
@@ -64,7 +65,7 @@ const scheduleRoutes = () => {
     }
   });
 
-  router.put('/:id', async (req, res) => {
+  router.put('/:id', validate(schemas.schedule), async (req, res) => {
     try {
       const { data: schedule, error } = await getDb()
         .from('schedules')

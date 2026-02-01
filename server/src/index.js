@@ -5,10 +5,10 @@ const env = require('./config/env');
 const logger = require('./utils/logger');
 const { testConnection } = require('./db/supabase');
 const createWhatsAppClient = require('./whatsapp/client');
-const keepAlive = require('./services/keepAlive');
+const { keepAlive, stopKeepAlive } = require('./services/keepAlive');
 const registerRoutes = require('./routes');
 const settingsService = require('./services/settingsService');
-const { initSchedulers } = require('./services/schedulerService');
+const { initSchedulers, clearAll } = require('./services/schedulerService');
 const { scheduleRetentionCleanup } = require('./services/retentionService');
 
 // Global error handlers to prevent crashes
@@ -16,6 +16,31 @@ process.on('unhandledRejection', (reason, promise) => {
   logger.error({ reason }, 'Unhandled Promise Rejection');
   // Don't exit - let the app continue
 });
+
+// Graceful shutdown handlers
+const gracefulShutdown = async (signal, whatsappClient) => {
+  logger.info({ signal }, 'Starting graceful shutdown...');
+  
+  try {
+    // Clear all intervals and timeouts
+    clearAll();
+    stopKeepAlive();
+    
+    // Disconnect WhatsApp
+    if (whatsappClient) {
+      await whatsappClient.disconnect();
+    }
+    
+    logger.info('Graceful shutdown completed');
+    process.exit(0);
+  } catch (error) {
+    logger.error({ error }, 'Error during graceful shutdown');
+    process.exit(1);
+  }
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 const start = async () => {
   const app = express();
@@ -47,6 +72,10 @@ const start = async () => {
   app.locals.whatsapp = whatsappClient;
 
   registerRoutes(app);
+
+  // Set up signal handlers after whatsappClient is initialized
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM', whatsappClient));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT', whatsappClient));
 
   // SPA fallback - serve index.html for non-API routes
   app.get('*', (req, res) => {

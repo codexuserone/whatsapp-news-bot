@@ -1,12 +1,18 @@
 const express = require('express');
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
 
 const targetRoutes = () => {
   const router = express.Router();
+  
+  const getDb = () => {
+    const supabase = getSupabaseClient();
+    if (!supabase) throw new Error('Database not available');
+    return supabase;
+  };
 
   router.get('/', async (_req, res) => {
     try {
-      const { data: targets, error } = await supabase
+      const { data: targets, error } = await getDb()
         .from('targets')
         .select('*')
         .order('created_at', { ascending: false });
@@ -21,7 +27,7 @@ const targetRoutes = () => {
 
   router.post('/', async (req, res) => {
     try {
-      const { data: target, error } = await supabase
+      const { data: target, error } = await getDb()
         .from('targets')
         .insert(req.body)
         .select()
@@ -37,7 +43,7 @@ const targetRoutes = () => {
 
   router.put('/:id', async (req, res) => {
     try {
-      const { data: target, error } = await supabase
+      const { data: target, error } = await getDb()
         .from('targets')
         .update(req.body)
         .eq('id', req.params.id)
@@ -54,7 +60,7 @@ const targetRoutes = () => {
 
   router.delete('/:id', async (req, res) => {
     try {
-      const { error } = await supabase
+      const { error } = await getDb()
         .from('targets')
         .delete()
         .eq('id', req.params.id);

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -8,6 +8,8 @@ import PageHeader from '../components/layout/PageHeader';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
+import { Checkbox } from '../components/ui/checkbox';
+import { Badge } from '../components/ui/badge';
 
 const schema = z.object({
   app_name: z.string().min(1),
@@ -15,6 +17,18 @@ const schema = z.object({
   log_retention_days: z.coerce.number().min(1),
   message_delay_ms: z.coerce.number().min(100)
 });
+
+// Common locations for Shabbos times
+const PRESET_LOCATIONS = [
+  { name: 'New York', latitude: 40.7128, longitude: -74.006, tzid: 'America/New_York' },
+  { name: 'Los Angeles', latitude: 34.0522, longitude: -118.2437, tzid: 'America/Los_Angeles' },
+  { name: 'Chicago', latitude: 41.8781, longitude: -87.6298, tzid: 'America/Chicago' },
+  { name: 'Miami', latitude: 25.7617, longitude: -80.1918, tzid: 'America/New_York' },
+  { name: 'Jerusalem', latitude: 31.7683, longitude: 35.2137, tzid: 'Asia/Jerusalem' },
+  { name: 'London', latitude: 51.5074, longitude: -0.1278, tzid: 'Europe/London' },
+  { name: 'Montreal', latitude: 45.5017, longitude: -73.5673, tzid: 'America/Montreal' },
+  { name: 'Toronto', latitude: 43.6532, longitude: -79.3832, tzid: 'America/Toronto' },
+];
 
 const SettingsPage = () => {
   const queryClient = useQueryClient();

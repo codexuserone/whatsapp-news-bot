@@ -7,6 +7,7 @@ const schedulesRoutes = require('./schedules');
 const settingsRoutes = require('./settings');
 const logsRoutes = require('./logs');
 const feedItemsRoutes = require('./feedItems');
+const shabbosRoutes = require('./shabbos');
 
 const registerRoutes = (app) => {
   const router = express.Router();
@@ -22,6 +23,7 @@ const registerRoutes = (app) => {
   router.use('/api/settings', settingsRoutes());
   router.use('/api/logs', logsRoutes());
   router.use('/api/feed-items', feedItemsRoutes());
+  router.use('/api/shabbos', shabbosRoutes());
 
   app.use(router);
 };

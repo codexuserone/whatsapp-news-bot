@@ -1,11 +1,18 @@
 const express = require('express');
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
 const { fetchAndProcessFeed, queueFeedItemsForSchedules } = require('../services/feedProcessor');
 const { initSchedulers, triggerImmediateSchedules } = require('../services/schedulerService');
 const { fetchFeedItems } = require('../services/feedFetcher');
 
 const feedsRoutes = () => {
   const router = express.Router();
+
+  // Helper to get supabase client
+  const getDb = () => {
+    const supabase = getSupabaseClient();
+    if (!supabase) throw new Error('Database not available');
+    return supabase;
+  };
 
   // Test a feed URL without saving - returns detected fields and sample item
   router.post('/test', async (req, res) => {
@@ -51,7 +58,7 @@ const feedsRoutes = () => {
 
   router.get('/', async (_req, res) => {
     try {
-      const { data: feeds, error } = await supabase
+      const { data: feeds, error } = await getDb()
         .from('feeds')
         .select('*')
         .order('created_at', { ascending: false });
@@ -66,7 +73,7 @@ const feedsRoutes = () => {
 
   router.post('/', async (req, res) => {
     try {
-      const { data: feed, error } = await supabase
+      const { data: feed, error } = await getDb()
         .from('feeds')
         .insert(req.body)
         .select()
@@ -83,7 +90,7 @@ const feedsRoutes = () => {
 
   router.put('/:id', async (req, res) => {
     try {
-      const { data: feed, error } = await supabase
+      const { data: feed, error } = await getDb()
         .from('feeds')
         .update(req.body)
         .eq('id', req.params.id)
@@ -101,7 +108,7 @@ const feedsRoutes = () => {
 
   router.delete('/:id', async (req, res) => {
     try {
-      const { error } = await supabase
+      const { error } = await getDb()
         .from('feeds')
         .delete()
         .eq('id', req.params.id);
@@ -117,7 +124,7 @@ const feedsRoutes = () => {
 
   router.post('/:id/refresh', async (req, res) => {
     try {
-      const { data: feed, error } = await supabase
+      const { data: feed, error } = await getDb()
         .from('feeds')
         .select('*')
         .eq('id', req.params.id)

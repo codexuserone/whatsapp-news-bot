@@ -1,5 +1,6 @@
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
 const settingsService = require('./settingsService');
+const { isCurrentlyShabbos } = require('./shabbosService');
 const sleep = require('../utils/sleep');
 const logger = require('../utils/logger');
 
@@ -49,7 +50,23 @@ const sendMessageWithTemplate = async (whatsappClient, target, template, feedIte
 };
 
 const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
+  const supabase = getSupabaseClient();
+  if (!supabase) return { sent: 0 };
+  
   try {
+    // Check if currently Shabbos/Yom Tov - if so, skip sending but keep messages queued
+    const shabbosStatus = await isCurrentlyShabbos();
+    if (shabbosStatus.isShabbos) {
+      logger.info({ scheduleId, reason: shabbosStatus.reason, endsAt: shabbosStatus.endsAt }, 
+        'Skipping message send - Shabbos/Yom Tov active');
+      return { 
+        sent: 0, 
+        skipped: true, 
+        reason: shabbosStatus.reason,
+        resumeAt: shabbosStatus.endsAt 
+      };
+    }
+    
     // Get schedule
     const { data: schedule, error: scheduleError } = await supabase
       .from('schedules')

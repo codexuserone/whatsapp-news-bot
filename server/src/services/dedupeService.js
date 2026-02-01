@@ -1,8 +1,11 @@
 const { fuzzy } = require('fast-fuzzy');
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
 const { normalizeText, normalizeUrl } = require('../utils/normalize');
 
 const isDuplicateFeedItem = async ({ title, url, threshold, since }) => {
+  const supabase = getSupabaseClient();
+  if (!supabase) return false;
+  
   try {
     const normalizedTitle = normalizeText(title);
     const normalizedUrlValue = normalizeUrl(url);
@@ -40,6 +43,9 @@ const isDuplicateFeedItem = async ({ title, url, threshold, since }) => {
 };
 
 const isDuplicateInChat = async ({ jid, title, url, threshold, since }) => {
+  const supabase = getSupabaseClient();
+  if (!supabase) return false;
+  
   try {
     const normalizedUrlValue = normalizeUrl(url);
     const normalizedTitle = normalizeText(title);

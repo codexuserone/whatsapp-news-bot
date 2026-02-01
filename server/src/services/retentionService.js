@@ -1,14 +1,18 @@
 const cron = require('node-cron');
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
 const settingsService = require('./settingsService');
 const logger = require('../utils/logger');
 
 const cleanup = async () => {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    logger.warn('Supabase not available, skipping retention cleanup');
+    return;
+  }
+  
   try {
     const settings = await settingsService.getSettings();
     const retentionDate = new Date(Date.now() - settings.retentionDays * 24 * 60 * 60 * 1000);
-    const authRetentionDays = settings.authRetentionDays || 60;
-    const authRetentionDate = new Date(Date.now() - authRetentionDays * 24 * 60 * 60 * 1000);
 
     await Promise.all([
       supabase.from('message_logs').delete().lt('created_at', retentionDate.toISOString()),

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -10,8 +10,7 @@ import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
 import { Checkbox } from '../components/ui/checkbox';
 import { Button } from '../components/ui/button';
-import ReactMarkdown from 'react-markdown';
-import { Table, TableHead, TableBody, TableRow, TableCell, TableHeaderCell } from '../components/ui/table';
+import { Badge } from '../components/ui/badge';
 
 const schema = z.object({
   name: z.string().min(1),
@@ -20,14 +19,66 @@ const schema = z.object({
   active: z.boolean().default(true)
 });
 
+// Apply template variables to content
+const applyTemplate = (content, data) => {
+  if (!content || !data) return content;
+  return content.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key) => {
+    const value = data[key];
+    if (value === undefined || value === null) return `{{${key}}}`;
+    return String(value);
+  });
+};
+
+// Convert WhatsApp markdown to HTML-safe preview
+const formatWhatsAppMarkdown = (text) => {
+  if (!text) return '';
+  return text
+    .replace(/\*(.*?)\*/g, '<strong>$1</strong>')
+    .replace(/_(.*?)_/g, '<em>$1</em>')
+    .replace(/~(.*?)~/g, '<del>$1</del>')
+    .replace(/```(.*?)```/gs, '<code>$1</code>')
+    .replace(/\n/g, '<br/>');
+};
+
 const TemplatesPage = () => {
   const queryClient = useQueryClient();
+  const textareaRef = useRef(null);
   const { data: templates = [] } = useQuery({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
   const { data: availableVariables = [] } = useQuery({ 
     queryKey: ['available-variables'], 
     queryFn: () => api.get('/api/templates/available-variables') 
   });
+  const { data: feedItems = [] } = useQuery({ 
+    queryKey: ['feed-items'], 
+    queryFn: () => api.get('/api/feed-items') 
+  });
   const [active, setActive] = useState(null);
+  const [previewWithData, setPreviewWithData] = useState(true);
+  
+  // Get sample data from first feed item for preview
+  const sampleData = feedItems[0] ? {
+    title: feedItems[0].title || 'Sample Title',
+    description: feedItems[0].description || 'Sample description text',
+    content: feedItems[0].content || feedItems[0].description || 'Full content here',
+    link: feedItems[0].link || 'https://example.com/article',
+    url: feedItems[0].link || 'https://example.com/article',
+    author: feedItems[0].author || 'Author Name',
+    pub_date: feedItems[0].pub_date || new Date().toISOString(),
+    image_url: feedItems[0].image_url || '',
+    imageUrl: feedItems[0].image_url || '',
+    categories: feedItems[0].categories || 'News'
+  } : {
+    title: 'Sample Article Title',
+    description: 'This is a sample description for preview purposes.',
+    content: 'Full article content would appear here.',
+    link: 'https://example.com/article',
+    url: 'https://example.com/article',
+    author: 'John Doe',
+    pub_date: new Date().toISOString(),
+    image_url: '',
+    imageUrl: '',
+    categories: 'News, Technology'
+  };
 
   const form = useForm({
     resolver: zodResolver(schema),
@@ -71,8 +122,23 @@ const TemplatesPage = () => {
   };
 
   const insertVariable = (varName) => {
-    const currentContent = form.getValues('content');
-    form.setValue('content', `${currentContent}{{${varName}}}`);
+    const textarea = textareaRef.current;
+    const currentContent = form.getValues('content') || '';
+    
+    if (textarea) {
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const newContent = currentContent.slice(0, start) + `{{${varName}}}` + currentContent.slice(end);
+      form.setValue('content', newContent);
+      // Reset cursor position after insertion
+      setTimeout(() => {
+        textarea.focus();
+        const newPos = start + varName.length + 4;
+        textarea.setSelectionRange(newPos, newPos);
+      }, 0);
+    } else {
+      form.setValue('content', `${currentContent}{{${varName}}}`);
+    }
   };
 
   return (
@@ -92,7 +158,18 @@ const TemplatesPage = () => {
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Content (WhatsApp markdown supported)</label>
-                <Textarea {...form.register('content')} placeholder="*{{title}}*&#10;{{link}}" rows={6} />
+                <Textarea 
+                  {...form.register('content')} 
+                  ref={(e) => {
+                    form.register('content').ref(e);
+                    textareaRef.current = e;
+                  }}
+                  placeholder="*{{title}}*&#10;{{link}}" 
+                  rows={6} 
+                />
+                <p className="text-xs text-muted-foreground">
+                  Use *bold*, _italic_, ~strikethrough~. Variables: {'{{variable}}'}
+                </p>
               </div>
               
               {/* Available Variables Section */}
@@ -144,11 +221,47 @@ const TemplatesPage = () => {
                 )}
               </div>
             </form>
-            <div className="rounded-2xl border border-ink/10 bg-white/80 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-ink/50">Preview</p>
-              <div className="prose prose-sm mt-3 max-w-none text-ink">
-                <ReactMarkdown>{form.watch('content') || 'Start typing to preview.'}</ReactMarkdown>
+            {/* Live Preview Section */}
+            <div className="rounded-2xl border border-border bg-muted/30 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Live Preview
+                </p>
+                <label className="flex items-center gap-2 text-xs">
+                  <input 
+                    type="checkbox" 
+                    checked={previewWithData} 
+                    onChange={(e) => setPreviewWithData(e.target.checked)}
+                    className="rounded border-border"
+                  />
+                  <span className="text-muted-foreground">Show with sample data</span>
+                </label>
               </div>
+              
+              {/* WhatsApp-style preview */}
+              <div className="rounded-lg bg-[#e5ddd5] p-3">
+                <div className="max-w-[85%] rounded-lg bg-[#dcf8c6] px-3 py-2 shadow-sm">
+                  <div 
+                    className="text-sm text-gray-800 whitespace-pre-wrap"
+                    dangerouslySetInnerHTML={{
+                      __html: formatWhatsAppMarkdown(
+                        previewWithData 
+                          ? applyTemplate(form.watch('content') || '', sampleData)
+                          : (form.watch('content') || 'Start typing to preview...')
+                      )
+                    }}
+                  />
+                  <div className="text-right mt-1">
+                    <span className="text-[10px] text-gray-500">12:00 PM</span>
+                  </div>
+                </div>
+              </div>
+              
+              {previewWithData && feedItems[0] && (
+                <p className="text-xs text-muted-foreground">
+                  Using data from: "{feedItems[0].title?.slice(0, 40)}..."
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>

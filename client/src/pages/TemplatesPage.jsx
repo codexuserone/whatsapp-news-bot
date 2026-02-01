@@ -102,12 +102,21 @@ const TemplatesPage = () => {
       queryClient.invalidateQueries({ queryKey: ['templates'] });
       setActive(null);
       form.reset();
-    }
+    },
+    onError: (error) => alert(`Failed to save template: ${error?.message || 'Unknown error'}`)
   });
 
   const deleteTemplate = useMutation({
     mutationFn: (id) => api.delete(`/api/templates/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['templates'] })
+    onSuccess: (_, id) => {
+      queryClient.invalidateQueries({ queryKey: ['templates'] });
+      queryClient.invalidateQueries({ queryKey: ['available-variables'] });
+      if (active?.id === id) {
+        setActive(null);
+        form.reset({ name: '', content: '', description: '', active: true });
+      }
+    },
+    onError: (error) => alert(`Failed to delete template: ${error?.message || 'Unknown error'}`)
   });
 
   const onSubmit = (values) => {

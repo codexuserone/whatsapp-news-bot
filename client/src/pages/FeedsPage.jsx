@@ -61,7 +61,8 @@ const FeedsPage = () => {
       setActive(null);
       setTestResult(null);
       form.reset();
-    }
+    },
+    onError: (error) => alert(`Failed to save feed: ${error?.message || 'Unknown error'}`)
   });
 
   const deleteFeed = useMutation({
@@ -69,7 +70,8 @@ const FeedsPage = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['feeds'] });
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
-    }
+    },
+    onError: (error) => alert(`Failed to delete feed: ${error?.message || 'Unknown error'}`)
   });
 
   const refreshFeed = useMutation({
@@ -77,7 +79,9 @@ const FeedsPage = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['feed-items'] });
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
-    }
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+    },
+    onError: (error) => alert(`Failed to refresh feed: ${error?.message || 'Unknown error'}`)
   });
 
   const testFeedUrl = async () => {

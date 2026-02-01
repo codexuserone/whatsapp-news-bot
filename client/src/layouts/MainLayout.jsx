@@ -14,7 +14,7 @@ import Breadcrumbs from '../components/layout/Breadcrumbs';
 
 const statusVariant = (status) => {
   if (status === 'connected') return 'success';
-  if (status === 'qr' || status === 'connecting') return 'warning';
+  if (status === 'qr' || status === 'qr_ready' || status === 'connecting') return 'warning';
   return 'destructive';
 };
 

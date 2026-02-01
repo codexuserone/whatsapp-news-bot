@@ -27,7 +27,7 @@ const OverviewPage = () => {
     { label: 'Schedules', value: schedules.length, to: '/schedules', icon: CalendarClock, color: 'text-orange-500' }
   ];
 
-  const statusVariant = status?.status === 'connected' ? 'success' : status?.status === 'qr' ? 'warning' : 'destructive';
+  const statusVariant = status?.status === 'connected' ? 'success' : (status?.status === 'qr' || status?.status === 'qr_ready' || status?.status === 'connecting') ? 'warning' : 'destructive';
 
   return (
     <div className="space-y-6">
@@ -88,8 +88,9 @@ const OverviewPage = () => {
               </div>
               <div>
                 <p className="font-medium">
-                  {status?.status === 'connected' ? 'Connected' : 
-                   status?.status === 'qr' ? 'Waiting for QR scan' : 
+                  {status?.status === 'connected' ? 'Connected' :
+                   (status?.status === 'qr' || status?.status === 'qr_ready') ? 'Waiting for QR scan' :
+                   status?.status === 'connecting' ? 'Connecting...' :
                    'Disconnected'}
                 </p>
                 <p className="text-sm text-muted-foreground">

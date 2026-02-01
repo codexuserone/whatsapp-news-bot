@@ -22,6 +22,7 @@ class WhatsAppClient {
     this.maxReconnectAttempts = 5;
     this.isConnecting = false;
     this.reconnectTimer = null;
+    this.isHandlingAuthCorruption = false;
   }
 
   async init() {
@@ -43,32 +44,99 @@ class WhatsAppClient {
     this.socket.ev.on('error', (err) => {
       logger.error({ err }, 'WhatsApp socket error');
       this.lastError = err?.message || 'Socket error';
+      if (this.isAuthStateCorrupted(err?.message)) {
+        void this.handleCorruptedAuthState(err);
+      }
     });
 
     // Handle process-level uncaught exceptions from crypto errors
     process.removeAllListeners('uncaughtException');
     process.on('uncaughtException', async (err) => {
       // Check if it's a crypto/auth error
-      if (err.message?.includes('authenticate data') || 
-          err.message?.includes('Unsupported state') ||
-          err.message?.includes('crypto')) {
-        logger.error({ err }, 'Crypto error detected - clearing auth state');
-        this.status = 'error';
-        this.lastError = 'Session corrupted. Please scan QR code again.';
-        
-        // Clear the corrupted auth state
-        if (this.authStore?.clearState) {
-          await this.authStore.clearState();
-        }
-        
-        // Don't crash - schedule a reconnect to get new QR
-        this.scheduleReconnect(5000);
+      if (this.isAuthStateCorrupted(err?.message)) {
+        await this.handleCorruptedAuthState(err);
       } else {
         // For other errors, log and exit
         logger.error({ err }, 'Uncaught exception');
         process.exit(1);
       }
     });
+
+    process.removeAllListeners('unhandledRejection');
+    process.on('unhandledRejection', async (reason) => {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      if (this.isAuthStateCorrupted(message)) {
+        await this.handleCorruptedAuthState(reason);
+      } else {
+        logger.error({ err: reason }, 'Unhandled promise rejection');
+      }
+    });
+  }
+
+  isAuthStateCorrupted(message) {
+    if (!message) return false;
+    const checks = [
+      'authenticate data',
+      'Unsupported state',
+      'crypto',
+      'Incorrect private key length'
+    ];
+    return checks.some((check) => message.includes(check));
+  }
+
+  async handleCorruptedAuthState(err) {
+    if (this.isHandlingAuthCorruption) return;
+    this.isHandlingAuthCorruption = true;
+    try {
+      logger.error({ err }, 'Crypto/auth error detected - clearing auth state');
+      this.status = 'error';
+      this.lastError = 'Session corrupted. Please scan QR code again.';
+      if (this.authStore?.clearState) {
+        await this.authStore.clearState();
+      }
+      this.scheduleReconnect(5000);
+    } finally {
+      this.isHandlingAuthCorruption = false;
+    }
+  }
+
+  extractErrorMessage(args) {
+    for (const arg of args) {
+      if (!arg) continue;
+      if (arg instanceof Error) return arg.message;
+      if (arg.err?.message) return arg.err.message;
+      if (arg.error?.message) return arg.error.message;
+      if (arg.trace && typeof arg.trace === 'string') return arg.trace;
+    }
+    return null;
+  }
+
+  extractLogMessage(args) {
+    const last = args[args.length - 1];
+    return typeof last === 'string' ? last : null;
+  }
+
+  createBaileysLogger() {
+    const baseLogger = logger.child({ class: 'baileys' });
+    const baileysLogger = Object.create(baseLogger);
+    const handleArgs = (args) => {
+      const message = this.extractLogMessage(args);
+      const errorMessage = this.extractErrorMessage(args);
+      if (this.isAuthStateCorrupted(message) || this.isAuthStateCorrupted(errorMessage)) {
+        void this.handleCorruptedAuthState(
+          errorMessage ? new Error(errorMessage) : new Error(message || 'Auth error')
+        );
+      }
+    };
+    baileysLogger.error = (...args) => {
+      baseLogger.error(...args);
+      handleArgs(args);
+    };
+    baileysLogger.warn = (...args) => {
+      baseLogger.warn(...args);
+      handleArgs(args);
+    };
+    return baileysLogger;
   }
 
   scheduleReconnect(delay) {
@@ -121,7 +189,8 @@ class WhatsAppClient {
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: undefined,
         keepAliveIntervalMs: 30000,
-        retryRequestDelayMs: 500
+        retryRequestDelayMs: 500,
+        logger: this.createBaileysLogger()
       });
       
       this.setupErrorHandlers();
@@ -234,13 +303,9 @@ class WhatsAppClient {
       this.status = 'error';
       
       // If it's a crypto/auth error, clear state and retry
-      if (error.message?.includes('authenticate data') || 
-          error.message?.includes('Unsupported state')) {
+      if (this.isAuthStateCorrupted(error.message)) {
         logger.warn('Auth state corrupted, clearing and retrying');
-        if (this.authStore?.clearState) {
-          await this.authStore.clearState();
-        }
-        this.scheduleReconnect(3000);
+        await this.handleCorruptedAuthState(error);
       }
     }
   }

@@ -17,10 +17,15 @@ const queueRoutes = () => {
       const { status } = req.query;
 
       let query = supabase
-        .from('message_queue')
-        .select('*')
+        .from('message_logs')
+        .select(`
+          *,
+          schedule:schedules(id, name),
+          feed_item:feed_items(id, title, link),
+          target:targets(id, name, phone_number)
+        `)
         .order('created_at', { ascending: false })
-        .limit(100);
+        .limit(200);
 
       if (status) {
         query = query.eq('status', status);
@@ -29,7 +34,15 @@ const queueRoutes = () => {
       const { data: items, error } = await query;
 
       if (error) throw error;
-      res.json(items || []);
+      const normalizedItems = (items || []).map((item) => ({
+        ...item,
+        title: item.feed_item?.title,
+        url: item.feed_item?.link,
+        rendered_content: item.message_content,
+        schedule_name: item.schedule?.name,
+        target_name: item.target?.name
+      }));
+      res.json(normalizedItems);
     } catch (error) {
       console.error('Error fetching queue:', error);
       res.status(500).json({ error: error.message });
@@ -41,7 +54,7 @@ const queueRoutes = () => {
     try {
       const supabase = getDb();
       const { error } = await supabase
-        .from('message_queue')
+        .from('message_logs')
         .delete()
         .eq('id', req.params.id);
 
@@ -59,7 +72,7 @@ const queueRoutes = () => {
       const supabase = getDb();
       const { status } = req.query;
 
-      let query = supabase.from('message_queue').delete();
+      let query = supabase.from('message_logs').delete();
       
       if (status) {
         query = query.eq('status', status);
@@ -84,8 +97,8 @@ const queueRoutes = () => {
       const supabase = getDb();
       
       const { data, error } = await supabase
-        .from('message_queue')
-        .update({ status: 'pending', error_message: null, retry_count: 0 })
+        .from('message_logs')
+        .update({ status: 'pending', error_message: null, sent_at: null, whatsapp_message_id: null })
         .eq('status', 'failed')
         .select();
 
@@ -103,10 +116,10 @@ const queueRoutes = () => {
       const supabase = getDb();
       
       const [pending, sent, failed, skipped] = await Promise.all([
-        supabase.from('message_queue').select('id', { count: 'exact' }).eq('status', 'pending'),
-        supabase.from('message_queue').select('id', { count: 'exact' }).eq('status', 'sent'),
-        supabase.from('message_queue').select('id', { count: 'exact' }).eq('status', 'failed'),
-        supabase.from('message_queue').select('id', { count: 'exact' }).eq('status', 'skipped')
+        supabase.from('message_logs').select('id', { count: 'exact' }).eq('status', 'pending'),
+        supabase.from('message_logs').select('id', { count: 'exact' }).eq('status', 'sent'),
+        supabase.from('message_logs').select('id', { count: 'exact' }).eq('status', 'failed'),
+        supabase.from('message_logs').select('id', { count: 'exact' }).eq('status', 'skipped')
       ]);
 
       res.json({

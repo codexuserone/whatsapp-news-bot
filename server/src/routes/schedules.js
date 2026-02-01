@@ -1,6 +1,6 @@
 const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
-const { sendQueuedForSchedule } = require('../services/queueService');
+const { sendQueuedForSchedule, queueExistingItemsForSchedule } = require('../services/queueService');
 const { initSchedulers } = require('../services/schedulerService');
 
 const scheduleRoutes = () => {
@@ -57,6 +57,7 @@ const scheduleRoutes = () => {
       
       if (error) throw error;
       await initSchedulers(req.app.locals.whatsapp);
+      await queueExistingItemsForSchedule(schedule.id, { limit: 50 });
       res.json(schedule);
     } catch (error) {
       console.error('Error creating schedule:', error);
@@ -75,6 +76,7 @@ const scheduleRoutes = () => {
       
       if (error) throw error;
       await initSchedulers(req.app.locals.whatsapp);
+      await queueExistingItemsForSchedule(schedule.id, { limit: 50 });
       res.json(schedule);
     } catch (error) {
       console.error('Error updating schedule:', error);
@@ -100,9 +102,35 @@ const scheduleRoutes = () => {
 
   router.post('/:id/dispatch', async (req, res) => {
     try {
+      const supabase = getDb();
       const whatsapp = req.app.locals.whatsapp;
-      const result = await sendQueuedForSchedule(req.params.id, whatsapp);
-      res.json(result);
+      if (!whatsapp?.socket) {
+        res.status(503).json({ error: 'WhatsApp not connected' });
+        return;
+      }
+
+      const { queued, error: queueError } = await queueExistingItemsForSchedule(req.params.id, { limit: 50 });
+      if (queueError) {
+        console.error('Error backfilling schedule queue:', queueError);
+      }
+
+      const { count: pendingCount, error: pendingError } = await supabase
+        .from('message_logs')
+        .select('id', { count: 'exact', head: true })
+        .eq('schedule_id', req.params.id)
+        .eq('status', 'pending');
+
+      if (pendingError) throw pendingError;
+
+      setImmediate(async () => {
+        try {
+          await sendQueuedForSchedule(req.params.id, whatsapp);
+        } catch (dispatchError) {
+          console.error('Error dispatching schedule:', dispatchError);
+        }
+      });
+
+      res.json({ ok: true, queued: true, pendingCount: pendingCount || 0, queuedCount: queued || 0 });
     } catch (error) {
       console.error('Error dispatching schedule:', error);
       res.status(500).json({ error: error.message });

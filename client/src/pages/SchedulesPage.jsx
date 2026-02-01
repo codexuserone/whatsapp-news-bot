@@ -73,9 +73,27 @@ const SchedulesPage = () => {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['schedules'] })
   });
 
+  const [dispatchResult, setDispatchResult] = useState(null);
+
   const dispatchSchedule = useMutation({
     mutationFn: (id) => api.post(`/api/schedules/${id}/dispatch`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['logs'] })
+    onSuccess: (data, id) => {
+      queryClient.invalidateQueries({ queryKey: ['logs'] });
+      const count = data?.pendingCount ?? 0;
+      const queued = data?.queuedCount ?? 0;
+      setDispatchResult({
+        id,
+        status: data?.error ? 'error' : 'success',
+        message: data?.error || `Dispatch queued. ${queued} new, ${count} pending item${count === 1 ? '' : 's'} to send.`
+      });
+    },
+    onError: (error, id) => {
+      setDispatchResult({
+        id,
+        status: 'error',
+        message: error.message || 'Dispatch failed.'
+      });
+    }
   });
 
   const onSubmit = (values) => {
@@ -231,6 +249,13 @@ const SchedulesPage = () => {
                           Delete
                         </Button>
                       </div>
+                      {dispatchResult?.id === schedule.id && (
+                        <p
+                          className={`mt-2 text-xs ${dispatchResult.status === 'error' ? 'text-red-600' : 'text-emerald-600'}`}
+                        >
+                          {dispatchResult.message}
+                        </p>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

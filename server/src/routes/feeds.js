@@ -136,11 +136,17 @@ const feedsRoutes = () => {
       }
       
       const items = await fetchAndProcessFeed(feed);
-      await queueFeedItemsForSchedules(feed.id, items);
+      const queuedLogs = await queueFeedItemsForSchedules(feed.id, items);
       if (items.length) {
-        await triggerImmediateSchedules(feed.id, req.app.locals.whatsapp);
+        setImmediate(async () => {
+          try {
+            await triggerImmediateSchedules(feed.id, req.app.locals.whatsapp);
+          } catch (dispatchError) {
+            console.error('Error dispatching immediate schedules:', dispatchError);
+          }
+        });
       }
-      res.json({ ok: true, items });
+      res.json({ ok: true, items, queuedCount: queuedLogs.length, dispatched: items.length > 0 });
     } catch (error) {
       console.error('Error refreshing feed:', error);
       res.status(500).json({ error: error.message });

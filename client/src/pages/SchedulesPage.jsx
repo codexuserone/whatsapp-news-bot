@@ -67,29 +67,33 @@ const SchedulesPage = () => {
       queryClient.invalidateQueries({ queryKey: ['schedules'] });
       setActive(null);
       form.reset();
-    }
+    },
+    onError: (error) => alert(`Failed to save schedule: ${error?.message || 'Unknown error'}`)
   });
 
   const deleteSchedule = useMutation({
     mutationFn: (id) => api.delete(`/api/schedules/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['schedules'] })
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['schedules'] }),
+    onError: (error) => alert(`Failed to delete schedule: ${error?.message || 'Unknown error'}`)
   });
 
   const dispatchSchedule = useMutation({
     mutationFn: (id) => api.post(`/api/schedules/${id}/dispatch`),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['logs'] });
-      // Show success toast
-      const message = data?.sent > 0 
-        ? `Successfully sent ${data.sent} message${data.sent !== 1 ? 's' : ''}`
-        : 'No messages were sent';
-      // You can add a toast library here, for now using alert
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      let message;
+      if (data?.sent > 0) {
+        message = `Successfully sent ${data.sent} message${data.sent !== 1 ? 's' : ''}`;
+      } else if (data?.skipped && data?.reason) {
+        message = `Skipped: ${data.reason}`;
+      } else {
+        message = 'No messages were sent. Refresh the feed first to queue items, then dispatch.';
+      }
       alert(message);
     },
     onError: (error) => {
-      // Show error toast
-      const message = error?.response?.data?.error || error?.message || 'Failed to dispatch schedule';
-      alert(`Error: ${message}`);
+      alert(`Error: ${error?.message || 'Failed to dispatch schedule'}`);
     }
   });
 
@@ -130,6 +134,15 @@ const SchedulesPage = () => {
           </CardHeader>
           <CardContent>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              {Object.keys(form.formState.errors).length > 0 && (
+                <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+                  <ul className="list-disc list-inside space-y-0.5">
+                    {form.formState.errors.target_ids && <li>Select at least one target</li>}
+                    {form.formState.errors.template_id && <li>Select a template</li>}
+                    {form.formState.errors.name && <li>Name is required</li>}
+                  </ul>
+                </div>
+              )}
               <div className="space-y-2">
                 <Label htmlFor="name">Name</Label>
                 <Input id="name" {...form.register('name')} placeholder="Daily Morning Dispatch" />

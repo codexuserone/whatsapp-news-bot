@@ -93,17 +93,23 @@ const OverviewPage = () => {
               <TableRow>
                 <TableHeaderCell>Status</TableHeaderCell>
                 <TableHeaderCell>Target</TableHeaderCell>
-                <TableHeaderCell>Feed Item</TableHeaderCell>
+                <TableHeaderCell>Message</TableHeaderCell>
                 <TableHeaderCell>Timestamp</TableHeaderCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {logs.slice(0, 5).map((log) => (
-                <TableRow key={log._id}>
-                  <TableCell className="capitalize">{log.status}</TableCell>
-                  <TableCell>{log.targetId}</TableCell>
-                  <TableCell>{log.feedItemId}</TableCell>
-                  <TableCell>{new Date(log.sentAt || log.createdAt).toLocaleString()}</TableCell>
+                <TableRow key={log.id}>
+                  <TableCell>
+                    <Badge variant={log.status === 'sent' ? 'success' : log.status === 'failed' ? 'danger' : 'warning'} className="capitalize">
+                      {log.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>{log.target?.name || log.target_id}</TableCell>
+                  <TableCell className="max-w-xs truncate">
+                    {log.message_content ? log.message_content.substring(0, 40) + '...' : '—'}
+                  </TableCell>
+                  <TableCell>{new Date(log.sent_at || log.created_at).toLocaleString()}</TableCell>
                 </TableRow>
               ))}
               {logs.length === 0 && (

@@ -49,45 +49,73 @@ const applyCleaning = (value = '', cleaning) => {
 };
 
 const fetchRssItems = async (feed) => {
-  const data = await parser.parseURL(feed.url);
-  return (data.items || []).map((item) => ({
-    title: item.title,
-    url: item.link,
-    description: item.contentSnippet || item.content || item['content:encoded'],
-    imageUrl: item.enclosure?.url || item['media:content']?.url,
-    publishedAt: item.isoDate || item.pubDate
-  }));
+  try {
+    const data = await parser.parseURL(feed.url);
+    return (data.items || []).map((item) => ({
+      guid: item.guid || item.id || item.link || `${feed.url}-${item.title}-${Date.now()}`,
+      title: item.title,
+      url: item.link,
+      description: item.contentSnippet || item.content || item['content:encoded'],
+      content: item['content:encoded'] || item.content || item.contentSnippet,
+      author: item.creator || item.author || item['dc:creator'],
+      imageUrl: item.enclosure?.url || item['media:content']?.$.url || item['media:content']?.url,
+      publishedAt: item.isoDate || item.pubDate,
+      categories: item.categories || []
+    }));
+  } catch (error) {
+    console.error(`Error fetching RSS feed ${feed.url}:`, error.message);
+    throw error;
+  }
 };
 
 const fetchJsonItems = async (feed) => {
-  const response = await axios.get(feed.url, { timeout: 15000 });
-  const json = response.data;
-  const itemsPath = feed.parseConfig?.itemsPath || 'items';
-  const items = getPath(json, itemsPath) || [];
-  return items.map((item) => ({
-    title: getPath(item, feed.parseConfig?.titlePath || 'title'),
-    url: getPath(item, feed.parseConfig?.linkPath || 'link'),
-    description: getPath(item, feed.parseConfig?.descriptionPath || 'description'),
-    imageUrl: getPath(item, feed.parseConfig?.imagePath || 'image'),
-    publishedAt: getPath(item, 'date') || getPath(item, 'pubDate') || getPath(item, 'publishedAt')
-  }));
+  try {
+    const response = await axios.get(feed.url, { timeout: 15000 });
+    const json = response.data;
+    const itemsPath = feed.parseConfig?.itemsPath || 'items';
+    const items = getPath(json, itemsPath) || [];
+    return items.map((item) => {
+      const url = getPath(item, feed.parseConfig?.linkPath || 'link') || getPath(item, 'url');
+      return {
+        guid: getPath(item, 'id') || getPath(item, 'guid') || url || `${feed.url}-${Date.now()}-${Math.random()}`,
+        title: getPath(item, feed.parseConfig?.titlePath || 'title'),
+        url,
+        description: getPath(item, feed.parseConfig?.descriptionPath || 'description') || getPath(item, 'summary'),
+        content: getPath(item, 'content') || getPath(item, 'content_html') || getPath(item, 'content_text'),
+        author: getPath(item, 'author') || getPath(item, 'author.name'),
+        imageUrl: getPath(item, feed.parseConfig?.imagePath || 'image') || getPath(item, 'banner_image'),
+        publishedAt: getPath(item, 'date_published') || getPath(item, 'date') || getPath(item, 'pubDate') || getPath(item, 'publishedAt'),
+        categories: getPath(item, 'tags') || getPath(item, 'categories') || []
+      };
+    });
+  } catch (error) {
+    console.error(`Error fetching JSON feed ${feed.url}:`, error.message);
+    throw error;
+  }
 };
 
 const fetchFeedItems = async (feed) => {
-  const items = feed.type === 'json' ? await fetchJsonItems(feed) : await fetchRssItems(feed);
-  return items
-    .filter((item) => item.title && item.url)
-    .map((item) => {
-      const cleanedTitle = applyCleaning(item.title, feed.cleaning);
-      const cleanedDescription = applyCleaning(item.description || '', feed.cleaning);
-      const cleanedUrl = feed.cleaning?.stripUtm ? removeUtm(item.url) : item.url;
-      return {
-        ...item,
-        title: cleanedTitle,
-        description: cleanedDescription,
-        url: cleanedUrl
-      };
-    });
+  try {
+    const items = feed.type === 'json' ? await fetchJsonItems(feed) : await fetchRssItems(feed);
+    return items
+      .filter((item) => item.title || item.url) // Allow items with at least title OR url
+      .map((item) => {
+        const cleanedTitle = applyCleaning(item.title || '', feed.cleaning);
+        const cleanedDescription = applyCleaning(item.description || '', feed.cleaning);
+        const cleanedContent = applyCleaning(item.content || '', feed.cleaning);
+        const cleanedUrl = feed.cleaning?.stripUtm && item.url ? removeUtm(item.url) : item.url;
+        return {
+          ...item,
+          title: cleanedTitle || 'Untitled',
+          description: cleanedDescription,
+          content: cleanedContent,
+          url: cleanedUrl
+        };
+      });
+  } catch (error) {
+    console.error(`Error fetching feed items from ${feed.url}:`, error.message);
+    return [];
+  }
 };
 
 module.exports = {

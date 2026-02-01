@@ -15,22 +15,20 @@ import { Table, TableHead, TableBody, TableRow, TableCell, TableHeaderCell } fro
 
 const schema = z.object({
   name: z.string().min(1),
-  type: z.enum(['group', 'channel', 'status']),
-  jid: z.string().min(1),
-  intraDelaySec: z.coerce.number().min(1).optional(),
-  enabled: z.boolean().default(true)
+  type: z.enum(['individual', 'group']),
+  phone_number: z.string().min(1),
+  notes: z.string().optional(),
+  active: z.boolean().default(true)
 });
 
 const TYPE_LABELS = {
-  group: 'Group',
-  channel: 'Channel',
-  status: 'Status'
+  individual: 'Individual',
+  group: 'Group'
 };
 
 const TYPE_COLORS = {
-  group: 'success',
-  channel: 'warning',
-  status: 'secondary'
+  individual: 'secondary',
+  group: 'success'
 };
 
 const TargetsPage = () => {
@@ -43,7 +41,7 @@ const TargetsPage = () => {
 
   const form = useForm({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', type: 'group', jid: '', intraDelaySec: 3, enabled: true }
+    defaultValues: { name: '', type: 'individual', phone_number: '', notes: '', active: true }
   });
 
   useEffect(() => {
@@ -51,16 +49,16 @@ const TargetsPage = () => {
       form.reset({
         name: active.name,
         type: active.type,
-        jid: active.jid,
-        intraDelaySec: active.intraDelaySec || 3,
-        enabled: active.enabled ?? true
+        phone_number: active.phone_number,
+        notes: active.notes || '',
+        active: active.active ?? true
       });
     }
   }, [active, form]);
 
   const saveTarget = useMutation({
     mutationFn: (payload) =>
-      active ? api.put(`/api/targets/${active._id}`, payload) : api.post('/api/targets', payload),
+      active ? api.put(`/api/targets/${active.id}`, payload) : api.post('/api/targets', payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['targets'] });
       setActive(null);
@@ -77,15 +75,14 @@ const TargetsPage = () => {
     saveTarget.mutate({
       name: values.name,
       type: values.type,
-      jid: values.jid,
-      intraDelaySec: values.intraDelaySec,
-      enabled: values.enabled
+      phone_number: values.phone_number,
+      notes: values.notes,
+      active: values.active
     });
   };
 
   const groupCount = targets.filter((t) => t.type === 'group').length;
-  const channelCount = targets.filter((t) => t.type === 'channel').length;
-  const statusCount = targets.filter((t) => t.type === 'status').length;
+  const individualCount = targets.filter((t) => t.type === 'individual').length;
 
   return (
     <div className="space-y-8">
@@ -95,23 +92,17 @@ const TargetsPage = () => {
       />
 
       {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Card className="cursor-pointer hover:border-ink/30" onClick={() => setFilterType('individual')}>
+          <CardContent className="p-4">
+            <p className="text-2xl font-bold">{individualCount}</p>
+            <p className="text-sm text-ink/60">Individuals</p>
+          </CardContent>
+        </Card>
         <Card className="cursor-pointer hover:border-ink/30" onClick={() => setFilterType('group')}>
           <CardContent className="p-4">
             <p className="text-2xl font-bold">{groupCount}</p>
             <p className="text-sm text-ink/60">Groups</p>
-          </CardContent>
-        </Card>
-        <Card className="cursor-pointer hover:border-ink/30" onClick={() => setFilterType('channel')}>
-          <CardContent className="p-4">
-            <p className="text-2xl font-bold">{channelCount}</p>
-            <p className="text-sm text-ink/60">Channels</p>
-          </CardContent>
-        </Card>
-        <Card className="cursor-pointer hover:border-ink/30" onClick={() => setFilterType('status')}>
-          <CardContent className="p-4">
-            <p className="text-2xl font-bold">{statusCount}</p>
-            <p className="text-sm text-ink/60">Status</p>
           </CardContent>
         </Card>
       </div>
@@ -126,34 +117,34 @@ const TargetsPage = () => {
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Name</label>
-                  <Input {...form.register('name')} placeholder="Anash News Group" />
+                  <Input {...form.register('name')} placeholder="John Doe" />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Type</label>
                   <Select {...form.register('type')}>
+                    <option value="individual">Individual</option>
                     <option value="group">Group</option>
-                    <option value="channel">Channel</option>
-                    <option value="status">Status</option>
                   </Select>
                 </div>
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">JID</label>
-                  <Input {...form.register('jid')} placeholder="1203630...@g.us or status@broadcast" />
+                  <label className="text-sm font-medium">Phone Number / JID</label>
+                  <Input {...form.register('phone_number')} placeholder="1234567890 or 1234567890@g.us" />
+                  <p className="text-xs text-ink/50">For groups, use the full JID ending in @g.us</p>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Intra-message Delay (sec)</label>
-                  <Input type="number" {...form.register('intraDelaySec', { valueAsNumber: true })} />
+                  <label className="text-sm font-medium">Notes (optional)</label>
+                  <Input {...form.register('notes')} placeholder="Any additional notes" />
                 </div>
               </div>
               <Controller
                 control={form.control}
-                name="enabled"
+                name="active"
                 render={({ field }) => (
                   <label className="flex items-center gap-2 text-sm font-medium">
                     <Checkbox checked={field.value} onChange={(e) => field.onChange(e.target.checked)} />
-                    Enabled
+                    Active
                   </label>
                 )}
               />
@@ -176,9 +167,8 @@ const TargetsPage = () => {
             <CardTitle>Targets ({filteredTargets.length})</CardTitle>
             <Select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="w-auto">
               <option value="all">All Types</option>
+              <option value="individual">Individuals</option>
               <option value="group">Groups</option>
-              <option value="channel">Channels</option>
-              <option value="status">Status</option>
             </Select>
           </CardHeader>
           <CardContent>
@@ -186,6 +176,7 @@ const TargetsPage = () => {
               <TableHead>
                 <TableRow>
                   <TableHeaderCell>Name</TableHeaderCell>
+                  <TableHeaderCell>Phone/JID</TableHeaderCell>
                   <TableHeaderCell>Type</TableHeaderCell>
                   <TableHeaderCell>Status</TableHeaderCell>
                   <TableHeaderCell>Actions</TableHeaderCell>
@@ -193,14 +184,15 @@ const TargetsPage = () => {
               </TableHead>
               <TableBody>
                 {filteredTargets.map((target) => (
-                  <TableRow key={target._id}>
+                  <TableRow key={target.id}>
                     <TableCell className="font-medium">{target.name}</TableCell>
+                    <TableCell className="font-mono text-xs">{target.phone_number}</TableCell>
                     <TableCell>
                       <Badge variant={TYPE_COLORS[target.type]}>{TYPE_LABELS[target.type]}</Badge>
                     </TableCell>
                     <TableCell>
-                      <Badge variant={target.enabled ? 'success' : 'secondary'}>
-                        {target.enabled ? 'Active' : 'Disabled'}
+                      <Badge variant={target.active ? 'success' : 'secondary'}>
+                        {target.active ? 'Active' : 'Disabled'}
                       </Badge>
                     </TableCell>
                     <TableCell>
@@ -208,7 +200,7 @@ const TargetsPage = () => {
                         <Button size="sm" variant="outline" onClick={() => setActive(target)}>
                           Edit
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => deleteTarget.mutate(target._id)}>
+                        <Button size="sm" variant="ghost" onClick={() => deleteTarget.mutate(target.id)}>
                           Delete
                         </Button>
                       </div>
@@ -217,8 +209,8 @@ const TargetsPage = () => {
                 ))}
                 {filteredTargets.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center text-ink/50">
-                      No targets found. Import from WhatsApp Console or create manually.
+                    <TableCell colSpan={5} className="text-center text-ink/50">
+                      No targets found. Create one to start sending messages.
                     </TableCell>
                   </TableRow>
                 )}

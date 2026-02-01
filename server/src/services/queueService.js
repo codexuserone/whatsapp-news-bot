@@ -1,6 +1,5 @@
 const { supabase } = require('../db/supabase');
 const settingsService = require('./settingsService');
-const { isDuplicateInChat } = require('./dedupeService');
 const sleep = require('../utils/sleep');
 const logger = require('../utils/logger');
 
@@ -63,7 +62,7 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
     }
 
     const settings = await settingsService.getSettings();
-    const interDelay = settings.defaultInterTargetDelaySec * 1000;
+    const messageDelay = settings.message_delay_ms || 2000;
 
     // Get targets
     const { data: targets, error: targetsError } = await supabase
@@ -115,23 +114,24 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
           continue;
         }
 
-        const since = new Date(Date.now() - settings.retentionDays * 24 * 60 * 60 * 1000);
+        const since = new Date(Date.now() - (settings.log_retention_days || 30) * 24 * 60 * 60 * 1000);
         const jid = target.phone_number.includes('@') 
           ? target.phone_number 
           : `${target.phone_number.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
 
-        const duplicate = await isDuplicateInChat({
-          jid,
-          title: feedItem.title,
-          url: feedItem.link,
-          threshold: settings.dedupeThreshold,
-          since
-        });
+        // Check for duplicate based on feed item + target combination
+        const { data: existingSent } = await supabase
+          .from('message_logs')
+          .select('id')
+          .eq('feed_item_id', feedItem.id)
+          .eq('target_id', target.id)
+          .eq('status', 'sent')
+          .single();
 
-        if (duplicate) {
+        if (existingSent) {
           await supabase
             .from('message_logs')
-            .update({ status: 'failed', error_message: 'Duplicate in chat history' })
+            .update({ status: 'failed', error_message: 'Already sent to this target' })
             .eq('id', log.id);
           continue;
         }
@@ -164,11 +164,8 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
             .eq('id', log.id);
         }
 
-        const intraDelay = settings.defaultIntraTargetDelaySec * 1000;
-        await sleep(intraDelay);
+        await sleep(messageDelay);
       }
-
-      await sleep(interDelay);
     }
 
     // Update schedule last run time

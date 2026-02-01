@@ -62,11 +62,14 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
   let sentCount = 0;
 
   for (const target of targets) {
-    const logs = await MessageLog.find({
-      scheduleId,
-      targetId: target._id,
-      status: 'queued'
-    }).sort({ createdAt: 1 });
+    const logs = await MessageLog.find(
+      {
+        scheduleId,
+        targetId: target._id,
+        status: 'queued'
+      },
+      { orderBy: { column: 'created_at', ascending: true } }
+    );
 
     for (const log of logs) {
       const feedItem = await FeedItem.findById(log.feedItemId);

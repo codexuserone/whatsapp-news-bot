@@ -20,6 +20,8 @@ const stripHtml = (value = '') => {
   return $.text();
 };
 
+const escapeRegExp = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const removeUtm = (url) => {
   try {
     const parsed = new URL(url);
@@ -43,7 +45,7 @@ const applyCleaning = (value = '', cleaning) => {
   output = stripHtml(output);
   (cleaning?.removePhrases || []).forEach((phrase) => {
     if (!phrase) return;
-    output = output.replace(new RegExp(phrase, 'gi'), '').trim();
+    output = output.replace(new RegExp(escapeRegExp(phrase), 'gi'), '').trim();
   });
   return output.trim();
 };

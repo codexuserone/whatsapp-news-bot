@@ -4,7 +4,7 @@ const AuthState = require('../models/AuthState');
 const serialize = (data) => JSON.parse(JSON.stringify(data, BufferJSON.replacer));
 const deserialize = (data) => JSON.parse(JSON.stringify(data), BufferJSON.reviver);
 
-const useMongoAuthState = async (name = 'default') => {
+const useSupabaseAuthState = async (name = 'default') => {
   let doc = await AuthState.findOne({ name });
   if (!doc) {
     doc = await AuthState.create({ name, creds: serialize(initAuthCreds()), keys: {} });
@@ -58,4 +58,4 @@ const useMongoAuthState = async (name = 'default') => {
   };
 };
 
-module.exports = useMongoAuthState;
+module.exports = useSupabaseAuthState;

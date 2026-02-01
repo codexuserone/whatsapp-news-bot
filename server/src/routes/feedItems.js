@@ -5,7 +5,10 @@ const feedItemRoutes = () => {
   const router = express.Router();
 
   router.get('/', async (_req, res) => {
-    const items = await FeedItem.find().sort({ createdAt: -1 }).limit(200);
+    const items = await FeedItem.find(
+      {},
+      { orderBy: { column: 'created_at', ascending: false }, limit: 200 }
+    );
     res.json(items);
   });
 

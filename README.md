@@ -13,7 +13,7 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
 - **Retention** - Auto-cleanup of old logs and auth states
 
 ## Tech Stack
-- **Backend**: Express, Baileys (@whiskeysockets/baileys), MongoDB, node-cron
+- **Backend**: Express, Baileys (@whiskeysockets/baileys), Supabase (Postgres), node-cron
 - **Frontend**: React, shadcn/ui, TanStack Query, react-hook-form + zod
 - **Hosting**: Render (with keep-alive endpoint)
 
@@ -22,7 +22,7 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
 ├── server/          # Express API + Baileys WhatsApp client
 │   ├── src/
 │   │   ├── routes/      # API endpoints
-│   │   ├── models/      # Mongoose schemas
+│   │   ├── models/      # Supabase-backed data access
 │   │   ├── services/    # Business logic
 │   │   └── whatsapp/    # Baileys client wrapper
 │   └── public/          # Built frontend (after npm run build:client)
@@ -38,25 +38,28 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
 
 1. **Install dependencies**:
    ```bash
-   npm install
+   ./scripts/npm-safe.sh install
    ```
 
-2. **Configure environment** (optional - uses in-memory DB by default):
+2. **Configure environment**:
    ```bash
    cp .env.example server/.env
-   # Edit server/.env if you want to use MongoDB Atlas
+   # Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
    ```
 
-3. **Start development servers**:
+3. **Initialize Supabase schema**:
+   - Run the SQL in `supabase/schema.sql` in the Supabase SQL editor to create the `documents` table and indexes.
+
+4. **Start development servers**:
    ```bash
    # Terminal 1 - Backend (port 5000)
-   npm run dev:server
+   ./scripts/npm-safe.sh run dev:server
    
    # Terminal 2 - Frontend (port 5173)
-   npm run dev:client
+   ./scripts/npm-safe.sh run dev:client
    ```
 
-4. **Open the app**: http://localhost:5173
+5. **Open the app**: http://localhost:5173
 
 ## Render Deployment
 
@@ -65,7 +68,8 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
 2. Connect repo to Render
 3. Render will auto-detect `render.yaml` and configure the service
 4. Set environment variables in Render dashboard:
-   - `MONGO_URI` - MongoDB Atlas connection string
+   - `SUPABASE_URL` - Supabase project URL (pre-filled in `render.yaml`)
+   - `SUPABASE_SERVICE_ROLE_KEY` - Supabase service role key (server-only; never expose in client)
    - `BASE_URL` - Your Render app URL (e.g., https://your-app.onrender.com)
    - `KEEP_ALIVE_URL` - Same as BASE_URL + /ping
 
@@ -76,13 +80,13 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
 4. Set environment variables (see `.env.example`)
 
 ### Required Environment Variables for Production
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `MONGO_URI` | MongoDB connection string | `mongodb+srv://user:pass@cluster.mongodb.net/wabot` |
-| `BASE_URL` | Your Render app URL | `https://your-app.onrender.com` |
-| `KEEP_ALIVE` | Enable keep-alive pings | `true` |
-| `KEEP_ALIVE_URL` | Ping endpoint URL | `https://your-app.onrender.com/ping` |
-| `USE_IN_MEMORY_DB` | Must be `false` in production | `false` |
+| Variable | Description |
+|----------|-------------|
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (server-only) |
+| `BASE_URL` | Your Render app URL |
+| `KEEP_ALIVE` | Enable keep-alive pings |
+| `KEEP_ALIVE_URL` | Ping endpoint URL |
 
 ## API Endpoints
 - `GET /health` - Health check
@@ -95,6 +99,6 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
 
 ## Notes
 - WhatsApp auth uses QR displayed in the UI (not terminal)
-- All settings are stored in MongoDB and editable via UI
+- All settings are stored in Supabase and editable via UI
 - Free tier Render instances spin down after inactivity - use keep-alive
-- Session data is stored in MongoDB, survives redeploys
+- Session data is stored in Supabase, survives redeploys

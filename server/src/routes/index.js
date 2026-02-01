@@ -1,4 +1,5 @@
 const express = require('express');
+const { getClient } = require('../db/supabase');
 const whatsappRoutes = require('./whatsapp');
 const feedsRoutes = require('./feeds');
 const templatesRoutes = require('./templates');
@@ -11,7 +12,17 @@ const feedItemsRoutes = require('./feedItems');
 const registerRoutes = (app) => {
   const router = express.Router();
 
-  router.get('/health', (_req, res) => res.json({ ok: true }));
+  router.get('/health', async (_req, res) => {
+    try {
+      const { error } = await getClient().from('documents').select('id').limit(1);
+      if (error) {
+        return res.status(503).json({ ok: false, supabase: false, error: 'supabase_unavailable' });
+      }
+      return res.json({ ok: true, supabase: true });
+    } catch (err) {
+      return res.status(503).json({ ok: false, supabase: false, error: 'supabase_unavailable' });
+    }
+  });
   router.get('/ping', (_req, res) => res.json({ ok: true, uptime: process.uptime() }));
 
   router.use('/api/whatsapp', whatsappRoutes());

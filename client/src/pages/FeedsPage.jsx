@@ -24,6 +24,9 @@ const schema = z.object({
   linkPath: z.string().optional(),
   descriptionPath: z.string().optional(),
   imagePath: z.string().optional(),
+  videoPath: z.string().optional(),
+  audioPath: z.string().optional(),
+  mediaTypePath: z.string().optional(),
   removePhrases: z.string().optional(),
   stripUtm: z.boolean().default(true),
   decodeEntities: z.boolean().default(true)
@@ -47,11 +50,17 @@ const FeedsPage = () => {
       linkPath: '',
       descriptionPath: '',
       imagePath: '',
+      videoPath: '',
+      audioPath: '',
+      mediaTypePath: '',
       removePhrases: '',
       stripUtm: true,
       decodeEntities: true
     }
   });
+
+  const feedType = form.watch('type');
+  const feedUrl = form.watch('url');
 
   useEffect(() => {
     if (active) {
@@ -66,6 +75,9 @@ const FeedsPage = () => {
         linkPath: active.parseConfig?.linkPath || '',
         descriptionPath: active.parseConfig?.descriptionPath || '',
         imagePath: active.parseConfig?.imagePath || '',
+        videoPath: active.parseConfig?.videoPath || '',
+        audioPath: active.parseConfig?.audioPath || '',
+        mediaTypePath: active.parseConfig?.mediaTypePath || '',
         removePhrases: (active.cleaning?.removePhrases || []).join('\n'),
         stripUtm: active.cleaning?.stripUtm ?? true,
         decodeEntities: active.cleaning?.decodeEntities ?? true
@@ -93,6 +105,27 @@ const FeedsPage = () => {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['feed-items'] })
   });
 
+  const probeFeed = useMutation({
+    mutationFn: (payload) => api.post('/api/feeds/probe', payload),
+    onSuccess: (data) => {
+      if (data?.mapping) {
+        form.setValue('itemsPath', data.mapping.itemsPath || '');
+        form.setValue('titlePath', data.mapping.titlePath || '');
+        form.setValue('linkPath', data.mapping.linkPath || '');
+        form.setValue('descriptionPath', data.mapping.descriptionPath || '');
+        form.setValue('imagePath', data.mapping.imagePath || '');
+        form.setValue('videoPath', data.mapping.videoPath || '');
+        form.setValue('audioPath', data.mapping.audioPath || '');
+        form.setValue('mediaTypePath', data.mapping.mediaTypePath || '');
+      }
+    }
+  });
+
+  const handleProbe = () => {
+    if (!feedUrl) return;
+    probeFeed.mutate({ url: feedUrl, type: feedType });
+  };
+
   const onSubmit = (values) => {
     const payload = {
       name: values.name,
@@ -105,7 +138,10 @@ const FeedsPage = () => {
         titlePath: values.titlePath || undefined,
         linkPath: values.linkPath || undefined,
         descriptionPath: values.descriptionPath || undefined,
-        imagePath: values.imagePath || undefined
+        imagePath: values.imagePath || undefined,
+        videoPath: values.videoPath || undefined,
+        audioPath: values.audioPath || undefined,
+        mediaTypePath: values.mediaTypePath || undefined
       },
       cleaning: {
         removePhrases: values.removePhrases
@@ -137,7 +173,16 @@ const FeedsPage = () => {
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">URL</label>
-                  <Input {...form.register('url')} placeholder="https://anash.org/feed" />
+                  <Input
+                    {...form.register('url')}
+                    placeholder="https://anash.org/feed"
+                    onBlur={() => {
+                      form.trigger('url');
+                      if (feedType === 'json') {
+                        handleProbe();
+                      }
+                    }}
+                  />
                 </div>
               </div>
 
@@ -166,16 +211,35 @@ const FeedsPage = () => {
                 />
               </div>
 
-              <div className="rounded-2xl border border-ink/10 bg-surface p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-ink/50">JSON Mapping</p>
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <Input {...form.register('itemsPath')} placeholder="items" />
-                  <Input {...form.register('titlePath')} placeholder="title" />
-                  <Input {...form.register('linkPath')} placeholder="link" />
-                  <Input {...form.register('descriptionPath')} placeholder="description" />
-                  <Input {...form.register('imagePath')} placeholder="image" />
+              {feedType === 'json' && (
+                <div className="rounded-2xl border border-ink/10 bg-surface p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-ink/50">JSON Mapping</p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={handleProbe}
+                      disabled={probeFeed.isPending || !feedUrl}
+                    >
+                      {probeFeed.isPending ? 'Detecting...' : 'Auto-detect fields'}
+                    </Button>
+                  </div>
+                  <p className="mt-2 text-xs text-ink/50">
+                    Auto-detect pulls available fields from the feed so you do not have to enter them manually.
+                  </p>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <Input {...form.register('itemsPath')} placeholder="items" />
+                    <Input {...form.register('titlePath')} placeholder="title" />
+                    <Input {...form.register('linkPath')} placeholder="link" />
+                    <Input {...form.register('descriptionPath')} placeholder="description" />
+                    <Input {...form.register('imagePath')} placeholder="image" />
+                    <Input {...form.register('videoPath')} placeholder="videoUrl" />
+                    <Input {...form.register('audioPath')} placeholder="audioUrl" />
+                    <Input {...form.register('mediaTypePath')} placeholder="mediaType" />
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div className="rounded-2xl border border-ink/10 bg-surface p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-ink/50">Cleaning Rules</p>

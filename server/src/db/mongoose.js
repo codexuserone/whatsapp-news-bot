@@ -8,6 +8,11 @@ const connectDb = async () => {
   mongoose.set('strictQuery', true);
 
   if (env.USE_IN_MEMORY_DB || !env.MONGO_URI) {
+    if (!env.MONGO_URI) {
+      logger.warn(
+        'MONGO_URI is not set. Falling back to in-memory MongoDB; data will not persist between restarts.'
+      );
+    }
     const { MongoMemoryServer } = require('mongodb-memory-server');
     if (!mongoServer) {
       mongoServer = await MongoMemoryServer.create();

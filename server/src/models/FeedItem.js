@@ -8,7 +8,11 @@ const feedItemSchema = new mongoose.Schema(
     url: { type: String, required: true },
     description: { type: String },
     imageUrl: { type: String },
+    videoUrl: { type: String },
+    audioUrl: { type: String },
+    mediaType: { type: String },
     publishedAt: { type: Date },
+    variables: { type: mongoose.Schema.Types.Mixed },
     normalizedTitle: { type: String, index: true },
     normalizedUrl: { type: String, index: true },
     hash: { type: String, index: true }

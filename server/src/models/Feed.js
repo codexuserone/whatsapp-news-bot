@@ -13,7 +13,10 @@ const feedSchema = new mongoose.Schema(
       titlePath: { type: String },
       linkPath: { type: String },
       descriptionPath: { type: String },
-      imagePath: { type: String }
+      imagePath: { type: String },
+      videoPath: { type: String },
+      audioPath: { type: String },
+      mediaTypePath: { type: String }
     },
     cleaning: {
       removePhrases: { type: [String], default: [] },

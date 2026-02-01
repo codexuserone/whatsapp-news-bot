@@ -54,11 +54,11 @@ const SettingsPage = () => {
             <CardTitle>Retention</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
+            <div id="retention-logs" className="space-y-2">
               <label className="text-sm font-medium">Retention Days</label>
               <Input type="number" {...form.register('retentionDays', { valueAsNumber: true })} />
             </div>
-            <div className="space-y-2">
+            <div id="retention-auth" className="space-y-2">
               <label className="text-sm font-medium">Auth Retention Days</label>
               <Input type="number" {...form.register('authRetentionDays', { valueAsNumber: true })} />
             </div>
@@ -70,11 +70,11 @@ const SettingsPage = () => {
             <CardTitle>Delays</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
+            <div id="delays-inter" className="space-y-2">
               <label className="text-sm font-medium">Inter-target Delay (sec)</label>
               <Input type="number" {...form.register('defaultInterTargetDelaySec', { valueAsNumber: true })} />
             </div>
-            <div className="space-y-2">
+            <div id="delays-intra" className="space-y-2">
               <label className="text-sm font-medium">Intra-target Delay (sec)</label>
               <Input type="number" {...form.register('defaultIntraTargetDelaySec', { valueAsNumber: true })} />
             </div>
@@ -86,7 +86,7 @@ const SettingsPage = () => {
             <CardTitle>Dedupe</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-2">
+            <div id="dedupe-threshold" className="space-y-2">
               <label className="text-sm font-medium">Fuzzy Match Threshold (0.5 - 1.0)</label>
               <Input type="number" step="0.01" {...form.register('dedupeThreshold', { valueAsNumber: true })} />
             </div>

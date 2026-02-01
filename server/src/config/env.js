@@ -23,9 +23,9 @@ const env = {
   DEFAULT_INTRA_TARGET_DELAY_SEC: Number(process.env.DEFAULT_INTRA_TARGET_DELAY_SEC || 3)
 };
 
-// In production, we require MONGO_URI unless explicitly using in-memory DB
+// In production, fall back to in-memory if MONGO_URI is missing (warned at connect time)
 if (isProd && !env.MONGO_URI) {
-  throw new Error('MONGO_URI is required in production');
+  env.USE_IN_MEMORY_DB = true;
 }
 
 module.exports = env;

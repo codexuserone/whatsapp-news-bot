@@ -1,6 +1,7 @@
 const express = require('express');
 const Feed = require('../models/Feed');
 const { fetchAndProcessFeed, queueFeedItemsForSchedules } = require('../services/feedProcessor');
+const { probeJsonFeed } = require('../services/feedFetcher');
 const { initSchedulers, triggerImmediateSchedules } = require('../services/schedulerService');
 
 const feedsRoutes = () => {
@@ -9,6 +10,20 @@ const feedsRoutes = () => {
   router.get('/', async (_req, res) => {
     const feeds = await Feed.find();
     res.json(feeds);
+  });
+
+  router.post('/probe', async (req, res) => {
+    const { url, type } = req.body || {};
+    if (!url) {
+      res.status(400).json({ error: 'URL is required' });
+      return;
+    }
+    if (type && type !== 'json') {
+      res.json({ type, autoDetected: false });
+      return;
+    }
+    const mapping = await probeJsonFeed(url);
+    res.json({ type: 'json', autoDetected: true, mapping });
   });
 
   router.post('/', async (req, res) => {

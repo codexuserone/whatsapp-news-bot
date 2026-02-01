@@ -1,4 +1,5 @@
 const express = require('express');
+const { validate, schemas } = require('../middleware/validation');
 
 const whatsappRoutes = () => {
   const router = express.Router();
@@ -68,7 +69,7 @@ const whatsappRoutes = () => {
   });
 
   // Send a test message
-  router.post('/send-test', async (req, res) => {
+  router.post('/send-test', validate(schemas.testMessage), async (req, res) => {
     try {
       const whatsapp = req.app.locals.whatsapp;
       const { jid, message } = req.body;
@@ -81,7 +82,8 @@ const whatsappRoutes = () => {
         return res.status(400).json({ ok: false, error: 'WhatsApp is not connected' });
       }
 
-      const result = await whatsapp.sendMessage(jid, { text: message });
+      const normalizedJid = jid.includes('@') ? jid : `${jid.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
+      const result = await whatsapp.sendMessage(normalizedJid, { text: message });
       res.json({ ok: true, messageId: result?.key?.id });
     } catch (error) {
       console.error('Error sending test message:', error);
@@ -90,7 +92,7 @@ const whatsappRoutes = () => {
   });
 
   // Send to status broadcast
-  router.post('/send-status', async (req, res) => {
+  router.post('/send-status', validate(schemas.statusMessage), async (req, res) => {
     try {
       const whatsapp = req.app.locals.whatsapp;
       const { message, imageUrl } = req.body;

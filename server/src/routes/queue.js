@@ -67,23 +67,6 @@ const queueRoutes = () => {
     }
   });
 
-  // Delete a queue item
-  router.delete('/:id', async (req, res) => {
-    try {
-      const supabase = getDb();
-      const { error } = await supabase
-        .from('message_logs')
-        .delete()
-        .eq('id', req.params.id);
-
-      if (error) throw error;
-      res.json({ success: true });
-    } catch (error) {
-      console.error('Error deleting queue item:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
   // Clear queue items by status
   router.delete('/clear', async (req, res) => {
     try {
@@ -153,6 +136,23 @@ const queueRoutes = () => {
       });
     } catch (error) {
       console.error('Error fetching queue stats:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Delete a queue item
+  router.delete('/:id', async (req, res) => {
+    try {
+      const supabase = getDb();
+      const { error } = await supabase
+        .from('message_logs')
+        .delete()
+        .eq('id', req.params.id);
+
+      if (error) throw error;
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error deleting queue item:', error);
       res.status(500).json({ error: error.message });
     }
   });

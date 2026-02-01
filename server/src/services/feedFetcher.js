@@ -35,6 +35,8 @@ const removeUtm = (url) => {
   }
 };
 
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const applyCleaning = (value = '', cleaning) => {
   let output = value;
   if (cleaning?.decodeEntities) {
@@ -43,7 +45,7 @@ const applyCleaning = (value = '', cleaning) => {
   output = stripHtml(output);
   (cleaning?.removePhrases || []).forEach((phrase) => {
     if (!phrase) return;
-    output = output.replace(new RegExp(phrase, 'gi'), '').trim();
+    output = output.replace(new RegExp(escapeRegExp(phrase), 'gi'), '').trim();
   });
   return output.trim();
 };

@@ -2,6 +2,7 @@ const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
 const { sendQueuedForSchedule } = require('../services/queueService');
 const { initSchedulers } = require('../services/schedulerService');
+const { getScheduleDiagnostics } = require('../services/diagnosticsService');
 const { validate, schemas } = require('../middleware/validation');
 
 const scheduleRoutes = () => {
@@ -114,6 +115,19 @@ const scheduleRoutes = () => {
       res.json(result);
     } catch (error) {
       console.error('Error dispatching schedule:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  router.get('/:id/diagnostics', async (req, res) => {
+    try {
+      const diagnostics = await getScheduleDiagnostics(req.params.id, req.app.locals.whatsapp);
+      if (!diagnostics.ok) {
+        return res.status(400).json(diagnostics);
+      }
+      res.json(diagnostics);
+    } catch (error) {
+      console.error('Error generating schedule diagnostics:', error);
       res.status(500).json({ error: error.message });
     }
   });

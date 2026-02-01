@@ -80,32 +80,38 @@ const TargetsPage = () => {
 
   const importAllGroups = async () => {
     setImporting(true);
-    const newGroups = waGroups.filter((g) => !existingJids.has(g.jid));
-    for (const group of newGroups) {
-      await addTarget.mutateAsync({
-        name: group.name,
-        phone_number: group.jid,
-        type: 'group',
-        active: true,
-        notes: `${group.size} members`
-      });
+    try {
+      const newGroups = waGroups.filter((g) => !existingJids.has(g.jid));
+      for (const group of newGroups) {
+        await addTarget.mutateAsync({
+          name: group.name,
+          phone_number: group.jid,
+          type: 'group',
+          active: true,
+          notes: `${group.size} members`
+        });
+      }
+    } finally {
+      setImporting(false);
     }
-    setImporting(false);
   };
 
   const importAllChannels = async () => {
     setImporting(true);
-    const newChannels = waChannels.filter((c) => !existingJids.has(c.jid));
-    for (const channel of newChannels) {
-      await addTarget.mutateAsync({
-        name: channel.name,
-        phone_number: channel.jid,
-        type: 'channel',
-        active: true,
-        notes: `${channel.subscribers} subscribers`
-      });
+    try {
+      const newChannels = waChannels.filter((c) => !existingJids.has(c.jid));
+      for (const channel of newChannels) {
+        await addTarget.mutateAsync({
+          name: channel.name,
+          phone_number: channel.jid,
+          type: 'channel',
+          active: true,
+          notes: `${channel.subscribers} subscribers`
+        });
+      }
+    } finally {
+      setImporting(false);
     }
-    setImporting(false);
   };
 
   const addStatusBroadcast = () => {
@@ -267,7 +273,7 @@ const TargetsPage = () => {
             </div>
           </div>
           <div className="flex flex-wrap gap-1 pt-2">
-            {['all', 'group', 'channel', 'status'].map((type) => (
+            {['all', 'group', 'channel', 'status', 'individual'].map((type) => (
               <Button
                 key={type}
                 size="sm"

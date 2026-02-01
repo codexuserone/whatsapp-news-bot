@@ -5,7 +5,7 @@ const sleep = require('../utils/sleep');
 const logger = require('../utils/logger');
 
 const applyTemplate = (templateBody, data) => {
-  return templateBody.replace(/{{\s*(\w+)\s*}}/g, (_, key) => (data[key] !== undefined ? data[key] : ''));
+  return templateBody.replace(/{{\s*(\w+)\s*}}/g, (_, key) => (data[key] != null ? data[key] : ''));
 };
 
 const buildMessageData = (feedItem) => ({
@@ -34,15 +34,92 @@ const sendMessageWithTemplate = async (whatsappClient, target, template, feedIte
   }
 
   // Format phone number as JID
+  if (!target?.phone_number) {
+    throw new Error('Target phone number missing');
+  }
+
   const jid = target.phone_number.includes('@') 
     ? target.phone_number 
     : `${target.phone_number.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
 
   if (feedItem.image_url) {
-    return whatsappClient.sendMessage(jid, { image: { url: feedItem.image_url }, caption: text });
+    try {
+      return await whatsappClient.sendMessage(jid, { image: { url: feedItem.image_url }, caption: text });
+    } catch (error) {
+      logger.warn({ error, jid, imageUrl: feedItem.image_url }, 'Failed to send image, falling back to text');
+    }
   }
 
   return whatsappClient.sendMessage(jid, { text });
+};
+
+const ensurePendingLogsForSchedule = async (supabase, schedule, targets) => {
+  if (!schedule?.feed_id || !targets?.length) return;
+
+  const { data: pendingLogs, error: pendingLogsError } = await supabase
+    .from('message_logs')
+    .select('id')
+    .eq('schedule_id', schedule.id)
+    .eq('status', 'pending')
+    .limit(1);
+
+  if (pendingLogsError) {
+    logger.warn({ scheduleId: schedule.id, error: pendingLogsError }, 'Failed to check pending logs');
+    return;
+  }
+
+  if (pendingLogs?.length) return;
+
+  const { data: latestFeedItem, error: latestFeedItemError } = await supabase
+    .from('feed_items')
+    .select('id')
+    .eq('feed_id', schedule.feed_id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+
+  if (latestFeedItemError || !latestFeedItem) {
+    logger.info({ scheduleId: schedule.id }, 'No recent feed items found to queue');
+    return;
+  }
+
+  const targetIds = targets.map((target) => target.id);
+  const { data: existingLogs, error: existingLogsError } = await supabase
+    .from('message_logs')
+    .select('target_id')
+    .eq('schedule_id', schedule.id)
+    .eq('feed_item_id', latestFeedItem.id)
+    .in('target_id', targetIds)
+    .in('status', ['pending', 'sent']);
+
+  if (existingLogsError) {
+    logger.warn({ scheduleId: schedule.id, error: existingLogsError }, 'Failed to check existing logs');
+    return;
+  }
+
+  const existingTargets = new Set((existingLogs || []).map((log) => log.target_id));
+  const newLogs = targetIds
+    .filter((targetId) => !existingTargets.has(targetId))
+    .map((targetId) => ({
+      feed_item_id: latestFeedItem.id,
+      target_id: targetId,
+      schedule_id: schedule.id,
+      template_id: schedule.template_id,
+      status: 'pending'
+    }));
+
+  if (!newLogs.length) return;
+
+  const { error: insertError } = await supabase
+    .from('message_logs')
+    .insert(newLogs);
+
+  if (insertError) {
+    logger.warn({ scheduleId: schedule.id, error: insertError }, 'Failed to queue latest feed item');
+    return;
+  }
+
+  logger.info({ scheduleId: schedule.id, count: newLogs.length }, 'Queued latest feed item for dispatch');
 };
 
 const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
@@ -104,6 +181,13 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
       return { sent: 0, error: 'Manual dispatch requires feed items' };
     }
 
+    const whatsappStatus = whatsappClient?.getStatus?.();
+    if (!whatsappStatus || whatsappStatus.status !== 'connected') {
+      logger.warn({ scheduleId, whatsappStatus: whatsappStatus?.status || 'unknown' }, 
+        'Skipping send - WhatsApp not connected');
+      return { sent: 0, skipped: true, reason: 'WhatsApp not connected' };
+    }
+
     const settings = await settingsService.getSettings();
     const messageDelay = settings.message_delay_ms || 2000;
     
@@ -138,6 +222,8 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
       throw targetsError;
     }
     logger.info({ scheduleId, targetCount: targets?.length || 0 }, 'Found targets for schedule');
+
+    await ensurePendingLogsForSchedule(supabase, schedule, targets);
 
     // Get template
     const { data: template, error: templateError } = await supabase
@@ -183,21 +269,25 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
           continue;
         }
 
-        const since = new Date(Date.now() - (settings.log_retention_days || 30) * 24 * 60 * 60 * 1000);
         const jid = target.phone_number.includes('@') 
           ? target.phone_number 
           : `${target.phone_number.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
 
         // Check for duplicate based on feed item + target combination
-        const { data: existingSent } = await supabase
+        const { data: existingSent, error: existingSentError } = await supabase
           .from('message_logs')
           .select('id')
           .eq('feed_item_id', feedItem.id)
           .eq('target_id', target.id)
           .eq('status', 'sent')
-          .single();
+          .limit(1);
 
-        if (existingSent) {
+        if (existingSentError) {
+          logger.warn({ scheduleId, feedItemId: feedItem.id, targetId: target.id, error: existingSentError }, 
+            'Failed to check duplicate message log');
+        }
+
+        if (existingSent?.length) {
           await supabase
             .from('message_logs')
             .update({ status: 'failed', error_message: 'Already sent to this target' })
@@ -300,5 +390,39 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
 };
 
 module.exports = {
-  sendQueuedForSchedule
+  sendQueuedForSchedule,
+  sendPendingForAllSchedules: async (whatsappClient) => {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      logger.error('Database not available - cannot send pending messages');
+      return { sent: 0, schedules: 0, error: 'Database not available' };
+    }
+
+    try {
+      const { data: pendingLogs, error: pendingLogsError } = await supabase
+        .from('message_logs')
+        .select('schedule_id')
+        .eq('status', 'pending');
+
+      if (pendingLogsError) {
+        throw pendingLogsError;
+      }
+
+      const scheduleIds = [...new Set((pendingLogs || []).map((log) => log.schedule_id).filter(Boolean))];
+      let totalSent = 0;
+
+      for (const scheduleId of scheduleIds) {
+        const result = await sendQueuedForSchedule(scheduleId, whatsappClient);
+        if (result?.sent) {
+          totalSent += result.sent;
+        }
+      }
+
+      logger.info({ scheduleCount: scheduleIds.length, totalSent }, 'Processed pending schedules after reconnect');
+      return { sent: totalSent, schedules: scheduleIds.length };
+    } catch (error) {
+      logger.error({ error }, 'Failed to send pending schedules after reconnect');
+      return { sent: 0, schedules: 0, error: error.message };
+    }
+  }
 };

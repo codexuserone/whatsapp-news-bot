@@ -3,6 +3,7 @@ const { getSupabaseClient } = require('../db/supabase');
 const { fetchAndProcessFeed, queueFeedItemsForSchedules } = require('../services/feedProcessor');
 const { initSchedulers, triggerImmediateSchedules } = require('../services/schedulerService');
 const { fetchFeedItems } = require('../services/feedFetcher');
+const { validate, schemas } = require('../middleware/validation');
 
 const feedsRoutes = () => {
   const router = express.Router();
@@ -27,7 +28,7 @@ const feedsRoutes = () => {
       const items = await fetchFeedItems(testFeed);
 
       if (!items || items.length === 0) {
-        return res.json({ error: 'No items found in feed. Check the URL or feed type.' });
+        return res.status(404).json({ error: 'No items found in feed. Check the URL or feed type.' });
       }
 
       // Detect all fields from the first item
@@ -52,7 +53,7 @@ const feedsRoutes = () => {
       });
     } catch (error) {
       console.error('Error testing feed:', error);
-      res.json({ error: error.message || 'Failed to fetch feed' });
+      res.status(500).json({ error: error.message || 'Failed to fetch feed' });
     }
   });
 
@@ -71,7 +72,7 @@ const feedsRoutes = () => {
     }
   });
 
-  router.post('/', async (req, res) => {
+  router.post('/', validate(schemas.feed), async (req, res) => {
     try {
       const { data: feed, error } = await getDb()
         .from('feeds')
@@ -88,7 +89,7 @@ const feedsRoutes = () => {
     }
   });
 
-  router.put('/:id', async (req, res) => {
+  router.put('/:id', validate(schemas.feed), async (req, res) => {
     try {
       const { data: feed, error } = await getDb()
         .from('feeds')

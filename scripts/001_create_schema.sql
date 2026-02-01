@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS targets (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name TEXT NOT NULL,
   phone_number TEXT NOT NULL,
-  type TEXT NOT NULL DEFAULT 'individual' CHECK (type IN ('individual', 'group')),
+  type TEXT NOT NULL DEFAULT 'individual' CHECK (type IN ('individual', 'group', 'channel', 'status')),
   active BOOLEAN DEFAULT true,
   notes TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),

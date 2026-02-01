@@ -22,8 +22,8 @@ const feedsRoutes = () => {
         return res.status(400).json({ error: 'URL is required' });
       }
 
-      // Create a temporary feed object for testing
-      const testFeed = { url, type, cleaning: { stripUtm: true, decodeEntities: true } };
+      // Create a temporary feed object for testing (cleaning is optional, uses defaults)
+      const testFeed = { url, type };
       const items = await fetchFeedItems(testFeed);
 
       if (!items || items.length === 0) {

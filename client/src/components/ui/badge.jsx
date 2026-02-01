@@ -8,7 +8,8 @@ const Badge = React.forwardRef(({ className, variant = 'default', ...props }, re
     secondary: 'bg-ink/10 text-ink/70',
     success: 'bg-emerald-500 text-white',
     warning: 'bg-amber-400 text-ink',
-    danger: 'bg-red-500 text-white'
+    danger: 'bg-red-500 text-white',
+    destructive: 'bg-destructive text-destructive-foreground'
   };
 
   return (

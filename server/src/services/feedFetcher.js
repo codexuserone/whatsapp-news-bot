@@ -97,13 +97,15 @@ const fetchJsonItems = async (feed) => {
 const fetchFeedItems = async (feed) => {
   try {
     const items = feed.type === 'json' ? await fetchJsonItems(feed) : await fetchRssItems(feed);
+    // Default cleaning options - always strip UTM and decode HTML entities
+    const cleaning = feed.cleaning || { stripUtm: true, decodeEntities: true };
     return items
       .filter((item) => item.title || item.url) // Allow items with at least title OR url
       .map((item) => {
-        const cleanedTitle = applyCleaning(item.title || '', feed.cleaning);
-        const cleanedDescription = applyCleaning(item.description || '', feed.cleaning);
-        const cleanedContent = applyCleaning(item.content || '', feed.cleaning);
-        const cleanedUrl = feed.cleaning?.stripUtm && item.url ? removeUtm(item.url) : item.url;
+        const cleanedTitle = applyCleaning(item.title || '', cleaning);
+        const cleanedDescription = applyCleaning(item.description || '', cleaning);
+        const cleanedContent = applyCleaning(item.content || '', cleaning);
+        const cleanedUrl = cleaning?.stripUtm && item.url ? removeUtm(item.url) : item.url;
         return {
           ...item,
           title: cleanedTitle || 'Untitled',

@@ -11,6 +11,14 @@ import { Textarea } from '../components/ui/textarea';
 import { Checkbox } from '../components/ui/checkbox';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
+import {
+  Table,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell,
+  TableHeaderCell
+} from '../components/ui/table';
 
 const schema = z.object({
   name: z.string().min(1),

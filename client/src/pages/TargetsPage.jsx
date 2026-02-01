@@ -1,229 +1,373 @@
-import React, { useEffect, useState } from 'react';
-import { useForm, Controller } from 'react-hook-form';
-import { z } from 'zod';
-import { zodResolver } from '@hookform/resolvers/zod';
+import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import PageHeader from '../components/layout/PageHeader';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
-import { Input } from '../components/ui/input';
-import { Select } from '../components/ui/select';
-import { Checkbox } from '../components/ui/checkbox';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
-import { Table, TableHead, TableBody, TableRow, TableCell, TableHeaderCell } from '../components/ui/table';
+import { Input } from '../components/ui/input';
+import { Checkbox } from '../components/ui/checkbox';
+import {
+  Table,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell,
+  TableHeaderCell
+} from '../components/ui/table';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from '../components/ui/alert-dialog';
 
-const schema = z.object({
-  name: z.string().min(1),
-  type: z.enum(['individual', 'group']),
-  phone_number: z.string().min(1),
-  notes: z.string().optional(),
-  active: z.boolean().default(true)
-});
-
-const TYPE_LABELS = {
-  individual: 'Individual',
-  group: 'Group'
-};
-
-const TYPE_COLORS = {
-  individual: 'secondary',
-  group: 'success'
+const TYPE_BADGES = {
+  individual: { label: 'Individual', variant: 'secondary' },
+  group: { label: 'Group', variant: 'success' },
+  channel: { label: 'Channel', variant: 'default' },
+  status: { label: 'Status', variant: 'warning' }
 };
 
 const TargetsPage = () => {
   const queryClient = useQueryClient();
-  const { data: targets = [] } = useQuery({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
-  const [active, setActive] = useState(null);
+  const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('all');
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [importing, setImporting] = useState(false);
 
-  const filteredTargets = filterType === 'all' ? targets : targets.filter((t) => t.type === filterType);
-
-  const form = useForm({
-    resolver: zodResolver(schema),
-    defaultValues: { name: '', type: 'individual', phone_number: '', notes: '', active: true }
+  // Fetch existing targets
+  const { data: targets = [], isLoading: targetsLoading } = useQuery({
+    queryKey: ['targets'],
+    queryFn: () => api.get('/api/targets')
   });
 
-  useEffect(() => {
-    if (active) {
-      form.reset({
-        name: active.name,
-        type: active.type,
-        phone_number: active.phone_number,
-        notes: active.notes || '',
-        active: active.active ?? true
-      });
-    }
-  }, [active, form]);
-
-  const saveTarget = useMutation({
-    mutationFn: (payload) =>
-      active ? api.put(`/api/targets/${active.id}`, payload) : api.post('/api/targets', payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['targets'] });
-      setActive(null);
-      form.reset();
-    }
+  // Fetch WhatsApp status
+  const { data: waStatus } = useQuery({
+    queryKey: ['whatsapp-status'],
+    queryFn: () => api.get('/api/whatsapp/status'),
+    refetchInterval: 5000
   });
 
-  const deleteTarget = useMutation({
-    mutationFn: (id) => api.delete(`/api/targets/${id}`),
+  // Fetch WhatsApp groups (only when connected)
+  const { data: waGroups = [], refetch: refetchGroups } = useQuery({
+    queryKey: ['whatsapp-groups'],
+    queryFn: () => api.get('/api/whatsapp/groups'),
+    enabled: waStatus?.status === 'connected'
+  });
+
+  // Fetch WhatsApp channels (only when connected)
+  const { data: waChannels = [], refetch: refetchChannels } = useQuery({
+    queryKey: ['whatsapp-channels'],
+    queryFn: () => api.get('/api/whatsapp/channels'),
+    enabled: waStatus?.status === 'connected'
+  });
+
+  const isConnected = waStatus?.status === 'connected';
+  const existingJids = new Set(targets.map((t) => t.phone_number));
+
+  // Mutations
+  const addTarget = useMutation({
+    mutationFn: (payload) => api.post('/api/targets', payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] })
   });
 
-  const onSubmit = (values) => {
-    saveTarget.mutate({
-      name: values.name,
-      type: values.type,
-      phone_number: values.phone_number,
-      notes: values.notes,
-      active: values.active
-    });
+  const updateTarget = useMutation({
+    mutationFn: ({ id, ...payload }) => api.put(`/api/targets/${id}`, payload),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] })
+  });
+
+  const removeTarget = useMutation({
+    mutationFn: (id) => api.delete(`/api/targets/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+      setDeleteTarget(null);
+    }
+  });
+
+  // Import all groups at once
+  const importAllGroups = async () => {
+    setImporting(true);
+    const newGroups = waGroups.filter((g) => !existingJids.has(g.jid));
+    for (const group of newGroups) {
+      await addTarget.mutateAsync({
+        name: group.name,
+        phone_number: group.jid,
+        type: 'group',
+        active: true,
+        notes: `${group.size} members`
+      });
+    }
+    setImporting(false);
   };
 
-  const groupCount = targets.filter((t) => t.type === 'group').length;
-  const individualCount = targets.filter((t) => t.type === 'individual').length;
+  // Import all channels at once
+  const importAllChannels = async () => {
+    setImporting(true);
+    const newChannels = waChannels.filter((c) => !existingJids.has(c.jid));
+    for (const channel of newChannels) {
+      await addTarget.mutateAsync({
+        name: channel.name,
+        phone_number: channel.jid,
+        type: 'channel',
+        active: true,
+        notes: `${channel.subscribers} subscribers`
+      });
+    }
+    setImporting(false);
+  };
+
+  // Add status broadcast
+  const addStatusBroadcast = () => {
+    if (!existingJids.has('status@broadcast')) {
+      addTarget.mutate({
+        name: 'My Status',
+        phone_number: 'status@broadcast',
+        type: 'status',
+        active: true,
+        notes: 'Posts to your WhatsApp Status'
+      });
+    }
+  };
+
+  // Filter targets
+  const filteredTargets = targets.filter((t) => {
+    const matchesSearch =
+      !search ||
+      t.name.toLowerCase().includes(search.toLowerCase()) ||
+      t.phone_number.toLowerCase().includes(search.toLowerCase());
+    const matchesType = filterType === 'all' || t.type === filterType;
+    return matchesSearch && matchesType;
+  });
+
+  // Count by type
+  const counts = {
+    all: targets.length,
+    group: targets.filter((t) => t.type === 'group').length,
+    channel: targets.filter((t) => t.type === 'channel').length,
+    status: targets.filter((t) => t.type === 'status').length,
+    individual: targets.filter((t) => t.type === 'individual').length
+  };
+
+  // Available to import
+  const availableGroups = waGroups.filter((g) => !existingJids.has(g.jid));
+  const availableChannels = waChannels.filter((c) => !existingJids.has(c.jid));
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <PageHeader
         title="Targets"
-        subtitle="Manage WhatsApp groups, channels, and status as message destinations."
+        subtitle="Import WhatsApp groups and channels as message destinations."
       />
 
-      {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Card className="cursor-pointer hover:border-ink/30" onClick={() => setFilterType('individual')}>
-          <CardContent className="p-4">
-            <p className="text-2xl font-bold">{individualCount}</p>
-            <p className="text-sm text-ink/60">Individuals</p>
-          </CardContent>
-        </Card>
-        <Card className="cursor-pointer hover:border-ink/30" onClick={() => setFilterType('group')}>
-          <CardContent className="p-4">
-            <p className="text-2xl font-bold">{groupCount}</p>
-            <p className="text-sm text-ink/60">Groups</p>
-          </CardContent>
-        </Card>
-      </div>
+      {/* WhatsApp Connection Status */}
+      {!isConnected && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <div className="rounded-full bg-amber-100 p-2">
+              <svg className="h-5 w-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="font-medium text-amber-800">WhatsApp Not Connected</h3>
+              <p className="text-sm text-amber-700 mt-1">
+                Connect WhatsApp first to import groups and channels automatically.
+              </p>
+              <Button variant="outline" size="sm" className="mt-3" asChild>
+                <a href="/whatsapp">Go to WhatsApp Console</a>
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
-      <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>{active ? 'Edit Target' : 'Create Target'}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Name</label>
-                  <Input {...form.register('name')} placeholder="John Doe" />
+      {/* Quick Import Section */}
+      {isConnected && (
+        <div className="grid gap-4 sm:grid-cols-3">
+          {/* Import Groups */}
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">Groups</p>
+                  <p className="text-sm text-muted-foreground">
+                    {availableGroups.length} available to import
+                  </p>
                 </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Type</label>
-                  <Select {...form.register('type')}>
-                    <option value="individual">Individual</option>
-                    <option value="group">Group</option>
-                  </Select>
-                </div>
-              </div>
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Phone Number / JID</label>
-                  <Input {...form.register('phone_number')} placeholder="1234567890 or 1234567890@g.us" />
-                  <p className="text-xs text-ink/50">For groups, use the full JID ending in @g.us</p>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Notes (optional)</label>
-                  <Input {...form.register('notes')} placeholder="Any additional notes" />
-                </div>
-              </div>
-              <Controller
-                control={form.control}
-                name="active"
-                render={({ field }) => (
-                  <label className="flex items-center gap-2 text-sm font-medium">
-                    <Checkbox checked={field.value} onChange={(e) => field.onChange(e.target.checked)} />
-                    Active
-                  </label>
-                )}
-              />
-              <div className="flex gap-2">
-                <Button type="submit" disabled={saveTarget.isPending}>
-                  {saveTarget.isPending ? 'Saving...' : active ? 'Update Target' : 'Save Target'}
+                <Button
+                  size="sm"
+                  onClick={importAllGroups}
+                  disabled={importing || availableGroups.length === 0}
+                >
+                  {importing ? 'Importing...' : 'Import All'}
                 </Button>
-                {active && (
-                  <Button type="button" variant="outline" onClick={() => { setActive(null); form.reset(); }}>
-                    Cancel
-                  </Button>
-                )}
               </div>
-            </form>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Targets ({filteredTargets.length})</CardTitle>
-            <Select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="w-auto">
-              <option value="all">All Types</option>
-              <option value="individual">Individuals</option>
-              <option value="group">Groups</option>
-            </Select>
-          </CardHeader>
-          <CardContent>
+          {/* Import Channels */}
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">Channels</p>
+                  <p className="text-sm text-muted-foreground">
+                    {availableChannels.length} available to import
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={importAllChannels}
+                  disabled={importing || availableChannels.length === 0}
+                >
+                  {importing ? 'Importing...' : 'Import All'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Status Broadcast */}
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">Status Broadcast</p>
+                  <p className="text-sm text-muted-foreground">Post to your WhatsApp Status</p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={addStatusBroadcast}
+                  disabled={existingJids.has('status@broadcast')}
+                >
+                  {existingJids.has('status@broadcast') ? 'Added' : 'Add'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Targets List */}
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <CardTitle>Saved Targets ({targets.length})</CardTitle>
+            <div className="flex flex-wrap gap-2">
+              <Input
+                placeholder="Search targets..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-48"
+              />
+              <div className="flex gap-1">
+                {['all', 'group', 'channel', 'status'].map((type) => (
+                  <Button
+                    key={type}
+                    size="sm"
+                    variant={filterType === type ? 'default' : 'outline'}
+                    onClick={() => setFilterType(type)}
+                  >
+                    {type === 'all' ? 'All' : TYPE_BADGES[type]?.label || type}
+                    <Badge variant="secondary" className="ml-1.5">
+                      {counts[type]}
+                    </Badge>
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {targetsLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground/20 border-t-foreground" />
+            </div>
+          ) : filteredTargets.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-muted-foreground">
+                {targets.length === 0
+                  ? 'No targets yet. Import groups from WhatsApp above.'
+                  : 'No targets match your search.'}
+              </p>
+            </div>
+          ) : (
             <Table>
               <TableHead>
                 <TableRow>
+                  <TableHeaderCell>Active</TableHeaderCell>
                   <TableHeaderCell>Name</TableHeaderCell>
-                  <TableHeaderCell>Phone/JID</TableHeaderCell>
                   <TableHeaderCell>Type</TableHeaderCell>
-                  <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>JID / Phone</TableHeaderCell>
+                  <TableHeaderCell>Notes</TableHeaderCell>
                   <TableHeaderCell>Actions</TableHeaderCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {filteredTargets.map((target) => (
                   <TableRow key={target.id}>
-                    <TableCell className="font-medium">{target.name}</TableCell>
-                    <TableCell className="font-mono text-xs">{target.phone_number}</TableCell>
                     <TableCell>
-                      <Badge variant={TYPE_COLORS[target.type]}>{TYPE_LABELS[target.type]}</Badge>
+                      <Checkbox
+                        checked={target.active}
+                        onChange={(e) =>
+                          updateTarget.mutate({ id: target.id, active: e.target.checked })
+                        }
+                      />
                     </TableCell>
+                    <TableCell className="font-medium">{target.name}</TableCell>
                     <TableCell>
-                      <Badge variant={target.active ? 'success' : 'secondary'}>
-                        {target.active ? 'Active' : 'Disabled'}
+                      <Badge variant={TYPE_BADGES[target.type]?.variant || 'secondary'}>
+                        {TYPE_BADGES[target.type]?.label || target.type}
                       </Badge>
                     </TableCell>
+                    <TableCell className="font-mono text-xs max-w-[200px] truncate">
+                      {target.phone_number}
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground max-w-[150px] truncate">
+                      {target.notes || '-'}
+                    </TableCell>
                     <TableCell>
-                      <div className="flex gap-2">
-                        <Button size="sm" variant="outline" onClick={() => setActive(target)}>
-                          Edit
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => deleteTarget.mutate(target.id)}>
-                          Delete
-                        </Button>
-                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDeleteTarget(target)}
+                      >
+                        Delete
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}
-                {filteredTargets.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-center text-ink/50">
-                      No targets found. Create one to start sending messages.
-                    </TableCell>
-                  </TableRow>
-                )}
               </TableBody>
             </Table>
-          </CardContent>
-        </Card>
-      </section>
+          )}
+        </CardContent>
+      </Card>
 
-      <div className="rounded-2xl border border-ink/10 bg-surface p-4 text-sm text-ink/60">
-        <strong>Tip:</strong> Import targets directly from the{' '}
-        <a href="/whatsapp" className="text-brand underline">WhatsApp Console</a> for easier setup.
-      </div>
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Target</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{deleteTarget?.name}"? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => removeTarget.mutate(deleteTarget.id)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

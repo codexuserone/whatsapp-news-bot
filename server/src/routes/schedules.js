@@ -101,7 +101,15 @@ const scheduleRoutes = () => {
   router.post('/:id/dispatch', async (req, res) => {
     try {
       const whatsapp = req.app.locals.whatsapp;
+      const status = whatsapp?.getStatus?.();
+      if (!status || status.status !== 'connected') {
+        return res.status(400).json({ error: 'WhatsApp not connected. Connect and try again.' });
+      }
+
       const result = await sendQueuedForSchedule(req.params.id, whatsapp);
+      if (result?.error) {
+        return res.status(500).json(result);
+      }
       res.json(result);
     } catch (error) {
       console.error('Error dispatching schedule:', error);

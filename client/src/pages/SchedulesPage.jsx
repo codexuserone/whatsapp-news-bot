@@ -77,7 +77,20 @@ const SchedulesPage = () => {
 
   const dispatchSchedule = useMutation({
     mutationFn: (id) => api.post(`/api/schedules/${id}/dispatch`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['logs'] })
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['logs'] });
+      // Show success toast
+      const message = data?.sent > 0 
+        ? `Successfully sent ${data.sent} message${data.sent !== 1 ? 's' : ''}`
+        : 'No messages were sent';
+      // You can add a toast library here, for now using alert
+      alert(message);
+    },
+    onError: (error) => {
+      // Show error toast
+      const message = error?.response?.data?.error || error?.message || 'Failed to dispatch schedule';
+      alert(`Error: ${message}`);
+    }
   });
 
   const onSubmit = (values) => {

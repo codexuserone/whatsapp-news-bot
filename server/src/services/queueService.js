@@ -29,9 +29,8 @@ const sendMessageWithTemplate = async (whatsappClient, target, template, feedIte
     throw new Error('Template rendered empty message');
   }
 
-  const socket = whatsappClient.socket;
-  if (!socket) {
-    throw new Error('WhatsApp socket not connected');
+  if (!whatsappClient || whatsappClient.getStatus().status !== 'connected') {
+    throw new Error('WhatsApp not connected');
   }
 
   // Format phone number as JID
@@ -40,20 +39,21 @@ const sendMessageWithTemplate = async (whatsappClient, target, template, feedIte
     : `${target.phone_number.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
 
   if (feedItem.image_url) {
-    if (target.type === 'group') {
-      return socket.sendMessage(jid, { image: { url: feedItem.image_url }, caption: text });
-    }
-    return socket.sendMessage(jid, { image: { url: feedItem.image_url }, caption: text });
+    return whatsappClient.sendMessage(jid, { image: { url: feedItem.image_url }, caption: text });
   }
 
-  return socket.sendMessage(jid, { text });
+  return whatsappClient.sendMessage(jid, { text });
 };
 
 const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
   const supabase = getSupabaseClient();
-  if (!supabase) return { sent: 0 };
+  if (!supabase) {
+    logger.error({ scheduleId }, 'Database not available - cannot send messages');
+    return { sent: 0, error: 'Database not available' };
+  }
   
   try {
+    logger.info({ scheduleId }, 'Starting dispatch for schedule');
     // Check if currently Shabbos/Yom Tov - if so, skip sending but keep messages queued
     const shabbosStatus = await isCurrentlyShabbos();
     if (shabbosStatus.isShabbos) {
@@ -75,11 +75,56 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
       .single();
 
     if (scheduleError || !schedule || !schedule.active) {
+      logger.warn({ scheduleId, error: scheduleError?.message, schedule, active: schedule?.active }, 
+        'Schedule not found or inactive');
       return { sent: 0 };
+    }
+
+    // Check if schedule has feed_id - if not, it's a manual dispatch only
+    if (!schedule.feed_id) {
+      logger.warn({ scheduleId }, 'Schedule has no feed_id - manual dispatch only');
+      // For manual dispatch, we need to look for pending logs without feed items
+      const { data: manualLogs, error: manualLogsError } = await supabase
+        .from('message_logs')
+        .select('*')
+        .eq('schedule_id', scheduleId)
+        .eq('status', 'pending')
+        .is('feed_item_id', null);
+
+      if (manualLogsError) throw manualLogsError;
+      
+      if (!manualLogs || manualLogs.length === 0) {
+        logger.info({ scheduleId }, 'No pending manual messages to send');
+        return { sent: 0 };
+      }
+
+      // For manual dispatch, we can't proceed without feed items
+      logger.warn({ scheduleId, count: manualLogs.length }, 
+        'Pending manual logs found but no feed items - cannot send');
+      return { sent: 0, error: 'Manual dispatch requires feed items' };
     }
 
     const settings = await settingsService.getSettings();
     const messageDelay = settings.message_delay_ms || 2000;
+    
+    // Rate limiting: check if we sent messages too recently
+    const minDelayBetweenSends = settings.defaultInterTargetDelaySec ? settings.defaultInterTargetDelaySec * 1000 : messageDelay;
+    const recentSends = await supabase
+      .from('message_logs')
+      .select('sent_at')
+      .eq('status', 'sent')
+      .gte('sent_at', new Date(Date.now() - minDelayBetweenSends).toISOString())
+      .limit(1);
+    
+    if (recentSends.data && recentSends.data.length > 0) {
+      const lastSent = new Date(recentSends.data[0].sent_at);
+      const timeSinceLastSend = Date.now() - lastSent.getTime();
+      if (timeSinceLastSend < minDelayBetweenSends) {
+        const waitTime = Math.ceil((minDelayBetweenSends - timeSinceLastSend) / 1000);
+        logger.info({ scheduleId, waitTime }, 'Rate limiting - waiting before sending');
+        await sleep(minDelayBetweenSends - timeSinceLastSend);
+      }
+    }
 
     // Get targets
     const { data: targets, error: targetsError } = await supabase
@@ -88,7 +133,11 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
       .in('id', schedule.target_ids || [])
       .eq('active', true);
 
-    if (targetsError) throw targetsError;
+    if (targetsError) {
+      logger.error({ scheduleId, error: targetsError }, 'Failed to fetch targets');
+      throw targetsError;
+    }
+    logger.info({ scheduleId, targetCount: targets?.length || 0 }, 'Found targets for schedule');
 
     // Get template
     const { data: template, error: templateError } = await supabase
@@ -98,8 +147,11 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
       .single();
 
     if (templateError || !template) {
+      logger.error({ scheduleId, templateId: schedule.template_id, error: templateError }, 
+        'Template not found for schedule');
       throw new Error('Template not found for schedule');
     }
+    logger.info({ scheduleId, templateId: template.id }, 'Found template for schedule');
 
     let sentCount = 0;
 
@@ -155,6 +207,18 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
 
         try {
           const messageContent = applyTemplate(template.content, buildMessageData(feedItem));
+          
+          // Validate rendered message before sending
+          if (!messageContent || messageContent.trim().length === 0) {
+            logger.warn({ scheduleId, feedItemId: feedItem.id, targetId: target.id }, 
+              'Template rendered empty message - skipping');
+            await supabase
+              .from('message_logs')
+              .update({ status: 'failed', error_message: 'Template rendered empty message' })
+              .eq('id', log.id);
+            continue;
+          }
+          
           const response = await sendMessageWithTemplate(whatsappClient, target, template, feedItem);
           
           await supabase
@@ -174,10 +238,46 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
             await whatsappClient.waitForMessage(response.key.id);
           }
         } catch (error) {
-          logger.error({ error }, 'Failed to send message');
+          logger.error({ error, scheduleId, feedItemId: feedItem.id, targetId: target.id }, 'Failed to send message');
+          
+          // Check if we should retry
+          const maxRetries = settings.max_retries || 3;
+          const currentRetry = log.retry_count || 0;
+          
+          if (currentRetry < maxRetries) {
+            // Calculate exponential backoff delay
+            const retryDelay = Math.min(1000 * Math.pow(2, currentRetry), 30000);
+            logger.info({ 
+              scheduleId, 
+              feedItemId: feedItem.id, 
+              targetId: target.id, 
+              retry: currentRetry + 1, 
+              maxRetries,
+              retryDelay 
+            }, 'Retrying failed message');
+            
+            // Update retry count and keep as pending
+            await supabase
+              .from('message_logs')
+              .update({ 
+                status: 'pending', 
+                error_message: `Retry ${currentRetry + 1}/${maxRetries}: ${error.message}`,
+                retry_count: currentRetry + 1
+              })
+              .eq('id', log.id);
+            
+            // Wait before retrying
+            await sleep(retryDelay);
+            continue; // Skip to next iteration to retry this message
+          }
+          
+          // Max retries reached, mark as failed
           await supabase
             .from('message_logs')
-            .update({ status: 'failed', error_message: error.message })
+            .update({ 
+              status: 'failed', 
+              error_message: `Max retries (${maxRetries}) exceeded: ${error.message}` 
+            })
             .eq('id', log.id);
         }
 
@@ -191,6 +291,7 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
       .update({ last_run_at: new Date().toISOString() })
       .eq('id', scheduleId);
 
+    logger.info({ scheduleId, sentCount }, 'Dispatch completed successfully');
     return { sent: sentCount };
   } catch (error) {
     logger.error({ error, scheduleId }, 'Failed to send queued messages');

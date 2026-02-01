@@ -18,6 +18,14 @@ const triggerImmediateSchedules = async (feedId, whatsappClient) => {
   const supabase = getSupabaseClient();
   if (!supabase) return;
   
+  // Check WhatsApp connection before triggering
+  const status = whatsappClient?.getStatus?.();
+  if (!status || status.status !== 'connected') {
+    logger.warn({ feedId, whatsappStatus: status?.status || 'unknown' }, 
+      'Skipping immediate schedules - WhatsApp not connected');
+    return;
+  }
+  
   try {
     const { data: schedules, error } = await supabase
       .from('schedules')
@@ -28,6 +36,7 @@ const triggerImmediateSchedules = async (feedId, whatsappClient) => {
     if (error) throw error;
 
     const immediateSchedules = (schedules || []).filter(s => !s.cron_expression);
+    logger.info({ feedId, count: immediateSchedules.length }, 'Triggering immediate schedules');
     
     for (const schedule of immediateSchedules) {
       await sendQueuedForSchedule(schedule.id, whatsappClient);

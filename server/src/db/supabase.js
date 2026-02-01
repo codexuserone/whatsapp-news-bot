@@ -10,17 +10,23 @@ function getSupabaseClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
 
+  console.log('[v0] Supabase URL available:', !!supabaseUrl);
+  console.log('[v0] Supabase Key available:', !!supabaseKey);
+
   if (!supabaseUrl || !supabaseKey) {
-    console.error('Missing Supabase credentials. Please set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY environment variables.');
+    console.error('[v0] Missing Supabase credentials.');
+    console.error('[v0] Available env vars with SUPA:', Object.keys(process.env).filter(k => k.includes('SUPA')).join(', '));
     return null;
   }
 
+  console.log('[v0] Creating Supabase client...');
   _supabase = createClient(supabaseUrl, supabaseKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false
     }
   });
+  console.log('[v0] Supabase client created successfully');
   
   return _supabase;
 }

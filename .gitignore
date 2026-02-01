@@ -7,4 +7,5 @@ yarn-debug.log*
 yarn-error.log*
 client/dist/
 server/dist/
+server/public/
 coverage/

@@ -22,7 +22,18 @@ export default {
           DEFAULT: '#d36b2d',
           dark: '#9a461b'
         },
-        highlight: '#f7c86b'
+        highlight: '#f7c86b',
+        destructive: {
+          DEFAULT: '#dc2626',
+          foreground: '#ffffff'
+        },
+        muted: {
+          DEFAULT: '#f3f4f6',
+          foreground: '#6b7280'
+        },
+        border: '#e5e7eb',
+        foreground: '#1b1a1a',
+        background: '#f6f2ed'
       },
       boxShadow: {
         soft: '0 12px 40px -20px rgba(31, 23, 17, 0.35)'

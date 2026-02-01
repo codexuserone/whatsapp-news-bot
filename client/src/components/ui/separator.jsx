@@ -1,8 +1,18 @@
-import React from 'react';
+import * as React from 'react';
 import { cn } from '../../lib/utils';
 
-const Separator = React.forwardRef(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn('h-px w-full bg-ink/10', className)} {...props} />
+const Separator = React.forwardRef(({ className, orientation = 'horizontal', decorative = true, ...props }, ref) => (
+  <div
+    ref={ref}
+    role={decorative ? 'none' : 'separator'}
+    aria-orientation={orientation}
+    className={cn(
+      'shrink-0 bg-border',
+      orientation === 'horizontal' ? 'h-[1px] w-full' : 'h-full w-[1px]',
+      className
+    )}
+    {...props}
+  />
 ));
 Separator.displayName = 'Separator';
 

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { ChevronRight } from 'lucide-react';
 import { navLookup } from '../../lib/navigation';
 import { cn } from '../../lib/utils';
 
@@ -16,22 +17,22 @@ const Breadcrumbs = () => {
     crumbs.push({ label, to });
   });
 
-  if (location.hash) {
-    const hashLabel = navLookup[`/settings${location.hash}`] || titleCase(location.hash.slice(1));
-    crumbs.push({ label: hashLabel, to: `${location.pathname}${location.hash}` });
-  }
-
   return (
-    <nav className="flex flex-wrap items-center gap-2 text-sm text-ink/60">
+    <nav className="flex items-center gap-1 text-sm">
       {crumbs.map((crumb, index) => (
         <React.Fragment key={`${crumb.to}-${index}`}>
+          {index > 0 && <ChevronRight className="h-4 w-4 text-muted-foreground" />}
           <Link
             to={crumb.to}
-            className={cn('rounded-full px-2 py-1 transition hover:bg-ink/10', index === crumbs.length - 1 && 'text-ink')}
+            className={cn(
+              'rounded-md px-2 py-1 transition-colors hover:bg-accent',
+              index === crumbs.length - 1 
+                ? 'font-medium text-foreground' 
+                : 'text-muted-foreground hover:text-foreground'
+            )}
           >
             {crumb.label}
           </Link>
-          {index < crumbs.length - 1 && <span className="text-ink/30">/</span>}
         </React.Fragment>
       ))}
     </nav>

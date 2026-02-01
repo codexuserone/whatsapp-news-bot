@@ -1,15 +1,15 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import PageHeader from '../components/layout/PageHeader';
-import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Select } from '../components/ui/select';
 import { Badge } from '../components/ui/badge';
-import { Table, TableHead, TableBody, TableRow, TableCell, TableHeaderCell } from '../components/ui/table';
+import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '../components/ui/table';
+import { Activity, Loader2 } from 'lucide-react';
 
 const STATUS_COLORS = {
   sent: 'success',
-  failed: 'danger',
+  failed: 'destructive',
   pending: 'warning'
 };
 
@@ -22,53 +22,69 @@ const LogsPage = () => {
   });
 
   return (
-    <div className="space-y-8">
-      <PageHeader title="Logs" subtitle="Inspect sent and failed delivery attempts." />
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Logs</h1>
+        <p className="text-muted-foreground">Inspect sent and failed delivery attempts.</p>
+      </div>
+
       <Card>
         <CardHeader>
-          <CardTitle>Delivery Logs ({logs.length})</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="mb-4 max-w-xs">
-            <Select value={status} onChange={(event) => setStatus(event.target.value)}>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Activity className="h-5 w-5" />
+                Delivery Logs
+              </CardTitle>
+              <CardDescription>{logs.length} log{logs.length !== 1 ? 's' : ''}</CardDescription>
+            </div>
+            <Select value={status} onChange={(event) => setStatus(event.target.value)} className="w-40">
               <option value="">All statuses</option>
               <option value="pending">Pending</option>
               <option value="sent">Sent</option>
               <option value="failed">Failed</option>
             </Select>
           </div>
+        </CardHeader>
+        <CardContent>
           {isLoading ? (
-            <div className="text-center py-8 text-ink/50">Loading logs...</div>
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
           ) : (
             <Table>
-              <TableHead>
+              <TableHeader>
                 <TableRow>
                   <TableHeaderCell>Status</TableHeaderCell>
                   <TableHeaderCell>Target</TableHeaderCell>
-                  <TableHeaderCell>Schedule</TableHeaderCell>
-                  <TableHeaderCell>Message</TableHeaderCell>
+                  <TableHeaderCell className="hidden md:table-cell">Schedule</TableHeaderCell>
+                  <TableHeaderCell className="hidden lg:table-cell">Message</TableHeaderCell>
                   <TableHeaderCell>Time</TableHeaderCell>
                 </TableRow>
-              </TableHead>
+              </TableHeader>
               <TableBody>
                 {logs.map((log) => (
                   <TableRow key={log.id}>
                     <TableCell>
-                      <Badge variant={STATUS_COLORS[log.status] || 'secondary'} className="capitalize">
+                      <Badge variant={STATUS_COLORS[log.status] || 'secondary'}>
                         {log.status}
                       </Badge>
                     </TableCell>
-                    <TableCell>{log.target?.name || log.target_id}</TableCell>
-                    <TableCell>{log.schedule?.name || log.schedule_id || '—'}</TableCell>
-                    <TableCell className="max-w-xs truncate" title={log.message_content}>
-                      {log.message_content ? log.message_content.substring(0, 50) + '...' : '—'}
+                    <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>
+                    <TableCell className="hidden text-muted-foreground md:table-cell">
+                      {log.schedule?.name || log.schedule_id || '—'}
                     </TableCell>
-                    <TableCell>{new Date(log.sent_at || log.created_at).toLocaleString()}</TableCell>
+                    <TableCell className="hidden max-w-xs truncate text-muted-foreground lg:table-cell" title={log.message_content}>
+                      {log.message_content?.substring(0, 50) || '—'}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {new Date(log.sent_at || log.created_at).toLocaleString()}
+                    </TableCell>
                   </TableRow>
                 ))}
                 {logs.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-ink/50">
+                    <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
                       No logs found.
                     </TableCell>
                   </TableRow>

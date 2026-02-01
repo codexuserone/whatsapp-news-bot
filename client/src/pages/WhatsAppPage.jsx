@@ -1,10 +1,10 @@
 import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import PageHeader from '../components/layout/PageHeader';
-import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
+import { RefreshCw, Power, CheckCircle, QrCode, Users, Radio, Loader2 } from 'lucide-react';
 
 const WhatsAppPage = () => {
   const queryClient = useQueryClient();
@@ -77,62 +77,66 @@ const WhatsAppPage = () => {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="WhatsApp Console"
-        subtitle="Connect WhatsApp to send automated messages to groups and channels."
-        actions={
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              onClick={() => disconnect.mutate()}
-              disabled={disconnect.isPending || !isConnected}
-            >
-              {disconnect.isPending ? 'Disconnecting...' : 'Disconnect'}
-            </Button>
-            <Button onClick={() => hardRefresh.mutate()} disabled={hardRefresh.isPending}>
-              {hardRefresh.isPending ? 'Refreshing...' : 'Hard Refresh'}
-            </Button>
-          </div>
-        }
-      />
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">WhatsApp Console</h1>
+          <p className="text-muted-foreground">Connect and manage your WhatsApp integration.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            onClick={() => disconnect.mutate()}
+            disabled={disconnect.isPending || !isConnected}
+          >
+            <Power className="mr-2 h-4 w-4" />
+            {disconnect.isPending ? 'Disconnecting...' : 'Disconnect'}
+          </Button>
+          <Button onClick={() => hardRefresh.mutate()} disabled={hardRefresh.isPending}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${hardRefresh.isPending ? 'animate-spin' : ''}`} />
+            {hardRefresh.isPending ? 'Refreshing...' : 'Hard Refresh'}
+          </Button>
+        </div>
+      </div>
 
       {/* Connection & QR Code */}
-      <section className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center justify-between">
-              Connection Status
+            <div className="flex items-center justify-between">
+              <CardTitle>Connection Status</CardTitle>
               {getStatusBadge()}
-            </CardTitle>
+            </div>
+            <CardDescription>WhatsApp Web connection state</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
+            <div className="space-y-3">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-ink/60">Status</span>
+                <span className="text-muted-foreground">Status</span>
                 <span className="font-medium">{status?.status || 'Unknown'}</span>
               </div>
               <div className="flex items-center justify-between text-sm">
-                <span className="text-ink/60">Last Connected</span>
+                <span className="text-muted-foreground">Last Connected</span>
                 <span className="font-medium">
                   {status?.lastSeenAt ? new Date(status.lastSeenAt).toLocaleString() : 'Never'}
                 </span>
               </div>
-              {status?.lastError && (
-                <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
-                  <strong>Error:</strong> {status.lastError}
-                </div>
-              )}
             </div>
             
+            {status?.lastError && (
+              <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+                <strong>Error:</strong> {status.lastError}
+              </div>
+            )}
+            
             {!isConnected && !isQrReady && (
-              <div className="rounded-lg border border-ink/10 bg-amber-50 p-3 text-sm text-amber-800">
+              <div className="rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
                 Click <strong>Hard Refresh</strong> to generate a new QR code.
               </div>
             )}
             
             {isConnected && (
-              <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">
-                WhatsApp is connected. You can now import groups and channels below.
+              <div className="rounded-lg bg-success/10 p-3 text-sm text-green-700">
+                WhatsApp is connected. Import groups and channels below.
               </div>
             )}
           </CardContent>
@@ -140,56 +144,60 @@ const WhatsAppPage = () => {
 
         <Card>
           <CardHeader>
-            <CardTitle>QR Code</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <QrCode className="h-5 w-5" />
+              QR Code
+            </CardTitle>
+            <CardDescription>Scan to connect your WhatsApp</CardDescription>
           </CardHeader>
           <CardContent className="flex min-h-[280px] items-center justify-center">
             {isConnected ? (
-              <div className="text-center space-y-2">
-                <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
-                  <svg className="h-8 w-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
+              <div className="text-center space-y-3">
+                <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-success/10">
+                  <CheckCircle className="h-8 w-8 text-green-600" />
                 </div>
-                <p className="text-sm text-ink/60">WhatsApp is connected</p>
+                <p className="text-sm text-muted-foreground">WhatsApp is connected</p>
               </div>
             ) : qr?.qr ? (
               <div className="text-center space-y-3">
                 <img 
                   src={qr.qr} 
                   alt="WhatsApp QR Code" 
-                  className="h-56 w-56 rounded-xl border border-ink/10 bg-white p-2" 
+                  className="h-56 w-56 rounded-lg border bg-white p-2" 
                 />
-                <p className="text-sm text-ink/60">Scan with WhatsApp on your phone</p>
+                <p className="text-sm text-muted-foreground">Scan with WhatsApp on your phone</p>
               </div>
             ) : (
-              <div className="text-center space-y-2">
-                <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-ink/5 animate-pulse">
-                  <svg className="h-8 w-8 text-ink/30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
-                  </svg>
+              <div className="text-center space-y-3">
+                <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-muted animate-pulse">
+                  <QrCode className="h-8 w-8 text-muted-foreground" />
                 </div>
-                <p className="text-sm text-ink/50">Waiting for QR code...</p>
-                <p className="text-xs text-ink/40">Click Hard Refresh if nothing appears</p>
+                <p className="text-sm text-muted-foreground">Waiting for QR code...</p>
+                <p className="text-xs text-muted-foreground">Click Hard Refresh if nothing appears</p>
               </div>
             )}
           </CardContent>
         </Card>
-      </section>
+      </div>
 
       {/* Status Broadcast */}
       <Card>
         <CardHeader>
-          <CardTitle>Status Broadcast</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <Radio className="h-5 w-5" />
+            Status Broadcast
+          </CardTitle>
+          <CardDescription>Post to your WhatsApp Status (visible to all contacts)</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center justify-between rounded-lg border border-ink/10 bg-white/50 p-4">
+          <div className="flex items-center justify-between rounded-lg border p-4">
             <div>
               <p className="font-medium">My Status</p>
-              <p className="text-sm text-ink/60">Post to your WhatsApp Status (visible to contacts)</p>
+              <p className="text-sm text-muted-foreground">Broadcast to all your contacts</p>
             </div>
             <Button
               size="sm"
-              variant="outline"
+              variant={existingPhones.has('status@broadcast') ? 'secondary' : 'default'}
               disabled={!isConnected || existingPhones.has('status@broadcast')}
               onClick={() =>
                 addTarget.mutate({
@@ -210,29 +218,31 @@ const WhatsAppPage = () => {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
+            <Users className="h-5 w-5" />
             Groups
-            <Badge variant="secondary">{groups.length}</Badge>
+            <Badge variant="secondary" className="ml-2">{groups.length}</Badge>
           </CardTitle>
+          <CardDescription>WhatsApp groups you can send messages to</CardDescription>
         </CardHeader>
         <CardContent>
           {!isConnected ? (
-            <p className="text-center text-ink/50 py-8">Connect WhatsApp to see your groups</p>
+            <p className="text-center text-muted-foreground py-8">Connect WhatsApp to see your groups</p>
           ) : groupsLoading ? (
             <div className="flex items-center justify-center py-8">
-              <div className="h-6 w-6 animate-spin rounded-full border-2 border-ink/20 border-t-ink"></div>
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : groups.length === 0 ? (
-            <p className="text-center text-ink/50 py-8">No groups found</p>
+            <p className="text-center text-muted-foreground py-8">No groups found</p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {groups.map((group) => (
                 <div
                   key={group.jid}
-                  className="flex items-center justify-between rounded-lg border border-ink/10 bg-white/50 p-3"
+                  className="flex items-center justify-between rounded-lg border p-3"
                 >
                   <div className="min-w-0 flex-1">
                     <p className="font-medium truncate">{group.name}</p>
-                    <p className="text-xs text-ink/50">{group.size} members</p>
+                    <p className="text-xs text-muted-foreground">{group.size} members</p>
                   </div>
                   <Button
                     size="sm"
@@ -260,29 +270,31 @@ const WhatsAppPage = () => {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
+            <Radio className="h-5 w-5" />
             Channels
-            <Badge variant="secondary">{channels.length}</Badge>
+            <Badge variant="secondary" className="ml-2">{channels.length}</Badge>
           </CardTitle>
+          <CardDescription>WhatsApp channels you administer</CardDescription>
         </CardHeader>
         <CardContent>
           {!isConnected ? (
-            <p className="text-center text-ink/50 py-8">Connect WhatsApp to see your channels</p>
+            <p className="text-center text-muted-foreground py-8">Connect WhatsApp to see your channels</p>
           ) : channelsLoading ? (
             <div className="flex items-center justify-center py-8">
-              <div className="h-6 w-6 animate-spin rounded-full border-2 border-ink/20 border-t-ink"></div>
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : channels.length === 0 ? (
-            <p className="text-center text-ink/50 py-8">No channels found (you need to be an admin)</p>
+            <p className="text-center text-muted-foreground py-8">No channels found (you need to be an admin)</p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {channels.map((channel) => (
                 <div
                   key={channel.jid}
-                  className="flex items-center justify-between rounded-lg border border-ink/10 bg-white/50 p-3"
+                  className="flex items-center justify-between rounded-lg border p-3"
                 >
                   <div className="min-w-0 flex-1">
                     <p className="font-medium truncate">{channel.name}</p>
-                    <p className="text-xs text-ink/50">{channel.subscribers} subscribers</p>
+                    <p className="text-xs text-muted-foreground">{channel.subscribers} subscribers</p>
                   </div>
                   <Button
                     size="sm"

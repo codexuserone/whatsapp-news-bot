@@ -4,13 +4,15 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import PageHeader from '../components/layout/PageHeader';
-import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
 import { Checkbox } from '../components/ui/checkbox';
 import { Button } from '../components/ui/button';
-import { Table, TableHead, TableBody, TableRow, TableCell, TableHeaderCell } from '../components/ui/table';
+import { Badge } from '../components/ui/badge';
+import { Label } from '../components/ui/label';
+import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '../components/ui/table';
+import { CalendarClock, Play, Pencil, Trash2, Loader2 } from 'lucide-react';
 
 const schema = z.object({
   name: z.string().min(1),
@@ -79,7 +81,7 @@ const SchedulesPage = () => {
   });
 
   const onSubmit = (values) => {
-    const payload = {
+    saveSchedule.mutate({
       name: values.name,
       cron_expression: values.cron_expression || null,
       timezone: values.timezone || 'UTC',
@@ -87,41 +89,49 @@ const SchedulesPage = () => {
       target_ids: values.target_ids,
       template_id: values.template_id,
       active: values.active
-    };
-    saveSchedule.mutate(payload);
+    });
   };
 
   return (
-    <div className="space-y-8">
-      <PageHeader title="Schedules" subtitle="Control delivery timing, intervals, and batch dispatch rules." />
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Schedules</h1>
+        <p className="text-muted-foreground">Control delivery timing, intervals, and batch dispatch rules.</p>
+      </div>
 
-      <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+      <div className="grid gap-6 lg:grid-cols-[1fr_400px]">
         <Card>
           <CardHeader>
-            <CardTitle>{active ? 'Edit Schedule' : 'Create Schedule'}</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <CalendarClock className="h-5 w-5" />
+              {active ? 'Edit Schedule' : 'Create Schedule'}
+            </CardTitle>
+            <CardDescription>
+              Configure when and where to send messages
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
               <div className="space-y-2">
-                <label className="text-sm font-medium">Name</label>
-                <Input {...form.register('name')} placeholder="Daily Morning Dispatch" />
+                <Label htmlFor="name">Name</Label>
+                <Input id="name" {...form.register('name')} placeholder="Daily Morning Dispatch" />
               </div>
 
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Cron Expression (optional)</label>
-                  <Input {...form.register('cron_expression')} placeholder="0 9 * * * (9am daily)" />
-                  <p className="text-xs text-ink/50">Leave empty for immediate dispatch on new items</p>
+                  <Label htmlFor="cron">Cron Expression (optional)</Label>
+                  <Input id="cron" {...form.register('cron_expression')} placeholder="0 9 * * *" />
+                  <p className="text-xs text-muted-foreground">Leave empty for immediate dispatch</p>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Timezone</label>
-                  <Input {...form.register('timezone')} placeholder="UTC" />
+                  <Label htmlFor="timezone">Timezone</Label>
+                  <Input id="timezone" {...form.register('timezone')} placeholder="UTC" />
                 </div>
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium">Feed</label>
-                <Select {...form.register('feed_id')}>
+                <Label htmlFor="feed_id">Feed</Label>
+                <Select id="feed_id" {...form.register('feed_id')}>
                   <option value="">Select feed</option>
                   {feeds.map((feed) => (
                     <option key={feed.id} value={feed.id}>
@@ -131,42 +141,45 @@ const SchedulesPage = () => {
                 </Select>
               </div>
 
-              <div className="rounded-2xl border border-ink/10 bg-surface p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-ink/50">Targets (Groups, Channels)</p>
+              <div className="space-y-2">
+                <Label>Targets (Groups, Channels)</Label>
                 <Controller
                   control={form.control}
                   name="target_ids"
                   render={({ field }) => (
-                    <div className="mt-3 space-y-2 max-h-48 overflow-y-auto">
-                      {activeTargets.length === 0 && (
-                        <p className="text-sm text-ink/50">No targets available. Add targets first.</p>
+                    <div className="rounded-lg border p-3 max-h-48 overflow-y-auto space-y-2">
+                      {activeTargets.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No targets available. Add targets first.</p>
+                      ) : (
+                        activeTargets.map((target) => (
+                          <label key={target.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                            <Checkbox
+                              checked={field.value.includes(target.id)}
+                              onChange={(event) => {
+                                const next = new Set(field.value);
+                                if (event.target.checked) {
+                                  next.add(target.id);
+                                } else {
+                                  next.delete(target.id);
+                                }
+                                field.onChange(Array.from(next));
+                              }}
+                            />
+                            <span>{target.name}</span>
+                            <Badge variant="secondary" className="ml-auto">
+                              {target.type}
+                            </Badge>
+                          </label>
+                        ))
                       )}
-                      {activeTargets.map((target) => (
-                        <label key={target.id} className="flex items-center gap-2 text-sm">
-                          <Checkbox
-                            checked={field.value.includes(target.id)}
-                            onChange={(event) => {
-                              const next = new Set(field.value);
-                              if (event.target.checked) {
-                                next.add(target.id);
-                              } else {
-                                next.delete(target.id);
-                              }
-                              field.onChange(Array.from(next));
-                            }}
-                          />
-                          <span>{target.name}</span>
-                          <span className="text-xs text-ink/40 capitalize">({target.type})</span>
-                        </label>
-                      ))}
                     </div>
                   )}
                 />
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium">Template</label>
-                <Select {...form.register('template_id')}>
+                <Label htmlFor="template_id">Template</Label>
+                <Select id="template_id" {...form.register('template_id')}>
                   <option value="">Select template</option>
                   {templates.map((template) => (
                     <option key={template.id} value={template.id}>
@@ -180,20 +193,25 @@ const SchedulesPage = () => {
                 control={form.control}
                 name="active"
                 render={({ field }) => (
-                  <label className="flex items-center gap-2 text-sm font-medium">
-                    <Checkbox checked={field.value} onChange={(e) => field.onChange(e.target.checked)} />
-                    Active
-                  </label>
+                  <div className="flex items-center gap-2">
+                    <Checkbox 
+                      id="schedule_active"
+                      checked={field.value} 
+                      onChange={(e) => field.onChange(e.target.checked)} 
+                    />
+                    <Label htmlFor="schedule_active" className="cursor-pointer">Active</Label>
+                  </div>
                 )}
               />
 
               <div className="flex gap-2">
                 <Button type="submit" disabled={saveSchedule.isPending}>
+                  {saveSchedule.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   {active ? 'Update Schedule' : 'Save Schedule'}
                 </Button>
                 {active && (
-                  <Button type="button" variant="outline" onClick={() => setActive(null)}>
-                    Clear
+                  <Button type="button" variant="outline" onClick={() => { setActive(null); form.reset(); }}>
+                    Cancel
                   </Button>
                 )}
               </div>
@@ -201,51 +219,59 @@ const SchedulesPage = () => {
           </CardContent>
         </Card>
 
+        {/* Saved Schedules */}
         <Card>
           <CardHeader>
-            <CardTitle>Existing Schedules</CardTitle>
+            <CardTitle>Saved Schedules</CardTitle>
+            <CardDescription>{schedules.length} schedule{schedules.length !== 1 ? 's' : ''}</CardDescription>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Name</TableHeaderCell>
-                  <TableHeaderCell>Cron</TableHeaderCell>
-                  <TableHeaderCell>Actions</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {schedules.map((schedule) => (
-                  <TableRow key={schedule.id}>
-                    <TableCell>{schedule.name}</TableCell>
-                    <TableCell className="font-mono text-xs">{schedule.cron_expression || 'Immediate'}</TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap gap-2">
-                        <Button size="sm" variant="outline" onClick={() => setActive(schedule)}>
-                          Edit
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => dispatchSchedule.mutate(schedule.id)}>
-                          Dispatch Now
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => deleteSchedule.mutate(schedule.id)}>
-                          Delete
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {schedules.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={3} className="text-center text-ink/50">
-                      No schedules yet.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
+            <div className="space-y-3">
+              {schedules.map((schedule) => (
+                <div key={schedule.id} className="rounded-lg border p-3">
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium truncate">{schedule.name}</p>
+                      <p className="text-xs font-mono text-muted-foreground">
+                        {schedule.cron_expression || 'Immediate'}
+                      </p>
+                    </div>
+                    <Badge variant={schedule.active ? 'success' : 'secondary'}>
+                      {schedule.active ? 'Active' : 'Inactive'}
+                    </Badge>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" onClick={() => setActive(schedule)}>
+                      <Pencil className="mr-1 h-3 w-3" /> Edit
+                    </Button>
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={() => dispatchSchedule.mutate(schedule.id)}
+                      disabled={dispatchSchedule.isPending}
+                    >
+                      <Play className="mr-1 h-3 w-3" /> Dispatch
+                    </Button>
+                    <Button 
+                      size="sm" 
+                      variant="ghost" 
+                      onClick={() => deleteSchedule.mutate(schedule.id)}
+                      className="text-destructive hover:text-destructive"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              {schedules.length === 0 && (
+                <p className="text-center text-muted-foreground py-8">
+                  No schedules yet. Create one above.
+                </p>
+              )}
+            </div>
           </CardContent>
         </Card>
-      </section>
+      </div>
     </div>
   );
 };

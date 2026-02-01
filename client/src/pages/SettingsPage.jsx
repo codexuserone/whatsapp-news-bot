@@ -4,12 +4,13 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import PageHeader from '../components/layout/PageHeader';
-import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import { Checkbox } from '../components/ui/checkbox';
 import { Badge } from '../components/ui/badge';
+import { Label } from '../components/ui/label';
+import { Settings, Clock, MapPin, Loader2 } from 'lucide-react';
 
 const schema = z.object({
   app_name: z.string().min(1),
@@ -18,7 +19,6 @@ const schema = z.object({
   message_delay_ms: z.coerce.number().min(100)
 });
 
-// Common locations for Shabbos times
 const PRESET_LOCATIONS = [
   { name: 'New York', latitude: 40.7128, longitude: -74.006, tzid: 'America/New_York' },
   { name: 'Los Angeles', latitude: 34.0522, longitude: -118.2437, tzid: 'America/Los_Angeles' },
@@ -36,7 +36,7 @@ const SettingsPage = () => {
   const { data: shabbosStatus } = useQuery({ 
     queryKey: ['shabbos-status'], 
     queryFn: () => api.get('/api/shabbos/status'),
-    refetchInterval: 60000 // Check every minute
+    refetchInterval: 60000
   });
   const { data: shabbosSettings } = useQuery({ 
     queryKey: ['shabbos-settings'], 
@@ -48,7 +48,7 @@ const SettingsPage = () => {
   const form = useForm({
     resolver: zodResolver(schema),
     defaultValues: {
-      app_name: 'Anash WhatsApp Bot',
+      app_name: 'WhatsApp News Bot',
       default_timezone: 'UTC',
       log_retention_days: 30,
       message_delay_ms: 2000
@@ -99,88 +99,103 @@ const SettingsPage = () => {
   };
 
   return (
-    <div className="space-y-8">
-      <PageHeader title="Settings" subtitle="Tune global defaults, retention windows, and safety controls." />
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
+        <p className="text-muted-foreground">Configure global defaults and safety controls.</p>
+      </div>
+
       <form onSubmit={form.handleSubmit((values) => saveSettings.mutate(values))} className="space-y-6">
         <Card id="general">
           <CardHeader>
-            <CardTitle>General</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Settings className="h-5 w-5" />
+              General
+            </CardTitle>
+            <CardDescription>Basic application settings</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4 md:grid-cols-2">
+          <CardContent className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <label className="text-sm font-medium">App Name</label>
-              <Input {...form.register('app_name')} />
+              <Label htmlFor="app_name">App Name</Label>
+              <Input id="app_name" {...form.register('app_name')} />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Default Timezone</label>
-              <Input {...form.register('default_timezone')} placeholder="UTC" />
+              <Label htmlFor="default_timezone">Default Timezone</Label>
+              <Input id="default_timezone" {...form.register('default_timezone')} placeholder="UTC" />
             </div>
           </CardContent>
         </Card>
 
         <Card id="messaging">
           <CardHeader>
-            <CardTitle>Messaging</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Clock className="h-5 w-5" />
+              Messaging
+            </CardTitle>
+            <CardDescription>Configure delays and retention</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4 md:grid-cols-2">
+          <CardContent className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Message Delay (ms)</label>
-              <Input type="number" {...form.register('message_delay_ms', { valueAsNumber: true })} />
-              <p className="text-xs text-ink/50">Delay between sending messages to avoid rate limiting</p>
+              <Label htmlFor="message_delay_ms">Message Delay (ms)</Label>
+              <Input id="message_delay_ms" type="number" {...form.register('message_delay_ms', { valueAsNumber: true })} />
+              <p className="text-xs text-muted-foreground">Delay between messages to avoid rate limiting</p>
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Log Retention (days)</label>
-              <Input type="number" {...form.register('log_retention_days', { valueAsNumber: true })} />
-              <p className="text-xs text-ink/50">How long to keep message logs</p>
+              <Label htmlFor="log_retention_days">Log Retention (days)</Label>
+              <Input id="log_retention_days" type="number" {...form.register('log_retention_days', { valueAsNumber: true })} />
+              <p className="text-xs text-muted-foreground">How long to keep message logs</p>
             </div>
           </CardContent>
         </Card>
 
         <Button type="submit" disabled={saveSettings.isPending}>
+          {saveSettings.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Save Settings
         </Button>
       </form>
 
-      {/* Shabbos Mode Section */}
+      {/* Shabbos Mode */}
       <Card id="shabbos">
         <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <span>Shabbos Mode</span>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <MapPin className="h-5 w-5" />
+                Shabbos Mode
+              </CardTitle>
+              <CardDescription>Auto-pause during Shabbos and Yom Tov</CardDescription>
+            </div>
             {shabbosStatus?.isShabbos ? (
               <Badge variant="warning">Currently Shabbos</Badge>
             ) : (
               <Badge variant="success">Regular Mode</Badge>
             )}
-          </CardTitle>
+          </div>
         </CardHeader>
         <CardContent className="space-y-6">
-          <p className="text-sm text-muted-foreground">
-            Automatically pause message sending during Shabbos and Yom Tov. Messages are queued and sent when Shabbos ends.
-          </p>
-
           {/* Current Status */}
           {shabbosStatus && (
-            <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Current Status</span>
-                <span className="text-sm">{shabbosStatus.reason || 'Regular weekday'}</span>
+            <div className="rounded-lg border bg-muted/50 p-4 space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Current Status</span>
+                <span className="font-medium">{shabbosStatus.reason || 'Regular weekday'}</span>
               </div>
               {shabbosStatus.nextShabbos && (
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Next Shabbos Starts</span>
-                  <span className="text-sm">{new Date(shabbosStatus.nextShabbos.start).toLocaleString()}</span>
-                </div>
-              )}
-              {shabbosStatus.nextShabbos && (
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Next Shabbos Ends</span>
-                  <span className="text-sm">{new Date(shabbosStatus.nextShabbos.end).toLocaleString()}</span>
-                </div>
+                <>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Next Shabbos Starts</span>
+                    <span>{new Date(shabbosStatus.nextShabbos.start).toLocaleString()}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Next Shabbos Ends</span>
+                    <span>{new Date(shabbosStatus.nextShabbos.end).toLocaleString()}</span>
+                  </div>
+                </>
               )}
               {shabbosStatus.isShabbos && shabbosStatus.endsAt && (
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Resumes At</span>
-                  <span className="text-sm font-semibold text-green-600">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Resumes At</span>
+                  <span className="font-semibold text-green-600">
                     {new Date(shabbosStatus.endsAt).toLocaleString()}
                   </span>
                 </div>
@@ -190,7 +205,7 @@ const SettingsPage = () => {
 
           {/* Location Selection */}
           <div className="space-y-3">
-            <label className="text-sm font-medium">Your Location</label>
+            <Label>Your Location</Label>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {PRESET_LOCATIONS.map((location) => (
                 <Button
@@ -215,7 +230,7 @@ const SettingsPage = () => {
           {/* Timing Settings */}
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Candle Lighting (minutes before sunset)</label>
+              <Label>Candle Lighting (minutes before sunset)</Label>
               <Input 
                 type="number" 
                 value={shabbosSettings?.candleLightingMins || 18}
@@ -228,7 +243,7 @@ const SettingsPage = () => {
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Havdalah (minutes after sunset)</label>
+              <Label>Havdalah (minutes after sunset)</Label>
               <Input 
                 type="number" 
                 value={shabbosSettings?.havdalahMins || 50}
@@ -245,13 +260,16 @@ const SettingsPage = () => {
           {/* Enable/Disable */}
           <div className="flex items-center gap-3">
             <Checkbox 
+              id="shabbos_enabled"
               checked={shabbosSettings?.enabled ?? true}
               onChange={(e) => saveShabbosSettings.mutate({
                 ...shabbosSettings,
                 enabled: e.target.checked
               })}
             />
-            <label className="text-sm">Enable Shabbos Mode (auto-pause during Shabbos/Yom Tov)</label>
+            <Label htmlFor="shabbos_enabled" className="cursor-pointer">
+              Enable Shabbos Mode (auto-pause during Shabbos/Yom Tov)
+            </Label>
           </div>
         </CardContent>
       </Card>

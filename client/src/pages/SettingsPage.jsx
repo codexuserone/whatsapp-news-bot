@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { useLocation } from 'react-router-dom';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -33,6 +34,7 @@ const PRESET_LOCATIONS = [
 
 const SettingsPage = () => {
   const queryClient = useQueryClient();
+  const location = useLocation();
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: () => api.get('/api/settings') });
   const { data: shabbosStatus } = useQuery({ 
     queryKey: ['shabbos-status'], 
@@ -68,6 +70,15 @@ const SettingsPage = () => {
       setSelectedLocation(shabbosSettings.city);
     }
   }, [shabbosSettings]);
+
+  useEffect(() => {
+    if (!location.hash) return;
+    const id = location.hash.replace('#', '');
+    const target = document.getElementById(id);
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [location.hash]);
 
   const saveSettings = useMutation({
     mutationFn: (payload) => api.put('/api/settings', payload),
@@ -137,12 +148,12 @@ const SettingsPage = () => {
             <CardDescription>Configure delays and retention</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
+            <div className="space-y-2" id="delays">
               <Label htmlFor="message_delay_ms">Message Delay (ms)</Label>
               <Input id="message_delay_ms" type="number" {...form.register('message_delay_ms', { valueAsNumber: true })} />
               <p className="text-xs text-muted-foreground">Delay between messages to avoid rate limiting</p>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2" id="retention">
               <Label htmlFor="log_retention_days">Log Retention (days)</Label>
               <Input id="log_retention_days" type="number" {...form.register('log_retention_days', { valueAsNumber: true })} />
               <p className="text-xs text-muted-foreground">How long to keep message logs</p>

@@ -59,7 +59,6 @@ const getSettings = async () => {
         data[entry.key] = entry.value;
       }
     });
-    data.retentionDays = data.log_retention_days ?? data.retentionDays;
     return data;
   } catch (error) {
     console.error('Error getting settings:', error);

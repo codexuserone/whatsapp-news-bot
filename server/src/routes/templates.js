@@ -1,5 +1,6 @@
 const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
+const { validate, schemas } = require('../middleware/validation');
 
 const getDb = () => {
   const supabase = getSupabaseClient();
@@ -9,10 +10,11 @@ const getDb = () => {
 
 // Extract variable names from template content (e.g., {{title}}, {{description}})
 function extractVariables(content) {
-  const regex = /\{\{(\w+)\}\}/g;
+  const regex = /\{\{\s*(\w+)\s*\}\}/g;
+  const input = String(content ?? '');
   const variables = new Set();
   let match;
-  while ((match = regex.exec(content)) !== null) {
+  while ((match = regex.exec(input)) !== null) {
     variables.add(match[1]);
   }
   return Array.from(variables);
@@ -36,7 +38,7 @@ const templateRoutes = () => {
     }
   });
 
-  router.post('/', async (req, res) => {
+  router.post('/', validate(schemas.template), async (req, res) => {
     try {
       // Extract variables from template content
       const variables = extractVariables(req.body.content || '');
@@ -55,7 +57,7 @@ const templateRoutes = () => {
     }
   });
 
-  router.put('/:id', async (req, res) => {
+  router.put('/:id', validate(schemas.template), async (req, res) => {
     try {
       // Extract variables from template content
       const variables = extractVariables(req.body.content || '');
@@ -110,7 +112,9 @@ const templateRoutes = () => {
         { name: 'link', description: 'Article URL' },
         { name: 'author', description: 'Article author' },
         { name: 'pub_date', description: 'Publication date' },
+        { name: 'publishedAt', description: 'Publication date (ISO string)' },
         { name: 'image_url', description: 'Article image URL' },
+        { name: 'imageUrl', description: 'Article image URL (alternate)' },
         { name: 'categories', description: 'Article categories' }
       ];
       

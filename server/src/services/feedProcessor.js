@@ -11,7 +11,8 @@ const fetchAndProcessFeed = async (feed) => {
   try {
     const settings = await settingsService.getSettings();
     const now = new Date();
-    const since = new Date(now.getTime() - settings.retentionDays * 24 * 60 * 60 * 1000);
+    const retentionDays = Number(settings.retentionDays || 14);
+    const since = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
     const items = await fetchFeedItems(feed);
     const newItems = [];
 
@@ -59,12 +60,10 @@ const fetchAndProcessFeed = async (feed) => {
       newItems.push(feedItem);
     }
 
-    if (newItems.length) {
-      await supabase
-        .from('feeds')
-        .update({ last_fetched_at: new Date().toISOString() })
-        .eq('id', feed.id);
-    }
+    await supabase
+      .from('feeds')
+      .update({ last_fetched_at: new Date().toISOString() })
+      .eq('id', feed.id);
 
     return newItems;
   } catch (error) {
@@ -96,8 +95,24 @@ const queueFeedItemsForSchedules = async (feedId, items) => {
     const logs = [];
 
     for (const schedule of schedules) {
+      const targetIds = schedule.target_ids || [];
       for (const feedItem of items) {
-        for (const targetId of schedule.target_ids || []) {
+        if (!targetIds.length) continue;
+        const { data: existingLogs, error: existingLogsError } = await supabase
+          .from('message_logs')
+          .select('target_id')
+          .eq('schedule_id', schedule.id)
+          .eq('feed_item_id', feedItem.id)
+          .in('target_id', targetIds)
+          .in('status', ['pending', 'sent']);
+
+        if (existingLogsError) {
+          console.error('Error checking existing logs:', existingLogsError);
+        }
+
+        const existingTargets = new Set((existingLogs || []).map((entry) => entry.target_id));
+        for (const targetId of targetIds) {
+          if (existingTargets.has(targetId)) continue;
           logs.push({
             feed_item_id: feedItem.id,
             target_id: targetId,

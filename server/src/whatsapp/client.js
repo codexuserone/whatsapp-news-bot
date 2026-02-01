@@ -8,6 +8,7 @@ const qrcode = require('qrcode');
 const logger = require('../utils/logger');
 const useSupabaseAuthState = require('./authStore');
 const { saveIncomingMessages } = require('../services/messageService');
+const { sendPendingForAllSchedules } = require('../services/queueService');
 
 class WhatsAppClient {
   constructor() {
@@ -161,6 +162,11 @@ class WhatsAppClient {
           logger.info('WhatsApp connected successfully');
           if (this.authStore.updateStatus) {
             await this.authStore.updateStatus('connected', null);
+          }
+          try {
+            await sendPendingForAllSchedules(this);
+          } catch (error) {
+            logger.error({ error }, 'Failed to send pending schedules after connect');
           }
         }
 

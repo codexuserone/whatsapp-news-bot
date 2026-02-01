@@ -1,5 +1,7 @@
 const Joi = require('joi');
 
+const JID_PATTERN = /^([0-9+\s\-\(\)]+|status@broadcast|[0-9\-]+@g\.us|[0-9]+@s\.whatsapp\.net)$/i;
+
 // Validation schemas
 const schemas = {
   // Schedule validation
@@ -25,7 +27,7 @@ const schemas = {
   // Target validation
   target: Joi.object({
     name: Joi.string().min(1).max(255).required(),
-    phone_number: Joi.string().pattern(/^[0-9+\s\-\(\)]+$/).required(),
+    phone_number: Joi.string().pattern(JID_PATTERN).required(),
     type: Joi.string().valid('individual', 'group', 'channel', 'status').required(),
     active: Joi.boolean().default(true),
     notes: Joi.string().max(1000).optional().allow('', null)
@@ -41,9 +43,19 @@ const schemas = {
 
   // WhatsApp test message validation
   testMessage: Joi.object({
-    jid: Joi.string().pattern(/^[0-9+\s\-\(\)]+(@[\w\.]+)?$/).required(),
+    jid: Joi.string().pattern(JID_PATTERN).required(),
     message: Joi.string().min(1).max(4096).required()
   }),
+
+  statusMessage: Joi.object({
+    message: Joi.string().max(4096).optional().allow('', null),
+    imageUrl: Joi.string().uri().optional().allow('', null)
+  }).custom((value, helpers) => {
+    if (!value.message && !value.imageUrl) {
+      return helpers.error('any.required');
+    }
+    return value;
+  }, 'status message validation'),
 
   // Settings validation
   settings: Joi.object().pattern(

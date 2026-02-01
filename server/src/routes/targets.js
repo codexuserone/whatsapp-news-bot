@@ -1,5 +1,6 @@
 const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
+const { validate, schemas, sanitizePhoneNumber } = require('../middleware/validation');
 
 const targetRoutes = () => {
   const router = express.Router();
@@ -25,11 +26,26 @@ const targetRoutes = () => {
     }
   });
 
-  router.post('/', async (req, res) => {
+  const normalizeTargetPayload = (payload) => {
+    const next = { ...payload };
+    if (next.type === 'status') {
+      next.phone_number = 'status@broadcast';
+      return next;
+    }
+    if (next.type === 'individual' && typeof next.phone_number === 'string') {
+      next.phone_number = sanitizePhoneNumber(next.phone_number);
+    } else if (typeof next.phone_number === 'string') {
+      next.phone_number = next.phone_number.trim();
+    }
+    return next;
+  };
+
+  router.post('/', validate(schemas.target), async (req, res) => {
     try {
+      const payload = normalizeTargetPayload(req.body);
       const { data: target, error } = await getDb()
         .from('targets')
-        .insert(req.body)
+        .insert(payload)
         .select()
         .single();
       
@@ -41,11 +57,12 @@ const targetRoutes = () => {
     }
   });
 
-  router.put('/:id', async (req, res) => {
+  router.put('/:id', validate(schemas.target), async (req, res) => {
     try {
+      const payload = normalizeTargetPayload(req.body);
       const { data: target, error } = await getDb()
         .from('targets')
-        .update(req.body)
+        .update(payload)
         .eq('id', req.params.id)
         .select()
         .single();

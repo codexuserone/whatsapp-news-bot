@@ -3,7 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const env = require('./config/env');
 const logger = require('./utils/logger');
-const connectDb = require('./db/mongoose');
+const { testConnection } = require('./db/supabase');
 const createWhatsAppClient = require('./whatsapp/client');
 const keepAlive = require('./services/keepAlive');
 const registerRoutes = require('./routes');
@@ -20,7 +20,12 @@ const start = async () => {
   const publicPath = path.join(__dirname, '../public');
   app.use(express.static(publicPath));
 
-  await connectDb();
+  // Test Supabase connection
+  const connected = await testConnection();
+  if (!connected) {
+    logger.error('Failed to connect to Supabase database');
+    process.exit(1);
+  }
   await settingsService.ensureDefaults();
 
   const whatsappClient = createWhatsAppClient();

@@ -1,6 +1,5 @@
 const cron = require('node-cron');
-const Feed = require('../models/Feed');
-const Schedule = require('../models/Schedule');
+const { supabase } = require('../db/supabase');
 const { fetchAndProcessFeed, queueFeedItemsForSchedules } = require('./feedProcessor');
 const { sendQueuedForSchedule } = require('./queueService');
 const logger = require('../utils/logger');
@@ -16,54 +15,86 @@ const clearAll = () => {
 };
 
 const triggerImmediateSchedules = async (feedId, whatsappClient) => {
-  const schedules = await Schedule.find({ enabled: true, mode: 'immediate', feedIds: feedId });
-  for (const schedule of schedules) {
-    await sendQueuedForSchedule(schedule._id, whatsappClient);
+  try {
+    const { data: schedules, error } = await supabase
+      .from('schedules')
+      .select('*')
+      .eq('active', true)
+      .eq('feed_id', feedId);
+
+    if (error) throw error;
+
+    // Filter for immediate mode schedules (cron_expression is null or empty)
+    const immediateSchedules = (schedules || []).filter(s => !s.cron_expression);
+    
+    for (const schedule of immediateSchedules) {
+      await sendQueuedForSchedule(schedule.id, whatsappClient);
+    }
+  } catch (error) {
+    logger.error({ error, feedId }, 'Failed to trigger immediate schedules');
   }
 };
 
 const scheduleFeedPolling = async (whatsappClient) => {
-  const feeds = await Feed.find({ enabled: true });
-  feeds.forEach(async (feed) => {
-    const intervalMs = Math.max(feed.fetchIntervalMinutes || 15, 5) * 60 * 1000;
-    const handler = async () => {
-      try {
-        const items = await fetchAndProcessFeed(feed);
-        await queueFeedItemsForSchedules(feed._id, items);
-        if (items.length) {
-          await triggerImmediateSchedules(feed._id, whatsappClient);
-        }
-      } catch (error) {
-        logger.error({ error, feedId: feed._id }, 'Failed to fetch feed');
-      }
-    };
+  try {
+    const { data: feeds, error } = await supabase
+      .from('feeds')
+      .select('*')
+      .eq('active', true);
 
-    await handler();
-    feedIntervals.set(feed._id.toString(), setInterval(handler, intervalMs));
-  });
+    if (error) throw error;
+
+    for (const feed of feeds || []) {
+      // Convert fetch_interval from seconds to milliseconds, minimum 5 minutes
+      const intervalMs = Math.max(feed.fetch_interval || 300, 300) * 1000;
+      
+      const handler = async () => {
+        try {
+          const items = await fetchAndProcessFeed(feed);
+          await queueFeedItemsForSchedules(feed.id, items);
+          if (items.length) {
+            await triggerImmediateSchedules(feed.id, whatsappClient);
+          }
+        } catch (error) {
+          logger.error({ error, feedId: feed.id }, 'Failed to fetch feed');
+        }
+      };
+
+      await handler();
+      feedIntervals.set(feed.id, setInterval(handler, intervalMs));
+    }
+  } catch (error) {
+    logger.error({ error }, 'Failed to schedule feed polling');
+  }
 };
 
 const scheduleSenders = async (whatsappClient) => {
-  const schedules = await Schedule.find({ enabled: true });
-  schedules.forEach((schedule) => {
-    if (schedule.mode === 'interval' && schedule.intervalMinutes) {
-      const intervalMs = schedule.intervalMinutes * 60 * 1000;
-      const interval = setInterval(() => sendQueuedForSchedule(schedule._id, whatsappClient), intervalMs);
-      scheduleJobs.set(schedule._id.toString(), { stop: () => clearInterval(interval) });
-    }
+  try {
+    const { data: schedules, error } = await supabase
+      .from('schedules')
+      .select('*')
+      .eq('active', true);
 
-    if (schedule.mode === 'times') {
-      schedule.times.forEach((time) => {
-        const [hour, minute] = time.split(':').map((value) => Number(value));
-        if (Number.isNaN(hour) || Number.isNaN(minute)) return;
-        const expression = `${minute} ${hour} * * *`;
-        const job = cron.schedule(expression, () => sendQueuedForSchedule(schedule._id, whatsappClient), {
-          timezone: schedule.timezone || 'UTC'
-        });
-        scheduleJobs.set(`${schedule._id.toString()}-${time}`, job);
-      });
+    if (error) throw error;
+
+    for (const schedule of schedules || []) {
+      // Handle cron expression based scheduling
+      if (schedule.cron_expression) {
+        try {
+          const job = cron.schedule(
+            schedule.cron_expression, 
+            () => sendQueuedForSchedule(schedule.id, whatsappClient), 
+            { timezone: schedule.timezone || 'UTC' }
+          );
+          scheduleJobs.set(schedule.id, job);
+        } catch (cronError) {
+          logger.error({ error: cronError, scheduleId: schedule.id }, 'Invalid cron expression');
+        }
+      }
     }
-  });
+  } catch (error) {
+    logger.error({ error }, 'Failed to schedule senders');
+  }
 };
 
 const initSchedulers = async (whatsappClient) => {

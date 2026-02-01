@@ -14,14 +14,12 @@ import { Table, TableHead, TableBody, TableRow, TableCell, TableHeaderCell } fro
 
 const schema = z.object({
   name: z.string().min(1),
-  mode: z.enum(['immediate', 'interval', 'times']),
-  intervalMinutes: z.coerce.number().optional(),
-  times: z.string().optional(),
+  cron_expression: z.string().optional(),
   timezone: z.string().optional(),
-  feedIds: z.array(z.string()).min(1),
-  targetIds: z.array(z.string()).min(1),
-  templateId: z.string().min(1),
-  enabled: z.boolean().default(true)
+  feed_id: z.string().optional(),
+  target_ids: z.array(z.string()).min(1),
+  template_id: z.string().min(1),
+  active: z.boolean().default(true)
 });
 
 const SchedulesPage = () => {

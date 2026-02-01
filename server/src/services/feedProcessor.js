@@ -1,89 +1,147 @@
-const Feed = require('../models/Feed');
-const FeedItem = require('../models/FeedItem');
-const Schedule = require('../models/Schedule');
-const MessageLog = require('../models/MessageLog');
+const { supabase } = require('../db/supabase');
 const { fetchFeedItems } = require('./feedFetcher');
 const { normalizeText, normalizeUrl } = require('../utils/normalize');
 const { isDuplicateFeedItem } = require('./dedupeService');
 const settingsService = require('./settingsService');
 
 const fetchAndProcessFeed = async (feed) => {
-  if (!feed.enabled) return [];
-  const settings = await settingsService.getSettings();
-  const now = new Date();
-  const since = new Date(now.getTime() - settings.retentionDays * 24 * 60 * 60 * 1000);
-  const items = await fetchFeedItems(feed);
-  const newItems = [];
+  if (!feed.active) return [];
+  
+  try {
+    const settings = await settingsService.getSettings();
+    const now = new Date();
+    const since = new Date(now.getTime() - settings.retentionDays * 24 * 60 * 60 * 1000);
+    const items = await fetchFeedItems(feed);
+    const newItems = [];
 
-  for (const item of items) {
-    const duplicate = await isDuplicateFeedItem({
-      title: item.title,
-      url: item.url,
-      threshold: settings.dedupeThreshold,
-      since
-    });
+    for (const item of items) {
+      const duplicate = await isDuplicateFeedItem({
+        title: item.title,
+        url: item.url,
+        threshold: settings.dedupeThreshold,
+        since
+      });
 
-    if (duplicate) {
-      continue;
+      if (duplicate) {
+        continue;
+      }
+
+      // Generate a unique GUID if not provided
+      const guid = item.guid || item.url || `${feed.id}-${Date.now()}-${Math.random()}`;
+
+      const { data: feedItem, error } = await supabase
+        .from('feed_items')
+        .insert({
+          feed_id: feed.id,
+          guid,
+          title: item.title,
+          link: item.url,
+          description: item.description,
+          image_url: item.imageUrl,
+          pub_date: item.publishedAt ? new Date(item.publishedAt).toISOString() : null,
+          raw_data: {
+            normalizedTitle: normalizeText(item.title),
+            normalizedUrl: normalizeUrl(item.url),
+            hash: `${normalizeText(item.title)}|${normalizeUrl(item.url)}`
+          }
+        })
+        .select()
+        .single();
+
+      if (error) {
+        // Skip duplicates (UNIQUE constraint violation)
+        if (error.code === '23505') continue;
+        console.error('Error inserting feed item:', error);
+        continue;
+      }
+
+      newItems.push(feedItem);
     }
 
-    const feedItem = await FeedItem.create({
-      feedId: feed._id,
-      guid: item.guid,
-      title: item.title,
-      url: item.url,
-      description: item.description,
-      imageUrl: item.imageUrl,
-      publishedAt: item.publishedAt ? new Date(item.publishedAt) : undefined,
-      normalizedTitle: normalizeText(item.title),
-      normalizedUrl: normalizeUrl(item.url),
-      hash: `${normalizeText(item.title)}|${normalizeUrl(item.url)}`
-    });
+    if (newItems.length) {
+      await supabase
+        .from('feeds')
+        .update({ last_fetched_at: new Date().toISOString() })
+        .eq('id', feed.id);
+    }
 
-    newItems.push(feedItem);
+    return newItems;
+  } catch (error) {
+    console.error('Error processing feed:', error);
+    // Update feed with error
+    await supabase
+      .from('feeds')
+      .update({ last_error: error.message })
+      .eq('id', feed.id);
+    return [];
   }
-
-  if (newItems.length) {
-    await Feed.findByIdAndUpdate(feed._id, { lastFetchedAt: new Date() });
-  }
-
-  return newItems;
 };
 
 const queueFeedItemsForSchedules = async (feedId, items) => {
   if (!items.length) return [];
-  const schedules = await Schedule.find({ feedIds: feedId, enabled: true });
-  const logs = [];
+  
+  try {
+    // Find schedules that use this feed
+    const { data: schedules, error: scheduleError } = await supabase
+      .from('schedules')
+      .select('*')
+      .eq('feed_id', feedId)
+      .eq('active', true);
 
-  for (const schedule of schedules) {
-    for (const feedItem of items) {
-      for (const targetId of schedule.targetIds || []) {
-        logs.push({
-          feedItemId: feedItem._id,
-          targetId,
-          scheduleId: schedule._id,
-          status: 'queued'
-        });
+    if (scheduleError) throw scheduleError;
+    if (!schedules || !schedules.length) return [];
+
+    const logs = [];
+
+    for (const schedule of schedules) {
+      for (const feedItem of items) {
+        for (const targetId of schedule.target_ids || []) {
+          logs.push({
+            feed_item_id: feedItem.id,
+            target_id: targetId,
+            schedule_id: schedule.id,
+            template_id: schedule.template_id,
+            status: 'pending'
+          });
+        }
       }
     }
-  }
 
-  if (logs.length) {
-    await MessageLog.insertMany(logs);
-  }
+    if (logs.length) {
+      const { error } = await supabase
+        .from('message_logs')
+        .insert(logs);
+      
+      if (error) throw error;
+    }
 
-  return logs;
+    return logs;
+  } catch (error) {
+    console.error('Error queueing feed items:', error);
+    return [];
+  }
 };
 
 const processAllFeeds = async () => {
-  const feeds = await Feed.find({ enabled: true });
-  const results = [];
-  for (const feed of feeds) {
-    const items = await fetchAndProcessFeed(feed);
-    await queueFeedItemsForSchedules(feed._id, items);
-    results.push({ feedId: feed._id, items });
+  try {
+    const { data: feeds, error } = await supabase
+      .from('feeds')
+      .select('*')
+      .eq('active', true);
+
+    if (error) throw error;
+
+    const results = [];
+    for (const feed of feeds) {
+      const items = await fetchAndProcessFeed(feed);
+      await queueFeedItemsForSchedules(feed.id, items);
+      results.push({ feedId: feed.id, items });
+    }
+    return results;
+  } catch (error) {
+    console.error('Error processing all feeds:', error);
+    return [];
   }
-  return results;
 };
 
 module.exports = {

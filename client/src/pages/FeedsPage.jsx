@@ -17,8 +17,8 @@ const schema = z.object({
   name: z.string().min(1),
   url: z.string().url(),
   type: z.enum(['rss', 'atom', 'json']),
-  enabled: z.boolean().default(true),
-  fetchIntervalMinutes: z.coerce.number().min(5),
+  active: z.boolean().default(true),
+  fetch_interval: z.coerce.number().min(300), // in seconds
   itemsPath: z.string().optional(),
   titlePath: z.string().optional(),
   linkPath: z.string().optional(),
@@ -40,8 +40,8 @@ const FeedsPage = () => {
       name: '',
       url: '',
       type: 'rss',
-      enabled: true,
-      fetchIntervalMinutes: 15,
+      active: true,
+      fetch_interval: 900, // 15 minutes in seconds
       itemsPath: '',
       titlePath: '',
       linkPath: '',
@@ -59,8 +59,8 @@ const FeedsPage = () => {
         name: active.name,
         url: active.url,
         type: active.type,
-        enabled: Boolean(active.enabled),
-        fetchIntervalMinutes: active.fetchIntervalMinutes || 15,
+        active: Boolean(active.active),
+        fetch_interval: active.fetch_interval || 900,
         itemsPath: active.parseConfig?.itemsPath || '',
         titlePath: active.parseConfig?.titlePath || '',
         linkPath: active.parseConfig?.linkPath || '',
@@ -75,7 +75,7 @@ const FeedsPage = () => {
 
   const saveFeed = useMutation({
     mutationFn: (payload) =>
-      active ? api.put(`/api/feeds/${active._id}`, payload) : api.post('/api/feeds', payload),
+      active ? api.put(`/api/feeds/${active.id}`, payload) : api.post('/api/feeds', payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['feeds'] });
       setActive(null);
@@ -98,22 +98,8 @@ const FeedsPage = () => {
       name: values.name,
       url: values.url,
       type: values.type,
-      enabled: values.enabled,
-      fetchIntervalMinutes: values.fetchIntervalMinutes,
-      parseConfig: {
-        itemsPath: values.itemsPath || undefined,
-        titlePath: values.titlePath || undefined,
-        linkPath: values.linkPath || undefined,
-        descriptionPath: values.descriptionPath || undefined,
-        imagePath: values.imagePath || undefined
-      },
-      cleaning: {
-        removePhrases: values.removePhrases
-          ? values.removePhrases.split('\n').map((phrase) => phrase.trim()).filter(Boolean)
-          : [],
-        stripUtm: values.stripUtm,
-        decodeEntities: values.decodeEntities
-      }
+      active: values.active,
+      fetch_interval: values.fetch_interval
     };
 
     saveFeed.mutate(payload);
@@ -151,59 +137,19 @@ const FeedsPage = () => {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Fetch Interval (min)</label>
-                  <Input type="number" {...form.register('fetchIntervalMinutes', { valueAsNumber: true })} />
+                  <label className="text-sm font-medium">Fetch Interval (sec)</label>
+                  <Input type="number" {...form.register('fetch_interval', { valueAsNumber: true })} min={300} step={60} />
                 </div>
                 <Controller
                   control={form.control}
-                  name="enabled"
+                  name="active"
                   render={({ field }) => (
                     <label className="flex items-center gap-2 text-sm font-medium">
                       <Checkbox checked={field.value} onChange={(e) => field.onChange(e.target.checked)} />
-                      Enabled
+                      Active
                     </label>
                   )}
                 />
-              </div>
-
-              <div className="rounded-2xl border border-ink/10 bg-surface p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-ink/50">JSON Mapping</p>
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <Input {...form.register('itemsPath')} placeholder="items" />
-                  <Input {...form.register('titlePath')} placeholder="title" />
-                  <Input {...form.register('linkPath')} placeholder="link" />
-                  <Input {...form.register('descriptionPath')} placeholder="description" />
-                  <Input {...form.register('imagePath')} placeholder="image" />
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-ink/10 bg-surface p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-ink/50">Cleaning Rules</p>
-                <div className="mt-3 space-y-3">
-                  <Textarea {...form.register('removePhrases')} placeholder="One phrase per line" />
-                  <div className="flex flex-wrap gap-4">
-                    <Controller
-                      control={form.control}
-                      name="stripUtm"
-                      render={({ field }) => (
-                        <label className="flex items-center gap-2 text-sm font-medium">
-                          <Checkbox checked={field.value} onChange={(e) => field.onChange(e.target.checked)} />
-                          Strip UTM params
-                        </label>
-                      )}
-                    />
-                    <Controller
-                      control={form.control}
-                      name="decodeEntities"
-                      render={({ field }) => (
-                        <label className="flex items-center gap-2 text-sm font-medium">
-                          <Checkbox checked={field.value} onChange={(e) => field.onChange(e.target.checked)} />
-                          Decode HTML entities
-                        </label>
-                      )}
-                    />
-                  </div>
-                </div>
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -235,7 +181,7 @@ const FeedsPage = () => {
               </TableHead>
               <TableBody>
                 {feeds.map((feed) => (
-                  <TableRow key={feed._id}>
+                  <TableRow key={feed.id}>
                     <TableCell>{feed.name}</TableCell>
                     <TableCell className="uppercase text-ink/60">{feed.type}</TableCell>
                     <TableCell>
@@ -243,10 +189,10 @@ const FeedsPage = () => {
                         <Button size="sm" variant="outline" onClick={() => setActive(feed)}>
                           Edit
                         </Button>
-                        <Button size="sm" variant="outline" onClick={() => refreshFeed.mutate(feed._id)}>
+                        <Button size="sm" variant="outline" onClick={() => refreshFeed.mutate(feed.id)}>
                           Refresh
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => deleteFeed.mutate(feed._id)}>
+                        <Button size="sm" variant="ghost" onClick={() => deleteFeed.mutate(feed.id)}>
                           Delete
                         </Button>
                       </div>

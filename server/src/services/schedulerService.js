@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
 const { fetchAndProcessFeed, queueFeedItemsForSchedules } = require('./feedProcessor');
 const { sendQueuedForSchedule } = require('./queueService');
 const logger = require('../utils/logger');
@@ -15,6 +15,9 @@ const clearAll = () => {
 };
 
 const triggerImmediateSchedules = async (feedId, whatsappClient) => {
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+  
   try {
     const { data: schedules, error } = await supabase
       .from('schedules')
@@ -24,7 +27,6 @@ const triggerImmediateSchedules = async (feedId, whatsappClient) => {
 
     if (error) throw error;
 
-    // Filter for immediate mode schedules (cron_expression is null or empty)
     const immediateSchedules = (schedules || []).filter(s => !s.cron_expression);
     
     for (const schedule of immediateSchedules) {
@@ -36,6 +38,12 @@ const triggerImmediateSchedules = async (feedId, whatsappClient) => {
 };
 
 const scheduleFeedPolling = async (whatsappClient) => {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    logger.warn('Supabase not available, skipping feed polling');
+    return;
+  }
+  
   try {
     const { data: feeds, error } = await supabase
       .from('feeds')
@@ -45,7 +53,6 @@ const scheduleFeedPolling = async (whatsappClient) => {
     if (error) throw error;
 
     for (const feed of feeds || []) {
-      // Convert fetch_interval from seconds to milliseconds, minimum 5 minutes
       const intervalMs = Math.max(feed.fetch_interval || 300, 300) * 1000;
       
       const handler = async () => {
@@ -69,6 +76,12 @@ const scheduleFeedPolling = async (whatsappClient) => {
 };
 
 const scheduleSenders = async (whatsappClient) => {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    logger.warn('Supabase not available, skipping scheduled senders');
+    return;
+  }
+  
   try {
     const { data: schedules, error } = await supabase
       .from('schedules')
@@ -78,7 +91,6 @@ const scheduleSenders = async (whatsappClient) => {
     if (error) throw error;
 
     for (const schedule of schedules || []) {
-      // Handle cron expression based scheduling
       if (schedule.cron_expression) {
         try {
           const job = cron.schedule(

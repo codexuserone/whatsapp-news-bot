@@ -1,4 +1,4 @@
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
 const env = require('../config/env');
 
 const DEFAULTS = {
@@ -10,6 +10,9 @@ const DEFAULTS = {
 };
 
 const ensureDefaults = async () => {
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+  
   try {
     const { data: entries, error } = await supabase
       .from('settings')
@@ -34,6 +37,9 @@ const ensureDefaults = async () => {
 };
 
 const getSettings = async () => {
+  const supabase = getSupabaseClient();
+  if (!supabase) return DEFAULTS;
+  
   try {
     const { data: entries, error } = await supabase
       .from('settings')
@@ -43,7 +49,6 @@ const getSettings = async () => {
     
     const data = { ...DEFAULTS };
     entries.forEach((entry) => {
-      // Parse JSON value if stored as JSON
       try {
         data[entry.key] = typeof entry.value === 'string' ? JSON.parse(entry.value) : entry.value;
       } catch {
@@ -58,6 +63,9 @@ const getSettings = async () => {
 };
 
 const updateSettings = async (updates) => {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error('Database not available');
+  
   try {
     const keys = Object.keys(updates || {});
     await Promise.all(

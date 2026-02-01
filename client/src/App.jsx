@@ -10,6 +10,7 @@ import SchedulesPage from './pages/SchedulesPage';
 import SettingsPage from './pages/SettingsPage';
 import LogsPage from './pages/LogsPage';
 import FeedItemsPage from './pages/FeedItemsPage';
+import QueuePage from './pages/QueuePage';
 
 const App = () => (
   <Routes>
@@ -20,6 +21,7 @@ const App = () => (
       <Route path="templates" element={<TemplatesPage />} />
       <Route path="targets" element={<TargetsPage />} />
       <Route path="schedules" element={<SchedulesPage />} />
+      <Route path="queue" element={<QueuePage />} />
       <Route path="logs" element={<LogsPage />} />
       <Route path="feed-items" element={<FeedItemsPage />} />
       <Route path="settings" element={<SettingsPage />} />

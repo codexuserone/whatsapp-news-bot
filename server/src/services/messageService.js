@@ -1,4 +1,4 @@
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
 const { normalizeText, normalizeUrl } = require('../utils/normalize');
 const { extractText, extractUrls } = require('../utils/messageParser');
 
@@ -39,6 +39,9 @@ const saveIncomingMessages = async (messages = []) => {
   }
 
   if (entries.length) {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+    
     try {
       await supabase.from('chat_messages').insert(entries);
     } catch (error) {
@@ -48,7 +51,9 @@ const saveIncomingMessages = async (messages = []) => {
 };
 
 const hasRecentUrl = async (jid, url) => {
-  if (!url) return false;
+  const supabase = getSupabaseClient();
+  if (!url || !supabase) return false;
+  
   try {
     const { data, error } = await supabase
       .from('chat_messages')

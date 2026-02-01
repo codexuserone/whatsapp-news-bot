@@ -1,13 +1,20 @@
 const express = require('express');
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
 const { sendQueuedForSchedule } = require('../services/queueService');
 const { initSchedulers } = require('../services/schedulerService');
 
 const scheduleRoutes = () => {
   const router = express.Router();
+  
+  const getDb = () => {
+    const supabase = getSupabaseClient();
+    if (!supabase) throw new Error('Database not available');
+    return supabase;
+  };
 
   router.get('/', async (_req, res) => {
     try {
+      const supabase = getDb();
       const { data: schedules, error } = await supabase
         .from('schedules')
         .select(`
@@ -23,7 +30,7 @@ const scheduleRoutes = () => {
       const schedulesWithTargets = await Promise.all(
         schedules.map(async (schedule) => {
           if (schedule.target_ids && schedule.target_ids.length > 0) {
-            const { data: targets } = await supabase
+            const { data: targets } = await getDb()
               .from('targets')
               .select('id, name, phone_number, type')
               .in('id', schedule.target_ids);
@@ -42,7 +49,7 @@ const scheduleRoutes = () => {
 
   router.post('/', async (req, res) => {
     try {
-      const { data: schedule, error } = await supabase
+      const { data: schedule, error } = await getDb()
         .from('schedules')
         .insert(req.body)
         .select()
@@ -59,7 +66,7 @@ const scheduleRoutes = () => {
 
   router.put('/:id', async (req, res) => {
     try {
-      const { data: schedule, error } = await supabase
+      const { data: schedule, error } = await getDb()
         .from('schedules')
         .update(req.body)
         .eq('id', req.params.id)
@@ -77,7 +84,7 @@ const scheduleRoutes = () => {
 
   router.delete('/:id', async (req, res) => {
     try {
-      const { error } = await supabase
+      const { error } = await getDb()
         .from('schedules')
         .delete()
         .eq('id', req.params.id);

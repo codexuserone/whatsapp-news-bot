@@ -1,11 +1,12 @@
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
 const { fetchFeedItems } = require('./feedFetcher');
 const { normalizeText, normalizeUrl } = require('../utils/normalize');
 const { isDuplicateFeedItem } = require('./dedupeService');
 const settingsService = require('./settingsService');
 
 const fetchAndProcessFeed = async (feed) => {
-  if (!feed.active) return [];
+  const supabase = getSupabaseClient();
+  if (!supabase || !feed.active) return [];
   
   try {
     const settings = await settingsService.getSettings();
@@ -78,7 +79,8 @@ const fetchAndProcessFeed = async (feed) => {
 };
 
 const queueFeedItemsForSchedules = async (feedId, items) => {
-  if (!items.length) return [];
+  const supabase = getSupabaseClient();
+  if (!supabase || !items.length) return [];
   
   try {
     // Find schedules that use this feed
@@ -123,6 +125,9 @@ const queueFeedItemsForSchedules = async (feedId, items) => {
 };
 
 const processAllFeeds = async () => {
+  const supabase = getSupabaseClient();
+  if (!supabase) return [];
+  
   try {
     const { data: feeds, error } = await supabase
       .from('feeds')

@@ -1,10 +1,58 @@
 const { BufferJSON, initAuthCreds } = require('@whiskeysockets/baileys');
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
 
-const serialize = (data) => JSON.parse(JSON.stringify(data, BufferJSON.replacer));
-const deserialize = (data) => JSON.parse(JSON.stringify(data), BufferJSON.reviver);
+const serialize = (data) => {
+  try {
+    return JSON.parse(JSON.stringify(data, BufferJSON.replacer));
+  } catch (e) {
+    console.error('Serialize error:', e);
+    return data;
+  }
+};
+
+const deserialize = (data) => {
+  try {
+    if (!data) return data;
+    return JSON.parse(JSON.stringify(data), BufferJSON.reviver);
+  } catch (e) {
+    console.error('Deserialize error:', e);
+    return data;
+  }
+};
 
 const useSupabaseAuthState = async (sessionId = 'default') => {
+  const supabase = getSupabaseClient();
+  
+  // If Supabase is not available, use in-memory state
+  if (!supabase) {
+    console.warn('Supabase not available, using in-memory auth state');
+    let state = { creds: initAuthCreds(), keys: {} };
+    return {
+      state: { 
+        creds: state.creds, 
+        keys: {
+          get: async (type, ids) => {
+            const data = {};
+            const store = state.keys[type] || {};
+            for (const id of ids) {
+              if (store[id]) data[id] = store[id];
+            }
+            return data;
+          },
+          set: async (data) => {
+            Object.keys(data).forEach((category) => {
+              state.keys[category] = state.keys[category] || {};
+              Object.assign(state.keys[category], data[category]);
+            });
+          }
+        }
+      },
+      saveCreds: async () => {},
+      clearState: async () => { state = { creds: initAuthCreds(), keys: {} }; },
+      updateStatus: async () => {}
+    };
+  }
+
   // Try to get existing auth state
   let { data: doc, error } = await supabase
     .from('auth_state')
@@ -33,8 +81,8 @@ const useSupabaseAuthState = async (sessionId = 'default') => {
   }
 
   let state = {
-    creds: deserialize(doc.creds || initAuthCreds()),
-    keys: deserialize(doc.keys || {})
+    creds: deserialize(doc.creds) || initAuthCreds(),
+    keys: deserialize(doc.keys) || {}
   };
 
   const saveState = async () => {

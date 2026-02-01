@@ -1,11 +1,14 @@
 const express = require('express');
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
 
 const logRoutes = () => {
   const router = express.Router();
 
   router.get('/', async (req, res) => {
     try {
+      const supabase = getSupabaseClient();
+      if (!supabase) return res.status(503).json({ error: 'Database not available' });
+      
       const { status } = req.query;
       
       let query = supabase

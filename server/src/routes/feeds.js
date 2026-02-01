@@ -1,14 +1,64 @@
 const express = require('express');
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
 const { fetchAndProcessFeed, queueFeedItemsForSchedules } = require('../services/feedProcessor');
 const { initSchedulers, triggerImmediateSchedules } = require('../services/schedulerService');
+const { fetchFeedItems } = require('../services/feedFetcher');
 
 const feedsRoutes = () => {
   const router = express.Router();
 
+  // Helper to get supabase client
+  const getDb = () => {
+    const supabase = getSupabaseClient();
+    if (!supabase) throw new Error('Database not available');
+    return supabase;
+  };
+
+  // Test a feed URL without saving - returns detected fields and sample item
+  router.post('/test', async (req, res) => {
+    try {
+      const { url, type = 'rss' } = req.body;
+      if (!url) {
+        return res.status(400).json({ error: 'URL is required' });
+      }
+
+      // Create a temporary feed object for testing
+      const testFeed = { url, type, cleaning: { stripUtm: true, decodeEntities: true } };
+      const items = await fetchFeedItems(testFeed);
+
+      if (!items || items.length === 0) {
+        return res.json({ error: 'No items found in feed. Check the URL or feed type.' });
+      }
+
+      // Detect all fields from the first item
+      const sampleItem = items[0];
+      const detectedFields = Object.keys(sampleItem).filter(key => {
+        const value = sampleItem[key];
+        return value !== null && value !== undefined && value !== '' && !Array.isArray(value);
+      });
+
+      // Also check for nested/array fields
+      Object.keys(sampleItem).forEach(key => {
+        if (Array.isArray(sampleItem[key]) && sampleItem[key].length > 0) {
+          detectedFields.push(key);
+        }
+      });
+
+      res.json({
+        feedTitle: sampleItem.title ? `Feed from ${new URL(url).hostname}` : 'Unknown Feed',
+        itemCount: items.length,
+        detectedFields: [...new Set(detectedFields)],
+        sampleItem
+      });
+    } catch (error) {
+      console.error('Error testing feed:', error);
+      res.json({ error: error.message || 'Failed to fetch feed' });
+    }
+  });
+
   router.get('/', async (_req, res) => {
     try {
-      const { data: feeds, error } = await supabase
+      const { data: feeds, error } = await getDb()
         .from('feeds')
         .select('*')
         .order('created_at', { ascending: false });
@@ -23,7 +73,7 @@ const feedsRoutes = () => {
 
   router.post('/', async (req, res) => {
     try {
-      const { data: feed, error } = await supabase
+      const { data: feed, error } = await getDb()
         .from('feeds')
         .insert(req.body)
         .select()
@@ -40,7 +90,7 @@ const feedsRoutes = () => {
 
   router.put('/:id', async (req, res) => {
     try {
-      const { data: feed, error } = await supabase
+      const { data: feed, error } = await getDb()
         .from('feeds')
         .update(req.body)
         .eq('id', req.params.id)
@@ -58,7 +108,7 @@ const feedsRoutes = () => {
 
   router.delete('/:id', async (req, res) => {
     try {
-      const { error } = await supabase
+      const { error } = await getDb()
         .from('feeds')
         .delete()
         .eq('id', req.params.id);
@@ -74,7 +124,7 @@ const feedsRoutes = () => {
 
   router.post('/:id/refresh', async (req, res) => {
     try {
-      const { data: feed, error } = await supabase
+      const { data: feed, error } = await getDb()
         .from('feeds')
         .select('*')
         .eq('id', req.params.id)

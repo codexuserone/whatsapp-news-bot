@@ -1,13 +1,19 @@
 const express = require('express');
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
 
 const feedItemRoutes = () => {
   const router = express.Router();
+  
+  const getDb = () => {
+    const supabase = getSupabaseClient();
+    if (!supabase) throw new Error('Database not available');
+    return supabase;
+  };
 
   // Get all feed items with feed information
   router.get('/', async (_req, res) => {
     try {
-      const { data: items, error } = await supabase
+      const { data: items, error } = await getDb()
         .from('feed_items')
         .select(`
           *,
@@ -27,7 +33,7 @@ const feedItemRoutes = () => {
   // Get feed items by feed ID
   router.get('/by-feed/:feedId', async (req, res) => {
     try {
-      const { data: items, error } = await supabase
+      const { data: items, error } = await getDb()
         .from('feed_items')
         .select('*')
         .eq('feed_id', req.params.feedId)
@@ -46,7 +52,7 @@ const feedItemRoutes = () => {
   router.get('/available-fields', async (_req, res) => {
     try {
       // Get a sample of recent feed items to extract available fields
-      const { data: items, error } = await supabase
+      const { data: items, error } = await getDb()
         .from('feed_items')
         .select('*')
         .order('created_at', { ascending: false })

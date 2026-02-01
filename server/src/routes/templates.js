@@ -1,5 +1,11 @@
 const express = require('express');
-const { supabase } = require('../db/supabase');
+const { getSupabaseClient } = require('../db/supabase');
+
+const getDb = () => {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error('Database not available');
+  return supabase;
+};
 
 // Extract variable names from template content (e.g., {{title}}, {{description}})
 function extractVariables(content) {
@@ -17,7 +23,7 @@ const templateRoutes = () => {
 
   router.get('/', async (_req, res) => {
     try {
-      const { data: templates, error } = await supabase
+      const { data: templates, error } = await getDb()
         .from('templates')
         .select('*')
         .order('created_at', { ascending: false });
@@ -35,7 +41,7 @@ const templateRoutes = () => {
       // Extract variables from template content
       const variables = extractVariables(req.body.content || '');
       
-      const { data: template, error } = await supabase
+      const { data: template, error } = await getDb()
         .from('templates')
         .insert({ ...req.body, variables })
         .select()
@@ -54,7 +60,7 @@ const templateRoutes = () => {
       // Extract variables from template content
       const variables = extractVariables(req.body.content || '');
       
-      const { data: template, error } = await supabase
+      const { data: template, error } = await getDb()
         .from('templates')
         .update({ ...req.body, variables })
         .eq('id', req.params.id)
@@ -71,7 +77,7 @@ const templateRoutes = () => {
 
   router.delete('/:id', async (req, res) => {
     try {
-      const { error } = await supabase
+      const { error } = await getDb()
         .from('templates')
         .delete()
         .eq('id', req.params.id);
@@ -88,7 +94,7 @@ const templateRoutes = () => {
   router.get('/available-variables', async (_req, res) => {
     try {
       // Get recent feed items to extract available fields
-      const { data: items, error } = await supabase
+      const { data: items, error } = await getDb()
         .from('feed_items')
         .select('*')
         .order('created_at', { ascending: false })

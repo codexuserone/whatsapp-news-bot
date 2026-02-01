@@ -4,21 +4,15 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import PageHeader from '../components/layout/PageHeader';
-import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
 import { Checkbox } from '../components/ui/checkbox';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
-import {
-  Table,
-  TableHead,
-  TableBody,
-  TableRow,
-  TableCell,
-  TableHeaderCell
-} from '../components/ui/table';
+import { Label } from '../components/ui/label';
+import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '../components/ui/table';
+import { Layers, Pencil, Trash2, Eye, Loader2 } from 'lucide-react';
 
 const schema = z.object({
   name: z.string().min(1),
@@ -27,7 +21,6 @@ const schema = z.object({
   active: z.boolean().default(true)
 });
 
-// Apply template variables to content
 const applyTemplate = (content, data) => {
   if (!content || !data) return content;
   return content.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key) => {
@@ -37,7 +30,6 @@ const applyTemplate = (content, data) => {
   });
 };
 
-// Convert WhatsApp markdown to HTML-safe preview
 const formatWhatsAppMarkdown = (text) => {
   if (!text) return '';
   return text
@@ -63,7 +55,6 @@ const TemplatesPage = () => {
   const [active, setActive] = useState(null);
   const [previewWithData, setPreviewWithData] = useState(true);
   
-  // Get sample data from first feed item for preview
   const sampleData = feedItems[0] ? {
     title: feedItems[0].title || 'Sample Title',
     description: feedItems[0].description || 'Sample description text',
@@ -120,13 +111,12 @@ const TemplatesPage = () => {
   });
 
   const onSubmit = (values) => {
-    const payload = {
+    saveTemplate.mutate({
       name: values.name,
       content: values.content,
       description: values.description,
       active: values.active
-    };
-    saveTemplate.mutate(payload);
+    });
   };
 
   const insertVariable = (varName) => {
@@ -138,7 +128,6 @@ const TemplatesPage = () => {
       const end = textarea.selectionEnd;
       const newContent = currentContent.slice(0, start) + `{{${varName}}}` + currentContent.slice(end);
       form.setValue('content', newContent);
-      // Reset cursor position after insertion
       setTimeout(() => {
         textarea.focus();
         const newPos = start + varName.length + 4;
@@ -150,104 +139,127 @@ const TemplatesPage = () => {
   };
 
   return (
-    <div className="space-y-8">
-      <PageHeader title="Templates" subtitle="Compose WhatsApp-ready messages with markdown and variables." />
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Templates</h1>
+        <p className="text-muted-foreground">Compose WhatsApp messages with markdown and variables.</p>
+      </div>
 
-      <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>{active ? 'Edit Template' : 'Create Template'}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Template name</label>
-                <Input {...form.register('name')} placeholder="Breaking News Template" />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Content (WhatsApp markdown supported)</label>
-                <Textarea 
-                  {...form.register('content')} 
-                  ref={(e) => {
-                    form.register('content').ref(e);
-                    textareaRef.current = e;
-                  }}
-                  placeholder="*{{title}}*&#10;{{link}}" 
-                  rows={6} 
+      <div className="grid gap-6 lg:grid-cols-[1fr_400px]">
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Layers className="h-5 w-5" />
+                {active ? 'Edit Template' : 'Create Template'}
+              </CardTitle>
+              <CardDescription>
+                Use *bold*, _italic_, ~strikethrough~. Variables: {'{{variable}}'}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="name">Template Name</Label>
+                  <Input id="name" {...form.register('name')} placeholder="Breaking News Template" />
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="content">Content</Label>
+                  <Textarea 
+                    id="content"
+                    {...form.register('content')} 
+                    ref={(e) => {
+                      form.register('content').ref(e);
+                      textareaRef.current = e;
+                    }}
+                    placeholder="*{{title}}*&#10;&#10;{{link}}" 
+                    className="min-h-[120px] font-mono text-sm"
+                  />
+                </div>
+                
+                {/* Available Variables */}
+                <div className="space-y-2">
+                  <Label>Available Variables (click to insert)</Label>
+                  <div className="flex flex-wrap gap-2 rounded-lg border p-3">
+                    {availableVariables.length > 0 ? (
+                      availableVariables.map((variable) => (
+                        <Button
+                          key={variable.name}
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => insertVariable(variable.name)}
+                          className="font-mono text-xs"
+                        >
+                          {`{{${variable.name}}}`}
+                        </Button>
+                      ))
+                    ) : (
+                      <p className="text-sm text-muted-foreground">
+                        No feed items yet. Add a feed and fetch items to see variables.
+                      </p>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="description">Description (optional)</Label>
+                  <Input id="description" {...form.register('description')} placeholder="Template for daily news updates" />
+                </div>
+                
+                <Controller
+                  control={form.control}
+                  name="active"
+                  render={({ field }) => (
+                    <div className="flex items-center gap-2">
+                      <Checkbox 
+                        id="active"
+                        checked={field.value} 
+                        onChange={(e) => field.onChange(e.target.checked)} 
+                      />
+                      <Label htmlFor="active" className="cursor-pointer">Active</Label>
+                    </div>
+                  )}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Use *bold*, _italic_, ~strikethrough~. Variables: {'{{variable}}'}
-                </p>
-              </div>
-              
-              {/* Available Variables Section */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Available Variables (click to insert)</label>
-                <div className="flex flex-wrap gap-2 rounded-lg border border-ink/10 bg-white/50 p-3">
-                  {availableVariables.length > 0 ? (
-                    availableVariables.map((variable) => (
-                      <button
-                        key={variable.name}
-                        type="button"
-                        onClick={() => insertVariable(variable.name)}
-                        className="rounded-full bg-sky-100 px-3 py-1 text-xs font-medium text-sky-700 hover:bg-sky-200 transition-colors"
-                        title={variable.description}
-                      >
-                        {`{{${variable.name}}}`}
-                      </button>
-                    ))
-                  ) : (
-                    <p className="text-sm text-ink/50">
-                      No feed items yet. Add a feed and fetch items to see available variables.
-                    </p>
+                
+                <div className="flex gap-2">
+                  <Button type="submit" disabled={saveTemplate.isPending}>
+                    {saveTemplate.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    {active ? 'Update Template' : 'Save Template'}
+                  </Button>
+                  {active && (
+                    <Button type="button" variant="outline" onClick={() => { setActive(null); form.reset(); }}>
+                      Cancel
+                    </Button>
                   )}
                 </div>
-              </div>
-              
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Description (optional)</label>
-                <Input {...form.register('description')} placeholder="Template for daily news updates" />
-              </div>
-              <Controller
-                control={form.control}
-                name="active"
-                render={({ field }) => (
-                  <label className="flex items-center gap-2 text-sm font-medium">
-                    <Checkbox checked={field.value} onChange={(e) => field.onChange(e.target.checked)} />
-                    Active
-                  </label>
-                )}
-              />
-              <div className="flex gap-2">
-                <Button type="submit" disabled={saveTemplate.isPending}>
-                  {active ? 'Update Template' : 'Save Template'}
-                </Button>
-                {active && (
-                  <Button type="button" variant="outline" onClick={() => setActive(null)}>
-                    Clear
-                  </Button>
-                )}
-              </div>
-            </form>
-            {/* Live Preview Section */}
-            <div className="rounded-2xl border border-border bg-muted/30 p-4 space-y-3">
+              </form>
+            </CardContent>
+          </Card>
+
+          {/* Live Preview */}
+          <Card>
+            <CardHeader>
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <CardTitle className="flex items-center gap-2">
+                  <Eye className="h-5 w-5" />
                   Live Preview
-                </p>
-                <label className="flex items-center gap-2 text-xs">
+                </CardTitle>
+                <label className="flex items-center gap-2 text-sm">
                   <input 
                     type="checkbox" 
                     checked={previewWithData} 
                     onChange={(e) => setPreviewWithData(e.target.checked)}
-                    className="rounded border-border"
+                    className="rounded border-input"
                   />
                   <span className="text-muted-foreground">Show with sample data</span>
                 </label>
               </div>
-              
+            </CardHeader>
+            <CardContent>
               {/* WhatsApp-style preview */}
-              <div className="rounded-lg bg-[#e5ddd5] p-3">
+              <div className="rounded-lg bg-[#e5ddd5] p-4">
                 <div className="max-w-[85%] rounded-lg bg-[#dcf8c6] px-3 py-2 shadow-sm">
                   <div 
                     className="text-sm text-gray-800 whitespace-pre-wrap"
@@ -266,56 +278,59 @@ const TemplatesPage = () => {
               </div>
               
               {previewWithData && feedItems[0] && (
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground mt-2">
                   Using data from: "{feedItems[0].title?.slice(0, 40)}..."
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Saved Templates */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Saved Templates</CardTitle>
+            <CardDescription>{templates.length} template{templates.length !== 1 ? 's' : ''}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {templates.map((template) => (
+                <div key={template.id} className="rounded-lg border p-3">
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium truncate">{template.name}</p>
+                      {template.description && (
+                        <p className="text-xs text-muted-foreground truncate">{template.description}</p>
+                      )}
+                    </div>
+                    <Badge variant={template.active ? 'success' : 'secondary'}>
+                      {template.active ? 'Active' : 'Inactive'}
+                    </Badge>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => setActive(template)}>
+                      <Pencil className="mr-1 h-3 w-3" /> Edit
+                    </Button>
+                    <Button 
+                      size="sm" 
+                      variant="ghost" 
+                      onClick={() => deleteTemplate.mutate(template.id)}
+                      className="text-destructive hover:text-destructive"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              {templates.length === 0 && (
+                <p className="text-center text-muted-foreground py-8">
+                  No templates yet. Create one above.
                 </p>
               )}
             </div>
           </CardContent>
         </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Existing Templates</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Name</TableHeaderCell>
-                  <TableHeaderCell>Active</TableHeaderCell>
-                  <TableHeaderCell>Actions</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {templates.map((template) => (
-                  <TableRow key={template.id}>
-                    <TableCell>{template.name}</TableCell>
-                    <TableCell>{template.active ? 'Yes' : 'No'}</TableCell>
-                    <TableCell>
-                      <div className="flex gap-2">
-                        <Button size="sm" variant="outline" onClick={() => setActive(template)}>
-                          Edit
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => deleteTemplate.mutate(template.id)}>
-                          Delete
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {templates.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={3} className="text-center text-ink/50">
-                      No templates created.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      </section>
+      </div>
     </div>
   );
 };

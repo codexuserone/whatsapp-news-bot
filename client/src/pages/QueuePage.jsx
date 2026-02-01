@@ -1,31 +1,28 @@
 import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import PageHeader from '../components/layout/PageHeader';
-import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Select } from '../components/ui/select';
+import { ListOrdered, RefreshCw, Trash2, AlertTriangle, Loader2 } from 'lucide-react';
 
 const QueuePage = () => {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState('pending');
 
-  // Fetch queue items
   const { data: queueItems = [], isLoading } = useQuery({
     queryKey: ['queue', statusFilter],
     queryFn: () => api.get(`/api/queue?status=${statusFilter}`),
     refetchInterval: 10000
   });
 
-  // Fetch Shabbos status
   const { data: shabbosStatus } = useQuery({
     queryKey: ['shabbos-status'],
     queryFn: () => api.get('/api/shabbos/status'),
     refetchInterval: 60000
   });
 
-  // Fetch schedules for display names
   const { data: schedules = [] } = useQuery({
     queryKey: ['schedules'],
     queryFn: () => api.get('/api/schedules')
@@ -36,19 +33,16 @@ const QueuePage = () => {
     return schedule?.name || 'Unknown Schedule';
   };
 
-  // Delete queue item
   const deleteItem = useMutation({
     mutationFn: (id) => api.delete(`/api/queue/${id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['queue'] })
   });
 
-  // Clear all pending items
   const clearPending = useMutation({
     mutationFn: () => api.delete('/api/queue/clear?status=pending'),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['queue'] })
   });
 
-  // Retry failed items
   const retryFailed = useMutation({
     mutationFn: () => api.post('/api/queue/retry-failed'),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['queue'] })
@@ -76,73 +70,77 @@ const QueuePage = () => {
 
   return (
     <div className="space-y-6">
-      <PageHeader 
-        title="Message Queue" 
-        subtitle="View and manage queued messages. Messages are held during Shabbos and sent automatically when it ends."
-        actions={
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={() => retryFailed.mutate()}
-              disabled={retryFailed.isPending}
-            >
-              Retry Failed
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => clearPending.mutate()}
-              disabled={clearPending.isPending}
-            >
-              Clear Pending
-            </Button>
-          </div>
-        }
-      />
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Message Queue</h1>
+          <p className="text-muted-foreground">View and manage queued messages.</p>
+        </div>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => retryFailed.mutate()}
+            disabled={retryFailed.isPending}
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${retryFailed.isPending ? 'animate-spin' : ''}`} />
+            Retry Failed
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => clearPending.mutate()}
+            disabled={clearPending.isPending}
+          >
+            <Trash2 className="mr-2 h-4 w-4" />
+            Clear Pending
+          </Button>
+        </div>
+      </div>
 
-      {/* Shabbos Status Banner */}
+      {/* Shabbos Banner */}
       {shabbosStatus?.isShabbos && (
-        <Card className="border-amber-200 bg-amber-50">
-          <CardContent className="py-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium text-amber-800">Shabbos Mode Active</p>
-                <p className="text-sm text-amber-700">
-                  Messages are being held. Will resume at {formatDate(shabbosStatus.endsAt)}
-                </p>
-              </div>
-              <Badge variant="warning" className="text-lg px-4 py-2">
-                {shabbosStatus.reason}
-              </Badge>
+        <Card className="border-warning/50 bg-warning/5">
+          <CardContent className="flex items-center gap-4 pt-6">
+            <div className="rounded-full bg-warning/20 p-2">
+              <AlertTriangle className="h-5 w-5 text-warning-foreground" />
             </div>
+            <div className="flex-1">
+              <p className="font-medium">Shabbos Mode Active</p>
+              <p className="text-sm text-muted-foreground">
+                Messages are being held. Will resume at {formatDate(shabbosStatus.endsAt)}
+              </p>
+            </div>
+            <Badge variant="warning" className="text-sm px-3 py-1">
+              {shabbosStatus.reason}
+            </Badge>
           </CardContent>
         </Card>
       )}
 
-      {/* Filter and Stats */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="pending">Pending</option>
-            <option value="sent">Sent</option>
-            <option value="failed">Failed</option>
-            <option value="skipped">Skipped</option>
-            <option value="">All</option>
-          </Select>
-          <span className="text-sm text-muted-foreground">
-            {queueItems.length} item{queueItems.length !== 1 ? 's' : ''}
-          </span>
-        </div>
+      {/* Filter */}
+      <div className="flex items-center gap-4">
+        <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-40">
+          <option value="pending">Pending</option>
+          <option value="sent">Sent</option>
+          <option value="failed">Failed</option>
+          <option value="skipped">Skipped</option>
+          <option value="">All</option>
+        </Select>
+        <span className="text-sm text-muted-foreground">
+          {queueItems.length} item{queueItems.length !== 1 ? 's' : ''}
+        </span>
       </div>
 
       {/* Queue Items */}
       <Card>
         <CardHeader>
-          <CardTitle>Queue Items</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <ListOrdered className="h-5 w-5" />
+            Queue Items
+          </CardTitle>
         </CardHeader>
         <CardContent>
           {isLoading ? (
             <div className="flex items-center justify-center py-8">
-              <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground/20 border-t-muted-foreground"></div>
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : queueItems.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
@@ -151,10 +149,7 @@ const QueuePage = () => {
           ) : (
             <div className="space-y-3">
               {queueItems.map((item) => (
-                <div
-                  key={item.id}
-                  className="rounded-lg border border-border bg-card p-4 space-y-3"
-                >
+                <div key={item.id} className="rounded-lg border p-4 space-y-3">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
@@ -169,7 +164,7 @@ const QueuePage = () => {
                           href={item.url} 
                           target="_blank" 
                           rel="noopener noreferrer"
-                          className="text-xs text-blue-600 hover:underline truncate block"
+                          className="text-xs text-primary hover:underline truncate block"
                         >
                           {item.url}
                         </a>
@@ -180,22 +175,21 @@ const QueuePage = () => {
                       variant="ghost"
                       onClick={() => deleteItem.mutate(item.id)}
                       disabled={deleteItem.isPending}
+                      className="text-destructive hover:text-destructive"
                     >
-                      Delete
+                      <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
 
-                  {/* Message Preview */}
                   {item.rendered_content && (
-                    <div className="rounded-md bg-muted/50 p-3">
-                      <p className="text-xs text-muted-foreground mb-1">Message Preview:</p>
+                    <div className="rounded-md bg-muted p-3">
+                      <p className="text-xs text-muted-foreground mb-1">Preview:</p>
                       <p className="text-sm whitespace-pre-wrap line-clamp-3">
                         {item.rendered_content}
                       </p>
                     </div>
                   )}
 
-                  {/* Metadata */}
                   <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
                     <span>Created: {formatDate(item.created_at)}</span>
                     {item.scheduled_for && (
@@ -205,7 +199,7 @@ const QueuePage = () => {
                       <span>Sent: {formatDate(item.sent_at)}</span>
                     )}
                     {item.error_message && (
-                      <span className="text-red-600">Error: {item.error_message}</span>
+                      <span className="text-destructive">Error: {item.error_message}</span>
                     )}
                   </div>
                 </div>

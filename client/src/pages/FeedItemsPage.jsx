@@ -4,9 +4,10 @@ import { api } from '../lib/api';
 import PageHeader from '../components/layout/PageHeader';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
 import { Table, TableHead, TableBody, TableRow, TableCell, TableHeaderCell } from '../components/ui/table';
+import { Badge } from '../components/ui/badge';
 
 const FeedItemsPage = () => {
-  const { data: items = [] } = useQuery({
+  const { data: items = [], isLoading } = useQuery({
     queryKey: ['feed-items'],
     queryFn: () => api.get('/api/feed-items'),
     refetchInterval: 15000
@@ -17,36 +18,58 @@ const FeedItemsPage = () => {
       <PageHeader title="Feed Items" subtitle="Recently ingested feed entries available for dispatch." />
       <Card>
         <CardHeader>
-          <CardTitle>Latest Items</CardTitle>
+          <CardTitle>Latest Items ({items.length})</CardTitle>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableHeaderCell>Title</TableHeaderCell>
-                <TableHeaderCell>URL</TableHeaderCell>
-                <TableHeaderCell>Published</TableHeaderCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {items.map((item) => (
-                <TableRow key={item._id}>
-                  <TableCell>{item.title}</TableCell>
-                  <TableCell className="text-ink/60">{item.url}</TableCell>
-                  <TableCell>
-                    {item.publishedAt ? new Date(item.publishedAt).toLocaleString() : '—'}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {items.length === 0 && (
+          {isLoading ? (
+            <div className="text-center py-8 text-ink/50">Loading feed items...</div>
+          ) : (
+            <Table>
+              <TableHead>
                 <TableRow>
-                  <TableCell colSpan={3} className="text-center text-ink/50">
-                    No feed items yet.
-                  </TableCell>
+                  <TableHeaderCell>Title</TableHeaderCell>
+                  <TableHeaderCell>Feed</TableHeaderCell>
+                  <TableHeaderCell>Link</TableHeaderCell>
+                  <TableHeaderCell>Published</TableHeaderCell>
+                  <TableHeaderCell>Sent</TableHeaderCell>
                 </TableRow>
-              )}
-            </TableBody>
-          </Table>
+              </TableHead>
+              <TableBody>
+                {items.map((item) => (
+                  <TableRow key={item.id}>
+                    <TableCell className="max-w-xs truncate font-medium" title={item.title}>
+                      {item.title || 'Untitled'}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{item.feed?.name || 'Unknown'}</Badge>
+                    </TableCell>
+                    <TableCell className="max-w-xs truncate text-ink/60">
+                      {item.link ? (
+                        <a href={item.link} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                          {item.link}
+                        </a>
+                      ) : '—'}
+                    </TableCell>
+                    <TableCell>
+                      {item.pub_date ? new Date(item.pub_date).toLocaleString() : '—'}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={item.sent ? 'success' : 'secondary'}>
+                        {item.sent ? 'Sent' : 'Pending'}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {items.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-ink/50">
+                      No feed items yet. Add feeds and refresh them to see items here.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
     </div>

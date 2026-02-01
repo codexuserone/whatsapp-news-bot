@@ -1,4 +1,4 @@
-const Setting = require('../models/Setting');
+const { supabase } = require('../db/supabase');
 const env = require('../config/env');
 
 const DEFAULTS = {
@@ -10,33 +10,75 @@ const DEFAULTS = {
 };
 
 const ensureDefaults = async () => {
-  const entries = await Setting.find();
-  const existing = new Set(entries.map((entry) => entry.key));
+  try {
+    const { data: entries, error } = await supabase
+      .from('settings')
+      .select('key');
+    
+    if (error) throw error;
+    
+    const existing = new Set(entries.map((entry) => entry.key));
 
-  await Promise.all(
-    Object.entries(DEFAULTS).map(async ([key, value]) => {
-      if (!existing.has(key)) {
-        await Setting.create({ key, value });
-      }
-    })
-  );
+    await Promise.all(
+      Object.entries(DEFAULTS).map(async ([key, value]) => {
+        if (!existing.has(key)) {
+          await supabase
+            .from('settings')
+            .insert({ key, value: JSON.stringify(value), description: `Default setting for ${key}` });
+        }
+      })
+    );
+  } catch (error) {
+    console.error('Error ensuring default settings:', error);
+  }
 };
 
 const getSettings = async () => {
-  const entries = await Setting.find();
-  const data = { ...DEFAULTS };
-  entries.forEach((entry) => {
-    data[entry.key] = entry.value;
-  });
-  return data;
+  try {
+    const { data: entries, error } = await supabase
+      .from('settings')
+      .select('*');
+    
+    if (error) throw error;
+    
+    const data = { ...DEFAULTS };
+    entries.forEach((entry) => {
+      // Parse JSON value if stored as JSON
+      try {
+        data[entry.key] = typeof entry.value === 'string' ? JSON.parse(entry.value) : entry.value;
+      } catch {
+        data[entry.key] = entry.value;
+      }
+    });
+    return data;
+  } catch (error) {
+    console.error('Error getting settings:', error);
+    return DEFAULTS;
+  }
 };
 
 const updateSettings = async (updates) => {
-  const keys = Object.keys(updates || {});
-  await Promise.all(
-    keys.map((key) => Setting.findOneAndUpdate({ key }, { value: updates[key] }, { upsert: true }))
-  );
-  return getSettings();
+  try {
+    const keys = Object.keys(updates || {});
+    await Promise.all(
+      keys.map(async (key) => {
+        const { error } = await supabase
+          .from('settings')
+          .upsert({ 
+            key, 
+            value: JSON.stringify(updates[key]),
+            description: `Setting for ${key}`
+          }, { 
+            onConflict: 'key' 
+          });
+        if (error) throw error;
+      })
+    );
+    return getSettings();
+  } catch (error) {
+    console.error('Error updating settings:', error);
+    throw error;
+  }
 };
 
 module.exports = {

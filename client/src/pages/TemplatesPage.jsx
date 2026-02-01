@@ -15,35 +15,39 @@ import { Table, TableHead, TableBody, TableRow, TableCell, TableHeaderCell } fro
 
 const schema = z.object({
   name: z.string().min(1),
-  body: z.string().min(1),
-  variables: z.string().optional(),
-  enabled: z.boolean().default(true)
+  content: z.string().min(1),
+  description: z.string().optional(),
+  active: z.boolean().default(true)
 });
 
 const TemplatesPage = () => {
   const queryClient = useQueryClient();
   const { data: templates = [] } = useQuery({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
+  const { data: availableVariables = [] } = useQuery({ 
+    queryKey: ['available-variables'], 
+    queryFn: () => api.get('/api/templates/available-variables') 
+  });
   const [active, setActive] = useState(null);
 
   const form = useForm({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', body: '', variables: '', enabled: true }
+    defaultValues: { name: '', content: '', description: '', active: true }
   });
 
   useEffect(() => {
     if (active) {
       form.reset({
         name: active.name,
-        body: active.body,
-        variables: (active.variables || []).join(', '),
-        enabled: active.enabled ?? true
+        content: active.content,
+        description: active.description || '',
+        active: active.active ?? true
       });
     }
   }, [active, form]);
 
   const saveTemplate = useMutation({
     mutationFn: (payload) =>
-      active ? api.put(`/api/templates/${active._id}`, payload) : api.post('/api/templates', payload),
+      active ? api.put(`/api/templates/${active.id}`, payload) : api.post('/api/templates', payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['templates'] });
       setActive(null);
@@ -59,11 +63,16 @@ const TemplatesPage = () => {
   const onSubmit = (values) => {
     const payload = {
       name: values.name,
-      body: values.body,
-      enabled: values.enabled,
-      variables: values.variables ? values.variables.split(',').map((item) => item.trim()).filter(Boolean) : []
+      content: values.content,
+      description: values.description,
+      active: values.active
     };
     saveTemplate.mutate(payload);
+  };
+
+  const insertVariable = (varName) => {
+    const currentContent = form.getValues('content');
+    form.setValue('content', `${currentContent}{{${varName}}}`);
   };
 
   return (
@@ -82,20 +91,45 @@ const TemplatesPage = () => {
                 <Input {...form.register('name')} placeholder="Breaking News Template" />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">Body (WhatsApp markdown supported)</label>
-                <Textarea {...form.register('body')} placeholder="*{{title}}*\n{{url}}" />
+                <label className="text-sm font-medium">Content (WhatsApp markdown supported)</label>
+                <Textarea {...form.register('content')} placeholder="*{{title}}*&#10;{{link}}" rows={6} />
               </div>
+              
+              {/* Available Variables Section */}
               <div className="space-y-2">
-                <label className="text-sm font-medium">Variables (comma separated)</label>
-                <Input {...form.register('variables')} placeholder="title, url, description" />
+                <label className="text-sm font-medium">Available Variables (click to insert)</label>
+                <div className="flex flex-wrap gap-2 rounded-lg border border-ink/10 bg-white/50 p-3">
+                  {availableVariables.length > 0 ? (
+                    availableVariables.map((variable) => (
+                      <button
+                        key={variable.name}
+                        type="button"
+                        onClick={() => insertVariable(variable.name)}
+                        className="rounded-full bg-sky-100 px-3 py-1 text-xs font-medium text-sky-700 hover:bg-sky-200 transition-colors"
+                        title={variable.description}
+                      >
+                        {`{{${variable.name}}}`}
+                      </button>
+                    ))
+                  ) : (
+                    <p className="text-sm text-ink/50">
+                      No feed items yet. Add a feed and fetch items to see available variables.
+                    </p>
+                  )}
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Description (optional)</label>
+                <Input {...form.register('description')} placeholder="Template for daily news updates" />
               </div>
               <Controller
                 control={form.control}
-                name="enabled"
+                name="active"
                 render={({ field }) => (
                   <label className="flex items-center gap-2 text-sm font-medium">
                     <Checkbox checked={field.value} onChange={(e) => field.onChange(e.target.checked)} />
-                    Enabled
+                    Active
                   </label>
                 )}
               />
@@ -113,7 +147,7 @@ const TemplatesPage = () => {
             <div className="rounded-2xl border border-ink/10 bg-white/80 p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-ink/50">Preview</p>
               <div className="prose prose-sm mt-3 max-w-none text-ink">
-                <ReactMarkdown>{form.watch('body') || 'Start typing to preview.'}</ReactMarkdown>
+                <ReactMarkdown>{form.watch('content') || 'Start typing to preview.'}</ReactMarkdown>
               </div>
             </div>
           </CardContent>
@@ -128,21 +162,21 @@ const TemplatesPage = () => {
               <TableHead>
                 <TableRow>
                   <TableHeaderCell>Name</TableHeaderCell>
-                  <TableHeaderCell>Enabled</TableHeaderCell>
+                  <TableHeaderCell>Active</TableHeaderCell>
                   <TableHeaderCell>Actions</TableHeaderCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {templates.map((template) => (
-                  <TableRow key={template._id}>
+                  <TableRow key={template.id}>
                     <TableCell>{template.name}</TableCell>
-                    <TableCell>{template.enabled ? 'Yes' : 'No'}</TableCell>
+                    <TableCell>{template.active ? 'Yes' : 'No'}</TableCell>
                     <TableCell>
                       <div className="flex gap-2">
                         <Button size="sm" variant="outline" onClick={() => setActive(template)}>
                           Edit
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => deleteTemplate.mutate(template._id)}>
+                        <Button size="sm" variant="ghost" onClick={() => deleteTemplate.mutate(template.id)}>
                           Delete
                         </Button>
                       </div>

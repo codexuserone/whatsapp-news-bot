@@ -1,26 +1,54 @@
 const { BufferJSON, initAuthCreds } = require('@whiskeysockets/baileys');
-const AuthState = require('../models/AuthState');
+const { supabase } = require('../db/supabase');
 
 const serialize = (data) => JSON.parse(JSON.stringify(data, BufferJSON.replacer));
 const deserialize = (data) => JSON.parse(JSON.stringify(data), BufferJSON.reviver);
 
-const useMongoAuthState = async (name = 'default') => {
-  let doc = await AuthState.findOne({ name });
-  if (!doc) {
-    doc = await AuthState.create({ name, creds: serialize(initAuthCreds()), keys: {} });
+const useSupabaseAuthState = async (sessionId = 'default') => {
+  // Try to get existing auth state
+  let { data: doc, error } = await supabase
+    .from('auth_state')
+    .select('*')
+    .eq('session_id', sessionId)
+    .single();
+
+  // Create new auth state if not found
+  if (error || !doc) {
+    const newCreds = serialize(initAuthCreds());
+    const { data: newDoc, error: insertError } = await supabase
+      .from('auth_state')
+      .upsert({ 
+        session_id: sessionId, 
+        creds: newCreds, 
+        keys: {},
+        status: 'disconnected'
+      }, { onConflict: 'session_id' })
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error('Error creating auth state:', insertError);
+    }
+    doc = newDoc || { creds: newCreds, keys: {} };
   }
 
   let state = {
-    creds: deserialize(doc.creds),
+    creds: deserialize(doc.creds || initAuthCreds()),
     keys: deserialize(doc.keys || {})
   };
 
   const saveState = async () => {
-    await AuthState.findOneAndUpdate(
-      { name },
-      { creds: serialize(state.creds), keys: serialize(state.keys), updatedAt: new Date() },
-      { upsert: true }
-    );
+    try {
+      await supabase
+        .from('auth_state')
+        .upsert({ 
+          session_id: sessionId, 
+          creds: serialize(state.creds), 
+          keys: serialize(state.keys)
+        }, { onConflict: 'session_id' });
+    } catch (error) {
+      console.error('Error saving auth state:', error);
+    }
   };
 
   const keys = {
@@ -52,10 +80,23 @@ const useMongoAuthState = async (name = 'default') => {
       await saveState();
     },
     clearState: async () => {
-      await AuthState.deleteOne({ name });
+      await supabase
+        .from('auth_state')
+        .update({ creds: null, keys: null, status: 'disconnected' })
+        .eq('session_id', sessionId);
       state = { creds: initAuthCreds(), keys: {} };
+    },
+    updateStatus: async (status, qrCode = null) => {
+      const updates = { status };
+      if (qrCode !== null) updates.qr_code = qrCode;
+      if (status === 'connected') updates.last_connected_at = new Date().toISOString();
+      
+      await supabase
+        .from('auth_state')
+        .update(updates)
+        .eq('session_id', sessionId);
     }
   };
 };
 
-module.exports = useMongoAuthState;
+module.exports = useSupabaseAuthState;

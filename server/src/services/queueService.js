@@ -1,10 +1,5 @@
-const MessageLog = require('../models/MessageLog');
-const FeedItem = require('../models/FeedItem');
-const Target = require('../models/Target');
-const Template = require('../models/Template');
-const Schedule = require('../models/Schedule');
+const { supabase } = require('../db/supabase');
 const settingsService = require('./settingsService');
-const { isDuplicateInChat } = require('./dedupeService');
 const sleep = require('../utils/sleep');
 const logger = require('../utils/logger');
 
@@ -14,15 +9,21 @@ const applyTemplate = (templateBody, data) => {
 
 const buildMessageData = (feedItem) => ({
   title: feedItem.title,
-  url: feedItem.url,
+  url: feedItem.link,
+  link: feedItem.link,
   description: feedItem.description,
-  imageUrl: feedItem.imageUrl,
-  publishedAt: feedItem.publishedAt ? feedItem.publishedAt.toISOString() : ''
+  content: feedItem.content,
+  author: feedItem.author,
+  image_url: feedItem.image_url,
+  imageUrl: feedItem.image_url,
+  pub_date: feedItem.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
+  publishedAt: feedItem.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
+  categories: Array.isArray(feedItem.categories) ? feedItem.categories.join(', ') : ''
 });
 
 const sendMessageWithTemplate = async (whatsappClient, target, template, feedItem) => {
   const payload = buildMessageData(feedItem);
-  const text = applyTemplate(template.body, payload).trim();
+  const text = applyTemplate(template.content, payload).trim();
   if (!text) {
     throw new Error('Template rendered empty message');
   }
@@ -32,85 +33,152 @@ const sendMessageWithTemplate = async (whatsappClient, target, template, feedIte
     throw new Error('WhatsApp socket not connected');
   }
 
-  if (feedItem.imageUrl) {
-    if (target.type === 'status') {
-      return socket.sendMessage('status@broadcast', { image: { url: feedItem.imageUrl }, caption: text }, { statusJidList: [target.jid] });
+  // Format phone number as JID
+  const jid = target.phone_number.includes('@') 
+    ? target.phone_number 
+    : `${target.phone_number.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
+
+  if (feedItem.image_url) {
+    if (target.type === 'group') {
+      return socket.sendMessage(jid, { image: { url: feedItem.image_url }, caption: text });
     }
-    return socket.sendMessage(target.jid, { image: { url: feedItem.imageUrl }, caption: text });
+    return socket.sendMessage(jid, { image: { url: feedItem.image_url }, caption: text });
   }
 
-  if (target.type === 'status') {
-    return socket.sendMessage('status@broadcast', { text }, { statusJidList: [target.jid] });
-  }
-
-  return socket.sendMessage(target.jid, { text });
+  return socket.sendMessage(jid, { text });
 };
 
 const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
-  const schedule = await Schedule.findById(scheduleId);
-  if (!schedule || !schedule.enabled) return { sent: 0 };
+  try {
+    // Get schedule
+    const { data: schedule, error: scheduleError } = await supabase
+      .from('schedules')
+      .select('*')
+      .eq('id', scheduleId)
+      .single();
 
-  const settings = await settingsService.getSettings();
-  const interDelay = settings.defaultInterTargetDelaySec * 1000;
-
-  const targets = await Target.find({ _id: { $in: schedule.targetIds }, enabled: true });
-  const template = await Template.findById(schedule.templateId);
-  if (!template) {
-    throw new Error('Template not found for schedule');
-  }
-
-  let sentCount = 0;
-
-  for (const target of targets) {
-    const logs = await MessageLog.find({
-      scheduleId,
-      targetId: target._id,
-      status: 'queued'
-    }).sort({ createdAt: 1 });
-
-    for (const log of logs) {
-      const feedItem = await FeedItem.findById(log.feedItemId);
-      if (!feedItem) {
-        await MessageLog.findByIdAndUpdate(log._id, { status: 'skipped', error: 'Feed item missing' });
-        continue;
-      }
-
-      const since = new Date(Date.now() - settings.retentionDays * 24 * 60 * 60 * 1000);
-      const duplicate = await isDuplicateInChat({
-        jid: target.jid,
-        title: feedItem.title,
-        url: feedItem.url,
-        threshold: settings.dedupeThreshold,
-        since
-      });
-
-      if (duplicate) {
-        await MessageLog.findByIdAndUpdate(log._id, { status: 'skipped', error: 'Duplicate in chat history' });
-        continue;
-      }
-
-      try {
-        const response = await sendMessageWithTemplate(whatsappClient, target, template, feedItem);
-        await MessageLog.findByIdAndUpdate(log._id, { status: 'sent', sentAt: new Date(), error: null });
-        sentCount += 1;
-
-        if (whatsappClient.waitForMessage) {
-          await whatsappClient.waitForMessage(response.key.id);
-        }
-      } catch (error) {
-        logger.error({ error }, 'Failed to send message');
-        await MessageLog.findByIdAndUpdate(log._id, { status: 'failed', error: error.message });
-      }
-
-      const intraDelay = (target.intraDelaySec || settings.defaultIntraTargetDelaySec) * 1000;
-      await sleep(intraDelay);
+    if (scheduleError || !schedule || !schedule.active) {
+      return { sent: 0 };
     }
 
-    await sleep(interDelay);
-  }
+    const settings = await settingsService.getSettings();
+    const messageDelay = settings.message_delay_ms || 2000;
 
-  await Schedule.findByIdAndUpdate(scheduleId, { lastRunAt: new Date() });
-  return { sent: sentCount };
+    // Get targets
+    const { data: targets, error: targetsError } = await supabase
+      .from('targets')
+      .select('*')
+      .in('id', schedule.target_ids || [])
+      .eq('active', true);
+
+    if (targetsError) throw targetsError;
+
+    // Get template
+    const { data: template, error: templateError } = await supabase
+      .from('templates')
+      .select('*')
+      .eq('id', schedule.template_id)
+      .single();
+
+    if (templateError || !template) {
+      throw new Error('Template not found for schedule');
+    }
+
+    let sentCount = 0;
+
+    for (const target of targets || []) {
+      // Get pending message logs for this target and schedule
+      const { data: logs, error: logsError } = await supabase
+        .from('message_logs')
+        .select('*')
+        .eq('schedule_id', scheduleId)
+        .eq('target_id', target.id)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: true });
+
+      if (logsError) continue;
+
+      for (const log of logs || []) {
+        // Get feed item
+        const { data: feedItem, error: feedItemError } = await supabase
+          .from('feed_items')
+          .select('*')
+          .eq('id', log.feed_item_id)
+          .single();
+
+        if (feedItemError || !feedItem) {
+          await supabase
+            .from('message_logs')
+            .update({ status: 'failed', error_message: 'Feed item missing' })
+            .eq('id', log.id);
+          continue;
+        }
+
+        const since = new Date(Date.now() - (settings.log_retention_days || 30) * 24 * 60 * 60 * 1000);
+        const jid = target.phone_number.includes('@') 
+          ? target.phone_number 
+          : `${target.phone_number.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
+
+        // Check for duplicate based on feed item + target combination
+        const { data: existingSent } = await supabase
+          .from('message_logs')
+          .select('id')
+          .eq('feed_item_id', feedItem.id)
+          .eq('target_id', target.id)
+          .eq('status', 'sent')
+          .single();
+
+        if (existingSent) {
+          await supabase
+            .from('message_logs')
+            .update({ status: 'failed', error_message: 'Already sent to this target' })
+            .eq('id', log.id);
+          continue;
+        }
+
+        try {
+          const messageContent = applyTemplate(template.content, buildMessageData(feedItem));
+          const response = await sendMessageWithTemplate(whatsappClient, target, template, feedItem);
+          
+          await supabase
+            .from('message_logs')
+            .update({ 
+              status: 'sent', 
+              sent_at: new Date().toISOString(), 
+              error_message: null,
+              message_content: messageContent,
+              whatsapp_message_id: response?.key?.id
+            })
+            .eq('id', log.id);
+          
+          sentCount += 1;
+
+          if (whatsappClient.waitForMessage) {
+            await whatsappClient.waitForMessage(response.key.id);
+          }
+        } catch (error) {
+          logger.error({ error }, 'Failed to send message');
+          await supabase
+            .from('message_logs')
+            .update({ status: 'failed', error_message: error.message })
+            .eq('id', log.id);
+        }
+
+        await sleep(messageDelay);
+      }
+    }
+
+    // Update schedule last run time
+    await supabase
+      .from('schedules')
+      .update({ last_run_at: new Date().toISOString() })
+      .eq('id', scheduleId);
+
+    return { sent: sentCount };
+  } catch (error) {
+    logger.error({ error, scheduleId }, 'Failed to send queued messages');
+    return { sent: 0, error: error.message };
+  }
 };
 
 module.exports = {

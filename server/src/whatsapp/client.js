@@ -5,7 +5,7 @@ const {
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode');
 const logger = require('../utils/logger');
-const useMongoAuthState = require('./authStore');
+const useSupabaseAuthState = require('./authStore');
 const { saveIncomingMessages } = require('../services/messageService');
 
 class WhatsAppClient {
@@ -19,7 +19,7 @@ class WhatsAppClient {
   }
 
   async init() {
-    this.authStore = await useMongoAuthState('primary');
+    this.authStore = await useSupabaseAuthState('primary');
     await this.connect();
   }
 
@@ -40,10 +40,17 @@ class WhatsAppClient {
         this.qrCode = await qrcode.toDataURL(qr);
         this.status = 'qr';
         this.lastError = null;
+        // Update status in database
+        if (this.authStore.updateStatus) {
+          await this.authStore.updateStatus('qr_ready', this.qrCode);
+        }
       }
 
       if (connection === 'connecting') {
         this.status = 'connecting';
+        if (this.authStore.updateStatus) {
+          await this.authStore.updateStatus('connecting');
+        }
       }
 
       if (connection === 'open') {
@@ -51,6 +58,9 @@ class WhatsAppClient {
         this.qrCode = null;
         this.lastError = null;
         this.lastSeenAt = new Date();
+        if (this.authStore.updateStatus) {
+          await this.authStore.updateStatus('connected', null);
+        }
       }
 
       if (connection === 'close') {
@@ -60,6 +70,10 @@ class WhatsAppClient {
 
         if (reason === DisconnectReason.loggedOut) {
           await this.authStore.clearState();
+        }
+
+        if (this.authStore.updateStatus) {
+          await this.authStore.updateStatus('disconnected');
         }
 
         logger.warn({ reason }, 'WhatsApp connection closed');

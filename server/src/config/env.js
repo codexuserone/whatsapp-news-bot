@@ -12,8 +12,10 @@ const baseUrl =
 
 const env = {
   PORT: process.env.PORT || 10000,
-  MONGO_URI: process.env.MONGO_URI,
-  USE_IN_MEMORY_DB: !isProd && process.env.USE_IN_MEMORY_DB === 'true',
+  // Supabase configuration
+  SUPABASE_URL: process.env.SUPABASE_URL,
+  SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
+  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
   BASE_URL: baseUrl,
   KEEP_ALIVE: process.env.KEEP_ALIVE === 'true',
   KEEP_ALIVE_URL: process.env.KEEP_ALIVE_URL,
@@ -23,9 +25,9 @@ const env = {
   DEFAULT_INTRA_TARGET_DELAY_SEC: Number(process.env.DEFAULT_INTRA_TARGET_DELAY_SEC || 3)
 };
 
-// In production, we require MONGO_URI unless explicitly using in-memory DB
-if (isProd && !env.MONGO_URI) {
-  throw new Error('MONGO_URI is required in production');
+// In production, we require Supabase credentials
+if (isProd && (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY)) {
+  throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required in production');
 }
 
 module.exports = env;

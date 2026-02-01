@@ -66,7 +66,7 @@ const WhatsAppPage = () => {
   });
 
   const isConnected = status?.status === 'connected';
-  const existingJids = new Set(existingTargets.map((t) => t.jid));
+  const existingPhones = new Set(existingTargets.map((t) => t.phone_number));
 
   return (
     <div className="space-y-8">
@@ -132,32 +132,14 @@ const WhatsAppPage = () => {
         </Card>
       </section>
 
-      {/* Status Broadcast Target */}
+      {/* Quick Add Target */}
       <Card>
         <CardHeader>
-          <CardTitle>Status Broadcast</CardTitle>
+          <CardTitle>Quick Add Target</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center justify-between rounded-2xl border border-ink/10 bg-surface p-4">
-            <div>
-              <p className="font-medium">My Status</p>
-              <p className="text-sm text-ink/60">Post to your WhatsApp Status (visible to contacts)</p>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!isConnected || existingJids.has('status@broadcast')}
-              onClick={() =>
-                addTarget.mutate({
-                  name: 'My Status',
-                  jid: 'status@broadcast',
-                  type: 'status',
-                  enabled: true
-                })
-              }
-            >
-              {existingJids.has('status@broadcast') ? 'Added ✓' : 'Add as Target'}
-            </Button>
+          <div className="text-sm text-ink/60 mb-4">
+            Import groups from WhatsApp below, or manually add targets in the Targets page.
           </div>
         </CardContent>
       </Card>
@@ -190,12 +172,12 @@ const WhatsAppPage = () => {
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={existingJids.has(group.jid)}
+                        disabled={existingPhones.has(group.jid)}
                         onClick={() =>
-                          addTarget.mutate({ name: group.name, jid: group.jid, type: 'group', enabled: true })
+                          addTarget.mutate({ name: group.name, phone_number: group.jid, type: 'group', active: true })
                         }
                       >
-                        {existingJids.has(group.jid) ? 'Added ✓' : 'Add'}
+                        {existingPhones.has(group.jid) ? 'Added' : 'Add'}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -241,12 +223,12 @@ const WhatsAppPage = () => {
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={existingJids.has(channel.jid)}
+                        disabled={existingPhones.has(channel.jid)}
                         onClick={() =>
-                          addTarget.mutate({ name: channel.name, jid: channel.jid, type: 'channel', enabled: true })
+                          addTarget.mutate({ name: channel.name, phone_number: channel.jid, type: 'group', active: true })
                         }
                       >
-                        {existingJids.has(channel.jid) ? 'Added ✓' : 'Add'}
+                        {existingPhones.has(channel.jid) ? 'Added' : 'Add'}
                       </Button>
                     </TableCell>
                   </TableRow>

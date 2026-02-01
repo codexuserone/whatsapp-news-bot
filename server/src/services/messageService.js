@@ -1,4 +1,4 @@
-const ChatMessage = require('../models/ChatMessage');
+const { supabase } = require('../db/supabase');
 const { normalizeText, normalizeUrl } = require('../utils/normalize');
 const { extractText, extractUrls } = require('../utils/messageParser');
 
@@ -12,14 +12,18 @@ const saveIncomingMessages = async (messages = []) => {
     const jid = message.key.remoteJid;
     const text = extractText(message.message);
     const urls = extractUrls(text);
+    const timestamp = message.messageTimestamp 
+      ? new Date(Number(message.messageTimestamp) * 1000).toISOString() 
+      : new Date().toISOString();
+
     const base = {
-      jid,
-      messageId: message.key.id,
-      senderJid: message.key.participant || message.participant,
-      fromMe: Boolean(message.key.fromMe),
-      text,
-      normalizedText: normalizeText(text),
-      timestamp: message.messageTimestamp ? new Date(Number(message.messageTimestamp) * 1000) : new Date()
+      remote_jid: jid,
+      whatsapp_id: message.key.id,
+      from_me: Boolean(message.key.fromMe),
+      content: text,
+      message_type: 'text',
+      timestamp,
+      raw_message: message
     };
 
     if (urls.length === 0) {
@@ -28,22 +32,37 @@ const saveIncomingMessages = async (messages = []) => {
       urls.forEach((url) => {
         entries.push({
           ...base,
-          url,
-          normalizedUrl: normalizeUrl(url)
+          media_url: url
         });
       });
     }
   }
 
   if (entries.length) {
-    await ChatMessage.insertMany(entries, { ordered: false }).catch(() => undefined);
+    try {
+      await supabase.from('chat_messages').insert(entries);
+    } catch (error) {
+      console.error('Error saving incoming messages:', error);
+    }
   }
 };
 
-const hasRecentUrl = async (jid, normalizedUrl) => {
-  if (!normalizedUrl) return false;
-  const existing = await ChatMessage.findOne({ jid, normalizedUrl });
-  return Boolean(existing);
+const hasRecentUrl = async (jid, url) => {
+  if (!url) return false;
+  try {
+    const { data, error } = await supabase
+      .from('chat_messages')
+      .select('id')
+      .eq('remote_jid', jid)
+      .ilike('content', `%${url}%`)
+      .limit(1);
+    
+    if (error) throw error;
+    return data && data.length > 0;
+  } catch (error) {
+    console.error('Error checking recent URL:', error);
+    return false;
+  }
 };
 
 module.exports = {

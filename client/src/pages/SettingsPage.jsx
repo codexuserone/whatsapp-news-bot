@@ -10,11 +10,10 @@ import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 
 const schema = z.object({
-  retentionDays: z.coerce.number().min(1),
-  authRetentionDays: z.coerce.number().min(1),
-  defaultInterTargetDelaySec: z.coerce.number().min(1),
-  defaultIntraTargetDelaySec: z.coerce.number().min(1),
-  dedupeThreshold: z.coerce.number().min(0.5).max(1)
+  app_name: z.string().min(1),
+  default_timezone: z.string().min(1),
+  log_retention_days: z.coerce.number().min(1),
+  message_delay_ms: z.coerce.number().min(100)
 });
 
 const SettingsPage = () => {
@@ -24,11 +23,10 @@ const SettingsPage = () => {
   const form = useForm({
     resolver: zodResolver(schema),
     defaultValues: {
-      retentionDays: 14,
-      authRetentionDays: 60,
-      defaultInterTargetDelaySec: 8,
-      defaultIntraTargetDelaySec: 3,
-      dedupeThreshold: 0.88
+      app_name: 'Anash WhatsApp Bot',
+      default_timezone: 'UTC',
+      log_retention_days: 30,
+      message_delay_ms: 2000
     }
   });
 
@@ -49,46 +47,36 @@ const SettingsPage = () => {
     <div className="space-y-8">
       <PageHeader title="Settings" subtitle="Tune global defaults, retention windows, and safety controls." />
       <form onSubmit={form.handleSubmit((values) => saveSettings.mutate(values))} className="space-y-6">
-        <Card id="retention">
+        <Card id="general">
           <CardHeader>
-            <CardTitle>Retention</CardTitle>
+            <CardTitle>General</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Retention Days</label>
-              <Input type="number" {...form.register('retentionDays', { valueAsNumber: true })} />
+              <label className="text-sm font-medium">App Name</label>
+              <Input {...form.register('app_name')} />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Auth Retention Days</label>
-              <Input type="number" {...form.register('authRetentionDays', { valueAsNumber: true })} />
+              <label className="text-sm font-medium">Default Timezone</label>
+              <Input {...form.register('default_timezone')} placeholder="UTC" />
             </div>
           </CardContent>
         </Card>
 
-        <Card id="delays">
+        <Card id="messaging">
           <CardHeader>
-            <CardTitle>Delays</CardTitle>
+            <CardTitle>Messaging</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Inter-target Delay (sec)</label>
-              <Input type="number" {...form.register('defaultInterTargetDelaySec', { valueAsNumber: true })} />
+              <label className="text-sm font-medium">Message Delay (ms)</label>
+              <Input type="number" {...form.register('message_delay_ms', { valueAsNumber: true })} />
+              <p className="text-xs text-ink/50">Delay between sending messages to avoid rate limiting</p>
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Intra-target Delay (sec)</label>
-              <Input type="number" {...form.register('defaultIntraTargetDelaySec', { valueAsNumber: true })} />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card id="dedupe">
-          <CardHeader>
-            <CardTitle>Dedupe</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Fuzzy Match Threshold (0.5 - 1.0)</label>
-              <Input type="number" step="0.01" {...form.register('dedupeThreshold', { valueAsNumber: true })} />
+              <label className="text-sm font-medium">Log Retention (days)</label>
+              <Input type="number" {...form.register('log_retention_days', { valueAsNumber: true })} />
+              <p className="text-xs text-ink/50">How long to keep message logs</p>
             </div>
           </CardContent>
         </Card>

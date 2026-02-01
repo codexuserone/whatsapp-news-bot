@@ -1,16 +1,37 @@
 const { createClient } = require('@supabase/supabase-js');
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+// Lazy initialization - client is created on first access
+let _supabase = null;
 
-if (!supabaseUrl || !supabaseKey) {
-  console.error('Missing Supabase credentials. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables.');
+function getSupabaseClient() {
+  if (_supabase) return _supabase;
+  
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseKey) {
+    console.error('Missing Supabase credentials. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables.');
+    return null;
+  }
+
+  _supabase = createClient(supabaseUrl, supabaseKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
+  });
+  
+  return _supabase;
 }
 
-const supabase = createClient(supabaseUrl || '', supabaseKey || '', {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false
+// Proxy object that lazily initializes Supabase
+const supabase = new Proxy({}, {
+  get(target, prop) {
+    const client = getSupabaseClient();
+    if (!client) {
+      throw new Error('Supabase client not initialized. Check environment variables.');
+    }
+    return client[prop];
   }
 });
 
@@ -25,7 +46,12 @@ function handleSupabaseError(error, context = '') {
 // Test database connection
 async function testConnection() {
   try {
-    const { data, error } = await supabase.from('settings').select('key').limit(1);
+    const client = getSupabaseClient();
+    if (!client) {
+      console.error('Supabase client not available - missing credentials');
+      return false;
+    }
+    const { data, error } = await client.from('settings').select('key').limit(1);
     if (error) throw error;
     console.log('Supabase connection successful');
     return true;
@@ -37,6 +63,7 @@ async function testConnection() {
 
 module.exports = {
   supabase,
+  getSupabaseClient,
   handleSupabaseError,
   testConnection
 };

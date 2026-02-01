@@ -23,10 +23,11 @@ const start = async () => {
   // Test Supabase connection
   const connected = await testConnection();
   if (!connected) {
-    logger.error('Failed to connect to Supabase database');
-    process.exit(1);
+    logger.warn('Failed to connect to Supabase database - some features may not work');
+    logger.warn('Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables');
+  } else {
+    await settingsService.ensureDefaults();
   }
-  await settingsService.ensureDefaults();
 
   const whatsappClient = createWhatsAppClient();
   await whatsappClient.init();

@@ -11,6 +11,12 @@ const settingsService = require('./services/settingsService');
 const { initSchedulers } = require('./services/schedulerService');
 const { scheduleRetentionCleanup } = require('./services/retentionService');
 
+// Global error handlers to prevent crashes
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error({ reason }, 'Unhandled Promise Rejection');
+  // Don't exit - let the app continue
+});
+
 const start = async () => {
   const app = express();
   app.use(cors());
@@ -18,6 +24,13 @@ const start = async () => {
 
   // Serve static files in production
   const publicPath = path.join(__dirname, '../public');
+  const fs = require('fs');
+  
+  // Create public folder if it doesn't exist
+  if (!fs.existsSync(publicPath)) {
+    fs.mkdirSync(publicPath, { recursive: true });
+  }
+  
   app.use(express.static(publicPath));
 
   // Test Supabase connection
@@ -37,7 +50,22 @@ const start = async () => {
 
   // SPA fallback - serve index.html for non-API routes
   app.get('*', (req, res) => {
-    res.sendFile(path.join(publicPath, 'index.html'));
+    const indexPath = path.join(publicPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      res.status(503).send(`
+        <!DOCTYPE html>
+        <html>
+          <head><title>Building...</title></head>
+          <body>
+            <h1>Application is building</h1>
+            <p>The client-side application is being built. Please wait a moment and refresh.</p>
+            <p>If this persists, check that the build command ran successfully.</p>
+          </body>
+        </html>
+      `);
+    }
   });
 
   app.listen(env.PORT, () => {

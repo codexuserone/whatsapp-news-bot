@@ -128,11 +128,25 @@ const useSupabaseAuthState = async (sessionId = 'default') => {
       await saveState();
     },
     clearState: async () => {
+      // Initialize fresh credentials
+      const freshCreds = initAuthCreds();
+      state = { creds: freshCreds, keys: {} };
+      
+      // Delete all existing auth data and create fresh
       await supabase
         .from('auth_state')
-        .update({ creds: null, keys: null, status: 'disconnected' })
+        .delete()
         .eq('session_id', sessionId);
-      state = { creds: initAuthCreds(), keys: {} };
+      
+      await supabase
+        .from('auth_state')
+        .upsert({ 
+          session_id: sessionId, 
+          creds: serialize(freshCreds), 
+          keys: {},
+          status: 'disconnected',
+          qr_code: null
+        }, { onConflict: 'session_id' });
     },
     updateStatus: async (status, qrCode = null) => {
       const updates = { status };

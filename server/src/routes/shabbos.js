@@ -27,14 +27,20 @@ const shabbosRoutes = () => {
     }
   });
 
-  // Get Shabbos settings
+  // Get Shabbos settings (returns flat format for frontend)
   router.get('/settings', async (_req, res) => {
     try {
       const settings = await settingsService.getSettings();
+      const loc = settings.shabbosMode?.location || DEFAULT_LOCATION;
       res.json({
-        enabled: settings.shabbosMode?.enabled || false,
-        location: settings.shabbosMode?.location || DEFAULT_LOCATION,
-        queueMessages: settings.shabbosMode?.queueMessages !== false // default true
+        enabled: settings.shabbosMode?.enabled ?? true,
+        city: loc.city || 'New York',
+        latitude: loc.latitude ?? 40.7128,
+        longitude: loc.longitude ?? -74.006,
+        tzid: loc.tzid || 'America/New_York',
+        candleLightingMins: settings.shabbosMode?.candleLightingMins ?? 18,
+        havdalahMins: settings.shabbosMode?.havdalahMins ?? 50,
+        queueMessages: settings.shabbosMode?.queueMessages !== false
       });
     } catch (error) {
       console.error('Error getting Shabbos settings:', error);
@@ -42,24 +48,57 @@ const shabbosRoutes = () => {
     }
   });
 
-  // Update Shabbos settings
+  // Update Shabbos settings (accepts flat format from frontend)
   router.put('/settings', async (req, res) => {
     try {
-      const { enabled, location, queueMessages } = req.body;
-      
+      const {
+        enabled,
+        location,
+        city,
+        latitude,
+        longitude,
+        tzid,
+        candleLightingMins,
+        havdalahMins,
+        queueMessages
+      } = req.body;
+
       const currentSettings = await settingsService.getSettings();
+      const currentLoc = currentSettings.shabbosMode?.location || DEFAULT_LOCATION;
+
+      const newLocation =
+        location ||
+        (city || latitude !== undefined || longitude !== undefined || tzid
+          ? {
+              city: city ?? currentLoc.city,
+              latitude: latitude ?? currentLoc.latitude,
+              longitude: longitude ?? currentLoc.longitude,
+              tzid: tzid ?? currentLoc.tzid
+            }
+          : currentLoc);
+
       const updatedShabbosMode = {
         ...currentSettings.shabbosMode,
         enabled: enabled !== undefined ? enabled : currentSettings.shabbosMode?.enabled,
-        location: location || currentSettings.shabbosMode?.location || DEFAULT_LOCATION,
+        location: newLocation,
+        candleLightingMins:
+          candleLightingMins !== undefined ? candleLightingMins : currentSettings.shabbosMode?.candleLightingMins ?? 18,
+        havdalahMins:
+          havdalahMins !== undefined ? havdalahMins : currentSettings.shabbosMode?.havdalahMins ?? 50,
         queueMessages: queueMessages !== undefined ? queueMessages : currentSettings.shabbosMode?.queueMessages
       };
 
       await settingsService.updateSettings({ shabbosMode: updatedShabbosMode });
-      
+
+      const loc = updatedShabbosMode.location || DEFAULT_LOCATION;
       res.json({
         enabled: updatedShabbosMode.enabled,
-        location: updatedShabbosMode.location,
+        city: loc.city,
+        latitude: loc.latitude,
+        longitude: loc.longitude,
+        tzid: loc.tzid,
+        candleLightingMins: updatedShabbosMode.candleLightingMins ?? 18,
+        havdalahMins: updatedShabbosMode.havdalahMins ?? 50,
         queueMessages: updatedShabbosMode.queueMessages
       });
     } catch (error) {

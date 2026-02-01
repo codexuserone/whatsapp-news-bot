@@ -22,7 +22,11 @@ const DEFAULT_LOCATION = {
 /**
  * Fetch Shabbos/Yom Tov times from HebCal API
  */
-const fetchShabbosTimesFromHebcal = async (location = DEFAULT_LOCATION) => {
+const fetchShabbosTimesFromHebcal = async (
+  location = DEFAULT_LOCATION,
+  candleLightingMins = 18,
+  havdalahMins = 50
+) => {
   try {
     const now = new Date();
     const params = new URLSearchParams({
@@ -30,14 +34,14 @@ const fetchShabbosTimesFromHebcal = async (location = DEFAULT_LOCATION) => {
       v: '1',
       maj: 'on',       // Major holidays
       min: 'off',      // Minor holidays (off)
-      mod: 'off',      // Modern holidays (off) 
+      mod: 'off',      // Modern holidays (off)
       nx: 'off',       // Rosh Chodesh
       ss: 'on',        // Special Shabbatot
       mf: 'off',       // Minor fasts
       c: 'on',         // Candle lighting
-      b: '18',         // Minutes before sunset for candle lighting
+      b: String(candleLightingMins),
       M: 'on',         // Havdalah
-      m: '50',         // Havdalah minutes after sunset
+      m: String(havdalahMins),
       geo: 'pos',
       latitude: location.latitude,
       longitude: location.longitude,
@@ -91,28 +95,30 @@ const parseShabbosTimesFromHebcal = (data) => {
 /**
  * Get cached or fresh Shabbos times
  */
-const getShabbosTimesWithCache = async (location = DEFAULT_LOCATION) => {
-  const locationKey = `${location.latitude},${location.longitude}`;
+const getShabbosTimesWithCache = async (
+  location = DEFAULT_LOCATION,
+  candleLightingMins = 18,
+  havdalahMins = 50
+) => {
+  const cacheKey = `${location.latitude},${location.longitude},${candleLightingMins},${havdalahMins}`;
   const now = Date.now();
 
-  // Check if cache is valid
   if (
-    shabbosCache.data && 
-    shabbosCache.location === locationKey &&
-    shabbosCache.fetchedAt && 
+    shabbosCache.data &&
+    shabbosCache.location === cacheKey &&
+    shabbosCache.fetchedAt &&
     (now - shabbosCache.fetchedAt) < CACHE_DURATION_MS
   ) {
     return shabbosCache.data;
   }
 
-  // Fetch fresh data
-  const hebcalData = await fetchShabbosTimesFromHebcal(location);
+  const hebcalData = await fetchShabbosTimesFromHebcal(location, candleLightingMins, havdalahMins);
   if (hebcalData) {
     const periods = parseShabbosTimesFromHebcal(hebcalData);
     shabbosCache = {
       data: periods,
       fetchedAt: now,
-      location: locationKey
+      location: cacheKey
     };
     return periods;
   }
@@ -133,7 +139,9 @@ const isCurrentlyShabbos = async () => {
     }
 
     const location = settings.shabbosMode?.location || DEFAULT_LOCATION;
-    const periods = await getShabbosTimesWithCache(location);
+    const candleMins = settings.shabbosMode?.candleLightingMins ?? 18;
+    const havdalahMins = settings.shabbosMode?.havdalahMins ?? 50;
+    const periods = await getShabbosTimesWithCache(location, candleMins, havdalahMins);
     const now = new Date();
 
     for (const period of periods) {
@@ -148,12 +156,11 @@ const isCurrentlyShabbos = async () => {
       }
     }
 
-    // Find next Shabbos
     const nextPeriod = periods.find(p => p.start > now);
     return {
       isShabbos: false,
       nextStart: nextPeriod?.start,
-      nextType: nextPeriod?.type,
+      nextShabbos: nextPeriod ? { start: nextPeriod.start, end: nextPeriod.end } : null,
       reason: 'Not currently Shabbos/Yom Tov'
     };
   } catch (error) {
@@ -169,7 +176,9 @@ const getUpcomingShabbos = async () => {
   try {
     const settings = await settingsService.getSettings();
     const location = settings.shabbosMode?.location || DEFAULT_LOCATION;
-    const periods = await getShabbosTimesWithCache(location);
+    const candleMins = settings.shabbosMode?.candleLightingMins ?? 18;
+    const havdalahMins = settings.shabbosMode?.havdalahMins ?? 50;
+    const periods = await getShabbosTimesWithCache(location, candleMins, havdalahMins);
     const now = new Date();
     
     // Return upcoming periods

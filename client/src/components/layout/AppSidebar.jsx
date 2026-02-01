@@ -39,6 +39,37 @@ const AppSidebar = () => {
               <SidebarMenu>
                 {section.items.map((item) => {
                   const Icon = item.icon;
+                  if (item.children?.length) {
+                    return (
+                      <SidebarMenuItem key={item.label}>
+                        <NavLink to={item.to} end={item.to === '/'}>
+                          {({ isActive }) => (
+                            <SidebarMenuButton isActive={isActive} className="w-full">
+                              {Icon && <Icon className="h-4 w-4" />}
+                              <span>{item.label}</span>
+                            </SidebarMenuButton>
+                          )}
+                        </NavLink>
+                        <ul className="ml-4 mt-1 space-y-0.5">
+                          {item.children.map((child) => (
+                            <li key={child.to}>
+                              <NavLink to={child.to}>
+                                {({ isActive }) => (
+                                  <SidebarMenuButton
+                                    isActive={isActive}
+                                    size="sm"
+                                    className="w-full text-muted-foreground hover:text-foreground"
+                                  >
+                                    <span>{child.label}</span>
+                                  </SidebarMenuButton>
+                                )}
+                              </NavLink>
+                            </li>
+                          ))}
+                        </ul>
+                      </SidebarMenuItem>
+                    );
+                  }
                   return (
                     <SidebarMenuItem key={item.label}>
                       <NavLink to={item.to} end={item.to === '/'}>

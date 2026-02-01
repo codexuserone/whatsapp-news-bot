@@ -3,6 +3,10 @@ const env = require('../config/env');
 
 const DEFAULTS = {
   retentionDays: env.RETENTION_DAYS,
+  log_retention_days: Number(process.env.LOG_RETENTION_DAYS || env.RETENTION_DAYS || 30),
+  app_name: 'WhatsApp News Bot',
+  default_timezone: 'UTC',
+  message_delay_ms: 2000,
   authRetentionDays: Number(process.env.AUTH_RETENTION_DAYS || 60),
   defaultInterTargetDelaySec: env.DEFAULT_INTER_TARGET_DELAY_SEC,
   defaultIntraTargetDelaySec: env.DEFAULT_INTRA_TARGET_DELAY_SEC,
@@ -55,6 +59,7 @@ const getSettings = async () => {
         data[entry.key] = entry.value;
       }
     });
+    data.retentionDays = data.log_retention_days ?? data.retentionDays;
     return data;
   } catch (error) {
     console.error('Error getting settings:', error);

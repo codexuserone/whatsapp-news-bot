@@ -7,7 +7,8 @@ import {
   CalendarClock,
   ClipboardList,
   Activity,
-  Settings
+  Settings,
+  ListOrdered
 } from 'lucide-react';
 
 export const navSections = [
@@ -24,7 +25,8 @@ export const navSections = [
       { label: 'Feeds', to: '/feeds', icon: Rss },
       { label: 'Templates', to: '/templates', icon: Layers },
       { label: 'Targets', to: '/targets', icon: Target },
-      { label: 'Schedules', to: '/schedules', icon: CalendarClock }
+      { label: 'Schedules', to: '/schedules', icon: CalendarClock },
+      { label: 'Queue', to: '/queue', icon: ListOrdered }
     ]
   },
   {

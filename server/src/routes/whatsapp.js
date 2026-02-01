@@ -67,6 +67,57 @@ const whatsappRoutes = () => {
     }
   });
 
+  // Send a test message
+  router.post('/send-test', async (req, res) => {
+    try {
+      const whatsapp = req.app.locals.whatsapp;
+      const { jid, message } = req.body;
+      
+      if (!jid || !message) {
+        return res.status(400).json({ ok: false, error: 'jid and message are required' });
+      }
+
+      if (whatsapp?.getStatus()?.status !== 'connected') {
+        return res.status(400).json({ ok: false, error: 'WhatsApp is not connected' });
+      }
+
+      const result = await whatsapp.sendMessage(jid, { text: message });
+      res.json({ ok: true, messageId: result?.key?.id });
+    } catch (error) {
+      console.error('Error sending test message:', error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // Send to status broadcast
+  router.post('/send-status', async (req, res) => {
+    try {
+      const whatsapp = req.app.locals.whatsapp;
+      const { message, imageUrl } = req.body;
+      
+      if (!message && !imageUrl) {
+        return res.status(400).json({ ok: false, error: 'message or imageUrl is required' });
+      }
+
+      if (whatsapp?.getStatus()?.status !== 'connected') {
+        return res.status(400).json({ ok: false, error: 'WhatsApp is not connected' });
+      }
+
+      let content;
+      if (imageUrl) {
+        content = { image: { url: imageUrl }, caption: message || '' };
+      } else {
+        content = { text: message };
+      }
+
+      const result = await whatsapp.sendStatusBroadcast(content);
+      res.json({ ok: true, messageId: result?.key?.id });
+    } catch (error) {
+      console.error('Error sending status:', error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   return router;
 };
 

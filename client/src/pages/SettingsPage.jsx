@@ -33,6 +33,17 @@ const PRESET_LOCATIONS = [
 const SettingsPage = () => {
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: () => api.get('/api/settings') });
+  const { data: shabbosStatus } = useQuery({ 
+    queryKey: ['shabbos-status'], 
+    queryFn: () => api.get('/api/shabbos/status'),
+    refetchInterval: 60000 // Check every minute
+  });
+  const { data: shabbosSettings } = useQuery({ 
+    queryKey: ['shabbos-settings'], 
+    queryFn: () => api.get('/api/shabbos/settings')
+  });
+
+  const [selectedLocation, setSelectedLocation] = useState('');
 
   const form = useForm({
     resolver: zodResolver(schema),
@@ -50,12 +61,42 @@ const SettingsPage = () => {
     }
   }, [settings, form]);
 
+  useEffect(() => {
+    if (shabbosSettings?.city) {
+      setSelectedLocation(shabbosSettings.city);
+    }
+  }, [shabbosSettings]);
+
   const saveSettings = useMutation({
     mutationFn: (payload) => api.put('/api/settings', payload),
     onSuccess: (data) => {
       queryClient.setQueryData(['settings'], data);
     }
   });
+
+  const saveShabbosSettings = useMutation({
+    mutationFn: (payload) => api.put('/api/shabbos/settings', payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['shabbos-settings'] });
+      queryClient.invalidateQueries({ queryKey: ['shabbos-status'] });
+    }
+  });
+
+  const handleLocationSelect = (locationName) => {
+    const location = PRESET_LOCATIONS.find(l => l.name === locationName);
+    if (location) {
+      setSelectedLocation(locationName);
+      saveShabbosSettings.mutate({
+        enabled: true,
+        city: location.name,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        tzid: location.tzid,
+        candleLightingMins: 18,
+        havdalahMins: 50
+      });
+    }
+  };
 
   return (
     <div className="space-y-8">
@@ -99,6 +140,121 @@ const SettingsPage = () => {
           Save Settings
         </Button>
       </form>
+
+      {/* Shabbos Mode Section */}
+      <Card id="shabbos">
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>Shabbos Mode</span>
+            {shabbosStatus?.isShabbos ? (
+              <Badge variant="warning">Currently Shabbos</Badge>
+            ) : (
+              <Badge variant="success">Regular Mode</Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <p className="text-sm text-muted-foreground">
+            Automatically pause message sending during Shabbos and Yom Tov. Messages are queued and sent when Shabbos ends.
+          </p>
+
+          {/* Current Status */}
+          {shabbosStatus && (
+            <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">Current Status</span>
+                <span className="text-sm">{shabbosStatus.reason || 'Regular weekday'}</span>
+              </div>
+              {shabbosStatus.nextShabbos && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">Next Shabbos Starts</span>
+                  <span className="text-sm">{new Date(shabbosStatus.nextShabbos.start).toLocaleString()}</span>
+                </div>
+              )}
+              {shabbosStatus.nextShabbos && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">Next Shabbos Ends</span>
+                  <span className="text-sm">{new Date(shabbosStatus.nextShabbos.end).toLocaleString()}</span>
+                </div>
+              )}
+              {shabbosStatus.isShabbos && shabbosStatus.endsAt && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">Resumes At</span>
+                  <span className="text-sm font-semibold text-green-600">
+                    {new Date(shabbosStatus.endsAt).toLocaleString()}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Location Selection */}
+          <div className="space-y-3">
+            <label className="text-sm font-medium">Your Location</label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {PRESET_LOCATIONS.map((location) => (
+                <Button
+                  key={location.name}
+                  type="button"
+                  variant={selectedLocation === location.name ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => handleLocationSelect(location.name)}
+                  disabled={saveShabbosSettings.isPending}
+                >
+                  {location.name}
+                </Button>
+              ))}
+            </div>
+            {shabbosSettings?.city && (
+              <p className="text-xs text-muted-foreground">
+                Currently set to: {shabbosSettings.city} ({shabbosSettings.tzid})
+              </p>
+            )}
+          </div>
+
+          {/* Timing Settings */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Candle Lighting (minutes before sunset)</label>
+              <Input 
+                type="number" 
+                value={shabbosSettings?.candleLightingMins || 18}
+                onChange={(e) => saveShabbosSettings.mutate({
+                  ...shabbosSettings,
+                  candleLightingMins: parseInt(e.target.value) || 18
+                })}
+                min={0}
+                max={60}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Havdalah (minutes after sunset)</label>
+              <Input 
+                type="number" 
+                value={shabbosSettings?.havdalahMins || 50}
+                onChange={(e) => saveShabbosSettings.mutate({
+                  ...shabbosSettings,
+                  havdalahMins: parseInt(e.target.value) || 50
+                })}
+                min={30}
+                max={90}
+              />
+            </div>
+          </div>
+
+          {/* Enable/Disable */}
+          <div className="flex items-center gap-3">
+            <Checkbox 
+              checked={shabbosSettings?.enabled ?? true}
+              onChange={(e) => saveShabbosSettings.mutate({
+                ...shabbosSettings,
+                enabled: e.target.checked
+              })}
+            />
+            <label className="text-sm">Enable Shabbos Mode (auto-pause during Shabbos/Yom Tov)</label>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 };

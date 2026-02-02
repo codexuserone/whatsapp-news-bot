@@ -23,6 +23,7 @@ class WhatsAppClient {
     this.isConnecting = false;
     this.reconnectTimer = null;
     this.isHandlingAuthCorruption = false;
+    this.isAuthCorrupted = false;
   }
 
   async init() {
@@ -75,13 +76,19 @@ class WhatsAppClient {
 
   isAuthStateCorrupted(message) {
     if (!message) return false;
+    const normalized = message.toLowerCase();
     const checks = [
       'authenticate data',
       'Unsupported state',
       'crypto',
-      'Incorrect private key length'
+      'Incorrect private key length',
+      'bad decrypt',
+      'invalid mac',
+      'no session record',
+      'no senderkeyrecord found for decryption',
+      'failed to decrypt message'
     ];
-    return checks.some((check) => message.includes(check));
+    return checks.some((check) => normalized.includes(check.toLowerCase()));
   }
 
   async handleCorruptedAuthState(err) {
@@ -91,8 +98,21 @@ class WhatsAppClient {
       logger.error({ err }, 'Crypto/auth error detected - clearing auth state');
       this.status = 'error';
       this.lastError = 'Session corrupted. Please scan QR code again.';
+      this.isAuthCorrupted = true;
       if (this.authStore?.clearState) {
         await this.authStore.clearState();
+      }
+      if (this.authStore?.updateStatus) {
+        await this.authStore.updateStatus('error');
+      }
+      if (this.socket) {
+        try {
+          this.socket.ev.removeAllListeners();
+          this.socket.end();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+        this.socket = null;
       }
       this.scheduleReconnect(5000);
     } finally {
@@ -228,6 +248,7 @@ class WhatsAppClient {
           this.lastError = null;
           this.lastSeenAt = new Date();
           this.reconnectAttempts = 0;
+          this.isAuthCorrupted = false;
           logger.info('WhatsApp connected successfully');
           if (this.authStore.updateStatus) {
             await this.authStore.updateStatus('connected', null);
@@ -244,7 +265,11 @@ class WhatsAppClient {
           const statusCode = lastDisconnect?.error?.output?.statusCode;
           const reason = lastDisconnect?.error?.output?.payload?.message || lastDisconnect?.error?.message;
           this.status = 'disconnected';
-          this.lastError = reason || 'Connection closed';
+          if (reason?.includes('QR refs attempts ended')) {
+            this.lastError = 'QR expired. Click Hard Refresh to generate a new QR code.';
+          } else {
+            this.lastError = reason || 'Connection closed';
+          }
           
           logger.warn({ statusCode, reason }, 'WhatsApp connection closed');
 
@@ -358,6 +383,7 @@ class WhatsAppClient {
 
   async sendMessage(jid, content, options = {}) {
     if (!this.socket) throw new Error('WhatsApp not connected');
+    if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
     try {
       const msg = await this.socket.sendMessage(jid, content, options);
       return msg;
@@ -369,6 +395,7 @@ class WhatsAppClient {
 
   async sendStatusBroadcast(content, options = {}) {
     if (!this.socket) throw new Error('WhatsApp not connected');
+    if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
     try {
       const msg = await this.socket.sendMessage('status@broadcast', content, options);
       return msg;

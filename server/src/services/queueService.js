@@ -3,6 +3,9 @@ const settingsService = require('./settingsService');
 const { isCurrentlyShabbos } = require('./shabbosService');
 const sleep = require('../utils/sleep');
 const logger = require('../utils/logger');
+const withTimeout = require('../utils/withTimeout');
+
+const DEFAULT_SEND_TIMEOUT_MS = 15000;
 
 const applyTemplate = (templateBody, data) => {
   return templateBody.replace(/{{\s*(\w+)\s*}}/g, (_, key) => (data[key] != null ? data[key] : ''));
@@ -76,18 +79,34 @@ const sendMessageWithTemplate = async (whatsappClient, target, template, feedIte
   if (feedItem.image_url) {
     try {
       if (target.type === 'status') {
-        return await whatsappClient.sendStatusBroadcast({ image: { url: feedItem.image_url }, caption: text });
+        return await withTimeout(
+          whatsappClient.sendStatusBroadcast({ image: { url: feedItem.image_url }, caption: text }),
+          DEFAULT_SEND_TIMEOUT_MS,
+          'Timed out sending image message'
+        );
       }
-      return await whatsappClient.sendMessage(jid, { image: { url: feedItem.image_url }, caption: text });
+      return await withTimeout(
+        whatsappClient.sendMessage(jid, { image: { url: feedItem.image_url }, caption: text }),
+        DEFAULT_SEND_TIMEOUT_MS,
+        'Timed out sending image message'
+      );
     } catch (error) {
       logger.warn({ error, jid, imageUrl: feedItem.image_url }, 'Failed to send image, falling back to text');
     }
   }
 
   if (target.type === 'status') {
-    return whatsappClient.sendStatusBroadcast({ text });
+    return withTimeout(
+      whatsappClient.sendStatusBroadcast({ text }),
+      DEFAULT_SEND_TIMEOUT_MS,
+      'Timed out sending status message'
+    );
   }
-  return whatsappClient.sendMessage(jid, { text });
+  return withTimeout(
+    whatsappClient.sendMessage(jid, { text }),
+    DEFAULT_SEND_TIMEOUT_MS,
+    'Timed out sending message'
+  );
 };
 
 const ensurePendingLogsForSchedule = async (supabase, schedule, targets) => {

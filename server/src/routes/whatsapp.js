@@ -1,5 +1,8 @@
 const express = require('express');
 const { validate, schemas } = require('../middleware/validation');
+const withTimeout = require('../utils/withTimeout');
+
+const DEFAULT_SEND_TIMEOUT_MS = 15000;
 
 const whatsappRoutes = () => {
   const router = express.Router();
@@ -90,9 +93,14 @@ const whatsappRoutes = () => {
       }
 
       const normalizedJid = normalizeTestJid(jid);
-      const result = isStatusBroadcast(normalizedJid)
-        ? await whatsapp.sendStatusBroadcast({ text: message })
-        : await whatsapp.sendMessage(normalizedJid, { text: message });
+      const sendPromise = isStatusBroadcast(normalizedJid)
+        ? whatsapp.sendStatusBroadcast({ text: message })
+        : whatsapp.sendMessage(normalizedJid, { text: message });
+      const result = await withTimeout(
+        sendPromise,
+        DEFAULT_SEND_TIMEOUT_MS,
+        'Timed out sending test message'
+      );
       res.json({ ok: true, messageId: result?.key?.id });
     } catch (error) {
       console.error('Error sending test message:', error);

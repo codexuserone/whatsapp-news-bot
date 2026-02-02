@@ -68,6 +68,13 @@ const whatsappRoutes = () => {
     }
   });
 
+  const normalizeTestJid = (jid) => {
+    if (jid.includes('@')) return jid;
+    return `${jid.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
+  };
+
+  const isStatusBroadcast = (jid) => jid === 'status@broadcast';
+
   // Send a test message
   router.post('/send-test', validate(schemas.testMessage), async (req, res) => {
     try {
@@ -82,8 +89,10 @@ const whatsappRoutes = () => {
         return res.status(400).json({ ok: false, error: 'WhatsApp is not connected' });
       }
 
-      const normalizedJid = jid.includes('@') ? jid : `${jid.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
-      const result = await whatsapp.sendMessage(normalizedJid, { text: message });
+      const normalizedJid = normalizeTestJid(jid);
+      const result = isStatusBroadcast(normalizedJid)
+        ? await whatsapp.sendStatusBroadcast({ text: message })
+        : await whatsapp.sendMessage(normalizedJid, { text: message });
       res.json({ ok: true, messageId: result?.key?.id });
     } catch (error) {
       console.error('Error sending test message:', error);

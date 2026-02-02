@@ -8,6 +8,39 @@ const applyTemplate = (templateBody, data) => {
   return templateBody.replace(/{{\s*(\w+)\s*}}/g, (_, key) => (data[key] != null ? data[key] : ''));
 };
 
+const normalizeTargetJid = (target) => {
+  if (!target?.phone_number) {
+    throw new Error('Target phone number missing');
+  }
+
+  const raw = String(target.phone_number).trim();
+  if (target.type === 'status') {
+    return 'status@broadcast';
+  }
+
+  if (target.type === 'group') {
+    const groupId = raw.replace(/[^0-9-]/g, '');
+    if (!groupId) {
+      throw new Error('Group ID invalid');
+    }
+    return `${groupId}@g.us`;
+  }
+
+  if (target.type === 'channel') {
+    const channelId = raw.replace(/[^0-9]/g, '');
+    if (!channelId) {
+      throw new Error('Channel ID invalid');
+    }
+    return `${channelId}@newsletter`;
+  }
+
+  const phoneDigits = raw.replace(/[^0-9]/g, '');
+  if (!phoneDigits) {
+    throw new Error('Phone number invalid');
+  }
+  return `${phoneDigits}@s.whatsapp.net`;
+};
+
 const buildMessageData = (feedItem) => ({
   title: feedItem.title,
   url: feedItem.link,
@@ -38,18 +71,22 @@ const sendMessageWithTemplate = async (whatsappClient, target, template, feedIte
     throw new Error('Target phone number missing');
   }
 
-  const jid = target.phone_number.includes('@') 
-    ? target.phone_number 
-    : `${target.phone_number.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
+  const jid = normalizeTargetJid(target);
 
   if (feedItem.image_url) {
     try {
+      if (target.type === 'status') {
+        return await whatsappClient.sendStatusBroadcast({ image: { url: feedItem.image_url }, caption: text });
+      }
       return await whatsappClient.sendMessage(jid, { image: { url: feedItem.image_url }, caption: text });
     } catch (error) {
       logger.warn({ error, jid, imageUrl: feedItem.image_url }, 'Failed to send image, falling back to text');
     }
   }
 
+  if (target.type === 'status') {
+    return whatsappClient.sendStatusBroadcast({ text });
+  }
   return whatsappClient.sendMessage(jid, { text });
 };
 
@@ -268,10 +305,6 @@ const sendQueuedForSchedule = async (scheduleId, whatsappClient) => {
             .eq('id', log.id);
           continue;
         }
-
-        const jid = target.phone_number.includes('@') 
-          ? target.phone_number 
-          : `${target.phone_number.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
 
         // Check for duplicate based on feed item + target combination
         const { data: existingSent, error: existingSentError } = await supabase

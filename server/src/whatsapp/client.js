@@ -79,12 +79,13 @@ class WhatsAppClient {
     const normalized = message.toLowerCase();
     const checks = [
       'authenticate data',
-      'Unsupported state',
+      'unsupported state',
       'crypto',
       'Incorrect private key length',
       'bad decrypt',
       'invalid mac',
       'no session record',
+      'no sender key record found for decryption',
       'no senderkeyrecord found for decryption',
       'failed to decrypt message'
     ];

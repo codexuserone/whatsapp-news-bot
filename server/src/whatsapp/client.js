@@ -81,14 +81,13 @@ class WhatsAppClient {
       'authenticate data',
       'unsupported state',
       'crypto',
-      'Incorrect private key length',
+      'incorrect private key length',
       'bad decrypt',
       'invalid mac',
       'no session record',
       'no sender key record found for decryption',
       'no senderkeyrecord found for decryption',
-      'failed to decrypt message'
-      'invalid mac'
+      'failed to decrypt message',
     ];
     return checks.some((check) => normalized.includes(check.toLowerCase()));
   }

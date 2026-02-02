@@ -10,9 +10,21 @@ const serialize = (data) => {
   }
 };
 
+const serializeForStorage = (data) => {
+  try {
+    return JSON.stringify(serialize(data));
+  } catch (e) {
+    console.error('Serialize storage error:', e);
+    return JSON.stringify(data);
+  }
+};
+
 const deserialize = (data) => {
   try {
     if (!data) return data;
+    if (typeof data === 'string') {
+      return JSON.parse(data, BufferJSON.reviver);
+    }
     return JSON.parse(JSON.stringify(data), BufferJSON.reviver);
   } catch (e) {
     console.error('Deserialize error:', e);
@@ -67,8 +79,8 @@ const useSupabaseAuthState = async (sessionId = 'default') => {
       .from('auth_state')
       .upsert({ 
         session_id: sessionId, 
-        creds: newCreds, 
-        keys: {},
+        creds: serializeForStorage(newCreds), 
+        keys: serializeForStorage({}),
         status: 'disconnected'
       }, { onConflict: 'session_id' })
       .select()
@@ -77,7 +89,7 @@ const useSupabaseAuthState = async (sessionId = 'default') => {
     if (insertError) {
       console.error('Error creating auth state:', insertError);
     }
-    doc = newDoc || { creds: newCreds, keys: {} };
+    doc = newDoc || { creds: serializeForStorage(newCreds), keys: serializeForStorage({}) };
   }
 
   let state = {
@@ -91,8 +103,8 @@ const useSupabaseAuthState = async (sessionId = 'default') => {
         .from('auth_state')
         .upsert({ 
           session_id: sessionId, 
-          creds: serialize(state.creds), 
-          keys: serialize(state.keys)
+          creds: serializeForStorage(state.creds), 
+          keys: serializeForStorage(state.keys)
         }, { onConflict: 'session_id' });
     } catch (error) {
       console.error('Error saving auth state:', error);
@@ -142,8 +154,8 @@ const useSupabaseAuthState = async (sessionId = 'default') => {
         .from('auth_state')
         .upsert({ 
           session_id: sessionId, 
-          creds: serialize(freshCreds), 
-          keys: {},
+          creds: serializeForStorage(freshCreds), 
+          keys: serializeForStorage({}),
           status: 'disconnected',
           qr_code: null
         }, { onConflict: 'session_id' });

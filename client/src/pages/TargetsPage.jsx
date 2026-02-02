@@ -360,7 +360,8 @@ const TargetsPage = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Target</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete "{deleteTarget?.name}"? This action cannot be undone.
+              Are you sure you want to delete "{deleteTarget?.name}"? This only removes the target from this app and
+              will not delete the WhatsApp group or chat.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

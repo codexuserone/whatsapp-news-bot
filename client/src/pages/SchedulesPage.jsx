@@ -18,7 +18,7 @@ const schema = z.object({
   name: z.string().min(1),
   cron_expression: z.string().optional(),
   timezone: z.string().optional(),
-  feed_id: z.string().optional(),
+  feed_id: z.string().min(1, 'Feed is required'),
   target_ids: z.array(z.string()).min(1),
   template_id: z.string().min(1),
   active: z.boolean().default(true)
@@ -102,7 +102,7 @@ const SchedulesPage = () => {
       name: values.name,
       cron_expression: values.cron_expression || null,
       timezone: values.timezone || 'UTC',
-      feed_id: values.feed_id || null,
+      feed_id: values.feed_id,
       target_ids: values.target_ids,
       template_id: values.template_id,
       active: values.active
@@ -170,6 +170,9 @@ const SchedulesPage = () => {
                     </option>
                   ))}
                 </Select>
+                {form.formState.errors.feed_id && (
+                  <p className="text-xs text-destructive">{form.formState.errors.feed_id.message}</p>
+                )}
               </div>
 
               <div className="space-y-2">

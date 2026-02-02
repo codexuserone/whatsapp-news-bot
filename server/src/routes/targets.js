@@ -26,16 +26,38 @@ const targetRoutes = () => {
     }
   });
 
+  const normalizeGroupJid = (phoneNumber) => {
+    const cleaned = phoneNumber.replace(/[^0-9-]/g, '');
+    return cleaned ? `${cleaned}@g.us` : phoneNumber;
+  };
+
+  const normalizeChannelJid = (phoneNumber) => {
+    const cleaned = phoneNumber.replace(/[^0-9]/g, '');
+    return cleaned ? `${cleaned}@newsletter` : phoneNumber;
+  };
+
+  const normalizeIndividualJid = (phoneNumber) => {
+    const cleaned = sanitizePhoneNumber(phoneNumber).replace(/[^0-9]/g, '');
+    return cleaned ? `${cleaned}@s.whatsapp.net` : phoneNumber;
+  };
+
   const normalizeTargetPayload = (payload) => {
     const next = { ...payload };
     if (next.type === 'status') {
       next.phone_number = 'status@broadcast';
       return next;
     }
-    if (next.type === 'individual' && typeof next.phone_number === 'string') {
-      next.phone_number = sanitizePhoneNumber(next.phone_number);
-    } else if (typeof next.phone_number === 'string') {
-      next.phone_number = next.phone_number.trim();
+    if (typeof next.phone_number === 'string') {
+      const trimmed = next.phone_number.trim();
+      if (next.type === 'individual') {
+        next.phone_number = normalizeIndividualJid(trimmed);
+      } else if (next.type === 'group') {
+        next.phone_number = normalizeGroupJid(trimmed);
+      } else if (next.type === 'channel') {
+        next.phone_number = normalizeChannelJid(trimmed);
+      } else {
+        next.phone_number = trimmed;
+      }
     }
     return next;
   };

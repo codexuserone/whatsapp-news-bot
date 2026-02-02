@@ -1,6 +1,6 @@
 const Joi = require('joi');
 
-const JID_PATTERN = /^([0-9+\s\-\(\)]+|status@broadcast|[0-9\-]+@g\.us|[0-9]+@s\.whatsapp\.net)$/i;
+const JID_PATTERN = /^([0-9+\s\-\(\)]+|status@broadcast|[0-9\-]+@g\.us|[0-9]+@s\.whatsapp\.net|[0-9]+@newsletter)$/i;
 
 // Validation schemas
 const schemas = {
@@ -9,7 +9,7 @@ const schemas = {
     name: Joi.string().min(1).max(255).required(),
     cron_expression: Joi.string().optional().allow('', null),
     timezone: Joi.string().default('UTC'),
-    feed_id: Joi.string().uuid().optional().allow('', null),
+    feed_id: Joi.string().uuid().required(),
     target_ids: Joi.array().items(Joi.string().uuid()).min(1).required(),
     template_id: Joi.string().uuid().required(),
     active: Joi.boolean().default(true)

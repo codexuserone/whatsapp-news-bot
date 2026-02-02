@@ -75,13 +75,16 @@ class WhatsAppClient {
 
   isAuthStateCorrupted(message) {
     if (!message) return false;
+    const normalized = message.toLowerCase();
     const checks = [
       'authenticate data',
       'Unsupported state',
       'crypto',
-      'Incorrect private key length'
+      'Incorrect private key length',
+      'bad decrypt',
+      'invalid mac'
     ];
-    return checks.some((check) => message.includes(check));
+    return checks.some((check) => normalized.includes(check.toLowerCase()));
   }
 
   async handleCorruptedAuthState(err) {
@@ -244,7 +247,11 @@ class WhatsAppClient {
           const statusCode = lastDisconnect?.error?.output?.statusCode;
           const reason = lastDisconnect?.error?.output?.payload?.message || lastDisconnect?.error?.message;
           this.status = 'disconnected';
-          this.lastError = reason || 'Connection closed';
+          if (reason?.includes('QR refs attempts ended')) {
+            this.lastError = 'QR expired. Click Hard Refresh to generate a new QR code.';
+          } else {
+            this.lastError = reason || 'Connection closed';
+          }
           
           logger.warn({ statusCode, reason }, 'WhatsApp connection closed');
 

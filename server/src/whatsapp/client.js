@@ -88,6 +88,7 @@ class WhatsAppClient {
       'no sender key record found for decryption',
       'no senderkeyrecord found for decryption',
       'failed to decrypt message'
+      'invalid mac'
     ];
     return checks.some((check) => normalized.includes(check.toLowerCase()));
   }

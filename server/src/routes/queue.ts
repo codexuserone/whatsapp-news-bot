@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
+const { resetStuckProcessingLogs } = require('../services/retentionService');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 
@@ -124,6 +125,17 @@ const queueRoutes = () => {
       res.json({ success: true, count: data?.length || 0 });
     } catch (error) {
       console.error('Error retrying failed items:', error);
+      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+    }
+  });
+
+  // Reset stuck processing items (e.g. after a crash)
+  router.post('/reset-processing', async (_req: Request, res: Response) => {
+    try {
+      const count = await resetStuckProcessingLogs();
+      res.json({ success: true, count });
+    } catch (error) {
+      console.error('Error resetting processing items:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
     }
   });

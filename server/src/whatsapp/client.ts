@@ -511,6 +511,12 @@ class WhatsAppClient {
       Object.values(groups || {}).forEach((group: { id?: string }) => {
         if (group?.id) {
           this.groupMetadataCache.set(group.id, group);
+          if (this.groupMetadataCache.size > 500) {
+            const oldest = this.groupMetadataCache.keys().next().value;
+            if (oldest) {
+              this.groupMetadataCache.delete(oldest);
+            }
+          }
         }
       });
       return Object.values(groups || {}).map((group) => ({

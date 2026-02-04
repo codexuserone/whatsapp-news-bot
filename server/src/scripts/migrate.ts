@@ -31,7 +31,7 @@ const listSqlFiles = async (dir: string) => {
   });
 };
 
-const main = async () => {
+const runMigrations = async () => {
   loadEnv();
 
   const databaseUrl = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
@@ -54,7 +54,20 @@ const main = async () => {
 
   await client.connect();
   try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        filename TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    const { rows: appliedRows } = await client.query('SELECT filename FROM schema_migrations');
+    const applied = new Set((appliedRows || []).map((r: { filename?: string }) => String(r.filename || '')));
+
     for (const file of files) {
+      if (applied.has(file)) {
+        continue;
+      }
       const fullPath = path.join(migrationsDir, file);
       const sql = await fs.readFile(fullPath, 'utf8');
       if (!sql.trim()) continue;
@@ -63,6 +76,9 @@ const main = async () => {
       await client.query('BEGIN');
       try {
         await client.query(sql);
+        await client.query('INSERT INTO schema_migrations (filename) VALUES ($1) ON CONFLICT (filename) DO NOTHING', [
+          file
+        ]);
         await client.query('COMMIT');
         process.stdout.write('OK\n');
       } catch (err) {
@@ -76,10 +92,16 @@ const main = async () => {
   }
 };
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(message);
-  process.exit(1);
-});
+if (require.main === module) {
+  runMigrations().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(message);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  runMigrations
+};
 
 export {};

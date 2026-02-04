@@ -19,6 +19,11 @@ const OverviewPage = () => {
   const { data: targets = [] } = useQuery({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
   const { data: schedules = [] } = useQuery({ queryKey: ['schedules'], queryFn: () => api.get('/api/schedules') });
   const { data: logs = [] } = useQuery({ queryKey: ['logs'], queryFn: () => api.get('/api/logs') });
+  const { data: queueStats } = useQuery({
+    queryKey: ['queue-stats'],
+    queryFn: () => api.get('/api/queue/stats'),
+    refetchInterval: 10000
+  });
 
   const stats = [
     { label: 'Feeds', value: feeds.length, to: '/feeds', icon: Rss, color: 'text-primary' },
@@ -102,6 +107,20 @@ const OverviewPage = () => {
                 </p>
               </div>
             </div>
+
+            {queueStats && (
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="font-medium">Queue</div>
+                  <Link to="/queue" className="text-xs text-primary hover:underline">
+                    View
+                  </Link>
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {queueStats.pending} pending · {queueStats.processing} processing · {queueStats.failed} failed
+                </div>
+              </div>
+            )}
             <Button asChild variant="outline" className="w-full">
               <Link to="/whatsapp">Manage Connection</Link>
             </Button>

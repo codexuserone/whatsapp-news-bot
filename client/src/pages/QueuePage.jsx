@@ -11,9 +11,15 @@ const QueuePage = () => {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState('pending');
 
+  const { data: queueStats } = useQuery({
+    queryKey: ['queue-stats'],
+    queryFn: () => api.get('/api/queue/stats'),
+    refetchInterval: 10000
+  });
+
   const { data: queueItems = [], isLoading } = useQuery({
     queryKey: ['queue', statusFilter],
-    queryFn: () => api.get(`/api/queue?status=${statusFilter === 'all' ? '' : statusFilter}`),
+    queryFn: () => api.get(statusFilter === 'all' ? '/api/queue' : `/api/queue?status=${statusFilter}`),
     refetchInterval: 10000
   });
 
@@ -48,10 +54,20 @@ const QueuePage = () => {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['queue'] })
   });
 
+  const resetProcessing = useMutation({
+    mutationFn: () => api.post('/api/queue/reset-processing'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      queryClient.invalidateQueries({ queryKey: ['queue-stats'] });
+    }
+  });
+
   const getStatusBadge = (status) => {
     switch (status) {
       case 'pending':
         return <Badge variant="secondary">Pending</Badge>;
+      case 'processing':
+        return <Badge variant="outline">Processing</Badge>;
       case 'sent':
         return <Badge variant="success">Sent</Badge>;
       case 'failed':
@@ -76,6 +92,15 @@ const QueuePage = () => {
           <p className="text-muted-foreground">View and manage queued messages.</p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => resetProcessing.mutate()}
+            disabled={resetProcessing.isPending || !(queueStats?.processing > 0)}
+            title={queueStats?.processing > 0 ? 'Reset stuck processing items' : 'No processing items'}
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${resetProcessing.isPending ? 'animate-spin' : ''}`} />
+            Reset Processing
+          </Button>
           <Button
             variant="outline"
             onClick={() => retryFailed.mutate()}
@@ -123,6 +148,7 @@ const QueuePage = () => {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="pending">Pending</SelectItem>
+            <SelectItem value="processing">Processing</SelectItem>
             <SelectItem value="sent">Sent</SelectItem>
             <SelectItem value="failed">Failed</SelectItem>
             <SelectItem value="skipped">Skipped</SelectItem>
@@ -132,6 +158,11 @@ const QueuePage = () => {
         <span className="text-sm text-muted-foreground">
           {queueItems.length} item{queueItems.length !== 1 ? 's' : ''}
         </span>
+        {queueStats && (
+          <span className="text-xs text-muted-foreground">
+            {queueStats.pending} pending · {queueStats.processing} processing · {queueStats.failed} failed
+          </span>
+        )}
       </div>
 
       {/* Queue Items */}

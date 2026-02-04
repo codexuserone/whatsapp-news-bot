@@ -10,7 +10,12 @@ const { keepAlive, stopKeepAlive } = require('./services/keepAlive');
 const registerRoutes = require('./routes');
 const settingsService = require('./services/settingsService');
 const { initSchedulers, clearAll } = require('./services/schedulerService');
-const { scheduleRetentionCleanup } = require('./services/retentionService');
+const {
+  scheduleRetentionCleanup,
+  scheduleProcessingWatchdog,
+  resetStuckProcessingLogs
+} = require('./services/retentionService');
+const { runMigrations } = require('./scripts/migrate');
 const errorHandler = require('./middleware/errorHandler');
 const notFoundHandler = require('./middleware/notFound');
 const requestLogger = require('./middleware/requestLogger');
@@ -78,6 +83,18 @@ const start = async () => {
     logger.warn('Failed to connect to Supabase database - some features may not work');
     logger.warn('Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables');
   } else {
+    if (process.env.RUN_MIGRATIONS_ON_START === 'true') {
+      try {
+        logger.info('Running database migrations');
+        await runMigrations();
+        logger.info('Database migrations complete');
+      } catch (error) {
+        logger.error({ error }, 'Database migrations failed');
+        if (process.env.MIGRATIONS_STRICT !== 'false') {
+          throw error;
+        }
+      }
+    }
     await settingsService.ensureDefaults();
   }
 
@@ -123,7 +140,10 @@ const start = async () => {
   });
 
   keepAlive();
+  // Reset any logs left in processing state by a crash/restart.
+  void resetStuckProcessingLogs();
   scheduleRetentionCleanup();
+  scheduleProcessingWatchdog();
   if (disableSchedulers) {
     logger.warn('Schedulers are disabled via DISABLE_SCHEDULERS');
   } else {

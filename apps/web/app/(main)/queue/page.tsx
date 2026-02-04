@@ -73,6 +73,14 @@ const QueuePage = () => {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['queue'] })
   });
 
+  const resetProcessing = useMutation({
+    mutationFn: () => api.post('/api/queue/reset-processing'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      queryClient.invalidateQueries({ queryKey: ['queue-stats'] });
+    }
+  });
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'pending':
@@ -103,6 +111,17 @@ const QueuePage = () => {
           <p className="text-muted-foreground">View and manage queued messages.</p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => resetProcessing.mutate()}
+            disabled={resetProcessing.isPending || !(queueStats?.processing ?? 0)}
+            title={
+              (queueStats?.processing ?? 0) > 0 ? 'Reset stuck processing items' : 'No processing items'
+            }
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${resetProcessing.isPending ? 'animate-spin' : ''}`} />
+            Reset Processing
+          </Button>
           <Button variant="outline" onClick={() => retryFailed.mutate()} disabled={retryFailed.isPending}>
             <RefreshCw className={`mr-2 h-4 w-4 ${retryFailed.isPending ? 'animate-spin' : ''}`} />
             Retry Failed

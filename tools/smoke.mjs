@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import path from 'path';
+import net from 'net';
 
 import { once } from 'events';
 
@@ -36,6 +37,35 @@ const waitForOk = async (url, timeoutMs = 20000) => {
     await sleep(400);
   }
   throw new Error(`Timed out waiting for ${url}`);
+};
+
+const isPortFree = (port) =>
+  new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => {
+      server.close(() => resolve(true));
+    });
+    // Bind on all interfaces to match how the app listens.
+    server.listen(port);
+  });
+
+const findFreePort = async (preferred) => {
+  const start = Number(preferred);
+  for (let port = start; port < start + 200; port++) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await isPortFree(port)) return String(port);
+  }
+  throw new Error(`Could not find a free port starting at ${preferred}`);
+};
+
+const waitForOkOrExit = async (child, url, timeoutMs = 20000) => {
+  await Promise.race([
+    waitForOk(url, timeoutMs),
+    once(child, 'exit').then(([code]) => {
+      throw new Error(`Process exited (${code}) while waiting for ${url}`);
+    })
+  ]);
 };
 
 const fetchText = async (url) => {
@@ -76,7 +106,7 @@ const main = async () => {
   await run('npm', ['run', 'build', '--prefix', 'apps/web']);
 
   // API smoke
-  const apiPort = '10001';
+  const apiPort = await findFreePort(10001);
   const api = spawn('node', ['server/dist/index.js'], {
     env: {
       ...process.env,
@@ -91,7 +121,7 @@ const main = async () => {
   api.stderr.on('data', (d) => process.stderr.write(d));
 
   try {
-    await waitForOk(`http://localhost:${apiPort}/health`);
+    await waitForOkOrExit(api, `http://localhost:${apiPort}/health`);
     const paths = [
       '/',
       '/health',
@@ -132,7 +162,7 @@ const main = async () => {
   }
 
   // Web smoke (start)
-  const webPort = '3001';
+  const webPort = await findFreePort(3001);
   const nextBin = path.join(process.cwd(), 'apps', 'web', 'node_modules', 'next', 'dist', 'bin', 'next');
   const web = spawn('node', [nextBin, 'start', '-p', webPort], {
     cwd: path.join(process.cwd(), 'apps', 'web'),
@@ -143,7 +173,7 @@ const main = async () => {
   web.stderr.on('data', (d) => process.stderr.write(d));
 
   try {
-    await waitForOk(`http://localhost:${webPort}/`);
+    await waitForOkOrExit(web, `http://localhost:${webPort}/`);
     const { status, text } = await fetchText(`http://localhost:${webPort}/`);
     if (status !== 200) {
       throw new Error(`Web smoke failed: / returned ${status}`);

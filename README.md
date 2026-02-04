@@ -76,6 +76,7 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
    # Set DATABASE_URL or SUPABASE_DB_URL first
    npm run db:migrate
    ```
+   The migration runner tracks applied files in the `schema_migrations` table.
 3. Alternatively, run the SQL files in `scripts/` using the Supabase SQL editor.
 
 ## Render Deployment
@@ -87,9 +88,11 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
 4. Set environment variables in Render dashboard:
    - `SUPABASE_URL` - Supabase project URL
    - `SUPABASE_SERVICE_ROLE_KEY` - Supabase service role key
+   - `DATABASE_URL` - Postgres connection string (used for automatic migrations)
    - `BASE_URL` - Your Render app URL (e.g., https://your-app.onrender.com)
    - `KEEP_ALIVE_URL` - Same as BASE_URL + /ping
    - `KEEP_ALIVE` - true
+   - `RUN_MIGRATIONS_ON_START` - true
 
 ### Option 2: Manual Setup
 1. Create a **Web Service** on Render

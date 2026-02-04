@@ -11,6 +11,17 @@ const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const feedsRoutes = () => {
   const router = express.Router();
 
+  const runAsync = (label: string, work: () => Promise<void>) => {
+    setImmediate(() => {
+      work().catch((error) => {
+        console.warn(`${label} failed:`, error);
+      });
+    });
+  };
+
+  const refreshSchedulers = (whatsappClient: unknown) =>
+    runAsync('Scheduler refresh', () => initSchedulers(whatsappClient));
+
   // Helper to get supabase client
   const getDb = () => {
     const supabase = getSupabaseClient();
@@ -85,7 +96,7 @@ const feedsRoutes = () => {
         .single();
       
       if (error) throw error;
-      await initSchedulers(req.app.locals.whatsapp);
+      refreshSchedulers(req.app.locals.whatsapp);
       res.json(feed);
     } catch (error) {
       console.error('Error creating feed:', error);
@@ -103,7 +114,7 @@ const feedsRoutes = () => {
         .single();
       
       if (error) throw error;
-      await initSchedulers(req.app.locals.whatsapp);
+      refreshSchedulers(req.app.locals.whatsapp);
       res.json(feed);
     } catch (error) {
       console.error('Error updating feed:', error);
@@ -119,7 +130,7 @@ const feedsRoutes = () => {
         .eq('id', req.params.id);
       
       if (error) throw error;
-      await initSchedulers(req.app.locals.whatsapp);
+      refreshSchedulers(req.app.locals.whatsapp);
       res.json({ ok: true });
     } catch (error) {
       console.error('Error deleting feed:', error);

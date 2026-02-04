@@ -14,11 +14,21 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      - key: SUPABASE_DB_URL
+        sync: false
+      - key: RUN_MIGRATIONS_ON_START
+        value: "false"
+      - key: MIGRATIONS_STRICT
+        value: "false"
       - key: KEEP_ALIVE
         value: true
       - key: KEEP_ALIVE_URL
         sync: false
       - key: BASE_URL
+        sync: false
+      - key: BASIC_AUTH_USER
+        sync: false
+      - key: BASIC_AUTH_PASS
         sync: false
     healthCheckPath: /health
     autoDeploy: true

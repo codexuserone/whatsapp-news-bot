@@ -106,6 +106,7 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
 |----------|-------------|---------|
 | `SUPABASE_URL` | Supabase project URL | `https://your-project.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key | `your-service-role-key` |
+| `DATABASE_URL` / `SUPABASE_DB_URL` | Postgres connection string (migrations) | `postgresql://...` |
 | `BASE_URL` | Your Render app URL | `https://your-app.onrender.com` |
 | `KEEP_ALIVE` | Enable keep-alive pings | `true` |
 | `KEEP_ALIVE_URL` | Ping endpoint URL | `https://your-app.onrender.com/ping` |

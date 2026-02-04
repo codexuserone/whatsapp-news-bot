@@ -769,6 +769,22 @@ class WhatsAppClient {
     if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
     try {
       const msg = await this.socket.sendMessage(jid, content, options);
+
+      try {
+        const id = msg?.key?.id;
+        if (id) {
+          this.recentSentMessages.set(String(id), msg);
+          if (this.recentSentMessages.size > 500) {
+            const oldest = this.recentSentMessages.keys().next().value;
+            if (oldest) {
+              this.recentSentMessages.delete(oldest);
+            }
+          }
+        }
+      } catch {
+        // ignore cache errors
+      }
+
       return msg;
     } catch (err) {
       logger.error({ err, jid }, 'Failed to send message');
@@ -785,6 +801,22 @@ class WhatsAppClient {
     if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
     try {
       const msg = await this.socket.sendMessage('status@broadcast', content, options);
+
+      try {
+        const id = msg?.key?.id;
+        if (id) {
+          this.recentSentMessages.set(String(id), msg);
+          if (this.recentSentMessages.size > 500) {
+            const oldest = this.recentSentMessages.keys().next().value;
+            if (oldest) {
+              this.recentSentMessages.delete(oldest);
+            }
+          }
+        }
+      } catch {
+        // ignore cache errors
+      }
+
       return msg;
     } catch (err) {
       logger.error({ err }, 'Failed to send status broadcast');

@@ -612,16 +612,31 @@ class WhatsAppClient {
       return cached;
     }
     return new Promise((resolve) => {
-      const timeout = setTimeout(() => resolve(null), timeoutMs);
-      const handler = ({ messages }: { messages: proto.IWebMessageInfo[] }) => {
+      let handler:
+        | ((event: { messages: proto.IWebMessageInfo[] }) => void)
+        | null = null;
+      let settled = false;
+
+      const finish = (value: proto.IWebMessageInfo | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        if (handler) {
+          socket.ev.off('messages.upsert', handler);
+        }
+        resolve(value);
+      };
+
+      const timeout = setTimeout(() => finish(null), timeoutMs);
+
+      handler = ({ messages }: { messages: proto.IWebMessageInfo[] }) => {
         const found = messages.find((m) => m.key?.id === messageId);
         if (found) {
           this.recentSentMessages.set(messageId, found);
-          clearTimeout(timeout);
-          socket.ev.off('messages.upsert', handler);
-          resolve(found);
+          finish(found);
         }
       };
+
       socket.ev.on('messages.upsert', handler);
     });
   }

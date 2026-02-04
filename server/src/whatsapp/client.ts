@@ -681,6 +681,12 @@ class WhatsAppClient {
       };
 
       socket.ev.on('messages.update', handler);
+
+      // Avoid race: status may be cached between the first check and listener attach.
+      const cachedAfter = this.recentMessageStatuses.get(messageId);
+      if (cachedAfter && typeof cachedAfter.status === 'number' && cachedAfter.status >= minStatus) {
+        finish(cachedAfter);
+      }
     });
   }
 
@@ -829,6 +835,12 @@ class WhatsAppClient {
       };
 
       socket.ev.on('messages.upsert', handler);
+
+      // Avoid race: message may be cached between the first check and listener attach.
+      const cachedAfter = this.recentSentMessages.get(messageId);
+      if (cachedAfter) {
+        finish(cachedAfter);
+      }
     });
   }
 

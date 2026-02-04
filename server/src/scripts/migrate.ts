@@ -1,13 +1,12 @@
 import fs from 'fs/promises';
 import path from 'path';
-import dns from 'dns';
+import * as dns from 'dns';
 import dotenv from 'dotenv';
 import { Client } from 'pg';
 
 const preferIpv4 = () => {
   try {
-    const setter = (dns as unknown as { setDefaultResultOrder?: (order: string) => void })
-      .setDefaultResultOrder;
+    const setter = (dns as unknown as { setDefaultResultOrder?: (order: string) => void }).setDefaultResultOrder;
     if (typeof setter === 'function') {
       setter('ipv4first');
     }

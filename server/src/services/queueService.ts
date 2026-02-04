@@ -929,20 +929,19 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
       }
 
       for (const log of logs || []) {
-        const { data: claimed, error: claimError } = await supabase
+        const { data: claimedRows, error: claimError } = await supabase
           .from('message_logs')
           .update({ status: 'processing', processing_started_at: new Date().toISOString() })
           .eq('id', log.id)
           .eq('status', 'pending')
-          .select('id')
-          .single();
+          .select('id');
 
         if (claimError) {
           logger.warn({ scheduleId, logId: log.id, error: claimError }, 'Failed to claim message log');
           continue;
         }
 
-        if (!claimed) {
+        if (!claimedRows || claimedRows.length === 0) {
           continue;
         }
         // Get feed item

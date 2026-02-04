@@ -3,6 +3,15 @@ const { loadBaileys } = require('./baileys');
 
 type AuthData = Record<string, unknown>;
 type KeyStoreData = Record<string, Record<string, unknown>>;
+
+type LeaseResult = {
+  ok: boolean;
+  supported: boolean;
+  ownerId: string | null;
+  expiresAt: string | null;
+  reason?: string;
+};
+
 type AuthStore = {
   state: {
     creds: AuthData;
@@ -15,6 +24,9 @@ type AuthStore = {
   clearState: () => Promise<void>;
   clearKeys: (types?: string[]) => Promise<void>;
   updateStatus: (status: string, qrCode?: string | null) => Promise<void>;
+  acquireLease: (ownerId: string, ttlMs?: number) => Promise<LeaseResult>;
+  renewLease: (ownerId: string, ttlMs?: number) => Promise<LeaseResult>;
+  releaseLease: (ownerId: string) => Promise<LeaseResult>;
 };
 
 const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<AuthStore> => {
@@ -166,7 +178,10 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
         }
         for (const type of types) delete state.keys[type];
       },
-      updateStatus: async () => {}
+      updateStatus: async () => {},
+      acquireLease: async () => ({ ok: true, supported: false, ownerId: null, expiresAt: null }),
+      renewLease: async () => ({ ok: true, supported: false, ownerId: null, expiresAt: null }),
+      releaseLease: async () => ({ ok: true, supported: false, ownerId: null, expiresAt: null })
     };
   }
 
@@ -232,6 +247,123 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     } catch (error) {
       console.error('Error saving auth state:', error);
     }
+  };
+
+  // Lease helpers (avoid WhatsApp conflicts across overlapping deploys/instances).
+  let leaseSupported: boolean | null = null;
+
+  const isMissingLeaseColumn = (supabaseError: unknown) => {
+    const msg = String((supabaseError as { message?: unknown })?.message || supabaseError || '').toLowerCase();
+    if (!msg) return false;
+    // PostgREST typically returns messages like: "column auth_state.lease_owner does not exist"
+    return msg.includes('does not exist') && (msg.includes('lease_owner') || msg.includes('lease_expires_at'));
+  };
+
+  const acquireLease = async (ownerId: string, ttlMs = 90_000): Promise<LeaseResult> => {
+    if (leaseSupported === false) {
+      return { ok: true, supported: false, ownerId: null, expiresAt: null };
+    }
+
+    const nowIso = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + Math.max(10_000, Number(ttlMs) || 0)).toISOString();
+    const { data, error: leaseError } = await supabase
+      .from('auth_state')
+      .update({ lease_owner: ownerId, lease_expires_at: expiresAt })
+      .eq('session_id', sessionId)
+      .or(`lease_expires_at.is.null,lease_expires_at.lt.${nowIso},lease_owner.eq.${ownerId}`)
+      .select('lease_owner,lease_expires_at');
+
+    if (leaseError) {
+      if (isMissingLeaseColumn(leaseError)) {
+        leaseSupported = false;
+        console.warn('Auth lease columns missing; skipping conflict prevention. Run latest SQL migrations.');
+        return { ok: true, supported: false, ownerId: null, expiresAt: null };
+      }
+      leaseSupported = true;
+      return {
+        ok: false,
+        supported: true,
+        ownerId: null,
+        expiresAt: null,
+        reason: String((leaseError as { message?: unknown })?.message || leaseError)
+      };
+    }
+
+    leaseSupported = true;
+    const row = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
+    const currentOwner = row?.lease_owner ? String(row.lease_owner) : null;
+    const currentExpiry = row?.lease_expires_at ? String(row.lease_expires_at) : expiresAt;
+    const ok = currentOwner === ownerId;
+    if (ok) {
+      return { ok: true, supported: true, ownerId: currentOwner, expiresAt: currentExpiry };
+    }
+    return { ok: false, supported: true, ownerId: currentOwner, expiresAt: currentExpiry, reason: 'lease_held' };
+  };
+
+  const renewLease = async (ownerId: string, ttlMs = 90_000): Promise<LeaseResult> => {
+    if (leaseSupported === false) {
+      return { ok: true, supported: false, ownerId: null, expiresAt: null };
+    }
+
+    const expiresAt = new Date(Date.now() + Math.max(10_000, Number(ttlMs) || 0)).toISOString();
+    const { data, error: leaseError } = await supabase
+      .from('auth_state')
+      .update({ lease_expires_at: expiresAt })
+      .eq('session_id', sessionId)
+      .eq('lease_owner', ownerId)
+      .select('lease_owner,lease_expires_at');
+
+    if (leaseError) {
+      if (isMissingLeaseColumn(leaseError)) {
+        leaseSupported = false;
+        return { ok: true, supported: false, ownerId: null, expiresAt: null };
+      }
+      leaseSupported = true;
+      return {
+        ok: false,
+        supported: true,
+        ownerId: null,
+        expiresAt: null,
+        reason: String((leaseError as { message?: unknown })?.message || leaseError)
+      };
+    }
+
+    leaseSupported = true;
+    const ok = Array.isArray(data) ? data.length > 0 : false;
+    if (ok) {
+      return { ok: true, supported: true, ownerId, expiresAt };
+    }
+    return { ok: false, supported: true, ownerId, expiresAt, reason: 'lost' };
+  };
+
+  const releaseLease = async (ownerId: string): Promise<LeaseResult> => {
+    if (leaseSupported === false) {
+      return { ok: true, supported: false, ownerId: null, expiresAt: null };
+    }
+
+    const { error: leaseError } = await supabase
+      .from('auth_state')
+      .update({ lease_owner: null, lease_expires_at: null })
+      .eq('session_id', sessionId)
+      .eq('lease_owner', ownerId);
+
+    if (leaseError) {
+      if (isMissingLeaseColumn(leaseError)) {
+        leaseSupported = false;
+        return { ok: true, supported: false, ownerId: null, expiresAt: null };
+      }
+      leaseSupported = true;
+      return {
+        ok: false,
+        supported: true,
+        ownerId: null,
+        expiresAt: null,
+        reason: String((leaseError as { message?: unknown })?.message || leaseError)
+      };
+    }
+
+    leaseSupported = true;
+    return { ok: true, supported: true, ownerId: null, expiresAt: null };
   };
 
   // Opportunistically repair legacy/double-encoded auth values on load.
@@ -343,11 +475,14 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
       if (qrCode !== undefined) updates.qr_code = qrCode;
       if (status === 'connected') updates.last_connected_at = new Date().toISOString();
       
-      await supabase
-        .from('auth_state')
-        .update(updates)
-        .eq('session_id', sessionId);
-    }
+      const { error: statusError } = await supabase.from('auth_state').update(updates).eq('session_id', sessionId);
+      if (statusError) {
+        console.warn('Failed to update auth_state status:', statusError);
+      }
+    },
+    acquireLease,
+    renewLease,
+    releaseLease
   };
 };
 

@@ -22,7 +22,7 @@ const requestLogger = require('./middleware/requestLogger');
 
 // Global error handlers to prevent crashes
 process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
-  logger.error({ reason }, 'Unhandled Promise Rejection');
+  logger.error({ err: reason }, 'Unhandled Promise Rejection');
   // Don't exit - let the app continue
 });
 
@@ -63,6 +63,38 @@ process.once('SIGINT', () => handleSignal('SIGINT'));
 const start = async () => {
   const app: Express = express();
   app.use(requestLogger);
+
+  // Optional Basic Auth (recommended for public deployments).
+  // Enable by setting BASIC_AUTH_USER and BASIC_AUTH_PASS.
+  const basicUser = process.env.BASIC_AUTH_USER;
+  const basicPass = process.env.BASIC_AUTH_PASS;
+  if (basicUser && basicPass) {
+    app.use((req: Request, res: Response, next) => {
+      const openPaths = new Set(['/health', '/ping', '/ready']);
+      if (openPaths.has(req.path)) return next();
+
+      const header = String(req.headers.authorization || '');
+      if (!header.startsWith('Basic ')) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="WhatsApp News Bot"');
+        return res.status(401).send('Authentication required');
+      }
+      try {
+        const raw = Buffer.from(header.slice(6), 'base64').toString('utf8');
+        const idx = raw.indexOf(':');
+        const user = idx >= 0 ? raw.slice(0, idx) : raw;
+        const pass = idx >= 0 ? raw.slice(idx + 1) : '';
+        if (user === basicUser && pass === basicPass) {
+          return next();
+        }
+      } catch {
+        // ignore
+      }
+
+      res.setHeader('WWW-Authenticate', 'Basic realm="WhatsApp News Bot"');
+      return res.status(401).send('Invalid credentials');
+    });
+  }
+
   app.use(cors());
   app.use(express.json({ limit: '2mb' }));
 
@@ -77,25 +109,27 @@ const start = async () => {
   
   app.use(express.static(publicPath));
 
+  // Optional: apply SQL migrations before touching tables.
+  if (process.env.RUN_MIGRATIONS_ON_START === 'true') {
+    try {
+      logger.info('Running database migrations');
+      await runMigrations();
+      logger.info('Database migrations complete');
+    } catch (error) {
+      logger.error({ error }, 'Database migrations failed');
+      const strict = process.env.MIGRATIONS_STRICT === 'true';
+      if (strict) {
+        throw error;
+      }
+    }
+  }
+
   // Test Supabase connection
   const connected = await testConnection();
   if (!connected) {
     logger.warn('Failed to connect to Supabase database - some features may not work');
     logger.warn('Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables');
   } else {
-    if (process.env.RUN_MIGRATIONS_ON_START === 'true') {
-      try {
-        logger.info('Running database migrations');
-        await runMigrations();
-        logger.info('Database migrations complete');
-      } catch (error) {
-        logger.error({ error }, 'Database migrations failed');
-        const strict = process.env.MIGRATIONS_STRICT === 'true';
-        if (strict) {
-          throw error;
-        }
-      }
-    }
     await settingsService.ensureDefaults();
   }
 

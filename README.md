@@ -77,7 +77,7 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
    npm run db:migrate
    ```
    The migration runner tracks applied files in the `schema_migrations` table.
-3. Alternatively, run the SQL files in `scripts/` using the Supabase SQL editor.
+3. Alternatively, run the SQL files in `scripts/` (001-011) using the Supabase SQL editor.
 
 ## Render Deployment
 
@@ -92,7 +92,8 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
    - `BASE_URL` - Your Render app URL (e.g., https://your-app.onrender.com)
    - `KEEP_ALIVE_URL` - Same as BASE_URL + /ping
    - `KEEP_ALIVE` - true
-   - `RUN_MIGRATIONS_ON_START` - true
+   - `RUN_MIGRATIONS_ON_START` - optional (recommended: run migrations manually in Supabase)
+   - `MIGRATIONS_STRICT` - optional (set to true to fail startup if migrations fail)
 
 ### Option 2: Manual Setup
 1. Create a **Web Service** on Render
@@ -108,6 +109,13 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
 | `BASE_URL` | Your Render app URL | `https://your-app.onrender.com` |
 | `KEEP_ALIVE` | Enable keep-alive pings | `true` |
 | `KEEP_ALIVE_URL` | Ping endpoint URL | `https://your-app.onrender.com/ping` |
+
+### Recommended Security (Basic Auth)
+If you deploy this publicly, set:
+- `BASIC_AUTH_USER`
+- `BASIC_AUTH_PASS`
+
+This protects both the UI and API with browser Basic Auth (health endpoints remain open).
 
 ## API Endpoints
 - `GET /health` - Health check
@@ -127,3 +135,4 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
 - Free tier Render instances spin down after inactivity. Use an external uptime ping against `/ping` to keep it alive.
 - Session data is stored in Supabase when configured; otherwise it resets on restart
 - Render single-service deploy serves the Vite UI built from `client/` at `/`
+- WhatsApp only allows one active web session per account. If you see a `conflict/replaced` error, log out of other linked devices and/or wait for an old deployment to stop before scanning a new QR.

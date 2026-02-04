@@ -1,4 +1,5 @@
 import type { AnyMessageContent, WASocket, proto } from '@whiskeysockets/baileys';
+import { randomUUID } from 'crypto';
 
 const { loadBaileys } = require('./baileys');
 const qrcode = require('qrcode');
@@ -9,7 +10,7 @@ const useSupabaseAuthState = require('./authStore');
 const { saveIncomingMessages } = require('../services/messageService');
 const { sendPendingForAllSchedules } = require('../services/queueService');
 
-type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error';
+type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict';
 
 type MessageStatusSnapshot = {
   status: number | null;
@@ -24,13 +25,29 @@ class WhatsAppClient {
   qrCode: string | null;
   lastError: string | null;
   lastSeenAt: Date | null;
+  instanceId: string;
   authStore: {
     state: { creds: Record<string, unknown>; keys: { get: (type: string, ids: string[]) => Promise<Record<string, unknown>>; set: (data: Record<string, Record<string, unknown>>) => Promise<void> } };
     saveCreds: () => Promise<void>;
     clearState: () => Promise<void>;
     clearKeys?: (types?: string[]) => Promise<void>;
     updateStatus: (status: string, qrCode?: string | null) => Promise<void>;
+    acquireLease?: (
+      ownerId: string,
+      ttlMs?: number
+    ) => Promise<{ ok: boolean; supported: boolean; ownerId: string | null; expiresAt: string | null; reason?: string }>;
+    renewLease?: (
+      ownerId: string,
+      ttlMs?: number
+    ) => Promise<{ ok: boolean; supported: boolean; ownerId: string | null; expiresAt: string | null; reason?: string }>;
+    releaseLease?: (
+      ownerId: string
+    ) => Promise<{ ok: boolean; supported: boolean; ownerId: string | null; expiresAt: string | null; reason?: string }>;
   } | null;
+  leaseSupported: boolean;
+  leaseHeld: boolean;
+  leaseExpiresAt: string | null;
+  leaseRenewTimer: NodeJS.Timeout | null;
   reconnectAttempts: number;
   maxReconnectAttempts: number;
   isConnecting: boolean;
@@ -54,7 +71,12 @@ class WhatsAppClient {
     this.qrCode = null;
     this.lastError = null;
     this.lastSeenAt = null;
+    this.instanceId = randomUUID();
     this.authStore = null;
+    this.leaseSupported = false;
+    this.leaseHeld = false;
+    this.leaseExpiresAt = null;
+    this.leaseRenewTimer = null;
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 5;
     this.isConnecting = false;
@@ -263,6 +285,70 @@ class WhatsAppClient {
     return baileysLogger;
   }
 
+  startLeaseRenewal(ttlMs = 90_000): void {
+    const authStore = this.authStore;
+    if (!authStore?.renewLease) return;
+    if (!this.leaseSupported || !this.leaseHeld) return;
+    if (this.leaseRenewTimer) return;
+
+    const intervalMs = Math.max(10_000, Math.floor(Number(ttlMs) / 2));
+
+    const tick = async () => {
+      const store = this.authStore;
+      if (!store?.renewLease) return;
+      try {
+        const lease = await store.renewLease(this.instanceId, ttlMs);
+        if (!lease.supported) {
+          this.leaseSupported = false;
+          this.leaseHeld = false;
+          this.leaseExpiresAt = null;
+          this.stopLeaseRenewal();
+          return;
+        }
+
+        this.leaseSupported = true;
+        this.leaseHeld = Boolean(lease.ok);
+        this.leaseExpiresAt = lease.expiresAt;
+
+        if (!lease.ok) {
+          logger.warn({ leaseOwner: lease.ownerId, leaseExpiresAt: lease.expiresAt }, 'Lost WhatsApp lease');
+          this.stopLeaseRenewal();
+          this.status = 'conflict';
+          this.lastError =
+            'Another bot instance took over this WhatsApp session. This instance will stay idle.';
+          if (this.authStore?.updateStatus) {
+            await this.authStore.updateStatus('conflict');
+          }
+          if (this.socket) {
+            try {
+              this.cleanupSocket();
+              this.socket.end(new Error('Lease lost'));
+            } catch {
+              // ignore
+            }
+            this.socket = null;
+          }
+          // Periodically retry acquisition in case the other instance stops.
+          this.scheduleReconnect(15000);
+        }
+      } catch (error) {
+        logger.warn({ error }, 'Failed to renew WhatsApp lease');
+      }
+    };
+
+    void tick();
+    this.leaseRenewTimer = setInterval(() => {
+      void tick();
+    }, intervalMs);
+  }
+
+  stopLeaseRenewal(): void {
+    if (this.leaseRenewTimer) {
+      clearInterval(this.leaseRenewTimer);
+      this.leaseRenewTimer = null;
+    }
+  }
+
   scheduleReconnect(delay: number): void {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -305,6 +391,36 @@ class WhatsAppClient {
       const authStore = this.authStore;
       if (!authStore) {
         throw new Error('Auth store not initialized');
+      }
+
+      // Acquire a cross-instance lease so only one bot connects at a time.
+      // This prevents WhatsApp "conflict/replaced" errors during rolling deploys.
+      if (authStore.acquireLease) {
+        try {
+          const lease = await authStore.acquireLease(this.instanceId, 90_000);
+          this.leaseSupported = lease.supported;
+          this.leaseHeld = lease.ok;
+          this.leaseExpiresAt = lease.expiresAt;
+
+          if (lease.supported && !lease.ok) {
+            this.status = 'conflict';
+            this.lastError =
+              'Another bot instance is active (lease held). Stop the other instance or wait ~90s, then retry.';
+            if (authStore.updateStatus) {
+              await authStore.updateStatus('conflict');
+            }
+            this.isConnecting = false;
+            // Retry periodically to take over after old instance stops.
+            this.scheduleReconnect(15000);
+            return;
+          }
+
+          if (lease.supported && lease.ok) {
+            this.startLeaseRenewal(90_000);
+          }
+        } catch (error) {
+          logger.warn({ error }, 'Failed to acquire WhatsApp lease; continuing without lock');
+        }
       }
 
       const {
@@ -472,7 +588,9 @@ class WhatsAppClient {
           // Connection conflict - another device logged in
           if (statusCode === 440 || reason?.includes('conflict')) {
             logger.warn('Connection conflict detected - another session is active');
-            this.lastError = 'Another session is active. Please close other WhatsApp Web sessions or click Hard Refresh.';
+            this.status = 'conflict';
+            this.lastError =
+              'Another session is active. Close other WhatsApp Web sessions or wait for the other bot instance to stop, then click Hard Refresh.';
             // Don't auto-reconnect on conflict - let user decide
             await authStore.updateStatus('conflict');
             return;
@@ -572,13 +690,17 @@ class WhatsAppClient {
     lastSeenAt: Date | null;
     hasQr: boolean;
     me: { jid: string | null; name: string | null };
+    instanceId: string;
+    lease: { supported: boolean; held: boolean; expiresAt: string | null };
   } {
     return {
       status: this.status,
       lastError: this.lastError,
       lastSeenAt: this.lastSeenAt,
       hasQr: Boolean(this.qrCode),
-      me: { jid: this.meJid, name: this.meName }
+      me: { jid: this.meJid, name: this.meName },
+      instanceId: this.instanceId,
+      lease: { supported: this.leaseSupported, held: this.leaseHeld, expiresAt: this.leaseExpiresAt }
     };
   }
 
@@ -883,6 +1005,17 @@ class WhatsAppClient {
       this.reconnectTimer = null;
     }
 
+    this.stopLeaseRenewal();
+    if (this.authStore?.releaseLease) {
+      try {
+        await this.authStore.releaseLease(this.instanceId);
+      } catch (error) {
+        logger.warn({ error }, 'Failed to release WhatsApp lease');
+      }
+    }
+    this.leaseHeld = false;
+    this.leaseExpiresAt = null;
+
     if (this.socket) {
       try {
         this.cleanupSocket();
@@ -939,6 +1072,9 @@ class WhatsAppClient {
     this.status = 'disconnected';
     this.qrCode = null;
     this.lastError = null;
+
+    // Stop renewing while we clear/recreate auth state.
+    this.stopLeaseRenewal();
     
     // Clear auth state to force new QR
     if (this.authStore?.clearState) {

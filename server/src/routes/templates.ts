@@ -1,0 +1,158 @@
+import type { Request, Response } from 'express';
+const express = require('express');
+const { getSupabaseClient } = require('../db/supabase');
+const { validate, schemas } = require('../middleware/validation');
+const { serviceUnavailable } = require('../core/errors');
+const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
+
+const getDb = () => {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw serviceUnavailable('Database not available');
+  return supabase;
+};
+
+// Extract variable names from template content (e.g., {{title}}, {{description}})
+function extractVariables(content: string) {
+  const regex = /\{\{\s*(\w+)\s*\}\}/g;
+  const input = String(content ?? '');
+  const variables = new Set<string>();
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(input)) !== null) {
+    if (match[1]) {
+      variables.add(match[1]);
+    }
+  }
+  return Array.from(variables);
+}
+
+const templateRoutes = () => {
+  const router = express.Router();
+
+  router.get('/', async (_req: Request, res: Response) => {
+    try {
+      const { data: templates, error } = await getDb()
+        .from('templates')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      res.json(templates);
+    } catch (error) {
+      console.error('Error fetching templates:', error);
+      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+    }
+  });
+
+  router.post('/', validate(schemas.template), async (req: Request, res: Response) => {
+    try {
+      // Extract variables from template content
+      const variables = extractVariables(String(req.body.content || ''));
+      
+      const { data: template, error } = await getDb()
+        .from('templates')
+        .insert({ ...req.body, variables })
+        .select()
+        .single();
+      
+      if (error) throw error;
+      res.json(template);
+    } catch (error) {
+      console.error('Error creating template:', error);
+      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+    }
+  });
+
+  router.put('/:id', validate(schemas.template), async (req: Request, res: Response) => {
+    try {
+      // Extract variables from template content
+      const variables = extractVariables(String(req.body.content || ''));
+      
+      const { data: template, error } = await getDb()
+        .from('templates')
+        .update({ ...req.body, variables })
+        .eq('id', req.params.id)
+        .select()
+        .single();
+      
+      if (error) throw error;
+      res.json(template);
+    } catch (error) {
+      console.error('Error updating template:', error);
+      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+    }
+  });
+
+  router.delete('/:id', async (req: Request, res: Response) => {
+    try {
+      const { error } = await getDb()
+        .from('templates')
+        .delete()
+        .eq('id', req.params.id);
+      
+      if (error) throw error;
+      res.json({ ok: true });
+    } catch (error) {
+      console.error('Error deleting template:', error);
+      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+    }
+  });
+
+  // Get available variables for templates based on feed items
+  router.get('/available-variables', async (_req: Request, res: Response) => {
+    try {
+      // Get recent feed items to extract available fields
+      const { data: items, error } = await getDb()
+        .from('feed_items')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20);
+      
+      if (error) throw error;
+      
+      // Standard feed item fields that are always available
+      const standardFields = [
+        { name: 'title', description: 'Article title' },
+        { name: 'description', description: 'Article description/summary' },
+        { name: 'content', description: 'Full article content' },
+        { name: 'link', description: 'Article URL' },
+        { name: 'author', description: 'Article author' },
+        { name: 'pub_date', description: 'Publication date' },
+        { name: 'image_url', description: 'Article image URL' },
+        { name: 'categories', description: 'Article categories' },
+        { name: 'normalized_url', description: 'Normalized URL (for dedupe)' },
+        { name: 'content_hash', description: 'Content hash (for dedupe)' },
+        { name: 'guid', description: 'Feed GUID' }
+      ];
+      
+      // Extract additional fields from raw_data
+      const additionalFields = new Set();
+      items.forEach((item: Record<string, unknown>) => {
+        if (item.raw_data && typeof item.raw_data === 'object') {
+          Object.entries(item.raw_data as Record<string, unknown>).forEach(([key, value]) => {
+            if (standardFields.find((f) => f.name === key)) return;
+            if (value == null) return;
+            if (typeof value === 'object') return;
+            additionalFields.add(key);
+          });
+        }
+      });
+      
+      const allFields = [
+        ...standardFields,
+        ...Array.from(additionalFields).map(name => ({ 
+          name, 
+          description: 'Custom field from feed' 
+        }))
+      ];
+      
+      res.json(allFields);
+    } catch (error) {
+      console.error('Error fetching available variables:', error);
+      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+    }
+  });
+
+  return router;
+};
+
+module.exports = templateRoutes;

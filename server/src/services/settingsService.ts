@@ -1,0 +1,116 @@
+const { getSupabaseClient } = require('../db/supabase');
+const env = require('../config/env');
+const { serviceUnavailable } = require('../core/errors');
+
+const DEFAULTS = {
+  retentionDays: env.RETENTION_DAYS,
+  log_retention_days: Number(process.env.LOG_RETENTION_DAYS || env.RETENTION_DAYS || 30),
+  app_name: 'WhatsApp News Bot',
+  default_timezone: 'UTC',
+  message_delay_ms: 2000,
+  max_retries: Number(process.env.MAX_RETRIES || 3),
+  authRetentionDays: Number(process.env.AUTH_RETENTION_DAYS || 60),
+  defaultInterTargetDelaySec: env.DEFAULT_INTER_TARGET_DELAY_SEC,
+  defaultIntraTargetDelaySec: env.DEFAULT_INTRA_TARGET_DELAY_SEC,
+  dedupeThreshold: 0.88,
+  processingTimeoutMinutes: Number(process.env.PROCESSING_TIMEOUT_MINUTES || 30)
+};
+
+const ensureDefaults = async () => {
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+  
+  try {
+    const { data: entries, error } = await supabase
+      .from('settings')
+      .select('key');
+    
+    if (error) throw error;
+    
+    const rows = (entries || []) as Array<{ key: string }>;
+    const existing = new Set(rows.map((entry) => entry.key));
+
+    await Promise.all(
+      Object.entries(DEFAULTS).map(async ([key, value]) => {
+        if (!existing.has(key)) {
+          await supabase
+            .from('settings')
+            .insert({ key, value: JSON.stringify(value), description: `Default setting for ${key}` });
+        }
+      })
+    );
+  } catch (error) {
+    console.error('Error ensuring default settings:', error);
+  }
+};
+
+const getSettings = async () => {
+  const supabase = getSupabaseClient();
+  if (!supabase) return DEFAULTS;
+  
+  try {
+    const { data: entries, error } = await supabase
+      .from('settings')
+      .select('*');
+    
+    if (error) throw error;
+    
+    const data: Record<string, unknown> = { ...DEFAULTS };
+    const rows = (entries || []) as Array<{ key: string; value: unknown }>;
+    rows.forEach((entry) => {
+      try {
+        data[entry.key] = typeof entry.value === 'string' ? JSON.parse(entry.value) : entry.value;
+      } catch {
+        data[entry.key] = entry.value;
+      }
+    });
+
+    if (data.log_retention_days == null && data.retentionDays != null) {
+      data.log_retention_days = data.retentionDays;
+    }
+    if (data.retentionDays == null && data.log_retention_days != null) {
+      data.retentionDays = data.log_retention_days;
+    }
+    if ('send_images' in data) {
+      delete data.send_images;
+    }
+    return data;
+  } catch (error) {
+    console.error('Error getting settings:', error);
+    return DEFAULTS;
+  }
+};
+
+const updateSettings = async (updates: Record<string, unknown>) => {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw serviceUnavailable('Database not available');
+  
+  try {
+    const keys = Object.keys(updates || {});
+    await Promise.all(
+      keys.map(async (key) => {
+        const { error } = await supabase
+          .from('settings')
+          .upsert({ 
+            key, 
+            value: JSON.stringify(updates[key]),
+            description: `Setting for ${key}`
+          }, { 
+            onConflict: 'key' 
+          });
+        if (error) throw error;
+      })
+    );
+    return getSettings();
+  } catch (error) {
+    console.error('Error updating settings:', error);
+    throw error;
+  }
+};
+
+module.exports = {
+  ensureDefaults,
+  getSettings,
+  updateSettings
+};
+export {};

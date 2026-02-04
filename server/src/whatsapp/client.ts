@@ -347,6 +347,7 @@ class WhatsAppClient {
         auth: state,
         printQRInTerminal: false,
         markOnlineOnConnect: false,
+        emitOwnEvents: true,
         browser,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: undefined,

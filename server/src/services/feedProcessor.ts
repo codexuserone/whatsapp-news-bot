@@ -132,6 +132,9 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
       last_error: null,
       consecutive_failures: 0
     };
+    if (meta?.detectedType && meta.detectedType !== feed.type) {
+      feedUpdate.type = meta.detectedType;
+    }
     if (meta?.etag) {
       feedUpdate.etag = meta.etag;
     }

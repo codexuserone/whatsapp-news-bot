@@ -34,6 +34,7 @@ class WhatsAppClient {
   processErrorHandlersBound: boolean;
   waVersion: number[] | null;
   waVersionFetchedAtMs: number | null;
+  recentSentMessages: Map<string, proto.IWebMessageInfo>;
 
   constructor() {
     this.socket = null;
@@ -54,6 +55,7 @@ class WhatsAppClient {
     this.processErrorHandlersBound = false;
     this.waVersion = null;
     this.waVersionFetchedAtMs = null;
+    this.recentSentMessages = new Map();
   }
 
   async init(): Promise<void> {
@@ -468,9 +470,26 @@ class WhatsAppClient {
       socket.ev.on('creds.update', saveCreds);
 
       socket.ev.on('messages.upsert', async ({ type, messages }) => {
-        if (type !== 'notify') return;
+        const list = Array.isArray(messages) ? messages : [];
+
+        for (const message of list as any[]) {
+          const id = message?.key?.id;
+          if (id && message?.key?.fromMe) {
+            this.recentSentMessages.set(String(id), message);
+            if (this.recentSentMessages.size > 500) {
+              const oldest = this.recentSentMessages.keys().next().value;
+              if (oldest) {
+                this.recentSentMessages.delete(oldest);
+              }
+            }
+          }
+        }
+
+        const toSave =
+          type === 'notify' ? list : list.filter((message: any) => Boolean(message?.key?.fromMe));
+        if (!toSave.length) return;
         try {
-          await saveIncomingMessages(messages);
+          await saveIncomingMessages(toSave);
         } catch (e) {
           logger.error({ e }, 'Error saving incoming messages');
         }
@@ -587,11 +606,17 @@ class WhatsAppClient {
   async waitForMessage(messageId: string, timeoutMs = 30000): Promise<proto.IWebMessageInfo | null> {
     const socket = this.socket;
     if (!socket) return null;
+
+    const cached = this.recentSentMessages.get(messageId);
+    if (cached) {
+      return cached;
+    }
     return new Promise((resolve) => {
       const timeout = setTimeout(() => resolve(null), timeoutMs);
       const handler = ({ messages }: { messages: proto.IWebMessageInfo[] }) => {
         const found = messages.find((m) => m.key?.id === messageId);
         if (found) {
+          this.recentSentMessages.set(messageId, found);
           clearTimeout(timeout);
           socket.ev.off('messages.upsert', handler);
           resolve(found);
@@ -619,6 +644,7 @@ class WhatsAppClient {
     }
 
     this.groupMetadataCache.clear();
+    this.recentSentMessages.clear();
 
     this.status = 'disconnected';
     this.qrCode = null;
@@ -649,6 +675,7 @@ class WhatsAppClient {
     }
 
     this.groupMetadataCache.clear();
+    this.recentSentMessages.clear();
     
     // Reset state
     this.isConnecting = false;

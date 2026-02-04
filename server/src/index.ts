@@ -90,7 +90,8 @@ const start = async () => {
         logger.info('Database migrations complete');
       } catch (error) {
         logger.error({ error }, 'Database migrations failed');
-        if (process.env.MIGRATIONS_STRICT !== 'false') {
+        const strict = process.env.MIGRATIONS_STRICT === 'true';
+        if (strict) {
           throw error;
         }
       }

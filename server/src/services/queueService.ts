@@ -889,7 +889,15 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
             return result;
           });
           const response = sendResult?.response;
-          
+
+          const messageId = response?.key?.id;
+          if (whatsappClient.waitForMessage && messageId) {
+            const observed = await whatsappClient.waitForMessage(messageId, 15000);
+            if (!observed) {
+              throw new Error('Message send not confirmed (no local upsert)');
+            }
+          }
+           
           await supabase
             .from('message_logs')
             .update({ 
@@ -898,7 +906,7 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
               processing_started_at: null,
               error_message: null,
               message_content: sendResult?.text || null,
-              whatsapp_message_id: response?.key?.id,
+              whatsapp_message_id: messageId,
               media_url: sendResult?.media?.url || null,
               media_type: sendResult?.media?.type || null,
               media_sent: Boolean(sendResult?.media?.sent),
@@ -916,10 +924,6 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
           }
           
           sentCount += 1;
-
-          if (whatsappClient.waitForMessage && response?.key?.id) {
-            await whatsappClient.waitForMessage(response.key.id);
-          }
         } catch (error) {
           logger.error({ error, scheduleId, feedItemId: feedItem.id, targetId: target.id }, 'Failed to send message');
 

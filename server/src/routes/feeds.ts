@@ -3,7 +3,7 @@ const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
 const { fetchAndProcessFeed, queueFeedItemsForSchedules } = require('../services/feedProcessor');
 const { initSchedulers, triggerImmediateSchedules } = require('../services/schedulerService');
-const { fetchFeedItems } = require('../services/feedFetcher');
+const { fetchFeedItemsWithMeta } = require('../services/feedFetcher');
 const { validate, schemas } = require('../middleware/validation');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
@@ -32,14 +32,13 @@ const feedsRoutes = () => {
   // Test a feed URL without saving - returns detected fields and sample item
   router.post('/test', async (req: Request, res: Response) => {
     try {
-      const { url, type = 'rss' } = req.body;
+      const { url } = req.body;
       if (!url) {
         return res.status(400).json({ error: 'URL is required' });
       }
 
       // Create a temporary feed object for testing (cleaning is optional, uses defaults)
-      const testFeed = { url, type };
-      const items = await fetchFeedItems(testFeed);
+      const { items, meta } = await fetchFeedItemsWithMeta({ url });
 
       if (!items || items.length === 0) {
         return res.status(404).json({ error: 'No items found in feed. Check the URL or feed type.' });
@@ -62,6 +61,8 @@ const feedsRoutes = () => {
 
       res.json({
         feedTitle: sampleItem.title ? `Feed from ${new URL(url).hostname}` : 'Unknown Feed',
+        detectedType: meta?.detectedType || null,
+        contentType: meta?.contentType || null,
         itemCount: items.length,
         detectedFields: [...new Set(detectedFields)],
         sampleItem

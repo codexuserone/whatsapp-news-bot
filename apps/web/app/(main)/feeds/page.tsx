@@ -9,7 +9,6 @@ import { api } from '@/lib/api';
 import type { Feed } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -19,7 +18,6 @@ import { Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2 } from 'lu
 const schema = z.object({
   name: z.string().min(1),
   url: z.string().url(),
-  type: z.enum(['rss', 'atom', 'json']),
   active: z.boolean().default(true),
   fetch_interval: z.coerce.number().min(300)
 });
@@ -29,6 +27,7 @@ type FeedFormValues = z.infer<typeof schema>;
 type FeedTestResult = {
   error?: string;
   feedTitle?: string;
+  detectedType?: string | null;
   itemCount?: number;
   detectedFields?: string[];
   sampleItem?: Record<string, unknown>;
@@ -49,7 +48,6 @@ const FeedsPage = () => {
     defaultValues: {
       name: '',
       url: '',
-      type: 'rss',
       active: true,
       fetch_interval: 900
     }
@@ -62,7 +60,6 @@ const FeedsPage = () => {
       form.reset({
         name: active.name,
         url: active.url,
-        type: active.type,
         active: Boolean(active.active),
         fetch_interval: active.fetch_interval || 900
       });
@@ -99,13 +96,12 @@ const FeedsPage = () => {
 
   const testFeedUrl = async () => {
     const url = form.getValues('url');
-    const type = form.getValues('type');
     if (!url) return;
 
     setTestLoading(true);
     setTestResult(null);
     try {
-      const result = await api.post<FeedTestResult>('/api/feeds/test', { url, type });
+      const result = await api.post<FeedTestResult>('/api/feeds/test', { url });
       setTestResult(result);
       if (!form.getValues('name') && result.feedTitle) {
         form.setValue('name', result.feedTitle);
@@ -125,7 +121,7 @@ const FeedsPage = () => {
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Feeds</h1>
-          <p className="text-muted-foreground">Add RSS, Atom, or JSON feeds. Variables are automatically detected.</p>
+          <p className="text-muted-foreground">Add any feed URL. Type and variables are auto-detected.</p>
         </div>
       </div>
 
@@ -160,23 +156,13 @@ const FeedsPage = () => {
                     <Input id="name" {...form.register('name')} placeholder="Auto-detected from feed" />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="type">Type</Label>
-                    <Controller
-                      control={form.control}
-                      name="type"
-                      render={({ field }) => (
-                        <Select value={field.value} onValueChange={field.onChange}>
-                          <SelectTrigger id="type">
-                            <SelectValue placeholder="Select type" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="rss">RSS</SelectItem>
-                            <SelectItem value="atom">Atom</SelectItem>
-                            <SelectItem value="json">JSON Feed</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      )}
-                    />
+                    <Label>Type</Label>
+                    <div className="flex h-10 items-center justify-between rounded-md border bg-muted/30 px-3 text-sm">
+                      <span className="text-muted-foreground">Auto-detect</span>
+                      <Badge variant="secondary" className="capitalize">
+                        {testResult?.detectedType || active?.type || 'rss'}
+                      </Badge>
+                    </div>
                   </div>
                 </div>
 
@@ -237,7 +223,7 @@ const FeedsPage = () => {
                   <p className="text-sm text-destructive">{testResult.error}</p>
                 ) : (
                   <div className="space-y-4">
-                    <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="grid gap-4 sm:grid-cols-3">
                       <div>
                         <p className="text-sm font-medium text-muted-foreground">Feed Title</p>
                         <p className="text-sm">{testResult.feedTitle || 'Unknown'}</p>
@@ -245,6 +231,10 @@ const FeedsPage = () => {
                       <div>
                         <p className="text-sm font-medium text-muted-foreground">Items Found</p>
                         <p className="text-sm">{testResult.itemCount || 0} items</p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Detected Type</p>
+                        <p className="text-sm capitalize">{testResult.detectedType || 'unknown'}</p>
                       </div>
                     </div>
                     <div>

@@ -15,6 +15,8 @@ type FetchMeta = {
   lastModified?: string;
   notModified?: boolean;
   durationMs?: number;
+  detectedType?: 'rss' | 'atom' | 'json';
+  contentType?: string;
 };
 
 const DEFAULT_USER_AGENT =
@@ -29,6 +31,48 @@ const getPath = (obj: Record<string, unknown>, path?: string) => {
     }
     return undefined;
   }, obj);
+};
+
+const toTextValue = (value: unknown): string | undefined => {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return undefined;
+};
+
+const extractJsonItemsArray = (json: unknown, itemsPath?: string): unknown[] => {
+  if (itemsPath) {
+    try {
+      const picked = getPath(json as Record<string, unknown>, itemsPath);
+      if (Array.isArray(picked)) return picked;
+    } catch {
+      // ignore
+    }
+  }
+
+  if (Array.isArray(json)) return json;
+  if (!json || typeof json !== 'object') return [];
+  const obj = json as Record<string, unknown>;
+
+  const candidates = [
+    getPath(obj, 'items'),
+    getPath(obj, 'feed.items'),
+    getPath(obj, 'data.items'),
+    getPath(obj, 'data'),
+    getPath(obj, 'results'),
+    getPath(obj, 'articles'),
+    getPath(obj, 'entries'),
+    getPath(obj, 'posts')
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate;
+  }
+
+  const topLevelArrays = Object.values(obj).filter((value) => Array.isArray(value));
+  if (topLevelArrays.length === 1) {
+    return topLevelArrays[0] as unknown[];
+  }
+  return [];
 };
 
 const stripHtml = (value: string = '') => {
@@ -173,7 +217,8 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
     status: response.status,
     etag: response.headers?.etag,
     lastModified: response.headers?.['last-modified'],
-    notModified: response.status === 304
+    notModified: response.status === 304,
+    contentType: response.headers?.['content-type']
   };
 
   if (response.status === 304) {
@@ -278,7 +323,8 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
     status: response.status,
     etag: response.headers?.etag,
     lastModified: response.headers?.['last-modified'],
-    notModified: response.status === 304
+    notModified: response.status === 304,
+    contentType: response.headers?.['content-type']
   };
 
   if (response.status === 304) {
@@ -287,43 +333,54 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
 
   const json = response.data;
   const itemsPath = (feed.parseConfig?.itemsPath as string) || 'items';
-  const itemsRaw = getPath(json as Record<string, unknown>, itemsPath);
-  const items = Array.isArray(itemsRaw) ? itemsRaw : [];
+  const items = extractJsonItemsArray(json, itemsPath);
   const mapped = (items as Record<string, unknown>[]).map((item) => {
+    const rawUrl =
+      getPath(item, (feed.parseConfig?.linkPath as string) || 'link') ||
+      getPath(item, 'url') ||
+      getPath(item, 'link') ||
+      getPath(item, 'external_url') ||
+      getPath(item, 'permalink');
     const url =
-      getPath(item, (feed.parseConfig?.linkPath as string) || 'link') || getPath(item, 'url');
+      toTextValue(rawUrl) ||
+      toTextValue(getPath(rawUrl as Record<string, unknown>, 'url')) ||
+      toTextValue(getPath(rawUrl as Record<string, unknown>, 'href'));
     const guidRaw = getPath(item, 'id') || getPath(item, 'guid') || url;
     const imageCandidate = pickFirstUrl(
-      toStringValue(getPath(item, (feed.parseConfig?.imagePath as string) || 'image')),
-      toStringValue(getPath(item, 'image_url')),
-      toStringValue(getPath(item, 'imageUrl')),
-      toStringValue(getPath(item, 'image.url')),
-      toStringValue(getPath(item, 'image.href')),
-      toStringValue(getPath(item, 'thumbnail')),
-      toStringValue(getPath(item, 'thumbnail_url')),
-      toStringValue(getPath(item, 'featured_image')),
-      toStringValue(getPath(item, 'banner_image'))
+      toTextValue(getPath(item, (feed.parseConfig?.imagePath as string) || 'image')),
+      toTextValue(getPath(item, 'image_url')),
+      toTextValue(getPath(item, 'imageUrl')),
+      toTextValue(getPath(item, 'image.url')),
+      toTextValue(getPath(item, 'image.href')),
+      toTextValue(getPath(item, 'thumbnail')),
+      toTextValue(getPath(item, 'thumbnail_url')),
+      toTextValue(getPath(item, 'featured_image')),
+      toTextValue(getPath(item, 'banner_image'))
     );
     return {
       guid: toStringValue(guidRaw) || `${feed.url}-${Date.now()}-${Math.random()}`,
-      title: toStringValue(getPath(item, (feed.parseConfig?.titlePath as string) || 'title')),
+      title: toTextValue(getPath(item, (feed.parseConfig?.titlePath as string) || 'title')),
       url: removeUtm(String(url || '')),
       description:
-        toStringValue(getPath(item, (feed.parseConfig?.descriptionPath as string) || 'description')) ||
-        toStringValue(getPath(item, 'summary')),
+        toTextValue(getPath(item, (feed.parseConfig?.descriptionPath as string) || 'description')) ||
+        toTextValue(getPath(item, 'summary')),
       content:
-        toStringValue(getPath(item, 'content')) ||
-        toStringValue(getPath(item, 'content_html')) ||
-        toStringValue(getPath(item, 'content_text')),
+        toTextValue(getPath(item, 'content')) ||
+        toTextValue(getPath(item, 'content_html')) ||
+        toTextValue(getPath(item, 'content_text')),
       author:
-        toStringValue(getPath(item, 'author')) || toStringValue(getPath(item, 'author.name')),
+        toTextValue(getPath(item, 'author.name')) || toTextValue(getPath(item, 'author')),
       imageUrl: imageCandidate,
       publishedAt:
-        toStringValue(getPath(item, 'date_published')) ||
-        toStringValue(getPath(item, 'date')) ||
-        toStringValue(getPath(item, 'pubDate')) ||
-        toStringValue(getPath(item, 'publishedAt')),
-      categories: (getPath(item, 'tags') as string[]) || (getPath(item, 'categories') as string[]) || []
+        toTextValue(getPath(item, 'date_published')) ||
+        toTextValue(getPath(item, 'date')) ||
+        toTextValue(getPath(item, 'pubDate')) ||
+        toTextValue(getPath(item, 'publishedAt')),
+      categories: Array.isArray(getPath(item, 'tags'))
+        ? (getPath(item, 'tags') as unknown[]).map((value) => String(value))
+        : Array.isArray(getPath(item, 'categories'))
+          ? (getPath(item, 'categories') as unknown[]).map((value) => String(value))
+          : []
     };
   });
 
@@ -332,8 +389,46 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
 
 const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedItemResult[]; meta: FetchMeta }> => {
   const start = Date.now();
-  const { items, meta } =
-    feed.type === 'json' ? await fetchJsonItemsWithMeta(feed) : await fetchRssItemsWithMeta(feed);
+
+  const tryFetch = async (kind: 'json' | 'xml') => {
+    if (kind === 'json') {
+      return fetchJsonItemsWithMeta({ ...feed, type: 'json' });
+    }
+    return fetchRssItemsWithMeta({ ...feed, type: feed.type === 'atom' ? 'atom' : 'rss' });
+  };
+
+  const preferred: 'json' | 'xml' = feed.type === 'json' ? 'json' : 'xml';
+  const fallback: 'json' | 'xml' = preferred === 'json' ? 'xml' : 'json';
+
+  let items: FeedItemResult[] = [];
+  let meta: FetchMeta = {};
+  let detectedType: FetchMeta['detectedType'] = feed.type || (preferred === 'json' ? 'json' : 'rss');
+
+  try {
+    const result = await tryFetch(preferred);
+    items = result.items;
+    meta = result.meta;
+    detectedType =
+      preferred === 'json' ? 'json' : feed.type === 'atom' ? 'atom' : 'rss';
+
+    if (!meta?.notModified && (!items || items.length === 0)) {
+      try {
+        const alt = await tryFetch(fallback);
+        if (alt?.items?.length) {
+          items = alt.items;
+          meta = alt.meta;
+          detectedType = fallback === 'json' ? 'json' : 'rss';
+        }
+      } catch {
+        // ignore fallback errors
+      }
+    }
+  } catch (error) {
+    const alt = await tryFetch(fallback);
+    items = alt.items;
+    meta = alt.meta;
+    detectedType = fallback === 'json' ? 'json' : 'rss';
+  }
 
   // Default cleaning options - always strip UTM and decode HTML entities
   const cleaning = feed.cleaning || { stripUtm: true, decodeEntities: true };
@@ -358,7 +453,7 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
 
   return {
     items: cleaned,
-    meta: { ...meta, durationMs: Date.now() - start }
+    meta: { ...meta, detectedType, durationMs: Date.now() - start }
   };
 };
 

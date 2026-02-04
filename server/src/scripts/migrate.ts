@@ -1,7 +1,20 @@
 import fs from 'fs/promises';
 import path from 'path';
+import dns from 'dns';
 import dotenv from 'dotenv';
 import { Client } from 'pg';
+
+const preferIpv4 = () => {
+  try {
+    const setter = (dns as unknown as { setDefaultResultOrder?: (order: string) => void })
+      .setDefaultResultOrder;
+    if (typeof setter === 'function') {
+      setter('ipv4first');
+    }
+  } catch {
+    // ignore
+  }
+};
 
 const loadEnv = () => {
   // server/.env
@@ -32,6 +45,7 @@ const listSqlFiles = async (dir: string) => {
 };
 
 const runMigrations = async () => {
+  preferIpv4();
   loadEnv();
 
   const databaseUrl = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;

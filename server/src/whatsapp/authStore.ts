@@ -1,4 +1,3 @@
-const { BufferJSON, initAuthCreds } = require('@whiskeysockets/baileys');
 const { getSupabaseClient } = require('../db/supabase');
 const { loadBaileys } = require('./baileys');
 
@@ -21,55 +20,106 @@ type AuthStore = {
 const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<AuthStore> => {
   const { BufferJSON, initAuthCreds } = await loadBaileys();
 
-  const normalizeKeyValue = (value: unknown): unknown => {
-    if (value == null) return value;
-    if (Buffer.isBuffer(value)) return value;
-    if (typeof value !== 'string') return value;
+  const looksLikeBase64 = (value: string) => {
+    const s = value.trim();
+    return (
+      s.length >= 32 &&
+      s.length % 4 === 0 &&
+      /^[A-Za-z0-9+/]+={0,2}$/.test(s)
+    );
+  };
 
-    // Some older auth-state rows may contain double-encoded JSON or base64 strings.
+  const normalizeStoredString = (value: string, depth = 0): unknown => {
+    if (depth > 4) return value;
+    const raw = String(value ?? '');
+    const trimmed = raw.trim();
+    if (!trimmed) return raw;
+
+    // Attempt to parse JSON (handles double-encoded JSONB strings)
     try {
-      return JSON.parse(value, BufferJSON.reviver);
+      const parsed = JSON.parse(trimmed, BufferJSON.reviver);
+      if (typeof parsed === 'string') {
+        if (parsed === raw) return parsed;
+        return normalizeStoredString(parsed, depth + 1);
+      }
+      return deepNormalize(parsed, depth + 1);
     } catch {
       // Not JSON; fall through
     }
 
-    const s = value.trim();
-    const looksLikeBase64 =
-      s.length >= 32 &&
-      s.length % 4 === 0 &&
-      /^[A-Za-z0-9+/]+={0,2}$/.test(s);
-
-    if (looksLikeBase64) {
+    // Attempt to decode base64 (handles legacy base64-encoded key material)
+    if (looksLikeBase64(trimmed)) {
       try {
-        return Buffer.from(s, 'base64');
+        return Buffer.from(trimmed, 'base64');
       } catch {
-        return value;
+        return raw;
       }
     }
 
-    return value;
+    return raw;
   };
 
-  const serializeForStorage = (data: unknown): string => {
+  const deepNormalize = (input: unknown, depth = 0): unknown => {
+    if (input == null) return input;
+    if (depth > 10) return input;
+    if (Buffer.isBuffer(input)) return input;
+    if (input instanceof Uint8Array) return input;
+
+    if (typeof input === 'string') {
+      return normalizeStoredString(input, depth);
+    }
+
+    if (Array.isArray(input)) {
+      let changed = false;
+      const mapped = input.map((value) => {
+        const next = deepNormalize(value, depth + 1);
+        if (next !== value) changed = true;
+        return next;
+      });
+      return changed ? mapped : input;
+    }
+
+    if (typeof input === 'object') {
+      const obj = input as Record<string, unknown>;
+      let changed = false;
+      const out: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(obj)) {
+        const next = deepNormalize(value, depth + 1);
+        out[key] = next;
+        if (next !== value) changed = true;
+      }
+      return changed ? out : input;
+    }
+
+    return input;
+  };
+
+  const normalizeKeyValue = (value: unknown): unknown => deepNormalize(value, 0);
+
+  const toStorableJson = (data: unknown): unknown => {
     try {
-      return JSON.stringify(data, BufferJSON.replacer);
+      return JSON.parse(JSON.stringify(data, BufferJSON.replacer));
     } catch (e) {
       console.error('Serialize storage error:', e);
-      return JSON.stringify(data);
+      try {
+        return JSON.parse(JSON.stringify(data));
+      } catch {
+        return data;
+      }
     }
   };
 
-  const deserialize = (data: unknown | string | null): unknown => {
+  const fromStored = (data: unknown | null): unknown => {
     try {
       if (data == null) return data;
       if (Buffer.isBuffer(data)) return data;
       if (typeof data === 'string') {
-        return JSON.parse(data, BufferJSON.reviver);
+        return normalizeStoredString(data, 0);
       }
-      return JSON.parse(JSON.stringify(data), BufferJSON.reviver);
+      return deepNormalize(JSON.parse(JSON.stringify(data), BufferJSON.reviver), 0);
     } catch (e) {
       console.error('Deserialize error:', e);
-      return data;
+      return deepNormalize(data, 0);
     }
   };
 
@@ -134,8 +184,8 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
       .from('auth_state')
       .upsert({ 
         session_id: sessionId, 
-        creds: serializeForStorage(newCreds), 
-        keys: serializeForStorage({}),
+        creds: toStorableJson(newCreds), 
+        keys: toStorableJson({}),
         status: 'disconnected'
       }, { onConflict: 'session_id' })
       .select()
@@ -144,31 +194,56 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     if (insertError) {
       console.error('Error creating auth state:', insertError);
     }
-    doc = newDoc || { creds: serializeForStorage(newCreds), keys: serializeForStorage({}) };
+    doc = newDoc || { creds: toStorableJson(newCreds), keys: toStorableJson({}) };
   }
 
   let state: { creds: AuthData; keys: KeyStoreData } = {
-    creds: (deserialize(doc.creds) as AuthData) || initAuthCreds(),
-    keys: (deserialize(doc.keys) as KeyStoreData) || {}
+    creds: (fromStored(doc.creds) as AuthData) || initAuthCreds(),
+    keys: (fromStored(doc.keys) as KeyStoreData) || {}
+  };
+
+  let saveChain: Promise<void> = Promise.resolve();
+
+  const withSaveLock = async (fn: () => Promise<void>) => {
+    const previous = saveChain;
+    let release!: () => void;
+    saveChain = new Promise<void>((resolve) => {
+      release = () => resolve(undefined);
+    });
+    await previous;
+    try {
+      await fn();
+    } finally {
+      release();
+    }
   };
 
   const saveState = async () => {
     try {
-      await supabase
-        .from('auth_state')
-        .upsert({ 
-          session_id: sessionId, 
-          creds: serializeForStorage(state.creds), 
-          keys: serializeForStorage(state.keys)
-        }, { onConflict: 'session_id' });
+      await withSaveLock(async () => {
+        await supabase
+          .from('auth_state')
+          .upsert({
+            session_id: sessionId,
+            creds: toStorableJson(state.creds),
+            keys: toStorableJson(state.keys)
+          }, { onConflict: 'session_id' });
+      });
     } catch (error) {
       console.error('Error saving auth state:', error);
     }
   };
 
-  // Opportunistically repair legacy/double-encoded key values on load.
+  // Opportunistically repair legacy/double-encoded auth values on load.
   try {
     let repaired = false;
+
+    const normalizedCreds = normalizeKeyValue(state.creds);
+    if (normalizedCreds && normalizedCreds !== state.creds && typeof normalizedCreds === 'object') {
+      state.creds = normalizedCreds as AuthData;
+      repaired = true;
+    }
+
     for (const type of Object.keys(state.keys || {})) {
       const typeStore = state.keys[type] || {};
       for (const id of Object.keys(typeStore)) {
@@ -200,8 +275,15 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     set: async (data: KeyStoreData) => {
       state.keys = state.keys || {};
       Object.keys(data).forEach((category) => {
-        state.keys[category] = state.keys[category] || {};
-        Object.assign(state.keys[category], data[category]);
+        const bucket = state.keys[category] || (state.keys[category] = {});
+        const entries = data[category] || {};
+        Object.entries(entries).forEach(([id, value]) => {
+          if (value === null || value === undefined) {
+            delete bucket[id];
+          } else {
+            bucket[id] = value as never;
+          }
+        });
       });
       await saveState();
     }
@@ -248,16 +330,17 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
         .from('auth_state')
         .upsert({ 
           session_id: sessionId, 
-          creds: serializeForStorage(freshCreds), 
-          keys: serializeForStorage({}),
+          creds: toStorableJson(freshCreds), 
+          keys: toStorableJson({}),
           status: 'disconnected',
           qr_code: null
         }, { onConflict: 'session_id' });
     },
     clearKeys,
-    updateStatus: async (status: string, qrCode: string | null = null) => {
+    updateStatus: async (status: string, qrCode?: string | null) => {
       const updates: Record<string, unknown> = { status };
-      if (qrCode !== null) updates.qr_code = qrCode;
+      // Only write qr_code when explicitly provided (allow null to clear).
+      if (qrCode !== undefined) updates.qr_code = qrCode;
       if (status === 'connected') updates.last_connected_at = new Date().toISOString();
       
       await supabase

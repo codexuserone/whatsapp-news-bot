@@ -9,8 +9,12 @@ import { Activity, Loader2 } from 'lucide-react';
 
 const STATUS_COLORS = {
   sent: 'success',
+  delivered: 'success',
+  read: 'success',
   failed: 'destructive',
-  pending: 'warning'
+  pending: 'warning',
+  skipped: 'warning',
+  processing: 'secondary'
 };
 
 const LogsPage = () => {
@@ -45,8 +49,12 @@ const LogsPage = () => {
               <SelectContent>
                 <SelectItem value="all">All statuses</SelectItem>
                 <SelectItem value="pending">Pending</SelectItem>
+                <SelectItem value="processing">Processing</SelectItem>
                 <SelectItem value="sent">Sent</SelectItem>
+                <SelectItem value="delivered">Delivered</SelectItem>
+                <SelectItem value="read">Read</SelectItem>
                 <SelectItem value="failed">Failed</SelectItem>
+                <SelectItem value="skipped">Skipped</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -71,7 +79,10 @@ const LogsPage = () => {
                 {logs.map((log) => (
                   <TableRow key={log.id}>
                     <TableCell>
-                      <Badge variant={STATUS_COLORS[log.status] || 'secondary'}>
+                      <Badge
+                        variant={STATUS_COLORS[log.status] || 'secondary'}
+                        title={log.error_message || undefined}
+                      >
                         {log.status}
                       </Badge>
                     </TableCell>

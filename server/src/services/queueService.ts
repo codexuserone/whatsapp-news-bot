@@ -56,6 +56,8 @@ type WhatsAppClient = {
 };
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
+const AUTH_ERROR_HINT =
+  'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
 
 let globalSendChain: Promise<void> = Promise.resolve();
 let globalLastSentAtMs = 0;
@@ -97,6 +99,20 @@ const waitForDelays = async (
   if (waitMs > 0) {
     await sleep(waitMs);
   }
+};
+
+const isAuthStateError = (message: string) => {
+  const normalized = String(message || '').toLowerCase();
+  if (!normalized) return false;
+  return [
+    'senderkeyrecord.deserialize',
+    'sender key record',
+    'not valid json',
+    'incorrect private key length',
+    'session corrupted',
+    'bad key material',
+    'no session record'
+  ].some((needle) => normalized.includes(needle));
 };
 
 const applyTemplate = (templateBody: string, data: Record<string, unknown>): string => {
@@ -449,14 +465,53 @@ const sendMessageWithTemplate = async (
         media: { type: 'image', url: resolved.url, sent: true, error: null }
       };
     } catch (error) {
-      const message = getErrorMessage(error);
-      logger.warn({ error, jid, imageUrl: resolved.url }, 'Failed to send image, falling back to text');
-      const response = await sendText();
-      return {
-        response,
-        text,
-        media: { type: 'image', url: resolved.url, sent: false, error: message }
-      };
+      const bufferErrorMessage = getErrorMessage(error);
+      logger.warn(
+        { error, jid, imageUrl: resolved.url },
+        'Failed to download/send image buffer; trying URL-based send'
+      );
+
+      try {
+        const content: Record<string, unknown> = {
+          image: { url: resolved.url },
+          caption: text
+        };
+        const response =
+          target.type === 'status'
+            ? await withTimeout(
+                whatsappClient.sendStatusBroadcast(content),
+                DEFAULT_SEND_TIMEOUT_MS,
+                'Timed out sending image status message'
+              )
+            : await withTimeout(
+                whatsappClient.sendMessage(jid, content),
+                DEFAULT_SEND_TIMEOUT_MS,
+                'Timed out sending image message'
+              );
+
+        return {
+          response,
+          text,
+          media: { type: 'image', url: resolved.url, sent: true, error: null }
+        };
+      } catch (urlError) {
+        const urlErrorMessage = getErrorMessage(urlError);
+        logger.warn(
+          { error: urlError, jid, imageUrl: resolved.url, bufferError: bufferErrorMessage },
+          'Failed to send image by URL, falling back to text'
+        );
+        const response = await sendText();
+        return {
+          response,
+          text,
+          media: {
+            type: 'image',
+            url: resolved.url,
+            sent: false,
+            error: `${bufferErrorMessage}; url-send: ${urlErrorMessage}`
+          }
+        };
+      }
     }
   }
 
@@ -980,14 +1035,18 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
         } catch (error) {
           logger.error({ error, scheduleId, feedItemId: feedItem.id, targetId: target.id }, 'Failed to send message');
 
-          const errorMessage = getErrorMessage(error);
+          const rawErrorMessage = getErrorMessage(error);
+          const authError = isAuthStateError(rawErrorMessage);
+          const errorMessage = authError
+            ? `${AUTH_ERROR_HINT} (${rawErrorMessage || 'unknown auth error'})`
+            : rawErrorMessage;
           const nonRetryable = [
             'Template rendered empty message',
             'Target phone number missing',
             'Group ID invalid',
             'Channel ID invalid',
             'Phone number invalid'
-          ].some((needle) => errorMessage.includes(needle));
+          ].some((needle) => rawErrorMessage.includes(needle));
 
           if (nonRetryable) {
             await supabase

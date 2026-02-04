@@ -52,13 +52,83 @@ const cleanup = async (): Promise<void> => {
     const settings = await settingsService.getSettings();
     const retentionDays = Number(settings.log_retention_days ?? settings.retentionDays ?? 14);
     const retentionDate = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+    const retentionIso = retentionDate.toISOString();
     await resetStuckProcessingLogs();
 
-    await Promise.all([
-      supabase.from('message_logs').delete().lt('created_at', retentionDate.toISOString()),
-      supabase.from('feed_items').delete().lt('created_at', retentionDate.toISOString()),
-      supabase.from('chat_messages').delete().lt('created_at', retentionDate.toISOString())
-    ]);
+    // Delete message logs first so we never orphan active logs from their feed items.
+    await supabase.from('message_logs').delete().lt('created_at', retentionIso);
+
+    // Chat history is only used for dedupe heuristics; safe to prune independently.
+    await supabase.from('chat_messages').delete().lt('created_at', retentionIso);
+
+    // Feed items are required to render queued messages. Only delete items that are:
+    // - old (based on sent_at)
+    // - marked sent
+    // - not referenced by any remaining message logs
+    const deleteOldFeedItemsSafely = async () => {
+      const chunk = <T>(arr: T[], size: number) => {
+        const out: T[][] = [];
+        for (let i = 0; i < arr.length; i += size) {
+          out.push(arr.slice(i, i + size));
+        }
+        return out;
+      };
+
+      const { data: candidates, error: candidatesError } = await supabase
+        .from('feed_items')
+        .select('id')
+        .eq('sent', true)
+        .lt('sent_at', retentionIso)
+        .limit(5000);
+
+      if (candidatesError) {
+        logger.warn({ error: candidatesError }, 'Failed to load feed item retention candidates');
+        return;
+      }
+
+      const ids = (candidates || [])
+        .map((row: { id?: string }) => row.id)
+        .filter(Boolean) as string[];
+
+      if (!ids.length) return;
+
+      const deletable: string[] = [];
+      const batches = chunk(ids, 500);
+      for (const batch of batches) {
+        const { data: refs, error: refsError } = await supabase
+          .from('message_logs')
+          .select('feed_item_id')
+          .in('feed_item_id', batch);
+
+        if (refsError) {
+          logger.warn({ error: refsError }, 'Failed to check feed item references for retention');
+          continue;
+        }
+
+        const referenced = new Set(
+          (refs || [])
+            .map((row: { feed_item_id?: string | null }) => row.feed_item_id)
+            .filter(Boolean) as string[]
+        );
+
+        for (const id of batch) {
+          if (!referenced.has(id)) {
+            deletable.push(id);
+          }
+        }
+      }
+
+      if (!deletable.length) return;
+
+      for (const batch of chunk(deletable, 500)) {
+        const { error: deleteError } = await supabase.from('feed_items').delete().in('id', batch);
+        if (deleteError) {
+          logger.warn({ error: deleteError }, 'Failed to delete old feed items');
+        }
+      }
+    };
+
+    await deleteOldFeedItemsSafely();
 
     logger.info('Retention cleanup complete');
   } catch (error) {

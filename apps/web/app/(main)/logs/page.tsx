@@ -11,9 +11,13 @@ import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } f
 import { Activity, Loader2 } from 'lucide-react';
 
 const STATUS_COLORS: Record<string, 'success' | 'destructive' | 'warning' | 'secondary'> = {
+  pending: 'warning',
+  processing: 'secondary',
   sent: 'success',
-  failed: 'destructive',
-  pending: 'warning'
+  delivered: 'success',
+  read: 'success',
+  skipped: 'warning',
+  failed: 'destructive'
 };
 
 const LogsPage = () => {
@@ -50,7 +54,10 @@ const LogsPage = () => {
                 <SelectItem value="pending">Pending</SelectItem>
                 <SelectItem value="processing">Processing</SelectItem>
                 <SelectItem value="sent">Sent</SelectItem>
+                <SelectItem value="delivered">Delivered</SelectItem>
+                <SelectItem value="read">Read</SelectItem>
                 <SelectItem value="failed">Failed</SelectItem>
+                <SelectItem value="skipped">Skipped</SelectItem>
               </SelectContent>
             </Select>
           </div>

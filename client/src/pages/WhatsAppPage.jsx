@@ -64,6 +64,16 @@ const WhatsAppPage = () => {
     }
   });
 
+  const clearSenderKeys = useMutation({
+    mutationFn: () => api.post('/api/whatsapp/clear-sender-keys'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+    }
+  });
+
   const addTarget = useMutation({
     mutationFn: (payload) => api.post('/api/targets', payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] })
@@ -109,6 +119,15 @@ const WhatsAppPage = () => {
             <RefreshCw className={`mr-2 h-4 w-4 ${hardRefresh.isPending ? 'animate-spin' : ''}`} />
             {hardRefresh.isPending ? 'Refreshing...' : 'Hard Refresh'}
           </Button>
+          <Button
+            variant="outline"
+            onClick={() => clearSenderKeys.mutate()}
+            disabled={clearSenderKeys.isPending}
+            title="Fix group send failures caused by sender-key corruption"
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${clearSenderKeys.isPending ? 'animate-spin' : ''}`} />
+            {clearSenderKeys.isPending ? 'Clearing Keys...' : 'Clear Sender Keys'}
+          </Button>
         </div>
       </div>
 
@@ -145,6 +164,12 @@ const WhatsAppPage = () => {
             {status?.lastError && (
               <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
                 <strong>Error:</strong> {status.lastError}
+              </div>
+            )}
+
+            {clearSenderKeys.isSuccess && (
+              <div className="rounded-lg bg-success/10 p-3 text-sm text-success">
+                Sender keys cleared. Reconnecting...
               </div>
             )}
             

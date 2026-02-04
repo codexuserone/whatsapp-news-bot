@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import Image from 'next/image';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { Target, WhatsAppChannel, WhatsAppGroup, WhatsAppStatus } from '@/lib/types';
@@ -210,9 +211,12 @@ const WhatsAppPage = () => {
                 </div>
             ) : qr?.qr ? (
               <div className="text-center space-y-3">
-                <img
+                <Image
                   src={qr.qr}
                   alt="WhatsApp QR Code"
+                  width={224}
+                  height={224}
+                  unoptimized
                   className="h-56 w-56 rounded-lg border bg-white p-2"
                 />
                 <p className="text-sm text-muted-foreground">Scan with WhatsApp on your phone</p>

@@ -6,6 +6,44 @@ import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } f
 import { Badge } from '../components/ui/badge';
 import { ClipboardList, ExternalLink, Loader2 } from 'lucide-react';
 
+const STATUS_VARIANTS = {
+  queued: 'warning',
+  sent: 'success',
+  failed: 'destructive',
+  not_queued: 'secondary'
+};
+
+const STATUS_LABELS = {
+  queued: 'Queued',
+  sent: 'Sent',
+  failed: 'Failed',
+  not_queued: 'Not queued'
+};
+
+const getDeliveryMeta = (item) => {
+  const status = item?.delivery_status || (item?.sent ? 'sent' : 'not_queued');
+  return {
+    status,
+    label: STATUS_LABELS[status] || 'Unknown'
+  };
+};
+
+const formatDeliverySummary = (delivery) => {
+  const data = delivery || {};
+  const pending = Number(data.pending || 0);
+  const processing = Number(data.processing || 0);
+  const sent = Number(data.sent || 0);
+  const failed = Number(data.failed || 0);
+  const skipped = Number(data.skipped || 0);
+  const queued = pending + processing;
+  const parts = [];
+  if (queued > 0) parts.push(`${queued} queued`);
+  if (sent > 0) parts.push(`${sent} sent`);
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (skipped > 0) parts.push(`${skipped} skipped`);
+  return parts.length ? parts.join(' · ') : 'No delivery logs';
+};
+
 const FeedItemsPage = () => {
   const { data: items = [], isLoading } = useQuery({
     queryKey: ['feed-items'],
@@ -40,45 +78,75 @@ const FeedItemsPage = () => {
                   <TableHeaderCell>Title</TableHeaderCell>
                   <TableHeaderCell className="hidden sm:table-cell">Feed</TableHeaderCell>
                   <TableHeaderCell className="hidden md:table-cell">Link</TableHeaderCell>
+                  <TableHeaderCell className="hidden md:table-cell">Image</TableHeaderCell>
                   <TableHeaderCell className="hidden lg:table-cell">Published</TableHeaderCell>
                   <TableHeaderCell>Status</TableHeaderCell>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell className="max-w-xs truncate font-medium" title={item.title}>
-                      {item.title || 'Untitled'}
-                    </TableCell>
-                    <TableCell className="hidden sm:table-cell">
-                      <Badge variant="secondary">{item.feed?.name || 'Unknown'}</Badge>
-                    </TableCell>
-                    <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
-                      {item.link ? (
-                        <a 
-                          href={item.link} 
-                          target="_blank" 
-                          rel="noopener noreferrer" 
-                          className="flex items-center gap-1 text-primary hover:underline"
-                        >
-                          <ExternalLink className="h-3 w-3" />
-                          Link
-                        </a>
-                      ) : '—'}
-                    </TableCell>
-                    <TableCell className="hidden text-muted-foreground lg:table-cell">
-                      {item.pub_date ? new Date(item.pub_date).toLocaleString() : '—'}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={item.sent ? 'success' : 'secondary'}>
-                        {item.sent ? 'Sent' : 'Pending'}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {items.map((item) => {
+                  const deliveryMeta = getDeliveryMeta(item);
+                  const summary = formatDeliverySummary(item.delivery);
+                  return (
+                    <TableRow key={item.id}>
+                      <TableCell className="max-w-xs truncate font-medium" title={item.title}>
+                        {item.title || 'Untitled'}
+                      </TableCell>
+                      <TableCell className="hidden sm:table-cell">
+                        <Badge variant="secondary">{item.feed?.name || 'Unknown'}</Badge>
+                      </TableCell>
+                      <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
+                        {item.link ? (
+                          <a 
+                            href={item.link} 
+                            target="_blank" 
+                            rel="noopener noreferrer" 
+                            className="flex items-center gap-1 text-primary hover:underline"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            Link
+                          </a>
+                        ) : '—'}
+                      </TableCell>
+                      <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
+                        {item.image_url ? (
+                          <a
+                            href={item.image_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2"
+                          >
+                            <img
+                              src={item.image_url}
+                              alt=""
+                              loading="lazy"
+                              referrerPolicy="no-referrer"
+                              className="h-10 w-10 shrink-0 rounded border bg-muted object-cover"
+                            />
+                            <span className="flex items-center gap-1 text-primary hover:underline">
+                              <ExternalLink className="h-3 w-3" />
+                              Image
+                            </span>
+                          </a>
+                        ) : (
+                          '—'
+                        )}
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground lg:table-cell">
+                        {item.pub_date ? new Date(item.pub_date).toLocaleString() : '—'}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={STATUS_VARIANTS[deliveryMeta.status] || 'secondary'}>
+                          {deliveryMeta.label}
+                        </Badge>
+                        <div className="text-xs text-muted-foreground mt-1">{summary}</div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
                 {items.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
                       No feed items yet. Add feeds and refresh them to see items here.
                     </TableCell>
                   </TableRow>

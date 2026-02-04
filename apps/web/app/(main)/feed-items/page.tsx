@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import Image from 'next/image';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { FeedItem } from '@/lib/types';
@@ -102,10 +103,22 @@ const FeedItemsPage = () => {
                           href={item.image_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="flex items-center gap-1 text-primary hover:underline"
+                          className="flex items-center gap-2"
                         >
-                          <ExternalLink className="h-3 w-3" />
-                          Image
+                          <span className="relative h-10 w-10 shrink-0 overflow-hidden rounded border bg-muted">
+                            <Image
+                              src={item.image_url}
+                              alt=""
+                              fill
+                              sizes="40px"
+                              className="object-cover"
+                              unoptimized
+                            />
+                          </span>
+                          <span className="flex items-center gap-1 text-primary hover:underline">
+                            <ExternalLink className="h-3 w-3" />
+                            Image
+                          </span>
                         </a>
                       ) : (
                         '—'

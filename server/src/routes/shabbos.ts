@@ -35,7 +35,7 @@ const shabbosRoutes = () => {
       const settings = await settingsService.getSettings();
       const loc = settings.shabbosMode?.location || DEFAULT_LOCATION;
       res.json({
-        enabled: settings.shabbosMode?.enabled ?? true,
+        enabled: settings.shabbosMode?.enabled ?? false,
         city: loc.city || 'New York',
         latitude: loc.latitude ?? 40.7128,
         longitude: loc.longitude ?? -74.006,

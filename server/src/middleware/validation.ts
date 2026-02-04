@@ -46,7 +46,8 @@ const schemas = {
   testMessage: z.object({
     jid: z.string().regex(JID_PATTERN),
     message: z.string().min(1).max(4096),
-    imageUrl: z.string().url().optional().nullable().transform(normalizeOptional)
+    imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+    confirm: z.boolean().optional()
   }),
 
   statusMessage: z

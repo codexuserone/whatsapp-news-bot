@@ -3,11 +3,20 @@ import type { AnyMessageContent, WASocket, proto } from '@whiskeysockets/baileys
 const { loadBaileys } = require('./baileys');
 const qrcode = require('qrcode');
 const logger = require('../utils/logger');
+const withTimeout = require('../utils/withTimeout');
+const { getErrorMessage } = require('../utils/errorUtils');
 const useSupabaseAuthState = require('./authStore');
 const { saveIncomingMessages } = require('../services/messageService');
 const { sendPendingForAllSchedules } = require('../services/queueService');
 
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error';
+
+type MessageStatusSnapshot = {
+  status: number | null;
+  statusLabel: string | null;
+  remoteJid: string | null;
+  updatedAtMs: number;
+};
 
 class WhatsAppClient {
   socket: WASocket | null;
@@ -35,6 +44,9 @@ class WhatsAppClient {
   waVersion: number[] | null;
   waVersionFetchedAtMs: number | null;
   recentSentMessages: Map<string, proto.IWebMessageInfo>;
+  recentMessageStatuses: Map<string, MessageStatusSnapshot>;
+  meJid: string | null;
+  meName: string | null;
 
   constructor() {
     this.socket = null;
@@ -56,6 +68,9 @@ class WhatsAppClient {
     this.waVersion = null;
     this.waVersionFetchedAtMs = null;
     this.recentSentMessages = new Map();
+    this.recentMessageStatuses = new Map();
+    this.meJid = null;
+    this.meName = null;
   }
 
   async init(): Promise<void> {
@@ -402,6 +417,14 @@ class WhatsAppClient {
           this.isAuthCorrupted = false;
           this.lastSenderKeyResetAt = null;
           this.lastKeyCacheResetAt = null;
+          try {
+            const socketUser = (socket as any)?.user;
+            this.meJid = socketUser?.id ? String(socketUser.id) : null;
+            this.meName = socketUser?.name ? String(socketUser.name) : null;
+          } catch {
+            this.meJid = null;
+            this.meName = null;
+          }
           logger.info('WhatsApp connected successfully');
           await authStore.updateStatus('connected', null);
           try {
@@ -417,6 +440,8 @@ class WhatsAppClient {
           const statusCode = disconnectError?.output?.statusCode;
           const reason = disconnectError?.output?.payload?.message || disconnectError?.message;
           this.status = 'disconnected';
+          this.meJid = null;
+          this.meName = null;
           if (reason?.includes('QR refs attempts ended')) {
             this.lastError = 'QR expired. Click Hard Refresh to generate a new QR code.';
           } else {
@@ -495,6 +520,37 @@ class WhatsAppClient {
           logger.error({ e }, 'Error saving incoming messages');
         }
       });
+
+      socket.ev.on('messages.update', (updates) => {
+        try {
+          const list = Array.isArray(updates) ? updates : [];
+          for (const entry of list as any[]) {
+            const id = entry?.key?.id;
+            if (!id) continue;
+            if (!entry?.key?.fromMe) continue;
+            const status = entry?.update?.status;
+            if (typeof status !== 'number') continue;
+
+            const statusLabel = null;
+            const snapshot: MessageStatusSnapshot = {
+              status,
+              statusLabel,
+              remoteJid: entry?.key?.remoteJid ? String(entry.key.remoteJid) : null,
+              updatedAtMs: Date.now()
+            };
+
+            this.recentMessageStatuses.set(String(id), snapshot);
+            if (this.recentMessageStatuses.size > 1000) {
+              const oldest = this.recentMessageStatuses.keys().next().value;
+              if (oldest) {
+                this.recentMessageStatuses.delete(oldest);
+              }
+            }
+          }
+        } catch (e) {
+          logger.warn({ e }, 'Failed to process messages.update');
+        }
+      });
     } catch (error) {
       this.isConnecting = false;
       logger.error({ error }, 'Error connecting to WhatsApp');
@@ -510,13 +566,147 @@ class WhatsAppClient {
     }
   }
 
-  getStatus(): { status: WhatsAppStatus; lastError: string | null; lastSeenAt: Date | null; hasQr: boolean } {
+  getStatus(): {
+    status: WhatsAppStatus;
+    lastError: string | null;
+    lastSeenAt: Date | null;
+    hasQr: boolean;
+    me: { jid: string | null; name: string | null };
+  } {
     return {
       status: this.status,
       lastError: this.lastError,
       lastSeenAt: this.lastSeenAt,
-      hasQr: Boolean(this.qrCode)
+      hasQr: Boolean(this.qrCode),
+      me: { jid: this.meJid, name: this.meName }
     };
+  }
+
+  getMe(): { jid: string | null; name: string | null } {
+    return { jid: this.meJid, name: this.meName };
+  }
+
+  async getGroupInfo(
+    jid: string,
+    timeoutMs = 15000
+  ): Promise<
+    | {
+        jid: string;
+        name: string;
+        size: number;
+        announce: boolean;
+        restrict: boolean;
+        ephemeralDuration: number | null;
+        participantCount: number;
+        me: { jid: string | null; isAdmin: boolean; admin: string | null };
+      }
+    | null
+  > {
+    const socket = this.socket as any;
+    if (!socket) return null;
+
+    try {
+      const meta = await withTimeout(socket.groupMetadata(jid), timeoutMs, 'Timed out fetching group metadata');
+      const participants = Array.isArray(meta?.participants) ? meta.participants : [];
+      const meJid = this.meJid || socket?.user?.id || null;
+      const meRow = meJid ? participants.find((p: any) => p?.id === meJid) : null;
+      const adminLevel = meRow?.admin ? String(meRow.admin) : null;
+      const isAdmin = Boolean(adminLevel);
+
+      return {
+        jid,
+        name: String(meta?.subject || jid),
+        size: Number(meta?.size || 0),
+        announce: Boolean(meta?.announce),
+        restrict: Boolean(meta?.restrict),
+        ephemeralDuration: typeof meta?.ephemeralDuration === 'number' ? meta.ephemeralDuration : null,
+        participantCount: participants.length,
+        me: { jid: meJid, isAdmin, admin: adminLevel }
+      };
+    } catch (error) {
+      logger.warn({ jid, error: getErrorMessage(error) }, 'Failed to load group metadata');
+      return null;
+    }
+  }
+
+  async waitForMessageStatus(
+    messageId: string,
+    minStatus: number,
+    timeoutMs = 30000
+  ): Promise<MessageStatusSnapshot | null> {
+    const socket = this.socket as any;
+    if (!socket) return null;
+
+    const cached = this.recentMessageStatuses.get(messageId);
+    if (cached && typeof cached.status === 'number' && cached.status >= minStatus) {
+      return cached;
+    }
+
+    return new Promise((resolve) => {
+      let handler: ((updates: any[]) => void) | null = null;
+      let settled = false;
+
+      const finish = (value: MessageStatusSnapshot | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        if (handler) {
+          socket.ev.off('messages.update', handler);
+        }
+        resolve(value);
+      };
+
+      const timeout = setTimeout(() => finish(null), timeoutMs);
+
+      handler = (updates: any[]) => {
+        const list = Array.isArray(updates) ? updates : [];
+        for (const entry of list) {
+          const id = entry?.key?.id;
+          if (!id || String(id) !== messageId) continue;
+          const status = entry?.update?.status;
+          if (typeof status !== 'number') continue;
+          if (status < minStatus) continue;
+
+          const statusLabel = null;
+          const snapshot: MessageStatusSnapshot = {
+            status,
+            statusLabel,
+            remoteJid: entry?.key?.remoteJid ? String(entry.key.remoteJid) : null,
+            updatedAtMs: Date.now()
+          };
+          this.recentMessageStatuses.set(messageId, snapshot);
+          finish(snapshot);
+          return;
+        }
+      };
+
+      socket.ev.on('messages.update', handler);
+    });
+  }
+
+  async confirmSend(
+    messageId: string,
+    options?: { upsertTimeoutMs?: number; ackTimeoutMs?: number }
+  ): Promise<{ ok: boolean; via: 'upsert' | 'ack' | 'none'; status?: number | null; statusLabel?: string | null }> {
+    const upsertTimeoutMs = Number(options?.upsertTimeoutMs ?? 5000);
+    const ackTimeoutMs = Number(options?.ackTimeoutMs ?? 15000);
+
+    try {
+      const observed = await this.waitForMessage(messageId, upsertTimeoutMs);
+      if (observed) {
+        return { ok: true, via: 'upsert' };
+      }
+    } catch {
+      // ignore
+    }
+
+    const minStatus = 1;
+    const acked = await this.waitForMessageStatus(messageId, minStatus, ackTimeoutMs);
+    if (acked) {
+      return { ok: true, via: 'ack', status: acked.status, statusLabel: acked.statusLabel };
+    }
+
+    return { ok: false, via: 'none' };
   }
 
   getQrCode(): string | null {
@@ -661,6 +851,9 @@ class WhatsAppClient {
 
     this.groupMetadataCache.clear();
     this.recentSentMessages.clear();
+    this.recentMessageStatuses.clear();
+    this.meJid = null;
+    this.meName = null;
 
     this.status = 'disconnected';
     this.qrCode = null;
@@ -692,6 +885,9 @@ class WhatsAppClient {
 
     this.groupMetadataCache.clear();
     this.recentSentMessages.clear();
+    this.recentMessageStatuses.clear();
+    this.meJid = null;
+    this.meName = null;
     
     // Reset state
     this.isConnecting = false;

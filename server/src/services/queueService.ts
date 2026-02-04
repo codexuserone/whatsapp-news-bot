@@ -45,6 +45,14 @@ type WhatsAppClient = {
   sendMessage: (jid: string, content: Record<string, unknown>, options?: Record<string, unknown>) => Promise<any>;
   sendStatusBroadcast: (content: Record<string, unknown>, options?: Record<string, unknown>) => Promise<any>;
   waitForMessage?: (messageId: string, timeoutMs?: number) => Promise<any>;
+  confirmSend?: (
+    messageId: string,
+    options?: { upsertTimeoutMs?: number; ackTimeoutMs?: number }
+  ) => Promise<{ ok: boolean; via: 'upsert' | 'ack' | 'none'; status?: number | null; statusLabel?: string | null }>;
+  getGroupInfo?: (
+    jid: string,
+    timeoutMs?: number
+  ) => Promise<{ announce: boolean; me: { isAdmin: boolean } } | null>;
 };
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
@@ -833,6 +841,38 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
 
       if (logsError) continue;
 
+      if (!logs || logs.length === 0) {
+        continue;
+      }
+
+      if (target.type === 'group' && whatsappClient.getGroupInfo) {
+        try {
+          const jid = normalizeTargetJid(target);
+          const info = await whatsappClient.getGroupInfo(jid);
+          if (info?.announce && !info?.me?.isAdmin) {
+            const reason = 'Group is admin-only (announce mode) and this WhatsApp account is not an admin';
+            const ids = (logs || []).map((l: { id?: string }) => l.id).filter(Boolean) as string[];
+            if (ids.length) {
+              await supabase
+                .from('message_logs')
+                .update({
+                  status: 'failed',
+                  processing_started_at: null,
+                  error_message: reason,
+                  media_url: null,
+                  media_type: null,
+                  media_sent: false,
+                  media_error: null
+                })
+                .in('id', ids);
+            }
+            continue;
+          }
+        } catch (error) {
+          logger.warn({ scheduleId, targetId: target.id, error }, 'Failed to check group send policy');
+        }
+      }
+
       for (const log of logs || []) {
         const { data: claimed, error: claimError } = await supabase
           .from('message_logs')
@@ -891,10 +931,20 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
           const response = sendResult?.response;
 
           const messageId = response?.key?.id;
-          if (whatsappClient.waitForMessage && messageId) {
-            const observed = await whatsappClient.waitForMessage(messageId, 15000);
-            if (!observed) {
-              throw new Error('Message send not confirmed (no local upsert)');
+          if (messageId) {
+            if (whatsappClient.confirmSend) {
+              const confirmation = await whatsappClient.confirmSend(messageId, {
+                upsertTimeoutMs: 5000,
+                ackTimeoutMs: 15000
+              });
+              if (!confirmation?.ok) {
+                throw new Error('Message send not confirmed (no upsert/ack)');
+              }
+            } else if (whatsappClient.waitForMessage) {
+              const observed = await whatsappClient.waitForMessage(messageId, 15000);
+              if (!observed) {
+                throw new Error('Message send not confirmed (no local upsert)');
+              }
             }
           }
            

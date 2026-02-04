@@ -134,6 +134,12 @@ const WhatsAppPage = () => {
                   {status?.lastSeenAt ? new Date(status.lastSeenAt).toLocaleString() : 'Never'}
                 </span>
               </div>
+              {status?.me?.jid && (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Connected As</span>
+                  <span className="font-medium font-mono text-xs">{status.me.jid}</span>
+                </div>
+              )}
             </div>
             
             {status?.lastError && (
@@ -240,7 +246,7 @@ const WhatsAppPage = () => {
             </div>
             <div className="flex items-center gap-4">
               <Button
-                onClick={() => sendTestMessage.mutate({ jid: testTarget, message: testMessage })}
+                onClick={() => sendTestMessage.mutate({ jid: testTarget, message: testMessage, confirm: true })}
                 disabled={sendTestMessage.isPending || !testTarget || !testMessage}
               >
                 {sendTestMessage.isPending ? (
@@ -251,7 +257,14 @@ const WhatsAppPage = () => {
                 Send Test
               </Button>
               {sendTestMessage.isSuccess && (
-                <span className="text-sm text-success">Message sent successfully!</span>
+                <span className="text-sm text-success">
+                  Sent{sendTestMessage.data?.messageId ? ` (${sendTestMessage.data.messageId})` : ''}
+                  {sendTestMessage.data?.confirmation
+                    ? sendTestMessage.data.confirmation.ok
+                      ? ` - Confirmed via ${sendTestMessage.data.confirmation.via}`
+                      : ' - Not confirmed'
+                    : ''}
+                </span>
               )}
               {sendTestMessage.isError && (
                 <span className="text-sm text-destructive">

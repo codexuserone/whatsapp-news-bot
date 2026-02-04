@@ -99,7 +99,7 @@ const whatsappRoutes = () => {
   // Send a test message
   router.post('/send-test', validate(schemas.testMessage), asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
-    const { jid, message, imageUrl } = req.body;
+    const { jid, message, imageUrl, confirm } = req.body;
 
     if (!jid || !message) {
       throw badRequest('jid and message are required');
@@ -136,7 +136,14 @@ const whatsappRoutes = () => {
       DEFAULT_SEND_TIMEOUT_MS,
       'Timed out sending test message'
     );
-    res.json({ ok: true, messageId: result?.key?.id });
+
+    const messageId = result?.key?.id;
+    let confirmation: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null = null;
+    if (confirm && messageId && whatsapp?.confirmSend) {
+      confirmation = await whatsapp.confirmSend(messageId, { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 });
+    }
+
+    res.json({ ok: true, messageId, confirmation });
   }));
 
   // Send to status broadcast

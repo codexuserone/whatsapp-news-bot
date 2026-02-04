@@ -933,10 +933,13 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
           const messageId = response?.key?.id;
           if (messageId) {
             if (whatsappClient.confirmSend) {
-              const confirmation = await whatsappClient.confirmSend(messageId, {
-                upsertTimeoutMs: 5000,
-                ackTimeoutMs: 15000
-              });
+              const isImage = sendResult?.media?.type === 'image' && Boolean(sendResult?.media?.sent);
+              const confirmation = await whatsappClient.confirmSend(
+                messageId,
+                isImage
+                  ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
+                  : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 }
+              );
               if (!confirmation?.ok) {
                 throw new Error('Message send not confirmed (no upsert/ack)');
               }

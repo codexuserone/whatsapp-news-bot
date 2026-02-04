@@ -140,7 +140,10 @@ const whatsappRoutes = () => {
     const messageId = result?.key?.id;
     let confirmation: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null = null;
     if (confirm && messageId && whatsapp?.confirmSend) {
-      confirmation = await whatsapp.confirmSend(messageId, { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 });
+      const timeouts = imageUrl
+        ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
+        : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 };
+      confirmation = await whatsapp.confirmSend(messageId, timeouts);
     }
 
     res.json({ ok: true, messageId, confirmation });

@@ -700,7 +700,7 @@ class WhatsAppClient {
       // ignore
     }
 
-    const minStatus = 1;
+    const minStatus = 0;
     const acked = await this.waitForMessageStatus(messageId, minStatus, ackTimeoutMs);
     if (acked) {
       return { ok: true, via: 'ack', status: acked.status, statusLabel: acked.statusLabel };

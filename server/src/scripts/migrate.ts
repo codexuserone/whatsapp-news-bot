@@ -143,6 +143,14 @@ const runMigrations = async () => {
         throw err;
       }
     }
+
+    try {
+      await client.query("NOTIFY pgrst, 'reload schema';");
+      process.stdout.write('Requested PostgREST schema reload.\n');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stdout.write(`Failed to notify PostgREST schema reload: ${message}\n`);
+    }
   } finally {
     await client.end();
   }

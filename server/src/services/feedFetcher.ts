@@ -354,6 +354,16 @@ const fetchJsonItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
       const url =
         getPath(item, (parseConfig?.linkPath as string) || 'link') || getPath(item, 'url');
       const guidRaw = getPath(item, 'id') || getPath(item, 'guid') || url;
+      const contentCandidate =
+        toRenderedTextValue(getPath(item, 'content.rendered')) ||
+        toRenderedTextValue(getPath(item, 'content')) ||
+        toRenderedTextValue(getPath(item, 'content_html')) ||
+        toRenderedTextValue(getPath(item, 'content_text'));
+      const descriptionCandidate =
+        toRenderedTextValue(getPath(item, (parseConfig?.descriptionPath as string) || 'description')) ||
+        toRenderedTextValue(getPath(item, 'excerpt.rendered')) ||
+        toRenderedTextValue(getPath(item, 'summary')) ||
+        contentCandidate;
       return {
         guid: toStringValue(guidRaw) || `${feed.url}-${Date.now()}-${Math.random()}`,
         title:
@@ -361,15 +371,8 @@ const fetchJsonItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
           toRenderedTextValue(getPath(item, 'title.rendered')) ||
           toRenderedTextValue(getPath(item, 'name')),
         url: removeUtm(String(url || '')),
-        description:
-          toRenderedTextValue(getPath(item, (parseConfig?.descriptionPath as string) || 'description')) ||
-          toRenderedTextValue(getPath(item, 'excerpt.rendered')) ||
-          toRenderedTextValue(getPath(item, 'summary')),
-        content:
-          toRenderedTextValue(getPath(item, 'content.rendered')) ||
-          toRenderedTextValue(getPath(item, 'content')) ||
-          toRenderedTextValue(getPath(item, 'content_html')) ||
-          toRenderedTextValue(getPath(item, 'content_text')),
+        description: descriptionCandidate,
+        content: contentCandidate,
         author:
           toStringValue(getPath(item, 'author')) || toStringValue(getPath(item, 'author.name')),
         imageUrl: pickFirstImageUrl(
@@ -476,7 +479,7 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
       guid: toStringValue(guidRaw) || `${feed.url}-${Date.now()}-${Math.random()}`,
       title: titleCandidate || descriptionCandidate || contentCandidate,
       url: removeUtm(String(url || '')),
-      description: descriptionCandidate,
+      description: descriptionCandidate || contentCandidate,
       content: contentCandidate,
       author: authorCandidate,
       imageUrl: imageCandidate,

@@ -77,7 +77,7 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
    npm run db:migrate
    ```
    The migration runner tracks applied files in the `schema_migrations` table.
-3. Alternatively, run the SQL files in `scripts/` (001-011) using the Supabase SQL editor.
+3. Alternatively, run the SQL files in `scripts/` (001-012) using the Supabase SQL editor.
 
 ## Render Deployment
 

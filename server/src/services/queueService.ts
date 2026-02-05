@@ -922,6 +922,28 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
       queueCursorAt = latestResult.cursorAt || null;
     }
 
+    // Persist the queue cursor even if we skip sending (e.g. WhatsApp disconnected or Shabbos).
+    // This avoids re-scanning the same feed items on every retry.
+    if (queueCursorAt) {
+      const { error: queueCursorError } = await supabase
+        .from('schedules')
+        .update({ last_queued_at: queueCursorAt })
+        .eq('id', scheduleId);
+      if (queueCursorError) {
+        const msg = String((queueCursorError as { message?: unknown })?.message || queueCursorError);
+        const missingQueueCursorColumn =
+          msg.toLowerCase().includes('last_queued_at') && msg.toLowerCase().includes('does not exist');
+        if (missingQueueCursorColumn) {
+          logger.warn(
+            { scheduleId, error: queueCursorError },
+            'Schedule queue cursor columns missing; run SQL migrations (scripts/012_schedule_queue_cursor.sql)'
+          );
+        } else {
+          logger.warn({ scheduleId, error: queueCursorError }, 'Failed to update schedule queue cursor');
+        }
+      }
+    }
+
     const shabbosStatus = await isCurrentlyShabbos();
     if (shabbosStatus.isShabbos) {
       logger.info({ scheduleId, reason: shabbosStatus.reason, endsAt: shabbosStatus.endsAt }, 

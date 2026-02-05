@@ -465,6 +465,21 @@ const resolveImageUrlForFeedItem = async (
     const scraped = await scrapeImageFromPage(link);
     const nowIso = new Date().toISOString();
     if (scraped) {
+      if (!isImageUrl(scraped)) {
+        feedItem.image_scraped_at = nowIso;
+        feedItem.image_scrape_error = 'Scraped URL is not an image (possibly video/audio)';
+        await maybeUpdateFeedItemImage(supabase, feedItem.id, {
+          image_scraped_at: nowIso,
+          image_scrape_error: feedItem.image_scrape_error
+        });
+        return {
+          url: null,
+          source: null,
+          scraped: true,
+          error: feedItem.image_scrape_error
+        };
+      }
+
       try {
         await assertSafeOutboundUrl(scraped);
       } catch (error) {

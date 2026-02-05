@@ -23,11 +23,22 @@ const scheduleRoutes = () => {
     runAsync('Scheduler refresh', () => initSchedulers(whatsappClient));
 
   const missingScheduleColumn = (error: unknown, column: string) => {
-    const message = String((error as { message?: unknown })?.message || error || '').toLowerCase();
+    const message = String((error as { message?: unknown; details?: unknown })?.message || (error as { details?: unknown })?.details || error || '').toLowerCase();
     const needle = String(column || '').toLowerCase();
     if (!needle) return false;
+
+    const codeRaw = (error as { code?: unknown })?.code;
+    const code = typeof codeRaw === 'string' ? codeRaw.toUpperCase() : '';
+    if (code === 'PGRST204' && message.includes(needle)) {
+      return true;
+    }
+    if (code === '42703' && message.includes(needle)) {
+      return true;
+    }
     return (
       message.includes(`could not find the '${needle}' column`) ||
+      message.includes(`could not find the \"${needle}\" column`) ||
+      message.includes(`could not find the ${needle} column`) ||
       (message.includes(needle) && message.includes('schema cache')) ||
       (message.includes(needle) && message.includes('does not exist'))
     );

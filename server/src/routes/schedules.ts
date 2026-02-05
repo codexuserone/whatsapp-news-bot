@@ -101,10 +101,9 @@ const scheduleRoutes = () => {
 
   router.post('/', validate(schemas.schedule), async (req: Request, res: Response) => {
     try {
-      const nowIso = new Date().toISOString();
+      // Do NOT set last_queued_at on creation - let first dispatch queue existing items
       const payload: Record<string, unknown> = {
-        ...req.body,
-        last_queued_at: nowIso
+        ...req.body
       };
 
       const supabase = getDb();

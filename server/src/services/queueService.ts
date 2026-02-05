@@ -1165,9 +1165,11 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
       queuedCount += sinceResult.queued;
       queueCursorAt = sinceResult.cursorAt;
     } else {
-      const latestResult = await queueLatestForSchedule(scheduleId, { schedule, targets });
-      queuedCount += latestResult.queued;
-      queueCursorAt = latestResult.cursorAt || null;
+      // New schedule with no cursor - queue ALL existing items by using epoch as "since"
+      const epochSchedule = { ...schedule, last_queued_at: '1970-01-01T00:00:00Z' };
+      const allResult = await queueSinceLastRunForSchedule(supabase, epochSchedule, targets);
+      queuedCount += allResult.queued;
+      queueCursorAt = allResult.cursorAt;
     }
 
     // Persist the queue cursor even if we skip sending (e.g. WhatsApp disconnected or Shabbos).

@@ -474,9 +474,10 @@ class WhatsAppClient {
 
           if (lease.supported && !lease.ok) {
             // Auto-takeover: force acquire the lease immediately
+            // This prevents users from having to manually click "Take Over"
             logger.warn({ holder: lease.ownerId }, 'Lease held, attempting auto-takeover...');
             this.status = 'connecting';
-            this.lastError = 'Taking over WhatsApp session...';
+            this.lastError = null; // Don't show confusing messages to users
             
             try {
               if (authStore.forceAcquireLease) {

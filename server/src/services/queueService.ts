@@ -133,6 +133,22 @@ const isHttpUrl = (value?: string | null) => {
   }
 };
 
+// Check if URL points to an image (not video/audio)
+const isImageUrl = (url: string): boolean => {
+  const lower = url.toLowerCase();
+  // Check file extensions
+  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp', '.svg'];
+  const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v'];
+  const audioExtensions = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.wma'];
+  
+  // Explicitly exclude videos and audio
+  if (videoExtensions.some(ext => lower.includes(ext))) return false;
+  if (audioExtensions.some(ext => lower.includes(ext))) return false;
+  
+  // Check if it's a known image extension
+  return imageExtensions.some(ext => lower.includes(ext));
+};
+
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (compatible; WhatsAppNewsBot/0.2; +https://example.invalid)';
 
@@ -259,7 +275,11 @@ const resolveImageUrlForFeedItem = async (
   }
 
   const existing = typeof feedItem.image_url === 'string' ? feedItem.image_url : null;
-  if (isHttpUrl(existing)) {
+  if (existing && isHttpUrl(existing)) {
+    // Skip video URLs - they can't be sent as images
+    if (!isImageUrl(existing)) {
+      return { url: null, source: null, scraped: false, error: 'URL is not an image (possibly video)' };
+    }
     try {
       await assertSafeOutboundUrl(existing);
       return { url: existing, source: feedItem.image_source || 'feed', scraped: false, error: null };

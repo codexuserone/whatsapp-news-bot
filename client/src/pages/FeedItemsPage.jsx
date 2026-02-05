@@ -14,10 +14,10 @@ const STATUS_VARIANTS = {
 };
 
 const STATUS_LABELS = {
-  queued: 'Queued',
+  queued: 'Pending',
   sent: 'Sent',
   failed: 'Failed',
-  not_queued: 'Not queued'
+  not_queued: 'New'
 };
 
 const getDeliveryMeta = (item) => {
@@ -28,20 +28,23 @@ const getDeliveryMeta = (item) => {
   };
 };
 
-const formatDeliverySummary = (delivery) => {
+const formatDeliverySummary = (delivery, deliveryStatus) => {
   const data = delivery || {};
-  const pending = Number(data.pending || 0);
-  const processing = Number(data.processing || 0);
   const sent = Number(data.sent || 0);
   const failed = Number(data.failed || 0);
-  const skipped = Number(data.skipped || 0);
-  const queued = pending + processing;
-  const parts = [];
-  if (queued > 0) parts.push(`${queued} queued`);
-  if (sent > 0) parts.push(`${sent} sent`);
-  if (failed > 0) parts.push(`${failed} failed`);
-  if (skipped > 0) parts.push(`${skipped} skipped`);
-  return parts.length ? parts.join(' · ') : 'No delivery logs';
+  
+  // Simple, clear messages
+  if (deliveryStatus === 'sent' && sent > 0) {
+    return `Delivered to ${sent} target${sent !== 1 ? 's' : ''}`;
+  }
+  if (failed > 0) {
+    return `Failed: ${failed}`;
+  }
+  if (deliveryStatus === 'sent') {
+    return 'Delivered';
+  }
+  // Don't show confusing "No delivery logs" - just leave blank for unqueued items
+  return '';
 };
 
 const FeedItemsPage = () => {
@@ -86,7 +89,7 @@ const FeedItemsPage = () => {
               <TableBody>
                 {items.map((item) => {
                   const deliveryMeta = getDeliveryMeta(item);
-                  const summary = formatDeliverySummary(item.delivery);
+                  const summary = formatDeliverySummary(item.delivery, deliveryMeta.status);
                   return (
                     <TableRow key={item.id}>
                       <TableCell className="max-w-xs truncate font-medium" title={item.title}>

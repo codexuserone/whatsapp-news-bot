@@ -89,6 +89,10 @@ const FeedsPage = () => {
     try {
       const result = await api.post('/api/feeds/test', { url });
       setTestResult(result);
+      // Auto-update URL if a different feed path was discovered
+      if (result.discoveredUrl && result.discoveredUrl !== url) {
+        form.setValue('url', result.discoveredUrl);
+      }
       if (!form.getValues('name') && result.feedTitle) {
         form.setValue('name', result.feedTitle);
       }

@@ -79,22 +79,105 @@ const feedsRoutes = () => {
     return supabase;
   };
 
-  // Test a feed URL without saving - returns detected fields and sample item
-  router.post('/test', async (req: Request, res: Response) => {
+  // Normalize URL: add https:// if missing, try common feed paths
+  const normalizeAndDiscoverFeedUrl = async (rawUrl: string): Promise<{ url: string; items: unknown[]; meta: unknown } | null> => {
+    let url = rawUrl.trim();
+    // Add protocol if missing
+    if (!url.match(/^https?:\/\//i)) {
+      url = 'https://' + url.replace(/^\/\//, '');
+    }
+    // Remove trailing slash for consistency
+    url = url.replace(/\/+$/, '');
+
+    // Common feed path suffixes to try
+    const suffixes = [
+      '', // Try as-is first
+      '/feed',
+      '/rss',
+      '/feed.xml',
+      '/rss.xml',
+      '/atom.xml',
+      '/wp-json/wp/v2/posts?per_page=10&_embed'
+    ];
+
+    for (const suffix of suffixes) {
+      const testUrl = url + suffix;
+      try {
+        await assertSafeOutboundUrl(testUrl);
+        const { items, meta } = await fetchFeedItemsWithMeta({ url: testUrl });
+        if (items && items.length > 0) {
+          return { url: testUrl, items, meta };
+        }
+      } catch {
+        // Try next suffix
+      }
+    }
+    return null;
+  };
+
+  // Discover feed URL - automatically finds the right feed path
+  router.post('/discover', async (req: Request, res: Response) => {
     try {
       const { url } = req.body;
       if (!url) {
         return res.status(400).json({ error: 'URL is required' });
       }
 
+      const result = await normalizeAndDiscoverFeedUrl(String(url));
+      if (!result) {
+        return res.status(404).json({ 
+          error: 'Could not find a valid feed. Tried common paths like /feed, /rss, /wp-json/wp/v2/posts',
+          triedUrl: url
+        });
+      }
+
+      const sampleItem = (result.items[0] || {}) as Record<string, unknown>;
+      res.json({
+        discoveredUrl: result.url,
+        feedTitle: `Feed from ${new URL(result.url).hostname}`,
+        itemCount: result.items.length,
+        sampleItem
+      });
+    } catch (error) {
+      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error, 'Failed to discover feed') });
+    }
+  });
+
+  // Test a feed URL without saving - returns detected fields and sample item
+  router.post('/test', async (req: Request, res: Response) => {
+    try {
+      let { url } = req.body;
+      if (!url) {
+        return res.status(400).json({ error: 'URL is required' });
+      }
+
+      // Auto-normalize URL
+      url = String(url).trim();
+      if (!url.match(/^https?:\/\//i)) {
+        url = 'https://' + url.replace(/^\/\//, '');
+      }
+
       try {
-        await assertSafeOutboundUrl(String(url));
+        await assertSafeOutboundUrl(url);
       } catch (error) {
         return res.status(400).json({ error: getErrorMessage(error, 'URL is not allowed') });
       }
 
-      // Create a temporary feed object for testing (cleaning is optional, uses defaults)
-      const { items, meta } = await fetchFeedItemsWithMeta({ url });
+      // Try the URL as-is first, then discover if it fails
+      let items, meta;
+      try {
+        const result = await fetchFeedItemsWithMeta({ url });
+        items = result.items;
+        meta = result.meta;
+      } catch {
+        // Try auto-discovery
+        const discovered = await normalizeAndDiscoverFeedUrl(url);
+        if (discovered) {
+          items = discovered.items;
+          meta = discovered.meta;
+          url = discovered.url;
+        }
+      }
 
       if (!items || items.length === 0) {
         return res.status(404).json({ error: 'No items found in feed. Check the URL or feed type.' });
@@ -117,6 +200,7 @@ const feedsRoutes = () => {
 
       res.json({
         feedTitle: sampleItem.title ? `Feed from ${new URL(url).hostname}` : 'Unknown Feed',
+        discoveredUrl: url,
         detectedType: meta?.detectedType || null,
         contentType: meta?.contentType || null,
         itemCount: items.length,

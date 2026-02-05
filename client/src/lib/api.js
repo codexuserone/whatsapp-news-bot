@@ -56,5 +56,11 @@ export const api = {
   delete: (path) =>
     fetchWithTimeout(`${getApiUrl()}${path}`, {
       method: 'DELETE'
+    }).then(handleResponse),
+  patch: (path, body) =>
+    fetchWithTimeout(`${getApiUrl()}${path}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: body !== undefined ? JSON.stringify(body) : undefined
     }).then(handleResponse)
 };

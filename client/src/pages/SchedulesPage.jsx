@@ -129,6 +129,12 @@ const SchedulesPage = () => {
     }
   });
 
+  const togglePause = useMutation({
+    mutationFn: ({ id, active }) => api.patch(`/api/schedules/${id}`, { active: !active }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['schedules'] }),
+    onError: (error) => alert(`Failed to toggle pause: ${error?.message || 'Unknown error'}`)
+  });
+
   const onSubmit = (values) => {
     saveSchedule.mutate({
       name: values.name,
@@ -189,19 +195,9 @@ const SchedulesPage = () => {
                 <Input id="name" {...form.register('name')} placeholder="Daily Morning Dispatch" />
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="cron">Cron Expression (optional)</Label>
-                  <Input id="cron" {...form.register('cron_expression')} placeholder="0 9 * * *" />
-                  <p className="text-xs text-muted-foreground">
-                    Leave empty to use delivery mode (immediate or batched)
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="timezone">Timezone</Label>
-                  <Input id="timezone" {...form.register('timezone')} placeholder="UTC" />
-                </div>
-              </div>
+              {/* Hidden cron field - use delivery mode instead */}
+              <input type="hidden" {...form.register('cron_expression')} />
+              <input type="hidden" {...form.register('timezone')} value="UTC" />
 
               <div className="space-y-2">
                 <Label htmlFor="delivery_mode">Delivery Mode</Label>
@@ -391,11 +387,9 @@ const SchedulesPage = () => {
                       Array.isArray(schedule.batch_times) && schedule.batch_times.length > 0
                         ? schedule.batch_times
                         : DEFAULT_BATCH_TIMES;
-                    const timingLabel = schedule.cron_expression
-                      ? schedule.cron_expression
-                      : mode === 'batched'
-                        ? `Batched (${batchTimes.join(', ')})`
-                        : 'Immediate';
+                    const timingLabel = mode === 'batched'
+                        ? `Batched at ${batchTimes.join(', ')}`
+                        : 'Sends immediately when new items arrive';
                     return (
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <div className="min-w-0 flex-1">
@@ -411,8 +405,13 @@ const SchedulesPage = () => {
                     );
                   })()}
                   <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="outline" onClick={() => setActive(schedule)}>
-                      <Pencil className="mr-1 h-3 w-3" /> Edit
+                    <Button 
+                      size="sm" 
+                      variant={schedule.active ? "secondary" : "default"}
+                      onClick={() => togglePause.mutate({ id: schedule.id, active: schedule.active })}
+                      disabled={togglePause.isPending}
+                    >
+                      {schedule.active ? 'Pause' : 'Resume'}
                     </Button>
                     <Button 
                       size="sm" 
@@ -420,7 +419,10 @@ const SchedulesPage = () => {
                       onClick={() => dispatchSchedule.mutate(schedule.id)}
                       disabled={dispatchSchedule.isPending}
                     >
-                      <Play className="mr-1 h-3 w-3" /> Dispatch
+                      <Play className="mr-1 h-3 w-3" /> Send Now
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setActive(schedule)}>
+                      <Pencil className="mr-1 h-3 w-3" /> Edit
                     </Button>
                     <Button 
                       size="sm" 

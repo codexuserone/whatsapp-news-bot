@@ -19,7 +19,8 @@ const schema = z.object({
   name: z.string().min(1),
   content: z.string().min(1),
   description: z.string().optional(),
-  active: z.boolean().default(true)
+  active: z.boolean().default(true),
+  send_images: z.boolean().default(true)
 });
 
 const applyTemplate = (content, data) => {
@@ -92,7 +93,7 @@ const TemplatesPage = () => {
 
   const form = useForm({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', content: '', description: '', active: true }
+    defaultValues: { name: '', content: '', description: '', active: true, send_images: true }
   });
 
   useEffect(() => {
@@ -101,7 +102,8 @@ const TemplatesPage = () => {
         name: active.name,
         content: active.content,
         description: active.description || '',
-        active: active.active ?? true
+        active: active.active ?? true,
+        send_images: active.send_images ?? true
       });
     }
   }, [active, form]);
@@ -135,7 +137,8 @@ const TemplatesPage = () => {
       name: values.name,
       content: values.content,
       description: values.description,
-      active: values.active
+      active: values.active,
+      send_images: values.send_images
     });
   };
 
@@ -243,13 +246,28 @@ const TemplatesPage = () => {
                   )}
                 />
                 
+                <Controller
+                  control={form.control}
+                  name="send_images"
+                  render={({ field }) => (
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="send_images"
+                        checked={field.value}
+                        onCheckedChange={(checked) => field.onChange(checked === true)}
+                      />
+                      <Label htmlFor="send_images" className="cursor-pointer">Send Images with Message</Label>
+                    </div>
+                  )}
+                />
+                
                 <div className="flex gap-2">
                   <Button type="submit" disabled={saveTemplate.isPending}>
                     {saveTemplate.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     {active ? 'Update Template' : 'Save Template'}
                   </Button>
                   {active && (
-                    <Button type="button" variant="outline" onClick={() => { setActive(null); form.reset(); }}>
+                    <Button type="button" variant="outline" onClick={() => { setActive(null); form.reset({ name: '', content: '', description: '', active: true, send_images: true }); }}>
                       Cancel
                     </Button>
                   )}

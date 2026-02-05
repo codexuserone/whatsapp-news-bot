@@ -3,6 +3,7 @@ const express = require('express');
 const swaggerUi = require('swagger-ui-express');
 const openapi = require('../openapi');
 const { testConnection } = require('../db/supabase');
+const { rateLimit, apiRateLimit, feedRateLimit } = require('../middleware/rateLimiter');
 const whatsappRoutes = require('./whatsapp');
 const feedsRoutes = require('./feeds');
 const templatesRoutes = require('./templates');
@@ -29,16 +30,18 @@ const registerRoutes = (app: Express) => {
   router.get('/api/openapi.json', (_req: Request, res: Response) => res.json(openapi));
   router.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openapi));
 
-  router.use('/api/whatsapp', whatsappRoutes());
-  router.use('/api/feeds', feedsRoutes());
-  router.use('/api/templates', templatesRoutes());
-  router.use('/api/targets', targetsRoutes());
-  router.use('/api/schedules', schedulesRoutes());
-  router.use('/api/settings', settingsRoutes());
-  router.use('/api/logs', logsRoutes());
-  router.use('/api/feed-items', feedItemsRoutes());
-  router.use('/api/shabbos', shabbosRoutes());
-  router.use('/api/queue', queueRoutes());
+  // Apply rate limiting to API routes
+  // Health and ready endpoints are intentionally excluded
+  router.use('/api/whatsapp', apiRateLimit, whatsappRoutes());
+  router.use('/api/feeds', feedRateLimit, feedsRoutes());
+  router.use('/api/templates', apiRateLimit, templatesRoutes());
+  router.use('/api/targets', apiRateLimit, targetsRoutes());
+  router.use('/api/schedules', apiRateLimit, schedulesRoutes());
+  router.use('/api/settings', apiRateLimit, settingsRoutes());
+  router.use('/api/logs', apiRateLimit, logsRoutes());
+  router.use('/api/feed-items', apiRateLimit, feedItemsRoutes());
+  router.use('/api/shabbos', apiRateLimit, shabbosRoutes());
+  router.use('/api/queue', apiRateLimit, queueRoutes());
 
   app.use(router);
 };

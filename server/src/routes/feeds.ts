@@ -97,12 +97,24 @@ const feedsRoutes = () => {
 
   router.post('/', validate(schemas.feed), async (req: Request, res: Response) => {
     try {
-      const { data: feed, error } = await getDb()
+      let { data: feed, error } = await getDb()
         .from('feeds')
         .insert(req.body)
         .select()
         .single();
-      
+
+      if (error) {
+        const msg = String((error as { message?: unknown })?.message || error);
+        const missingParseConfigColumn =
+          msg.toLowerCase().includes('parse_config') && msg.toLowerCase().includes('does not exist');
+        if (missingParseConfigColumn) {
+          const { parse_config: _parseConfig, ...fallbackBody } = req.body as Record<string, unknown>;
+          const retry = await getDb().from('feeds').insert(fallbackBody).select().single();
+          feed = retry.data;
+          error = retry.error;
+        }
+      }
+
       if (error) throw error;
       refreshSchedulers(req.app.locals.whatsapp);
       res.json(feed);
@@ -114,13 +126,30 @@ const feedsRoutes = () => {
 
   router.put('/:id', validate(schemas.feed), async (req: Request, res: Response) => {
     try {
-      const { data: feed, error } = await getDb()
+      let { data: feed, error } = await getDb()
         .from('feeds')
         .update(req.body)
         .eq('id', req.params.id)
         .select()
         .single();
-      
+
+      if (error) {
+        const msg = String((error as { message?: unknown })?.message || error);
+        const missingParseConfigColumn =
+          msg.toLowerCase().includes('parse_config') && msg.toLowerCase().includes('does not exist');
+        if (missingParseConfigColumn) {
+          const { parse_config: _parseConfig, ...fallbackBody } = req.body as Record<string, unknown>;
+          const retry = await getDb()
+            .from('feeds')
+            .update(fallbackBody)
+            .eq('id', req.params.id)
+            .select()
+            .single();
+          feed = retry.data;
+          error = retry.error;
+        }
+      }
+
       if (error) throw error;
       refreshSchedulers(req.app.locals.whatsapp);
       res.json(feed);

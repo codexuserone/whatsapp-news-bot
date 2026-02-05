@@ -17,7 +17,7 @@ services:
       - key: SUPABASE_DB_URL
         sync: false
       - key: RUN_MIGRATIONS_ON_START
-        value: "false"
+        value: "true"
       - key: MIGRATIONS_STRICT
         value: "false"
       - key: KEEP_ALIVE

@@ -24,7 +24,15 @@ const schemas = {
     url: z.string().url(),
     type: z.enum(['rss', 'atom', 'json']).optional(),
     active: z.boolean().default(true),
-    fetch_interval: z.number().int().min(60).default(300)
+    fetch_interval: z.number().int().min(60).default(300),
+    parse_config: z.record(z.unknown()).optional(),
+    cleaning: z
+      .object({
+        stripUtm: z.boolean().optional(),
+        decodeEntities: z.boolean().optional(),
+        removePhrases: z.array(z.string()).optional()
+      })
+      .optional()
   }),
 
   target: z.object({

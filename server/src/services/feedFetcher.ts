@@ -197,9 +197,17 @@ type FeedConfig = {
   url: string;
   type?: 'rss' | 'atom' | 'json';
   parseConfig?: Record<string, unknown>;
+  parse_config?: Record<string, unknown>;
   cleaning?: FeedCleaning;
   etag?: string | null;
   last_modified?: string | null;
+};
+
+const resolveParseConfig = (feed: FeedConfig): Record<string, unknown> => {
+  const raw =
+    (feed.parseConfig && typeof feed.parseConfig === 'object' ? feed.parseConfig : null) ||
+    (feed.parse_config && typeof feed.parse_config === 'object' ? feed.parse_config : null);
+  return raw || {};
 };
 
 type FeedItemResult = {
@@ -324,25 +332,26 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
 
 const fetchJsonItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
   try {
+    const parseConfig = resolveParseConfig(feed);
     const requestUrl = withWordPressEmbed(feed.url);
     await assertSafeOutboundUrl(requestUrl);
     const response = await axios.get(requestUrl, { timeout: 15000 });
     const json = response.data;
-    const itemsPath = (feed.parseConfig?.itemsPath as string) || 'items';
+    const itemsPath = (parseConfig?.itemsPath as string) || 'items';
     const items = extractJsonItemsArray(json, itemsPath);
     return (items as Record<string, unknown>[]).map((item) => {
       const url =
-        getPath(item, (feed.parseConfig?.linkPath as string) || 'link') || getPath(item, 'url');
+        getPath(item, (parseConfig?.linkPath as string) || 'link') || getPath(item, 'url');
       const guidRaw = getPath(item, 'id') || getPath(item, 'guid') || url;
       return {
         guid: toStringValue(guidRaw) || `${feed.url}-${Date.now()}-${Math.random()}`,
         title:
-          toRenderedTextValue(getPath(item, (feed.parseConfig?.titlePath as string) || 'title')) ||
+          toRenderedTextValue(getPath(item, (parseConfig?.titlePath as string) || 'title')) ||
           toRenderedTextValue(getPath(item, 'title.rendered')) ||
           toRenderedTextValue(getPath(item, 'name')),
         url: removeUtm(String(url || '')),
         description:
-          toRenderedTextValue(getPath(item, (feed.parseConfig?.descriptionPath as string) || 'description')) ||
+          toRenderedTextValue(getPath(item, (parseConfig?.descriptionPath as string) || 'description')) ||
           toRenderedTextValue(getPath(item, 'excerpt.rendered')) ||
           toRenderedTextValue(getPath(item, 'summary')),
         content:
@@ -353,7 +362,7 @@ const fetchJsonItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
         author:
           toStringValue(getPath(item, 'author')) || toStringValue(getPath(item, 'author.name')),
         imageUrl: pickFirstImageUrl(
-          toRenderedTextValue(getPath(item, (feed.parseConfig?.imagePath as string) || 'image')),
+          toRenderedTextValue(getPath(item, (parseConfig?.imagePath as string) || 'image')),
           toRenderedTextValue(getPath(item, 'image_url')),
           toRenderedTextValue(getPath(item, 'featured_image')),
           toRenderedTextValue(getPath(item, 'banner_image')),
@@ -377,6 +386,7 @@ const fetchJsonItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
 };
 
 const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedItemResult[]; meta: FetchMeta }> => {
+  const parseConfig = resolveParseConfig(feed);
   const requestUrl = withWordPressEmbed(feed.url);
   await assertSafeOutboundUrl(requestUrl);
   const headers: Record<string, string> = {};
@@ -404,11 +414,11 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
   }
 
   const json = response.data;
-  const itemsPath = (feed.parseConfig?.itemsPath as string) || 'items';
+  const itemsPath = (parseConfig?.itemsPath as string) || 'items';
   const items = extractJsonItemsArray(json, itemsPath);
   const mapped = (items as Record<string, unknown>[]).map((item) => {
     const rawUrl =
-      getPath(item, (feed.parseConfig?.linkPath as string) || 'link') ||
+      getPath(item, (parseConfig?.linkPath as string) || 'link') ||
       getPath(item, 'url') ||
       getPath(item, 'link') ||
       getPath(item, 'external_url') ||
@@ -419,7 +429,7 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
       toTextValue(getPath(rawUrl as Record<string, unknown>, 'href'));
     const guidRaw = getPath(item, 'id') || getPath(item, 'guid') || url;
     const imageCandidate = pickFirstImageUrl(
-      toRenderedTextValue(getPath(item, (feed.parseConfig?.imagePath as string) || 'image')),
+      toRenderedTextValue(getPath(item, (parseConfig?.imagePath as string) || 'image')),
       toRenderedTextValue(getPath(item, 'image_url')),
       toRenderedTextValue(getPath(item, 'imageUrl')),
       toRenderedTextValue(getPath(item, 'image.url')),
@@ -434,11 +444,11 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
       toRenderedTextValue(getPath(item, '_embedded.wp:featuredmedia[0].source_url'))
     );
     const titleCandidate =
-      toRenderedTextValue(getPath(item, (feed.parseConfig?.titlePath as string) || 'title')) ||
+      toRenderedTextValue(getPath(item, (parseConfig?.titlePath as string) || 'title')) ||
       toRenderedTextValue(getPath(item, 'title.rendered')) ||
       toRenderedTextValue(getPath(item, 'name'));
     const descriptionCandidate =
-      toRenderedTextValue(getPath(item, (feed.parseConfig?.descriptionPath as string) || 'description')) ||
+      toRenderedTextValue(getPath(item, (parseConfig?.descriptionPath as string) || 'description')) ||
       toRenderedTextValue(getPath(item, 'excerpt.rendered')) ||
       toRenderedTextValue(getPath(item, 'summary'));
     const contentCandidate =

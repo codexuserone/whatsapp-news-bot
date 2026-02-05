@@ -59,7 +59,12 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
     const nowIso = now.toISOString();
     const retentionDays = Number(settings.log_retention_days ?? settings.retentionDays ?? 14);
     const since = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
-    const { items, meta } = await fetchFeedItemsWithMeta(feed);
+    const { items, meta } = await fetchFeedItemsWithMeta({
+      ...feed,
+      parseConfig: (feed as unknown as { parseConfig?: Record<string, unknown>; parse_config?: Record<string, unknown> })
+        .parseConfig ||
+        (feed as unknown as { parse_config?: Record<string, unknown> }).parse_config
+    });
     const newItems: FeedItemRecord[] = [];
     const fetchedCount = Array.isArray(items) ? items.length : 0;
     let duplicateCount = 0;

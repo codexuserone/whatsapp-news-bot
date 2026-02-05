@@ -1,0 +1,2 @@
+ALTER TABLE feeds
+  ADD COLUMN IF NOT EXISTS parse_config JSONB;

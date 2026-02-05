@@ -1164,7 +1164,21 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
     if (queueCursorAt) {
       scheduleUpdates.last_queued_at = queueCursorAt;
     }
-    await supabase.from('schedules').update(scheduleUpdates).eq('id', scheduleId);
+    const { error: scheduleUpdateError } = await supabase.from('schedules').update(scheduleUpdates).eq('id', scheduleId);
+    if (scheduleUpdateError) {
+      const msg = String((scheduleUpdateError as { message?: unknown })?.message || scheduleUpdateError);
+      const missingQueueCursorColumn =
+        msg.toLowerCase().includes('last_queued_at') && msg.toLowerCase().includes('does not exist');
+      if (missingQueueCursorColumn) {
+        logger.warn(
+          { scheduleId, error: scheduleUpdateError },
+          'Schedule queue cursor columns missing; run SQL migrations (scripts/012_schedule_queue_cursor.sql)'
+        );
+        await supabase.from('schedules').update({ last_run_at: lastRunAt, next_run_at: nextRunAt }).eq('id', scheduleId);
+      } else {
+        logger.warn({ scheduleId, error: scheduleUpdateError }, 'Failed to update schedule run timestamps');
+      }
+    }
 
     logger.info({ scheduleId, sentCount }, 'Dispatch completed successfully');
     return { sent: sentCount, queued: queuedCount };

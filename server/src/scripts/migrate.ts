@@ -22,7 +22,42 @@ const loadEnv = () => {
   dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 };
 
-const getMigrationsDir = () => path.resolve(__dirname, '../../../scripts');
+const dirExists = async (value: string) => {
+  try {
+    const stat = await fs.stat(value);
+    return stat.isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+const resolveMigrationsDir = async () => {
+  const candidates = [
+    path.resolve(__dirname, '../../../scripts'),
+    path.resolve(__dirname, '../../../../scripts'),
+    path.resolve(process.cwd(), 'scripts'),
+    path.resolve(process.cwd(), '../scripts'),
+    path.resolve(process.cwd(), '../../scripts')
+  ];
+
+  for (const candidate of candidates) {
+    if (!(await dirExists(candidate))) continue;
+    try {
+      const files = await listSqlFiles(candidate);
+      if (files.length) return { dir: candidate, files };
+    } catch {
+      continue;
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (await dirExists(candidate)) {
+      return { dir: candidate, files: [] as string[] };
+    }
+  }
+
+  return { dir: candidates[0] || path.resolve(__dirname, '../../../scripts'), files: [] as string[] };
+};
 
 const listSqlFiles = async (dir: string) => {
   const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -48,14 +83,22 @@ const runMigrations = async () => {
   loadEnv();
 
   const databaseUrl = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
+  const databaseUrlSource = process.env.DATABASE_URL
+    ? 'DATABASE_URL'
+    : process.env.SUPABASE_DB_URL
+      ? 'SUPABASE_DB_URL'
+      : null;
   if (!databaseUrl) {
     throw new Error(
-      'Missing DATABASE_URL. Add it to server/.env (Postgres connection string) before running migrations.'
+      'Missing DATABASE_URL (or SUPABASE_DB_URL). Add a Postgres connection string to server/.env (local) or Render env vars (prod) before running migrations.'
     );
   }
 
-  const migrationsDir = getMigrationsDir();
-  const files = await listSqlFiles(migrationsDir);
+  const resolved = await resolveMigrationsDir();
+  const migrationsDir = resolved.dir;
+  process.stdout.write(`Using ${databaseUrlSource || 'DATABASE_URL'} for migrations.\n`);
+  process.stdout.write(`Scanning migrations in ${migrationsDir}\n`);
+  const files = resolved.files.length ? resolved.files : await listSqlFiles(migrationsDir);
   if (!files.length) {
     throw new Error(`No .sql files found in ${migrationsDir}`);
   }

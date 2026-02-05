@@ -21,7 +21,7 @@ services:
       - key: MIGRATIONS_STRICT
         value: "false"
       - key: KEEP_ALIVE
-        value: true
+        value: "true"
       - key: KEEP_ALIVE_URL
         sync: false
       - key: BASE_URL

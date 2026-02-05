@@ -57,6 +57,9 @@ const spec = {
     '/api/whatsapp/hard-refresh': {
       post: { tags: ['whatsapp'], summary: 'Hard refresh WhatsApp session', responses: { 200: { description: 'OK' } } }
     },
+    '/api/whatsapp/takeover': {
+      post: { tags: ['whatsapp'], summary: 'Take over WhatsApp session lease', responses: { 200: { description: 'OK' } } }
+    },
     '/api/whatsapp/send-test': {
       post: { tags: ['whatsapp'], summary: 'Send test message', responses: { 200: { description: 'OK' } } }
     },

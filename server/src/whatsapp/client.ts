@@ -43,9 +43,15 @@ class WhatsAppClient {
     releaseLease?: (
       ownerId: string
     ) => Promise<{ ok: boolean; supported: boolean; ownerId: string | null; expiresAt: string | null; reason?: string }>;
+    forceAcquireLease?: (
+      ownerId: string,
+      ttlMs?: number
+    ) => Promise<{ ok: boolean; supported: boolean; ownerId: string | null; expiresAt: string | null; reason?: string }>;
+    getLeaseInfo?: () => Promise<{ supported: boolean; ownerId: string | null; expiresAt: string | null }>;
   } | null;
   leaseSupported: boolean;
   leaseHeld: boolean;
+  leaseOwnerId: string | null;
   leaseExpiresAt: string | null;
   leaseRenewTimer: NodeJS.Timeout | null;
   reconnectAttempts: number;
@@ -75,6 +81,7 @@ class WhatsAppClient {
     this.authStore = null;
     this.leaseSupported = false;
     this.leaseHeld = false;
+    this.leaseOwnerId = null;
     this.leaseExpiresAt = null;
     this.leaseRenewTimer = null;
     this.reconnectAttempts = 0;
@@ -291,7 +298,8 @@ class WhatsAppClient {
     if (!this.leaseSupported || !this.leaseHeld) return;
     if (this.leaseRenewTimer) return;
 
-    const intervalMs = Math.max(10_000, Math.floor(Number(ttlMs) / 2));
+    // Renew frequently to reduce takeover delay during rolling deploys.
+    const intervalMs = Math.max(10_000, Math.floor(Number(ttlMs) / 3));
 
     const tick = async () => {
       const store = this.authStore;
@@ -301,6 +309,7 @@ class WhatsAppClient {
         if (!lease.supported) {
           this.leaseSupported = false;
           this.leaseHeld = false;
+          this.leaseOwnerId = null;
           this.leaseExpiresAt = null;
           this.stopLeaseRenewal();
           return;
@@ -308,6 +317,7 @@ class WhatsAppClient {
 
         this.leaseSupported = true;
         this.leaseHeld = Boolean(lease.ok);
+        this.leaseOwnerId = lease.ownerId;
         this.leaseExpiresAt = lease.expiresAt;
 
         if (!lease.ok) {
@@ -347,6 +357,63 @@ class WhatsAppClient {
       clearInterval(this.leaseRenewTimer);
       this.leaseRenewTimer = null;
     }
+  }
+
+  async takeoverLease(ttlMs = 90_000): Promise<{
+    ok: boolean;
+    supported: boolean;
+    ownerId: string | null;
+    expiresAt: string | null;
+    reason?: string;
+  }> {
+    const store = this.authStore;
+    if (!store?.forceAcquireLease) {
+      return { ok: false, supported: false, ownerId: null, expiresAt: null, reason: 'unsupported' };
+    }
+
+    const lease = await store.forceAcquireLease(this.instanceId, ttlMs);
+    this.leaseSupported = lease.supported;
+    this.leaseHeld = Boolean(lease.ok);
+    this.leaseOwnerId = lease.ownerId;
+    this.leaseExpiresAt = lease.expiresAt;
+
+    if (!lease.supported) {
+      return lease;
+    }
+
+    if (!lease.ok) {
+      this.status = 'conflict';
+      const holder = lease.ownerId || 'unknown';
+      const until = lease.expiresAt || 'unknown';
+      this.lastError = `Failed to take over lease (held by ${holder} until ${until}).`;
+      if (store.updateStatus) {
+        await store.updateStatus('conflict');
+      }
+      return lease;
+    }
+
+    // Close current socket and reconnect as lease holder.
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    this.stopLeaseRenewal();
+    this.startLeaseRenewal(ttlMs);
+
+    if (this.socket) {
+      try {
+        this.cleanupSocket();
+        this.socket.end(new Error('Lease takeover'));
+      } catch {
+        // ignore
+      }
+      this.socket = null;
+    }
+
+    this.isConnecting = false;
+    await this.connect();
+    return lease;
   }
 
   scheduleReconnect(delay: number): void {
@@ -400,12 +467,14 @@ class WhatsAppClient {
           const lease = await authStore.acquireLease(this.instanceId, 90_000);
           this.leaseSupported = lease.supported;
           this.leaseHeld = lease.ok;
+          this.leaseOwnerId = lease.ownerId;
           this.leaseExpiresAt = lease.expiresAt;
 
           if (lease.supported && !lease.ok) {
             this.status = 'conflict';
-            this.lastError =
-              'Another bot instance is active (lease held). Stop the other instance or wait ~90s, then retry.';
+            const holder = lease.ownerId || 'unknown';
+            const until = lease.expiresAt || 'unknown';
+            this.lastError = `Another bot instance is active (lease held by ${holder} until ${until}).`;
             if (authStore.updateStatus) {
               await authStore.updateStatus('conflict');
             }
@@ -691,7 +760,7 @@ class WhatsAppClient {
     hasQr: boolean;
     me: { jid: string | null; name: string | null };
     instanceId: string;
-    lease: { supported: boolean; held: boolean; expiresAt: string | null };
+    lease: { supported: boolean; held: boolean; ownerId: string | null; expiresAt: string | null };
   } {
     return {
       status: this.status,
@@ -700,7 +769,12 @@ class WhatsAppClient {
       hasQr: Boolean(this.qrCode),
       me: { jid: this.meJid, name: this.meName },
       instanceId: this.instanceId,
-      lease: { supported: this.leaseSupported, held: this.leaseHeld, expiresAt: this.leaseExpiresAt }
+      lease: {
+        supported: this.leaseSupported,
+        held: this.leaseHeld,
+        ownerId: this.leaseOwnerId,
+        expiresAt: this.leaseExpiresAt
+      }
     };
   }
 
@@ -1014,6 +1088,7 @@ class WhatsAppClient {
       }
     }
     this.leaseHeld = false;
+    this.leaseOwnerId = null;
     this.leaseExpiresAt = null;
 
     if (this.socket) {

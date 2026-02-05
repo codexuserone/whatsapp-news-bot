@@ -83,6 +83,16 @@ const whatsappRoutes = () => {
     res.json({ ok: true });
   }));
 
+  // Force this instance to take over the WhatsApp lease (for recovery after deploy conflicts)
+  router.post('/takeover', asyncHandler(async (req: Request, res: Response) => {
+    const whatsapp = req.app.locals.whatsapp;
+    if (!whatsapp || typeof whatsapp.takeoverLease !== 'function') {
+      throw badRequest('WhatsApp client not available');
+    }
+    const lease = await whatsapp.takeoverLease();
+    res.json({ ok: true, lease });
+  }));
+
   router.post('/clear-sender-keys', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
     if (!whatsapp || typeof whatsapp.clearSenderKeys !== 'function') {

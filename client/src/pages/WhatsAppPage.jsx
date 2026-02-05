@@ -74,6 +74,16 @@ const WhatsAppPage = () => {
     }
   });
 
+  const takeover = useMutation({
+    mutationFn: () => api.post('/api/whatsapp/takeover'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+    }
+  });
+
   const addTarget = useMutation({
     mutationFn: (payload) => api.post('/api/targets', payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] })
@@ -88,6 +98,7 @@ const WhatsAppPage = () => {
 
   const isConnected = status?.status === 'connected';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
+  const isConflict = status?.status === 'conflict';
   const existingPhones = new Set(existingTargets.map((t) => t.phone_number));
   const activeTargets = existingTargets.filter((target) => target.active);
 
@@ -128,6 +139,18 @@ const WhatsAppPage = () => {
             <RefreshCw className={`mr-2 h-4 w-4 ${clearSenderKeys.isPending ? 'animate-spin' : ''}`} />
             {clearSenderKeys.isPending ? 'Clearing Keys...' : 'Clear Sender Keys'}
           </Button>
+
+          {isConflict && status?.lease?.supported && (
+            <Button
+              variant="destructive"
+              onClick={() => takeover.mutate()}
+              disabled={takeover.isPending}
+              title="If a previous deploy is holding the session, take it over"
+            >
+              <RefreshCw className={`mr-2 h-4 w-4 ${takeover.isPending ? 'animate-spin' : ''}`} />
+              {takeover.isPending ? 'Taking Over...' : 'Take Over Session'}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -147,6 +170,16 @@ const WhatsAppPage = () => {
                 <span className="text-muted-foreground">Status</span>
                 <span className="font-medium">{status?.status || 'Unknown'}</span>
               </div>
+              {status?.lease?.supported && (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Lease</span>
+                  <span className="font-medium font-mono text-xs">
+                    {status.lease.held
+                      ? `held (this instance)`
+                      : `held by ${status.lease.ownerId || 'unknown'}${status.lease.expiresAt ? ` until ${new Date(status.lease.expiresAt).toLocaleTimeString()}` : ''}`}
+                  </span>
+                </div>
+              )}
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Last Connected</span>
                 <span className="font-medium">
@@ -164,6 +197,12 @@ const WhatsAppPage = () => {
             {status?.lastError && (
               <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
                 <strong>Error:</strong> {status.lastError}
+              </div>
+            )}
+
+            {takeover.isSuccess && (
+              <div className="rounded-lg bg-success/10 p-3 text-sm text-success">
+                Lease takeover requested. Reconnecting...
               </div>
             )}
 

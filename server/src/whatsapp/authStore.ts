@@ -12,6 +12,12 @@ type LeaseResult = {
   reason?: string;
 };
 
+type LeaseInfo = {
+  supported: boolean;
+  ownerId: string | null;
+  expiresAt: string | null;
+};
+
 type AuthStore = {
   state: {
     creds: AuthData;
@@ -27,6 +33,8 @@ type AuthStore = {
   acquireLease: (ownerId: string, ttlMs?: number) => Promise<LeaseResult>;
   renewLease: (ownerId: string, ttlMs?: number) => Promise<LeaseResult>;
   releaseLease: (ownerId: string) => Promise<LeaseResult>;
+  forceAcquireLease: (ownerId: string, ttlMs?: number) => Promise<LeaseResult>;
+  getLeaseInfo: () => Promise<LeaseInfo>;
 };
 
 const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<AuthStore> => {
@@ -181,7 +189,9 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
       updateStatus: async () => {},
       acquireLease: async () => ({ ok: true, supported: false, ownerId: null, expiresAt: null }),
       renewLease: async () => ({ ok: true, supported: false, ownerId: null, expiresAt: null }),
-      releaseLease: async () => ({ ok: true, supported: false, ownerId: null, expiresAt: null })
+      releaseLease: async () => ({ ok: true, supported: false, ownerId: null, expiresAt: null }),
+      forceAcquireLease: async () => ({ ok: true, supported: false, ownerId: null, expiresAt: null }),
+      getLeaseInfo: async () => ({ supported: false, ownerId: null, expiresAt: null })
     };
   }
 
@@ -252,6 +262,25 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
   // Lease helpers (avoid WhatsApp conflicts across overlapping deploys/instances).
   let leaseSupported: boolean | null = null;
 
+  const getCurrentLeaseRow = async (): Promise<{ ownerId: string | null; expiresAt: string | null } | null> => {
+    try {
+      const { data, error } = await supabase
+        .from('auth_state')
+        .select('lease_owner,lease_expires_at')
+        .eq('session_id', sessionId)
+        .limit(1);
+      if (error) return null;
+      const row = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
+      if (!row) return { ownerId: null, expiresAt: null };
+      return {
+        ownerId: row.lease_owner ? String(row.lease_owner) : null,
+        expiresAt: row.lease_expires_at ? String(row.lease_expires_at) : null
+      };
+    } catch {
+      return null;
+    }
+  };
+
   const isMissingLeaseColumn = (supabaseError: unknown) => {
     const msg = String((supabaseError as { message?: unknown })?.message || supabaseError || '').toLowerCase();
     if (!msg) return false;
@@ -291,13 +320,29 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
 
     leaseSupported = true;
     const row = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
-    const currentOwner = row?.lease_owner ? String(row.lease_owner) : null;
-    const currentExpiry = row?.lease_expires_at ? String(row.lease_expires_at) : expiresAt;
+    let currentOwner = row?.lease_owner ? String(row.lease_owner) : null;
+    let currentExpiry = row?.lease_expires_at ? String(row.lease_expires_at) : null;
     const ok = currentOwner === ownerId;
     if (ok) {
-      return { ok: true, supported: true, ownerId: currentOwner, expiresAt: currentExpiry };
+      return { ok: true, supported: true, ownerId: currentOwner, expiresAt: currentExpiry || expiresAt };
     }
-    return { ok: false, supported: true, ownerId: currentOwner, expiresAt: currentExpiry, reason: 'lease_held' };
+
+    // If we didn't update anything, fetch the current lease holder for better diagnostics.
+    if (!currentOwner || !currentExpiry) {
+      const current = await getCurrentLeaseRow();
+      if (current) {
+        currentOwner = current.ownerId;
+        currentExpiry = current.expiresAt;
+      }
+    }
+
+    return {
+      ok: false,
+      supported: true,
+      ownerId: currentOwner,
+      expiresAt: currentExpiry,
+      reason: 'lease_held'
+    };
   };
 
   const renewLease = async (ownerId: string, ttlMs = 90_000): Promise<LeaseResult> => {
@@ -333,7 +378,60 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     if (ok) {
       return { ok: true, supported: true, ownerId, expiresAt };
     }
-    return { ok: false, supported: true, ownerId, expiresAt, reason: 'lost' };
+
+    const current = await getCurrentLeaseRow();
+    return {
+      ok: false,
+      supported: true,
+      ownerId: current?.ownerId ?? ownerId,
+      expiresAt: current?.expiresAt ?? expiresAt,
+      reason: 'lost'
+    };
+  };
+
+  const forceAcquireLease = async (ownerId: string, ttlMs = 90_000): Promise<LeaseResult> => {
+    if (leaseSupported === false) {
+      return { ok: true, supported: false, ownerId: null, expiresAt: null };
+    }
+
+    const expiresAt = new Date(Date.now() + Math.max(10_000, Number(ttlMs) || 0)).toISOString();
+    const { data, error: leaseError } = await supabase
+      .from('auth_state')
+      .update({ lease_owner: ownerId, lease_expires_at: expiresAt })
+      .eq('session_id', sessionId)
+      .select('lease_owner,lease_expires_at');
+
+    if (leaseError) {
+      if (isMissingLeaseColumn(leaseError)) {
+        leaseSupported = false;
+        return { ok: true, supported: false, ownerId: null, expiresAt: null };
+      }
+      leaseSupported = true;
+      return {
+        ok: false,
+        supported: true,
+        ownerId: null,
+        expiresAt: null,
+        reason: String((leaseError as { message?: unknown })?.message || leaseError)
+      };
+    }
+
+    leaseSupported = true;
+    const row = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
+    const currentOwner = row?.lease_owner ? String(row.lease_owner) : ownerId;
+    const currentExpiry = row?.lease_expires_at ? String(row.lease_expires_at) : expiresAt;
+    return { ok: currentOwner === ownerId, supported: true, ownerId: currentOwner, expiresAt: currentExpiry };
+  };
+
+  const getLeaseInfo = async (): Promise<LeaseInfo> => {
+    if (leaseSupported === false) {
+      return { supported: false, ownerId: null, expiresAt: null };
+    }
+    const current = await getCurrentLeaseRow();
+    if (!current) {
+      return { supported: Boolean(leaseSupported), ownerId: null, expiresAt: null };
+    }
+    return { supported: Boolean(leaseSupported ?? true), ownerId: current.ownerId, expiresAt: current.expiresAt };
   };
 
   const releaseLease = async (ownerId: string): Promise<LeaseResult> => {
@@ -482,7 +580,9 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     },
     acquireLease,
     renewLease,
-    releaseLease
+    releaseLease,
+    forceAcquireLease,
+    getLeaseInfo
   };
 };
 

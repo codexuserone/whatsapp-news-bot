@@ -113,10 +113,13 @@ const feedsRoutes = () => {
             msgLower.includes("could not find") ||
             msgLower.includes('unknown field'));
         if (missingParseConfigColumn) {
-          const { parse_config: _parseConfig, ...fallbackBody } = req.body as Record<string, unknown>;
-          const retry = await getDb().from('feeds').insert(fallbackBody).select().single();
-          feed = retry.data;
-          error = retry.error;
+          const body = req.body as Record<string, unknown>;
+          if (body.parse_config !== null && body.parse_config !== undefined) {
+            return res.status(400).json({
+              error:
+                "Database schema does not support 'feeds.parse_config' yet. Apply migration scripts/013_feed_parse_config.sql (or set SUPABASE_DB_URL + RUN_MIGRATIONS_ON_START on Render) and retry."
+            });
+          }
         }
       }
 
@@ -148,15 +151,13 @@ const feedsRoutes = () => {
             msgLower.includes("could not find") ||
             msgLower.includes('unknown field'));
         if (missingParseConfigColumn) {
-          const { parse_config: _parseConfig, ...fallbackBody } = req.body as Record<string, unknown>;
-          const retry = await getDb()
-            .from('feeds')
-            .update(fallbackBody)
-            .eq('id', req.params.id)
-            .select()
-            .single();
-          feed = retry.data;
-          error = retry.error;
+          const body = req.body as Record<string, unknown>;
+          if (body.parse_config !== null && body.parse_config !== undefined) {
+            return res.status(400).json({
+              error:
+                "Database schema does not support 'feeds.parse_config' yet. Apply migration scripts/013_feed_parse_config.sql (or set SUPABASE_DB_URL + RUN_MIGRATIONS_ON_START on Render) and retry."
+            });
+          }
         }
       }
 

@@ -38,9 +38,19 @@ const applyTemplate = (content: string, data: Record<string, unknown>) => {
   });
 };
 
+const escapeHtml = (value: string) => {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
 const formatWhatsAppMarkdown = (text: string) => {
   if (!text) return '';
-  return text
+  const safe = escapeHtml(text);
+  return safe
     .replace(/\*(.*?)\*/g, '<strong>$1</strong>')
     .replace(/_(.*?)_/g, '<em>$1</em>')
     .replace(/~(.*?)~/g, '<del>$1</del>')

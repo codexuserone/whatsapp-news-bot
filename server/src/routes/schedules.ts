@@ -174,6 +174,35 @@ const scheduleRoutes = () => {
     }
   });
 
+  // PATCH for partial updates (e.g., toggling active status)
+  router.patch('/:id', async (req: Request, res: Response) => {
+    try {
+      const supabase = getDb();
+      const allowedFields = ['active', 'name', 'timezone', 'cron_expression', 'delivery_mode', 'batch_times'];
+      const updates: Record<string, unknown> = {};
+      for (const field of allowedFields) {
+        if (field in req.body) {
+          updates[field] = req.body[field];
+        }
+      }
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: 'No valid fields to update' });
+      }
+      const { data, error } = await supabase
+        .from('schedules')
+        .update(updates)
+        .eq('id', req.params.id)
+        .select()
+        .single();
+      if (error) throw error;
+      refreshSchedulers(req.app.locals.whatsapp);
+      res.json(data);
+    } catch (error) {
+      console.error('Error patching schedule:', error);
+      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+    }
+  });
+
   router.delete('/:id', async (req: Request, res: Response) => {
     try {
       const { error } = await getDb()

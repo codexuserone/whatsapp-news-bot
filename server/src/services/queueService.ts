@@ -566,15 +566,42 @@ const normalizeTargetJid = (target: Target) => {
   return `${phoneDigits}@s.whatsapp.net`;
 };
 
+const sanitizeText = (text: string | null | undefined): string => {
+  if (!text) return '';
+  // Fix common encoding issues - replace problematic characters with safe equivalents
+  return String(text)
+    .replace(/[\u0080-\u009F]/g, '') // Remove C1 control characters
+    .replace(/\uFFFD/g, '') // Remove replacement characters (question mark boxes)
+    .replace(/â€™/g, "'") // Curly apostrophe
+    .replace(/â€œ/g, '"') // Left double quote
+    .replace(/â€/g, '"') // Right double quote
+    .replace(/â€"/g, '-') // Em dash
+    .replace(/â€"/g, '-') // En dash
+    .replace(/Ã©/g, 'é') // é
+    .replace(/Ã¨/g, 'è') // è
+    .replace(/Ã´/g, 'ô') // ô
+    .replace(/Ã®/g, 'î') // î
+    .replace(/Ã§/g, 'ç') // ç
+    .replace(/Ã /g, 'à') // à
+    .replace(/Ã¢/g, 'â') // â
+    .replace(/Ã«/g, 'ë') // ë
+    .replace(/Ã¯/g, 'ï') // ï
+    .replace(/Ã¼/g, 'ü') // ü
+    .replace(/Ã¶/g, 'ö') // ö
+    .replace(/Ã¤/g, 'ä') // ä
+    .replace(/Ã±/g, 'ñ') // ñ
+    .trim();
+};
+
 const buildMessageData = (feedItem: FeedItem) => ({
   id: feedItem.id,
   guid: (feedItem as unknown as { guid?: string }).guid,
-  title: feedItem.title,
+  title: sanitizeText(feedItem.title),
   url: feedItem.link,
   link: feedItem.link,
-  description: feedItem.description || feedItem.content,
-  content: feedItem.content || feedItem.description,
-  author: feedItem.author,
+  description: sanitizeText(feedItem.description || feedItem.content),
+  content: sanitizeText(feedItem.content || feedItem.description),
+  author: sanitizeText(feedItem.author),
   image_url: feedItem.image_url,
   imageUrl: feedItem.image_url,
   normalized_url: (feedItem as unknown as { normalized_url?: string }).normalized_url,
@@ -1165,11 +1192,12 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
       queuedCount += sinceResult.queued;
       queueCursorAt = sinceResult.cursorAt;
     } else {
-      // New schedule with no cursor - queue ALL existing items by using epoch as "since"
-      const epochSchedule = { ...schedule, last_queued_at: '1970-01-01T00:00:00Z' };
-      const allResult = await queueSinceLastRunForSchedule(supabase, epochSchedule, targets);
-      queuedCount += allResult.queued;
-      queueCursorAt = allResult.cursorAt;
+      // New schedule with no cursor - queue only items from last 48 hours (not all historical items)
+      const since48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+      const recentSchedule = { ...schedule, last_queued_at: since48h };
+      const recentResult = await queueSinceLastRunForSchedule(supabase, recentSchedule, targets);
+      queuedCount += recentResult.queued;
+      queueCursorAt = recentResult.cursorAt;
     }
 
     // Persist the queue cursor even if we skip sending (e.g. WhatsApp disconnected or Shabbos).

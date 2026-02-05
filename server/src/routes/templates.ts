@@ -98,14 +98,19 @@ const templateRoutes = () => {
   });
 
   // Get available variables for templates based on feed items
-  router.get('/available-variables', async (_req: Request, res: Response) => {
+  router.get('/available-variables', async (req: Request, res: Response) => {
     try {
+      const feedId = typeof req.query.feed_id === 'string' ? req.query.feed_id : null;
       // Get recent feed items to extract available fields
-      const { data: items, error } = await getDb()
+      let query = getDb()
         .from('feed_items')
         .select('*')
         .order('created_at', { ascending: false })
         .limit(20);
+      if (feedId) {
+        query = query.eq('feed_id', feedId);
+      }
+      const { data: items, error } = await query;
       
       if (error) throw error;
       
@@ -125,40 +130,14 @@ const templateRoutes = () => {
       ];
       
       const additionalFields = new Set<string>();
-      const nestedRawFields = new Set<string>();
-
-      const addNested = (value: unknown, path: string, depth: number) => {
-        if (!path) return;
-        if (depth <= 0) return;
-        if (value === null || value === undefined) return;
-
-        if (typeof value !== 'object') {
-          nestedRawFields.add(path);
-          return;
-        }
-
-        nestedRawFields.add(path);
-        if (Array.isArray(value)) {
-          for (let i = 0; i < Math.min(value.length, 3); i++) {
-            addNested(value[i], `${path}[${i}]`, depth - 1);
-          }
-          return;
-        }
-
-        const entries = Object.entries(value as Record<string, unknown>);
-        for (const [key, child] of entries) {
-          addNested(child, `${path}.${key}`, depth - 1);
-        }
-      };
+      const internalKeys = new Set(['normalizedUrl', 'normalizedTitle', 'hash']);
 
       items.forEach((item: Record<string, unknown>) => {
         if (item.raw_data && typeof item.raw_data === 'object') {
           const raw = item.raw_data as Record<string, unknown>;
-          addNested(raw, 'raw_data', 4);
-          addNested(raw, 'raw', 4);
-
           Object.entries(raw).forEach(([key, value]) => {
             if (standardFields.find((f) => f.name === key)) return;
+            if (internalKeys.has(key)) return;
             if (value == null) return;
             if (typeof value === 'object') return;
             additionalFields.add(key);
@@ -171,10 +150,6 @@ const templateRoutes = () => {
         ...Array.from(additionalFields).map(name => ({ 
           name, 
           description: 'Custom field from feed' 
-        })),
-        ...Array.from(nestedRawFields).map((name) => ({
-          name,
-          description: 'Nested raw_data field from feed'
         }))
       ];
       

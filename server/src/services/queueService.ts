@@ -301,13 +301,18 @@ const isImageUrl = (url: string): boolean => {
   const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp', '.svg'];
   const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v'];
   const audioExtensions = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.wma'];
-  
-  // Explicitly exclude videos and audio
-  if (videoExtensions.some(ext => lower.includes(ext))) return false;
-  if (audioExtensions.some(ext => lower.includes(ext))) return false;
-  
-  // Check if it's a known image extension
-  return imageExtensions.some(ext => lower.includes(ext));
+  const nonImageExtensions = ['.html', '.htm', '.php', '.asp', '.aspx', '.jsp'];
+
+  // Explicitly exclude videos, audio, and obvious HTML endpoints
+  if (videoExtensions.some((ext) => lower.includes(ext))) return false;
+  if (audioExtensions.some((ext) => lower.includes(ext))) return false;
+  if (nonImageExtensions.some((ext) => lower.includes(ext))) return false;
+
+  // Known image extension = true
+  if (imageExtensions.some((ext) => lower.includes(ext))) return true;
+
+  // Unknown extension: still allow, we'll validate by content-type on download
+  return true;
 };
 
 const DEFAULT_USER_AGENT =
@@ -566,31 +571,48 @@ const normalizeTargetJid = (target: Target) => {
   return `${phoneDigits}@s.whatsapp.net`;
 };
 
+const fixMojibake = (value: string): string => {
+  const input = String(value || '');
+  if (!/[ÃÂâ�]/.test(input)) return input;
+  try {
+    const decoded = Buffer.from(input, 'latin1').toString('utf8');
+    const decodedErrors = (decoded.match(/\uFFFD/g) || []).length;
+    const inputErrors = (input.match(/\uFFFD/g) || []).length;
+    return decodedErrors <= inputErrors ? decoded : input;
+  } catch {
+    return input;
+  }
+};
+
+const stripControlChars = (value: string): string =>
+  value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+
 const sanitizeText = (text: string | null | undefined): string => {
   if (!text) return '';
   // Fix common encoding issues - replace problematic characters with safe equivalents
-  return String(text)
-    .replace(/[\u0080-\u009F]/g, '') // Remove C1 control characters
-    .replace(/\uFFFD/g, '') // Remove replacement characters (question mark boxes)
-    .replace(/â€™/g, "'") // Curly apostrophe
-    .replace(/â€œ/g, '"') // Left double quote
-    .replace(/â€/g, '"') // Right double quote
-    .replace(/â€"/g, '-') // Em dash
-    .replace(/â€"/g, '-') // En dash
-    .replace(/Ã©/g, 'é') // é
-    .replace(/Ã¨/g, 'è') // è
-    .replace(/Ã´/g, 'ô') // ô
-    .replace(/Ã®/g, 'î') // î
-    .replace(/Ã§/g, 'ç') // ç
-    .replace(/Ã /g, 'à') // à
-    .replace(/Ã¢/g, 'â') // â
-    .replace(/Ã«/g, 'ë') // ë
-    .replace(/Ã¯/g, 'ï') // ï
-    .replace(/Ã¼/g, 'ü') // ü
-    .replace(/Ã¶/g, 'ö') // ö
-    .replace(/Ã¤/g, 'ä') // ä
-    .replace(/Ã±/g, 'ñ') // ñ
-    .trim();
+  return stripControlChars(
+    fixMojibake(String(text))
+      .replace(/[\u0080-\u009F]/g, '') // Remove C1 control characters
+      .replace(/\uFFFD/g, '') // Remove replacement characters (question mark boxes)
+      .replace(/â€™/g, "'") // Curly apostrophe
+      .replace(/â€œ/g, '"') // Left double quote
+      .replace(/â€/g, '"') // Right double quote
+      .replace(/â€"/g, '-') // Em dash
+      .replace(/â€"/g, '-') // En dash
+      .replace(/Ã©/g, 'é') // é
+      .replace(/Ã¨/g, 'è') // è
+      .replace(/Ã´/g, 'ô') // ô
+      .replace(/Ã®/g, 'î') // î
+      .replace(/Ã§/g, 'ç') // ç
+      .replace(/Ã /g, 'à') // à
+      .replace(/Ã¢/g, 'â') // â
+      .replace(/Ã«/g, 'ë') // ë
+      .replace(/Ã¯/g, 'ï') // ï
+      .replace(/Ã¼/g, 'ü') // ü
+      .replace(/Ã¶/g, 'ö') // ö
+      .replace(/Ã¤/g, 'ä') // ä
+      .replace(/Ã±/g, 'ñ') // ñ
+  ).trim();
 };
 
 const buildMessageData = (feedItem: FeedItem) => ({
@@ -658,7 +680,7 @@ const sendMessageWithTemplate = async (
   options?: { sendImages?: boolean; supabase?: SupabaseClient }
 ): Promise<SendWithMediaResult> => {
   const payload = buildMessageData(feedItem);
-  const text = applyTemplate(template.content, payload).trim();
+  const text = sanitizeText(applyTemplate(template.content, payload)).trim();
   if (!text) {
     throw new Error('Template rendered empty message');
   }
@@ -810,7 +832,8 @@ type Schedule = {
 const queueSinceLastRunForSchedule = async (
   supabase: SupabaseClient,
   schedule: Schedule,
-  targets: Target[]
+  targets: Target[],
+  options?: { minPublishedAt?: string }
 ): Promise<{ queued: number; feedItemCount: number; cursorAt: string | null }> => {
   if (!schedule.feed_id) return { queued: 0, feedItemCount: 0, cursorAt: null };
   const sinceIso = schedule.last_queued_at || schedule.last_run_at;
@@ -827,6 +850,7 @@ const queueSinceLastRunForSchedule = async (
   let cursorId: string | null = null;
   let totalQueued = 0;
   let totalFeedItems = 0;
+  const minPublishedAtMs = options?.minPublishedAt ? new Date(options.minPublishedAt).getTime() : null;
 
   const flushBatch = async (batch: Array<Record<string, unknown>>) => {
     if (!batch.length) return 0;
@@ -844,7 +868,7 @@ const queueSinceLastRunForSchedule = async (
   while (true) {
     let query = supabase
       .from('feed_items')
-      .select('id, created_at')
+      .select('id, created_at, pub_date')
       .eq('feed_id', schedule.feed_id)
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
@@ -862,7 +886,7 @@ const queueSinceLastRunForSchedule = async (
       break;
     }
 
-    const items = (page || []) as Array<{ id?: string; created_at?: string }>;
+    const items = (page || []) as Array<{ id?: string; created_at?: string; pub_date?: string }>;
     if (!items.length) {
       break;
     }
@@ -873,6 +897,12 @@ const queueSinceLastRunForSchedule = async (
     for (const item of items) {
       const feedItemId = item?.id ? String(item.id) : null;
       if (!feedItemId) continue;
+      if (minPublishedAtMs && item?.pub_date) {
+        const pubMs = new Date(item.pub_date).getTime();
+        if (!Number.isNaN(pubMs) && pubMs < minPublishedAtMs) {
+          continue;
+        }
+      }
       for (const targetId of targetIds) {
         batch.push({
           feed_item_id: feedItemId,
@@ -1192,10 +1222,13 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
       queuedCount += sinceResult.queued;
       queueCursorAt = sinceResult.cursorAt;
     } else {
-      // New schedule with no cursor - queue only the latest 5 items (not all historical)
-      const latestResult = await queueLatestForSchedule(scheduleId, { schedule, targets });
-      queuedCount += latestResult.queued;
-      queueCursorAt = latestResult.cursorAt || null;
+      // New schedule with no cursor - queue recent items only (avoid old articles)
+      const lookbackHours = Number(process.env.INITIAL_SCHEDULE_LOOKBACK_HOURS || 24);
+      const minPublishedAt = new Date(Date.now() - lookbackHours * 60 * 60 * 1000).toISOString();
+      const recentSchedule = { ...schedule, last_queued_at: minPublishedAt };
+      const recentResult = await queueSinceLastRunForSchedule(supabase, recentSchedule, targets, { minPublishedAt });
+      queuedCount += recentResult.queued;
+      queueCursorAt = recentResult.cursorAt;
     }
 
     // Persist the queue cursor even if we skip sending (e.g. WhatsApp disconnected or Shabbos).

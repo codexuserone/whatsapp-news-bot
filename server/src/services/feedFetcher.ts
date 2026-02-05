@@ -108,6 +108,26 @@ const isValidUrl = (value?: string) => {
   }
 };
 
+const normalizeUrlCandidate = (candidate?: string | null, baseUrl?: string | null) => {
+  const raw = String(candidate || '').trim();
+  if (!raw) return undefined;
+
+  if (raw.startsWith('//')) {
+    const value = `https:${raw}`;
+    return isValidUrl(value) ? value : undefined;
+  }
+
+  if (isValidUrl(raw)) return raw;
+  if (!baseUrl || !isValidUrl(baseUrl)) return undefined;
+
+  try {
+    const resolved = new URL(raw, baseUrl).toString();
+    return isValidUrl(resolved) ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const isDisallowedImageCandidate = (value?: string | null) => {
   if (!value) return true;
   const normalized = String(value).toLowerCase();
@@ -132,13 +152,14 @@ const pickFirstUrl = (...candidates: Array<string | undefined | null>) => {
   return undefined;
 };
 
-const pickFirstImageUrl = (...candidates: Array<string | undefined | null>) => {
+const pickFirstImageUrl = (baseUrl?: string | null, ...candidates: Array<string | undefined | null>) => {
   for (const candidate of candidates) {
     const value = typeof candidate === 'string' ? candidate.trim() : '';
     if (!value) continue;
-    if (!isValidUrl(value)) continue;
-    if (isDisallowedImageCandidate(value)) continue;
-    return value;
+    const resolved = normalizeUrlCandidate(value, baseUrl);
+    if (!resolved) continue;
+    if (isDisallowedImageCandidate(resolved)) continue;
+    return resolved;
   }
   return undefined;
 };
@@ -166,12 +187,31 @@ const withWordPressEmbed = (url: string) => {
   }
 };
 
-const extractFirstImageFromHtml = (html?: string) => {
+const pickFromSrcset = (srcset?: string | null) => {
+  const value = String(srcset || '').trim();
+  if (!value) return undefined;
+  const entries = value
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => part.split(/\s+/)[0])
+    .filter(Boolean);
+  return entries.length ? entries[entries.length - 1] : undefined;
+};
+
+const extractFirstImageFromHtml = (html?: string, baseUrl?: string | null) => {
   if (!html) return undefined;
   try {
     const $ = cheerio.load(html);
-    const src = $('img').first().attr('src');
-    return src && isValidUrl(src) ? src : undefined;
+    const img = $('img').first();
+    const srcset = img.attr('data-srcset') || img.attr('srcset');
+    const src =
+      pickFromSrcset(srcset) ||
+      img.attr('data-src') ||
+      img.attr('data-lazy-src') ||
+      img.attr('data-original') ||
+      img.attr('src');
+    return normalizeUrlCandidate(src, baseUrl);
   } catch {
     return undefined;
   }
@@ -246,25 +286,36 @@ const fetchRssItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
       const rssItem = item as Record<string, unknown> & {
         enclosure?: { url?: string };
         'media:content'?: { $?: { url?: string }; url?: string };
+        'media:thumbnail'?: { $?: { url?: string }; url?: string };
+        'itunes:image'?: { href?: string; url?: string };
+        image?: { url?: string; href?: string } | string;
         categories?: unknown[];
       };
       const guidRaw = rssItem.guid || rssItem.id || rssItem.link;
       const guidValue = toStringValue(guidRaw) || `${feed.url}-${rssItem.title}-${Date.now()}`;
+      const link = removeUtm(toStringValue(rssItem.link) || '');
       const htmlImage = extractFirstImageFromHtml(
-        toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet)
+        toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet),
+        link
+      );
+      const imageUrl = pickFirstImageUrl(
+        link,
+        toStringValue(rssItem.enclosure?.url),
+        toStringValue(rssItem['media:content']?.$?.url || rssItem['media:content']?.url),
+        toStringValue(rssItem['media:thumbnail']?.$?.url || rssItem['media:thumbnail']?.url),
+        toStringValue(rssItem['itunes:image']?.href || rssItem['itunes:image']?.url),
+        toStringValue((rssItem.image as { url?: string })?.url || (rssItem.image as { href?: string })?.href),
+        toStringValue(typeof rssItem.image === 'string' ? rssItem.image : undefined),
+        htmlImage
       );
       return {
         guid: guidValue,
         title: toStringValue(rssItem.title),
-        url: removeUtm(toStringValue(rssItem.link) || ''),
+        url: link,
         description: toStringValue(rssItem.contentSnippet || rssItem.content || rssItem['content:encoded']),
         content: toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet),
         author: toStringValue(rssItem.creator || rssItem.author || rssItem['dc:creator']),
-        imageUrl: pickFirstImageUrl(
-          toStringValue(rssItem.enclosure?.url),
-          toStringValue(rssItem['media:content']?.$?.url || rssItem['media:content']?.url),
-          htmlImage
-        ),
+        imageUrl,
         publishedAt: toStringValue(rssItem.isoDate || rssItem.pubDate),
         categories: Array.isArray(rssItem.categories) ? rssItem.categories.map((value) => String(value)) : []
       };
@@ -313,10 +364,13 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
     };
     const guidRaw = rssItem.guid || rssItem.id || rssItem.link;
     const guidValue = toStringValue(guidRaw) || `${feed.url}-${rssItem.title}-${Date.now()}`;
+    const link = removeUtm(toStringValue(rssItem.link) || '');
     const htmlImage = extractFirstImageFromHtml(
-      toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet)
+      toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet),
+      link
     );
     const imageUrl = pickFirstImageUrl(
+      link,
       toStringValue(rssItem.enclosure?.url),
       toStringValue(rssItem['media:content']?.$?.url || rssItem['media:content']?.url),
       toStringValue(rssItem['media:thumbnail']?.$?.url || rssItem['media:thumbnail']?.url),
@@ -328,7 +382,7 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
     return {
       guid: guidValue,
       title: toStringValue(rssItem.title),
-      url: removeUtm(toStringValue(rssItem.link) || ''),
+      url: link,
       description: toStringValue(rssItem.contentSnippet || rssItem.content || rssItem['content:encoded']),
       content: toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet),
       author: toStringValue(rssItem.creator || rssItem.author || rssItem['dc:creator']),
@@ -351,8 +405,16 @@ const fetchJsonItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
     const itemsPath = (parseConfig?.itemsPath as string) || 'items';
     const items = extractJsonItemsArray(json, itemsPath);
     return (items as Record<string, unknown>[]).map((item) => {
+      const rawUrl =
+        getPath(item, (parseConfig?.linkPath as string) || 'link') ||
+        getPath(item, 'url') ||
+        getPath(item, 'link') ||
+        getPath(item, 'external_url') ||
+        getPath(item, 'permalink');
       const url =
-        getPath(item, (parseConfig?.linkPath as string) || 'link') || getPath(item, 'url');
+        toTextValue(rawUrl) ||
+        toTextValue(getPath(rawUrl as Record<string, unknown>, 'url')) ||
+        toTextValue(getPath(rawUrl as Record<string, unknown>, 'href'));
       const guidRaw = getPath(item, 'id') || getPath(item, 'guid') || url;
       const contentCandidate =
         toRenderedTextValue(getPath(item, 'content.rendered')) ||
@@ -376,10 +438,17 @@ const fetchJsonItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
         author:
           toStringValue(getPath(item, 'author')) || toStringValue(getPath(item, 'author.name')),
         imageUrl: pickFirstImageUrl(
+          url as string,
           toRenderedTextValue(getPath(item, (parseConfig?.imagePath as string) || 'image')),
           toRenderedTextValue(getPath(item, 'image_url')),
+          toRenderedTextValue(getPath(item, 'imageUrl')),
+          toRenderedTextValue(getPath(item, 'image.url')),
+          toRenderedTextValue(getPath(item, 'image.href')),
+          toRenderedTextValue(getPath(item, 'thumbnail')),
+          toRenderedTextValue(getPath(item, 'thumbnail_url')),
           toRenderedTextValue(getPath(item, 'featured_image')),
           toRenderedTextValue(getPath(item, 'banner_image')),
+          toRenderedTextValue(getPath(item, 'yoast_head_json.og_image[0].url')),
           toRenderedTextValue(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.full.source_url')),
           toRenderedTextValue(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.large.source_url')),
           toRenderedTextValue(getPath(item, '_embedded.wp:featuredmedia[0].source_url'))
@@ -443,6 +512,7 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
       toTextValue(getPath(rawUrl as Record<string, unknown>, 'href'));
     const guidRaw = getPath(item, 'id') || getPath(item, 'guid') || url;
     const imageCandidate = pickFirstImageUrl(
+      url as string,
       toRenderedTextValue(getPath(item, (parseConfig?.imagePath as string) || 'image')),
       toRenderedTextValue(getPath(item, 'image_url')),
       toRenderedTextValue(getPath(item, 'imageUrl')),

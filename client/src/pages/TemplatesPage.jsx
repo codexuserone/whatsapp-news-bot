@@ -56,13 +56,14 @@ const TemplatesPage = () => {
   const queryClient = useQueryClient();
   const textareaRef = useRef(null);
   const { data: templates = [] } = useQuery({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
-  const { data: availableVariables = [] } = useQuery({ 
-    queryKey: ['available-variables'], 
-    queryFn: () => api.get('/api/templates/available-variables') 
-  });
   const { data: feedItems = [] } = useQuery({ 
     queryKey: ['feed-items'], 
     queryFn: () => api.get('/api/feed-items') 
+  });
+  const feedId = feedItems[0]?.feed_id;
+  const { data: availableVariables = [] } = useQuery({ 
+    queryKey: ['available-variables', feedId], 
+    queryFn: () => api.get(`/api/templates/available-variables${feedId ? `?feed_id=${feedId}` : ''}`) 
   });
   const [active, setActive] = useState(null);
   const [previewWithData, setPreviewWithData] = useState(true);

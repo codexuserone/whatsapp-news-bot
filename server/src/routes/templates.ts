@@ -13,13 +13,13 @@ const getDb = () => {
 
 // Extract variable names from template content (e.g., {{title}}, {{description}})
 function extractVariables(content: string) {
-  const regex = /\{\{\s*(\w+)\s*\}\}/g;
+  const regex = /\{\{\s*([^{}\s]+)\s*\}\}/g;
   const input = String(content ?? '');
   const variables = new Set<string>();
   let match: RegExpExecArray | null;
   while ((match = regex.exec(input)) !== null) {
     if (match[1]) {
-      variables.add(match[1]);
+      variables.add(String(match[1]).trim());
     }
   }
   return Array.from(variables);
@@ -124,11 +124,40 @@ const templateRoutes = () => {
         { name: 'guid', description: 'Feed GUID' }
       ];
       
-      // Extract additional fields from raw_data
-      const additionalFields = new Set();
+      const additionalFields = new Set<string>();
+      const nestedRawFields = new Set<string>();
+
+      const addNested = (value: unknown, path: string, depth: number) => {
+        if (!path) return;
+        if (depth <= 0) return;
+        if (value === null || value === undefined) return;
+
+        if (typeof value !== 'object') {
+          nestedRawFields.add(path);
+          return;
+        }
+
+        nestedRawFields.add(path);
+        if (Array.isArray(value)) {
+          for (let i = 0; i < Math.min(value.length, 3); i++) {
+            addNested(value[i], `${path}[${i}]`, depth - 1);
+          }
+          return;
+        }
+
+        const entries = Object.entries(value as Record<string, unknown>);
+        for (const [key, child] of entries) {
+          addNested(child, `${path}.${key}`, depth - 1);
+        }
+      };
+
       items.forEach((item: Record<string, unknown>) => {
         if (item.raw_data && typeof item.raw_data === 'object') {
-          Object.entries(item.raw_data as Record<string, unknown>).forEach(([key, value]) => {
+          const raw = item.raw_data as Record<string, unknown>;
+          addNested(raw, 'raw_data', 4);
+          addNested(raw, 'raw', 4);
+
+          Object.entries(raw).forEach(([key, value]) => {
             if (standardFields.find((f) => f.name === key)) return;
             if (value == null) return;
             if (typeof value === 'object') return;
@@ -142,6 +171,10 @@ const templateRoutes = () => {
         ...Array.from(additionalFields).map(name => ({ 
           name, 
           description: 'Custom field from feed' 
+        })),
+        ...Array.from(nestedRawFields).map((name) => ({
+          name,
+          description: 'Nested raw_data field from feed'
         }))
       ];
       

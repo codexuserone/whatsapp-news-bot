@@ -116,10 +116,53 @@ const isAuthStateError = (message: string) => {
   ].some((needle) => normalized.includes(needle));
 };
 
+const tokenizeTemplatePath = (value: string): Array<string | number> => {
+  const tokens: Array<string | number> = [];
+  const input = String(value || '').trim();
+  if (!input) return tokens;
+  const re = /([^.[\]]+)|\[(\d+)\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(input)) !== null) {
+    if (match[1]) {
+      tokens.push(match[1]);
+    } else if (match[2]) {
+      tokens.push(Number(match[2]));
+    }
+  }
+  return tokens;
+};
+
+const getTemplateValue = (data: Record<string, unknown>, key: string): unknown => {
+  if (!key) return undefined;
+  if (Object.prototype.hasOwnProperty.call(data, key)) {
+    return data[key];
+  }
+  const tokens = tokenizeTemplatePath(key);
+  let current: any = data;
+  for (const token of tokens) {
+    if (current == null) return undefined;
+    current = current[token as any];
+  }
+  return current;
+};
+
+const formatTemplateValue = (value: unknown): string => {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
 const applyTemplate = (templateBody: string, data: Record<string, unknown>): string => {
-  return templateBody.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
-    const value = data[key];
-    return value != null ? String(value) : '';
+  if (!templateBody) return '';
+  return templateBody.replace(/{{\s*([^{}\s]+)\s*}}/g, (_, rawKey) => {
+    const key = String(rawKey || '').trim();
+    return formatTemplateValue(getTemplateValue(data, key));
   });
 };
 
@@ -408,6 +451,16 @@ const buildMessageData = (feedItem: FeedItem) => ({
   pub_date: feedItem.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
   publishedAt: feedItem.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
   categories: Array.isArray(feedItem.categories) ? feedItem.categories.join(', ') : '',
+  raw_data:
+    typeof (feedItem as unknown as { raw_data?: unknown }).raw_data === 'object' &&
+    (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
+      ? (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
+      : {},
+  raw:
+    typeof (feedItem as unknown as { raw_data?: unknown }).raw_data === 'object' &&
+    (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
+      ? (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
+      : {},
   ...(typeof (feedItem as unknown as { raw_data?: unknown }).raw_data === 'object' &&
   (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
     ? Object.fromEntries(

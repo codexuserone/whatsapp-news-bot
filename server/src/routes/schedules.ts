@@ -98,19 +98,21 @@ const scheduleRoutes = () => {
 
       const supabase = getDb();
       let schedule: Record<string, unknown> | null = null;
+      let attemptPayload: Record<string, unknown> = payload;
 
-      const { data, error } = await supabase.from('schedules').insert(payload).select().single();
-      if (!error) {
-        schedule = data;
-      } else {
-        const retryPayload = stripUnsupportedScheduleFields(payload, error);
-        const { data: retryData, error: retryError } = await supabase
-          .from('schedules')
-          .insert(retryPayload)
-          .select()
-          .single();
-        if (retryError) throw retryError;
-        schedule = retryData;
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const { data, error } = await supabase.from('schedules').insert(attemptPayload).select().single();
+        if (!error) {
+          schedule = data;
+          break;
+        }
+
+        const cleaned = stripUnsupportedScheduleFields(attemptPayload, error);
+        const changed = Object.keys(attemptPayload).some((key) => !(key in cleaned));
+        if (!changed) {
+          throw error;
+        }
+        attemptPayload = cleaned;
       }
 
       if (!schedule) {
@@ -128,25 +130,27 @@ const scheduleRoutes = () => {
     try {
       const supabase = getDb();
       let schedule: Record<string, unknown> | null = null;
-      const { data, error } = await supabase
-        .from('schedules')
-        .update(req.body)
-        .eq('id', req.params.id)
-        .select()
-        .single();
+      let attemptPayload: Record<string, unknown> = req.body;
 
-      if (!error) {
-        schedule = data;
-      } else {
-        const retryPayload = stripUnsupportedScheduleFields(req.body, error);
-        const { data: retryData, error: retryError } = await supabase
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const { data, error } = await supabase
           .from('schedules')
-          .update(retryPayload)
+          .update(attemptPayload)
           .eq('id', req.params.id)
           .select()
           .single();
-        if (retryError) throw retryError;
-        schedule = retryData;
+
+        if (!error) {
+          schedule = data;
+          break;
+        }
+
+        const cleaned = stripUnsupportedScheduleFields(attemptPayload, error);
+        const changed = Object.keys(attemptPayload).some((key) => !(key in cleaned));
+        if (!changed) {
+          throw error;
+        }
+        attemptPayload = cleaned;
       }
 
       if (!schedule) {

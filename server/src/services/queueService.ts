@@ -10,6 +10,7 @@ const logger = require('../utils/logger');
 const withTimeout = require('../utils/withTimeout');
 const { getErrorMessage } = require('../utils/errorUtils');
 const { computeNextRunAt } = require('../utils/cron');
+const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 
 type Target = {
   id?: string;
@@ -169,6 +170,7 @@ const pickFromSrcset = (srcset?: string | null) => {
 };
 
 const scrapeImageFromPage = async (pageUrl: string) => {
+  await assertSafeOutboundUrl(pageUrl);
   const response = await axios.get(pageUrl, {
     timeout: 12000,
     maxContentLength: 2 * 1024 * 1024,
@@ -208,6 +210,7 @@ const scrapeImageFromPage = async (pageUrl: string) => {
 };
 
 const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null) => {
+  await assertSafeOutboundUrl(imageUrl);
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
   const response = await axios.get(imageUrl, {
     timeout: 15000,
@@ -257,7 +260,13 @@ const resolveImageUrlForFeedItem = async (
 
   const existing = typeof feedItem.image_url === 'string' ? feedItem.image_url : null;
   if (isHttpUrl(existing)) {
-    return { url: existing, source: feedItem.image_source || 'feed', scraped: false, error: null };
+    try {
+      await assertSafeOutboundUrl(existing);
+      return { url: existing, source: feedItem.image_source || 'feed', scraped: false, error: null };
+    } catch (error) {
+      const message = getErrorMessage(error);
+      return { url: null, source: null, scraped: false, error: message };
+    }
   }
 
   const link = typeof feedItem.link === 'string' ? feedItem.link : null;
@@ -275,6 +284,19 @@ const resolveImageUrlForFeedItem = async (
     const scraped = await scrapeImageFromPage(link);
     const nowIso = new Date().toISOString();
     if (scraped) {
+      try {
+        await assertSafeOutboundUrl(scraped);
+      } catch (error) {
+        const message = getErrorMessage(error);
+        feedItem.image_scraped_at = nowIso;
+        feedItem.image_scrape_error = message;
+        await maybeUpdateFeedItemImage(supabase, feedItem.id, {
+          image_scraped_at: nowIso,
+          image_scrape_error: message
+        });
+        return { url: null, source: null, scraped: true, error: message };
+      }
+
       feedItem.image_url = scraped;
       feedItem.image_source = 'page';
       feedItem.image_scraped_at = nowIso;
@@ -436,8 +458,22 @@ const sendMessageWithTemplate = async (
 
   const resolved = await resolveImageUrlForFeedItem(options?.supabase, feedItem, allowImages);
   if (allowImages && resolved.url) {
+    let safeUrl: string;
     try {
-      const { buffer, mimetype } = await downloadImageBuffer(resolved.url, feedItem.link);
+      safeUrl = (await assertSafeOutboundUrl(resolved.url)).toString();
+    } catch (error) {
+      const message = getErrorMessage(error);
+      logger.warn({ error, jid, imageUrl: resolved.url }, 'Blocked unsafe image URL');
+      const response = await sendText();
+      return {
+        response,
+        text,
+        media: { type: 'image', url: resolved.url, sent: false, error: message }
+      };
+    }
+
+    try {
+      const { buffer, mimetype } = await downloadImageBuffer(safeUrl, feedItem.link);
       const content: Record<string, unknown> = {
         image: buffer,
         caption: text
@@ -462,18 +498,18 @@ const sendMessageWithTemplate = async (
       return {
         response,
         text,
-        media: { type: 'image', url: resolved.url, sent: true, error: null }
+        media: { type: 'image', url: safeUrl, sent: true, error: null }
       };
     } catch (error) {
       const bufferErrorMessage = getErrorMessage(error);
       logger.warn(
-        { error, jid, imageUrl: resolved.url },
+        { error, jid, imageUrl: safeUrl },
         'Failed to download/send image buffer; trying URL-based send'
       );
 
       try {
         const content: Record<string, unknown> = {
-          image: { url: resolved.url },
+          image: { url: safeUrl },
           caption: text
         };
         const response =
@@ -492,12 +528,12 @@ const sendMessageWithTemplate = async (
         return {
           response,
           text,
-          media: { type: 'image', url: resolved.url, sent: true, error: null }
+          media: { type: 'image', url: safeUrl, sent: true, error: null }
         };
       } catch (urlError) {
         const urlErrorMessage = getErrorMessage(urlError);
         logger.warn(
-          { error: urlError, jid, imageUrl: resolved.url, bufferError: bufferErrorMessage },
+          { error: urlError, jid, imageUrl: safeUrl, bufferError: bufferErrorMessage },
           'Failed to send image by URL, falling back to text'
         );
         const response = await sendText();
@@ -506,7 +542,7 @@ const sendMessageWithTemplate = async (
           text,
           media: {
             type: 'image',
-            url: resolved.url,
+            url: safeUrl,
             sent: false,
             error: `${bufferErrorMessage}; url-send: ${urlErrorMessage}`
           }

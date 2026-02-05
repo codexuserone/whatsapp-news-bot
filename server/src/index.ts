@@ -64,6 +64,17 @@ const start = async () => {
   const app: Express = express();
   app.use(requestLogger);
 
+  // Render environments can lack IPv6 egress; prefer IPv4 to avoid ENETUNREACH on DNS results.
+  try {
+    const dns = require('dns');
+    const setter = (dns as unknown as { setDefaultResultOrder?: (order: string) => void }).setDefaultResultOrder;
+    if (typeof setter === 'function') {
+      setter('ipv4first');
+    }
+  } catch {
+    // ignore
+  }
+
   // Optional Basic Auth (recommended for public deployments).
   // Enable by setting BASIC_AUTH_USER and BASIC_AUTH_PASS.
   const basicUser = process.env.BASIC_AUTH_USER;
@@ -95,7 +106,32 @@ const start = async () => {
     });
   }
 
-  app.use(cors());
+  // CORS: same-origin deployments don't need it. For separate UI deployments (e.g. Vercel),
+  // set CORS_ORIGINS to a comma-separated allowlist of origins.
+  const corsOrigins = String(process.env.CORS_ORIGINS || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const isProd = process.env.NODE_ENV === 'production';
+  app.use(
+    cors({
+      origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+        // Non-browser clients (curl, server-to-server) typically omit Origin.
+        if (!origin) return callback(null, true);
+
+        // Dev defaults to permissive unless an allowlist is provided.
+        if (!isProd && corsOrigins.length === 0) return callback(null, true);
+
+        if (corsOrigins.includes(origin)) return callback(null, true);
+
+        // Disallowed origin: don't error (avoids breaking same-origin), just omit CORS headers.
+        return callback(null, false);
+      },
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+      maxAge: 86400
+    })
+  );
   app.use(express.json({ limit: '2mb' }));
 
   // Serve static files in production

@@ -2,6 +2,7 @@ const Parser = require('rss-parser');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const he = require('he');
+const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 
 const parser = new Parser({
   customFields: {
@@ -201,6 +202,7 @@ const fetchRssItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
 };
 
 const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedItemResult[]; meta: FetchMeta }> => {
+  await assertSafeOutboundUrl(feed.url);
   const headers: Record<string, string> = {};
   if (feed.etag) headers['If-None-Match'] = String(feed.etag);
   if (feed.last_modified) headers['If-Modified-Since'] = String(feed.last_modified);
@@ -267,6 +269,7 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
 
 const fetchJsonItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
   try {
+    await assertSafeOutboundUrl(feed.url);
     const response = await axios.get(feed.url, { timeout: 15000 });
     const json = response.data;
     const itemsPath = (feed.parseConfig?.itemsPath as string) || 'items';
@@ -307,6 +310,7 @@ const fetchJsonItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
 };
 
 const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedItemResult[]; meta: FetchMeta }> => {
+  await assertSafeOutboundUrl(feed.url);
   const headers: Record<string, string> = {};
   if (feed.etag) headers['If-None-Match'] = String(feed.etag);
   if (feed.last_modified) headers['If-Modified-Since'] = String(feed.last_modified);

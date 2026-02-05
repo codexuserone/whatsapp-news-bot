@@ -5,6 +5,8 @@ const asyncHandler = require('../middleware/asyncHandler');
 const { badRequest } = require('../core/errors');
 const withTimeout = require('../utils/withTimeout');
 const axios = require('axios');
+const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
+const { getErrorMessage } = require('../utils/errorUtils');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const DEFAULT_USER_AGENT =
@@ -20,6 +22,7 @@ const isHttpUrl = (value: string) => {
 };
 
 const downloadImageBuffer = async (url: string) => {
+  await assertSafeOutboundUrl(url);
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
   const response = await axios.get(url, {
     timeout: DEFAULT_SEND_TIMEOUT_MS,
@@ -116,6 +119,11 @@ const whatsappRoutes = () => {
         throw badRequest('imageUrl must be an http(s) URL');
       }
       try {
+        await assertSafeOutboundUrl(imageUrl);
+      } catch (error) {
+        throw badRequest(getErrorMessage(error, 'imageUrl is not allowed'));
+      }
+      try {
         const { buffer, mimetype } = await downloadImageBuffer(imageUrl);
         content = mimetype
           ? { image: buffer, mimetype, caption: message || '' }
@@ -166,6 +174,11 @@ const whatsappRoutes = () => {
     if (imageUrl) {
       if (!isHttpUrl(imageUrl)) {
         throw badRequest('imageUrl must be an http(s) URL');
+      }
+      try {
+        await assertSafeOutboundUrl(imageUrl);
+      } catch (error) {
+        throw badRequest(getErrorMessage(error, 'imageUrl is not allowed'));
       }
       try {
         const { buffer, mimetype } = await downloadImageBuffer(imageUrl);

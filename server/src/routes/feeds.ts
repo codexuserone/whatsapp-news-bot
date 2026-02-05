@@ -4,6 +4,7 @@ const { getSupabaseClient } = require('../db/supabase');
 const { fetchAndProcessFeed, queueFeedItemsForSchedules } = require('../services/feedProcessor');
 const { initSchedulers, triggerImmediateSchedules } = require('../services/schedulerService');
 const { fetchFeedItemsWithMeta } = require('../services/feedFetcher');
+const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { validate, schemas } = require('../middleware/validation');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
@@ -35,6 +36,12 @@ const feedsRoutes = () => {
       const { url } = req.body;
       if (!url) {
         return res.status(400).json({ error: 'URL is required' });
+      }
+
+      try {
+        await assertSafeOutboundUrl(String(url));
+      } catch (error) {
+        return res.status(400).json({ error: getErrorMessage(error, 'URL is not allowed') });
       }
 
       // Create a temporary feed object for testing (cleaning is optional, uses defaults)

@@ -118,6 +118,10 @@ If you deploy this publicly, set:
 
 This protects both the UI and API with browser Basic Auth (health endpoints remain open).
 
+### Recommended Hardening
+- `CORS_ORIGINS` - comma-separated UI origins allowed to call the API (use this if the UI is on a different domain)
+- `ALLOW_PRIVATE_URLS` - set to `true` only if you intentionally need internal/private feeds or image URLs (SSRF risk)
+
 ## API Endpoints
 - `GET /health` - Health check
 - `GET /ping` - Keep-alive endpoint

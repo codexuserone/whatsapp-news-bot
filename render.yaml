@@ -30,5 +30,9 @@ services:
         sync: false
       - key: BASIC_AUTH_PASS
         sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ALLOW_PRIVATE_URLS
+        value: "false"
     healthCheckPath: /health
     autoDeploy: true

@@ -13,7 +13,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
-import { Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2, RefreshCw } from 'lucide-react';
 
 const schema = z.object({
   name: z.string().min(1),
@@ -91,6 +91,16 @@ const FeedsPage = () => {
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
     },
     onError: (error: unknown) => alert(`Failed to delete feed: ${getErrorMessage(error)}`)
+  });
+
+  const refreshFeed = useMutation({
+    mutationFn: (id: string) => api.post(`/api/feeds/${id}/refresh`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['feeds'] });
+      queryClient.invalidateQueries({ queryKey: ['feed-items'] });
+      queryClient.invalidateQueries({ queryKey: ['available-variables'] });
+    },
+    onError: (error: unknown) => alert(`Failed to refresh feed: ${getErrorMessage(error)}`)
   });
 
 
@@ -310,6 +320,10 @@ const FeedsPage = () => {
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" variant="outline" onClick={() => selectFeed(feed)}>
                       <Pencil className="mr-1 h-3 w-3" /> Edit
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => refreshFeed.mutate(feed.id)} disabled={refreshFeed.isPending}>
+                      {refreshFeed.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-1 h-3 w-3" />}
+                      Refresh
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => deleteFeed.mutate(feed.id)} className="text-destructive hover:text-destructive">
                       <Trash2 className="h-3 w-3" />

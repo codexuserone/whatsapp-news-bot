@@ -17,8 +17,6 @@ const env = {
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
-  MONGO_URI: process.env.MONGO_URI,
-  USE_IN_MEMORY_DB: process.env.USE_IN_MEMORY_DB === 'true',
   BASE_URL: baseUrl,
   KEEP_ALIVE: process.env.KEEP_ALIVE === 'true',
   KEEP_ALIVE_URL: process.env.KEEP_ALIVE_URL,

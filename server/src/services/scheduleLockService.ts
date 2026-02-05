@@ -86,35 +86,37 @@ const acquireLockViaTable = async (
                      process.env.HOSTNAME || 
                      `instance_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
+  const payload = {
+    schedule_id: scheduleId,
+    locked_by: instanceId,
+    locked_at: now.toISOString(),
+    locked_until: lockedUntil.toISOString()
+  };
+
+  const isMissingTableError = (error: unknown) => {
+    const message = String((error as { message?: unknown })?.message || error || '');
+    return message.includes('does not exist') || message.includes('schedule_locks');
+  };
+
+  const isConflictError = (error: unknown) => {
+    const code = (error as { code?: string })?.code;
+    if (code === '23505') return true;
+    const message = String((error as { message?: unknown })?.message || error || '').toLowerCase();
+    return message.includes('duplicate key') || message.includes('unique constraint');
+  };
+
+  const toRow = (data: unknown) => (Array.isArray(data) ? data[0] : data);
+
   try {
-    // Try to insert or update lock atomically
-    // Only succeed if lock doesn't exist or has expired
-    const { data, error } = await supabase
+    // Attempt insert first (fast path when no lock exists).
+    const { data: inserted, error: insertError } = await supabase
       .from('schedule_locks')
-      .upsert({
-        schedule_id: scheduleId,
-        locked_by: instanceId,
-        locked_at: now.toISOString(),
-        locked_until: lockedUntil.toISOString()
-      }, {
-        onConflict: 'schedule_id',
-        ignoreDuplicates: false // We want to update
-      })
-      .select()
-      .single();
+      .insert(payload)
+      .select('schedule_id, locked_by, locked_until');
 
-    if (error) {
-      // Table might not exist - graceful degradation
-      if (String(error).includes('does not exist') || 
-          String(error).includes('schedule_locks')) {
-        // Allow operation without locking
-        return { acquired: true };
-      }
-      return { acquired: false, holderInfo: null };
-    }
+    const insertedRow = toRow(inserted) as { locked_by?: string } | undefined;
 
-    // Check if we got the lock
-    if (data?.locked_by === instanceId) {
+    if (!insertError && insertedRow?.locked_by === instanceId) {
       const release = async () => {
         try {
           await supabase
@@ -129,10 +131,61 @@ const acquireLockViaTable = async (
       return { acquired: true, release };
     }
 
-    // Another instance has the lock
-    return { 
-      acquired: false, 
-      holderInfo: `held_by_${data?.locked_by || 'unknown'}` 
+    if (insertError) {
+      if (isMissingTableError(insertError)) {
+        // Allow operation without locking when table is missing.
+        return { acquired: true };
+      }
+      if (!isConflictError(insertError)) {
+        return { acquired: false, holderInfo: null };
+      }
+    }
+
+    // Conflict: only update if the lock has expired.
+    const { data: updated, error: updateError } = await supabase
+      .from('schedule_locks')
+      .update(payload)
+      .eq('schedule_id', scheduleId)
+      .lt('locked_until', now.toISOString())
+      .select('schedule_id, locked_by, locked_until');
+
+    if (updateError) {
+      if (isMissingTableError(updateError)) {
+        return { acquired: true };
+      }
+      return { acquired: false, holderInfo: null };
+    }
+
+    const updatedRow = toRow(updated) as { locked_by?: string } | undefined;
+    if (updatedRow?.locked_by === instanceId) {
+      const release = async () => {
+        try {
+          await supabase
+            .from('schedule_locks')
+            .delete()
+            .eq('schedule_id', scheduleId)
+            .eq('locked_by', instanceId);
+        } catch (e) {
+          // Ignore release errors
+        }
+      };
+      return { acquired: true, release };
+    }
+
+    const { data: current, error: currentError } = await supabase
+      .from('schedule_locks')
+      .select('locked_by, locked_until')
+      .eq('schedule_id', scheduleId)
+      .limit(1);
+
+    if (currentError) {
+      return { acquired: false, holderInfo: null };
+    }
+
+    const currentRow = toRow(current) as { locked_by?: string } | undefined;
+    return {
+      acquired: false,
+      holderInfo: `held_by_${currentRow?.locked_by || 'unknown'}`
     };
   } catch (e) {
     // Graceful degradation - allow operation if locking fails

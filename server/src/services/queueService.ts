@@ -1192,12 +1192,10 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
       queuedCount += sinceResult.queued;
       queueCursorAt = sinceResult.cursorAt;
     } else {
-      // New schedule with no cursor - queue only items from last 48 hours (not all historical items)
-      const since48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-      const recentSchedule = { ...schedule, last_queued_at: since48h };
-      const recentResult = await queueSinceLastRunForSchedule(supabase, recentSchedule, targets);
-      queuedCount += recentResult.queued;
-      queueCursorAt = recentResult.cursorAt;
+      // New schedule with no cursor - queue only the latest 5 items (not all historical)
+      const latestResult = await queueLatestForSchedule(scheduleId, { schedule, targets });
+      queuedCount += latestResult.queued;
+      queueCursorAt = latestResult.cursorAt || null;
     }
 
     // Persist the queue cursor even if we skip sending (e.g. WhatsApp disconnected or Shabbos).

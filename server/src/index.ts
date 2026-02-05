@@ -145,42 +145,10 @@ const start = async () => {
   
   app.use(express.static(publicPath));
 
-  // Optional: apply SQL migrations before touching tables.
-  if (process.env.RUN_MIGRATIONS_ON_START === 'true') {
-    try {
-      logger.info('Running database migrations');
-      await runMigrations();
-      logger.info('Database migrations complete');
-    } catch (error) {
-      logger.error({ error }, 'Database migrations failed');
-      const strict = process.env.MIGRATIONS_STRICT === 'true';
-      if (strict) {
-        throw error;
-      }
-    }
-  }
-
-  // Test Supabase connection
-  const connected = await testConnection();
-  if (!connected) {
-    logger.warn('Failed to connect to Supabase database - some features may not work');
-    logger.warn('Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables');
-  } else {
-    await settingsService.ensureDefaults();
-  }
-
   const disableWhatsApp = process.env.DISABLE_WHATSAPP === 'true';
   const disableSchedulers = process.env.DISABLE_SCHEDULERS === 'true';
 
-  const whatsappClient = disableWhatsApp ? null : createWhatsAppClient();
-  if (whatsappClient) {
-    await whatsappClient.init();
-  } else {
-    logger.warn('WhatsApp is disabled via DISABLE_WHATSAPP');
-  }
-  whatsappClientRef = whatsappClient;
-  app.locals.whatsapp = whatsappClient;
-
+  app.locals.whatsapp = null;
   registerRoutes(app);
 
   app.use('/api', notFoundHandler);
@@ -210,33 +178,72 @@ const start = async () => {
     logger.info({ port: env.PORT }, 'Server listening');
   });
 
-  keepAlive();
-  // Reset any logs left in processing state by a crash/restart.
-  void resetStuckProcessingLogs();
-  scheduleRetentionCleanup();
-  scheduleProcessingWatchdog();
-  if (disableSchedulers) {
-    logger.warn('Schedulers are disabled via DISABLE_SCHEDULERS');
-  } else {
-    // If WhatsApp leasing is supported, only the lease-holder should run polling/schedulers.
-    // This avoids duplicate feed polling + queue churn during rolling deploys.
-    const status = whatsappClient?.getStatus?.();
-    const lease = status?.lease;
-    const leaseSupported = Boolean(lease && typeof lease.supported === 'boolean' ? lease.supported : false);
-    const leaseHeld = Boolean(lease && typeof lease.held === 'boolean' ? lease.held : false);
-    if (whatsappClient && leaseSupported && !leaseHeld) {
-      logger.warn(
-        {
-          whatsappStatus: status?.status,
-          instanceId: status?.instanceId,
-          lease
-        },
-        'Skipping schedulers: WhatsApp lease not held (another instance is active)'
-      );
-    } else {
-      await initSchedulers(whatsappClient);
+  const boot = async () => {
+    // Optional: apply SQL migrations.
+    if (process.env.RUN_MIGRATIONS_ON_START === 'true') {
+      try {
+        logger.info('Running database migrations');
+        await runMigrations();
+        logger.info('Database migrations complete');
+      } catch (error) {
+        logger.error({ error }, 'Database migrations failed');
+        const strict = process.env.MIGRATIONS_STRICT === 'true';
+        if (strict) {
+          throw error;
+        }
+      }
     }
-  }
+
+    // Test Supabase connection
+    const connected = await testConnection();
+    if (!connected) {
+      logger.warn('Failed to connect to Supabase database - some features may not work');
+      logger.warn('Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables');
+    } else {
+      await settingsService.ensureDefaults();
+    }
+
+    const whatsappClient = disableWhatsApp ? null : createWhatsAppClient();
+    if (whatsappClient) {
+      await whatsappClient.init();
+    } else {
+      logger.warn('WhatsApp is disabled via DISABLE_WHATSAPP');
+    }
+    whatsappClientRef = whatsappClient;
+    app.locals.whatsapp = whatsappClient;
+
+    keepAlive();
+    // Reset any logs left in processing state by a crash/restart.
+    void resetStuckProcessingLogs();
+    scheduleRetentionCleanup();
+    scheduleProcessingWatchdog();
+    if (disableSchedulers) {
+      logger.warn('Schedulers are disabled via DISABLE_SCHEDULERS');
+    } else {
+      // If WhatsApp leasing is supported, only the lease-holder should run polling/schedulers.
+      // This avoids duplicate feed polling + queue churn during rolling deploys.
+      const status = whatsappClient?.getStatus?.();
+      const lease = status?.lease;
+      const leaseSupported = Boolean(lease && typeof lease.supported === 'boolean' ? lease.supported : false);
+      const leaseHeld = Boolean(lease && typeof lease.held === 'boolean' ? lease.held : false);
+      if (whatsappClient && leaseSupported && !leaseHeld) {
+        logger.warn(
+          {
+            whatsappStatus: status?.status,
+            instanceId: status?.instanceId,
+            lease
+          },
+          'Skipping schedulers: WhatsApp lease not held (another instance is active)'
+        );
+      } else {
+        await initSchedulers(whatsappClient);
+      }
+    }
+  };
+
+  void boot().catch((error) => {
+    logger.error({ error }, 'Background boot failed');
+  });
 };
 
 start().catch((error) => {

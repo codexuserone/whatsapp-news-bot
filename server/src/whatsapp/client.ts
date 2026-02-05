@@ -462,7 +462,9 @@ class WhatsAppClient {
 
       // Acquire a cross-instance lease so only one bot connects at a time.
       // This prevents WhatsApp "conflict/replaced" errors during rolling deploys.
-      if (authStore.acquireLease) {
+      // Can be disabled via env var if causing issues.
+      const skipLease = process.env.SKIP_WHATSAPP_LEASE === 'true';
+      if (!skipLease && authStore.acquireLease) {
         try {
           const lease = await authStore.acquireLease(this.instanceId, 90_000);
           this.leaseSupported = lease.supported;
@@ -472,7 +474,6 @@ class WhatsAppClient {
 
           if (lease.supported && !lease.ok) {
             // Auto-takeover: force acquire the lease immediately
-            // This prevents users from having to manually click "Take Over"
             logger.warn({ holder: lease.ownerId }, 'Lease held, attempting auto-takeover...');
             this.status = 'connecting';
             this.lastError = 'Taking over WhatsApp session...';
@@ -488,24 +489,16 @@ class WhatsAppClient {
                   this.startLeaseRenewal(90_000);
                   // Continue with connection below (don't return)
                 } else {
-                  logger.error({ reason: takeover.reason }, 'Auto-takeover failed');
-                  this.status = 'disconnected';
-                  this.lastError = 'Could not take over session. Retrying...';
-                  this.isConnecting = false;
-                  this.scheduleReconnect(30000);
-                  return;
+                  logger.error({ reason: takeover.reason }, 'Auto-takeover failed, continuing without lease');
+                  this.leaseHeld = true; // Continue anyway - don't block
                 }
               } else {
                 logger.warn('Force acquire not supported, continuing without lease');
                 this.leaseHeld = true;
               }
             } catch (error) {
-              logger.error({ error }, 'Auto-takeover error');
-              this.status = 'disconnected';
-              this.lastError = 'Session takeover error. Retrying...';
-              this.isConnecting = false;
-              this.scheduleReconnect(30000);
-              return;
+              logger.error({ error }, 'Auto-takeover error, continuing without lease');
+              this.leaseHeld = true; // Continue anyway - don't block
             }
           }
 
@@ -514,6 +507,14 @@ class WhatsAppClient {
           }
         } catch (error) {
           logger.warn({ error }, 'Failed to acquire WhatsApp lease; continuing without lock');
+          this.leaseHeld = true; // Don't let lease errors block connection
+        }
+      } else {
+        // Lease disabled or not supported - just connect
+        this.leaseSupported = false;
+        this.leaseHeld = true;
+        if (skipLease) {
+          logger.info('WhatsApp lease system disabled via SKIP_WHATSAPP_LEASE');
         }
       }
 

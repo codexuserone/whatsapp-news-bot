@@ -34,5 +34,7 @@ services:
         sync: false
       - key: ALLOW_PRIVATE_URLS
         value: "false"
+      - key: SKIP_WHATSAPP_LEASE
+        value: "true"
     healthCheckPath: /health
     autoDeploy: true

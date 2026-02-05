@@ -17,6 +17,89 @@ const spec = {
     { name: 'settings' },
     { name: 'shabbos' }
   ],
+  components: {
+    schemas: {
+      Uuid: { type: 'string', format: 'uuid' },
+      IsoDateTime: { type: 'string', format: 'date-time' },
+      TimeOfDay: { type: 'string', pattern: '^([01]\\d|2[0-3]):[0-5]\\d$' },
+      ScheduleDeliveryMode: { type: 'string', enum: ['immediate', 'batched'], default: 'immediate' },
+      FeedSummary: {
+        type: 'object',
+        properties: {
+          id: { $ref: '#/components/schemas/Uuid' },
+          name: { type: 'string' },
+          url: { type: 'string' }
+        }
+      },
+      TemplateSummary: {
+        type: 'object',
+        properties: {
+          id: { $ref: '#/components/schemas/Uuid' },
+          name: { type: 'string' },
+          content: { type: 'string' }
+        }
+      },
+      TargetSummary: {
+        type: 'object',
+        properties: {
+          id: { $ref: '#/components/schemas/Uuid' },
+          name: { type: 'string' },
+          phone_number: { type: 'string' },
+          type: { type: 'string' }
+        }
+      },
+      ScheduleInput: {
+        type: 'object',
+        required: ['name', 'feed_id', 'template_id', 'target_ids'],
+        properties: {
+          name: { type: 'string' },
+          cron_expression: { type: 'string', nullable: true },
+          timezone: { type: 'string', default: 'UTC' },
+          feed_id: { $ref: '#/components/schemas/Uuid' },
+          target_ids: {
+            type: 'array',
+            minItems: 1,
+            items: { $ref: '#/components/schemas/Uuid' }
+          },
+          template_id: { $ref: '#/components/schemas/Uuid' },
+          active: { type: 'boolean', default: true },
+          delivery_mode: { $ref: '#/components/schemas/ScheduleDeliveryMode' },
+          batch_times: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/TimeOfDay' },
+            default: ['07:00', '15:00', '22:00']
+          }
+        }
+      },
+      Schedule: {
+        type: 'object',
+        properties: {
+          id: { $ref: '#/components/schemas/Uuid' },
+          name: { type: 'string' },
+          feed_id: { $ref: '#/components/schemas/Uuid', nullable: true },
+          template_id: { $ref: '#/components/schemas/Uuid', nullable: true },
+          target_ids: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/Uuid' }
+          },
+          cron_expression: { type: 'string', nullable: true },
+          timezone: { type: 'string' },
+          active: { type: 'boolean' },
+          delivery_mode: { $ref: '#/components/schemas/ScheduleDeliveryMode' },
+          batch_times: { type: 'array', items: { $ref: '#/components/schemas/TimeOfDay' } },
+          last_run_at: { $ref: '#/components/schemas/IsoDateTime', nullable: true },
+          next_run_at: { $ref: '#/components/schemas/IsoDateTime', nullable: true },
+          last_queued_at: { $ref: '#/components/schemas/IsoDateTime', nullable: true },
+          last_dispatched_at: { $ref: '#/components/schemas/IsoDateTime', nullable: true },
+          created_at: { $ref: '#/components/schemas/IsoDateTime' },
+          updated_at: { $ref: '#/components/schemas/IsoDateTime' },
+          feed: { $ref: '#/components/schemas/FeedSummary', nullable: true },
+          template: { $ref: '#/components/schemas/TemplateSummary', nullable: true },
+          targets: { type: 'array', items: { $ref: '#/components/schemas/TargetSummary' } }
+        }
+      }
+    }
+  },
   paths: {
     '/health': {
       get: {
@@ -100,11 +183,66 @@ const spec = {
       delete: { tags: ['targets'], summary: 'Delete target', responses: { 200: { description: 'OK' } } }
     },
     '/api/schedules': {
-      get: { tags: ['schedules'], summary: 'List schedules', responses: { 200: { description: 'OK' } } },
-      post: { tags: ['schedules'], summary: 'Create schedule', responses: { 200: { description: 'OK' } } }
+      get: {
+        tags: ['schedules'],
+        summary: 'List schedules',
+        responses: {
+          200: {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: { type: 'array', items: { $ref: '#/components/schemas/Schedule' } }
+              }
+            }
+          }
+        }
+      },
+      post: {
+        tags: ['schedules'],
+        summary: 'Create schedule',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/ScheduleInput' }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/Schedule' }
+              }
+            }
+          }
+        }
+      }
     },
     '/api/schedules/{id}': {
-      put: { tags: ['schedules'], summary: 'Update schedule', responses: { 200: { description: 'OK' } } },
+      put: {
+        tags: ['schedules'],
+        summary: 'Update schedule',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/ScheduleInput' }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/Schedule' }
+              }
+            }
+          }
+        }
+      },
       delete: { tags: ['schedules'], summary: 'Delete schedule', responses: { 200: { description: 'OK' } } }
     },
     '/api/schedules/{id}/dispatch': {

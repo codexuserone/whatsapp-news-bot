@@ -4,6 +4,7 @@ const { z } = require('zod');
 const { badRequest } = require('../core/errors');
 
 const JID_PATTERN = /^([0-9+\s\-\(\)]+|status@broadcast|[0-9\-]+@g\.us|[0-9]+@s\.whatsapp\.net|[0-9]+@newsletter)$/i;
+const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 // Validation schemas
 const normalizeOptional = (value: string | null | undefined) => (value === '' ? null : value);
@@ -16,7 +17,19 @@ const schemas = {
     feed_id: z.string().uuid(),
     target_ids: z.array(z.string().uuid()).min(1),
     template_id: z.string().uuid(),
-    active: z.boolean().default(true)
+    active: z.boolean().default(true),
+    delivery_mode: z.enum(['immediate', 'batched']).optional().default('immediate'),
+    batch_times: z
+      .array(z.string().regex(TIME_OF_DAY_PATTERN))
+      .optional()
+      .default(['07:00', '15:00', '22:00'])
+  }).superRefine((value: { delivery_mode?: string; batch_times?: string[] }, ctx: { addIssue: (issue: { code: string; message: string; path: string[] }) => void }) => {
+    if (value.delivery_mode === 'batched') {
+      const times = Array.isArray(value.batch_times) ? value.batch_times : [];
+      if (times.length === 0) {
+        ctx.addIssue({ code: 'custom', message: 'batch_times is required when delivery_mode is batched', path: ['batch_times'] });
+      }
+    }
   }),
 
   feed: z.object({

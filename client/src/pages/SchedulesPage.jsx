@@ -14,6 +14,17 @@ import { Label } from '../components/ui/label';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '../components/ui/table';
 import { CalendarClock, Play, Pencil, Trash2, Loader2 } from 'lucide-react';
 
+const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+const DEFAULT_BATCH_TIMES = ['07:00', '15:00', '22:00'];
+
+const parseBatchTimesInput = (value) =>
+  String(value || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+const formatBatchTimesInput = (value) => (Array.isArray(value) ? value.join(', ') : '');
+
 const schema = z.object({
   name: z.string().min(1),
   cron_expression: z.string().optional(),
@@ -21,7 +32,19 @@ const schema = z.object({
   feed_id: z.string().min(1, 'Feed is required'),
   target_ids: z.array(z.string()).min(1),
   template_id: z.string().min(1),
-  active: z.boolean().default(true)
+  active: z.boolean().default(true),
+  delivery_mode: z.enum(['immediate', 'batched']).default('immediate'),
+  batch_times: z
+    .array(z.string().regex(TIME_OF_DAY_PATTERN, 'Use HH:MM (24h)'))
+    .optional()
+    .default(DEFAULT_BATCH_TIMES)
+}).superRefine((value, ctx) => {
+  if (value.delivery_mode === 'batched') {
+    const times = Array.isArray(value.batch_times) ? value.batch_times : [];
+    if (times.length === 0) {
+      ctx.addIssue({ code: 'custom', message: 'Batch times are required for batched delivery.', path: ['batch_times'] });
+    }
+  }
 });
 
 const SchedulesPage = () => {
@@ -42,9 +65,13 @@ const SchedulesPage = () => {
       feed_id: '',
       target_ids: [],
       template_id: '',
-      active: true
+      active: true,
+      delivery_mode: 'immediate',
+      batch_times: DEFAULT_BATCH_TIMES
     }
   });
+
+  const deliveryMode = form.watch('delivery_mode');
 
   useEffect(() => {
     if (active) {
@@ -55,7 +82,12 @@ const SchedulesPage = () => {
         feed_id: active.feed_id || '',
         target_ids: (active.target_ids || []).map((id) => id.toString()),
         template_id: active.template_id || '',
-        active: active.active ?? true
+        active: active.active ?? true,
+        delivery_mode: active.delivery_mode || 'immediate',
+        batch_times:
+          Array.isArray(active.batch_times) && active.batch_times.length > 0
+            ? active.batch_times
+            : DEFAULT_BATCH_TIMES
       });
     }
   }, [active, form]);
@@ -105,7 +137,14 @@ const SchedulesPage = () => {
       feed_id: values.feed_id,
       target_ids: values.target_ids,
       template_id: values.template_id,
-      active: values.active
+      active: values.active,
+      delivery_mode: values.delivery_mode,
+      batch_times:
+        values.delivery_mode === 'batched'
+          ? values.batch_times
+          : values.batch_times?.length
+            ? values.batch_times
+            : DEFAULT_BATCH_TIMES
     });
   };
 
@@ -154,13 +193,56 @@ const SchedulesPage = () => {
                 <div className="space-y-2">
                   <Label htmlFor="cron">Cron Expression (optional)</Label>
                   <Input id="cron" {...form.register('cron_expression')} placeholder="0 9 * * *" />
-                  <p className="text-xs text-muted-foreground">Leave empty for immediate dispatch</p>
+                  <p className="text-xs text-muted-foreground">
+                    Leave empty to use delivery mode (immediate or batched)
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="timezone">Timezone</Label>
                   <Input id="timezone" {...form.register('timezone')} placeholder="UTC" />
                 </div>
               </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="delivery_mode">Delivery Mode</Label>
+                <Controller
+                  control={form.control}
+                  name="delivery_mode"
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger id="delivery_mode">
+                        <SelectValue placeholder="Select delivery mode" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="immediate">Immediate (send as items arrive)</SelectItem>
+                        <SelectItem value="batched">Batched (send at set times)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </div>
+
+              {deliveryMode === 'batched' && (
+                <div className="space-y-2">
+                  <Label htmlFor="batch_times">Batch Times</Label>
+                  <Controller
+                    control={form.control}
+                    name="batch_times"
+                    render={({ field }) => (
+                      <Input
+                        id="batch_times"
+                        value={formatBatchTimesInput(field.value)}
+                        onChange={(event) => field.onChange(parseBatchTimesInput(event.target.value))}
+                        placeholder="07:00, 15:00, 22:00"
+                      />
+                    )}
+                  />
+                  <p className="text-xs text-muted-foreground">Use 24h time, comma-separated.</p>
+                  {form.formState.errors.batch_times && (
+                    <p className="text-xs text-destructive">{form.formState.errors.batch_times.message}</p>
+                  )}
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label htmlFor="feed_id">Feed</Label>
@@ -303,17 +385,31 @@ const SchedulesPage = () => {
             <div className="space-y-3">
               {schedules.map((schedule) => (
                 <div key={schedule.id} className="rounded-lg border p-3">
+                  {(() => {
+                    const mode = schedule.delivery_mode || 'immediate';
+                    const batchTimes =
+                      Array.isArray(schedule.batch_times) && schedule.batch_times.length > 0
+                        ? schedule.batch_times
+                        : DEFAULT_BATCH_TIMES;
+                    const timingLabel = schedule.cron_expression
+                      ? schedule.cron_expression
+                      : mode === 'batched'
+                        ? `Batched (${batchTimes.join(', ')})`
+                        : 'Immediate';
+                    return (
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <div className="min-w-0 flex-1">
                       <p className="font-medium truncate">{schedule.name}</p>
                       <p className="text-xs font-mono text-muted-foreground">
-                        {schedule.cron_expression || 'Immediate'}
+                        {timingLabel}
                       </p>
                     </div>
                     <Badge variant={schedule.active ? 'success' : 'secondary'}>
                       {schedule.active ? 'Active' : 'Inactive'}
                     </Badge>
                   </div>
+                    );
+                  })()}
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" variant="outline" onClick={() => setActive(schedule)}>
                       <Pencil className="mr-1 h-3 w-3" /> Edit

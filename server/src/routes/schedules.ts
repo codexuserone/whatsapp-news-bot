@@ -22,10 +22,30 @@ const scheduleRoutes = () => {
   const refreshSchedulers = (whatsappClient: unknown) =>
     runAsync('Scheduler refresh', () => initSchedulers(whatsappClient));
 
-  const dispatchImmediate = (scheduleId: string, whatsappClient: unknown) =>
-    runAsync(`Dispatch schedule ${scheduleId}`, async () => {
-      await sendQueuedForSchedule(scheduleId, whatsappClient as never);
-    });
+  const missingScheduleColumn = (error: unknown, column: string) => {
+    const message = String((error as { message?: unknown })?.message || error || '').toLowerCase();
+    const needle = String(column || '').toLowerCase();
+    if (!needle) return false;
+    return (
+      message.includes(`could not find the '${needle}' column`) ||
+      (message.includes(needle) && message.includes('schema cache')) ||
+      (message.includes(needle) && message.includes('does not exist'))
+    );
+  };
+
+  const stripUnsupportedScheduleFields = (payload: Record<string, unknown>, error: unknown) => {
+    const cleaned = { ...payload };
+    const maybeStrip = (column: string) => {
+      if (missingScheduleColumn(error, column)) {
+        delete (cleaned as Record<string, unknown>)[column];
+      }
+    };
+    maybeStrip('delivery_mode');
+    maybeStrip('batch_times');
+    maybeStrip('last_dispatched_at');
+    maybeStrip('last_queued_at');
+    return cleaned;
+  };
   
   const getDb = () => {
     const supabase = getSupabaseClient();
@@ -70,19 +90,33 @@ const scheduleRoutes = () => {
 
   router.post('/', validate(schemas.schedule), async (req: Request, res: Response) => {
     try {
-      const { data: schedule, error } = await getDb()
-        .from('schedules')
-        .insert(req.body)
-        .select()
-        .single();
-      
-      if (error) throw error;
-      refreshSchedulers(req.app.locals.whatsapp);
+      const nowIso = new Date().toISOString();
+      const payload: Record<string, unknown> = {
+        ...req.body,
+        last_queued_at: nowIso
+      };
 
-      // For immediate schedules, queue+send once so the system shows activity
-      if (schedule?.active && !schedule?.cron_expression) {
-        dispatchImmediate(schedule.id, req.app.locals.whatsapp);
+      const supabase = getDb();
+      let schedule: Record<string, unknown> | null = null;
+
+      const { data, error } = await supabase.from('schedules').insert(payload).select().single();
+      if (!error) {
+        schedule = data;
+      } else {
+        const retryPayload = stripUnsupportedScheduleFields(payload, error);
+        const { data: retryData, error: retryError } = await supabase
+          .from('schedules')
+          .insert(retryPayload)
+          .select()
+          .single();
+        if (retryError) throw retryError;
+        schedule = retryData;
       }
+
+      if (!schedule) {
+        throw new Error('Failed to create schedule');
+      }
+      refreshSchedulers(req.app.locals.whatsapp);
       res.json(schedule);
     } catch (error) {
       console.error('Error creating schedule:', error);
@@ -92,19 +126,33 @@ const scheduleRoutes = () => {
 
   router.put('/:id', validate(schemas.schedule), async (req: Request, res: Response) => {
     try {
-      const { data: schedule, error } = await getDb()
+      const supabase = getDb();
+      let schedule: Record<string, unknown> | null = null;
+      const { data, error } = await supabase
         .from('schedules')
         .update(req.body)
         .eq('id', req.params.id)
         .select()
         .single();
-      
-      if (error) throw error;
-      refreshSchedulers(req.app.locals.whatsapp);
 
-      if (schedule?.active && !schedule?.cron_expression) {
-        dispatchImmediate(schedule.id, req.app.locals.whatsapp);
+      if (!error) {
+        schedule = data;
+      } else {
+        const retryPayload = stripUnsupportedScheduleFields(req.body, error);
+        const { data: retryData, error: retryError } = await supabase
+          .from('schedules')
+          .update(retryPayload)
+          .eq('id', req.params.id)
+          .select()
+          .single();
+        if (retryError) throw retryError;
+        schedule = retryData;
       }
+
+      if (!schedule) {
+        throw new Error('Failed to update schedule');
+      }
+      refreshSchedulers(req.app.locals.whatsapp);
       res.json(schedule);
     } catch (error) {
       console.error('Error updating schedule:', error);

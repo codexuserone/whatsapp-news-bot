@@ -60,6 +60,124 @@ const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const AUTH_ERROR_HINT =
   'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
 
+const DEFAULT_BATCH_TIMES = ['07:00', '15:00', '22:00'];
+
+const parseTimeOfDay = (value: string): { hour: number; minute: number } | null => {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (!match) return null;
+  return { hour: Number(match[1]), minute: Number(match[2]) };
+};
+
+const normalizeBatchTimes = (value: unknown): string[] => {
+  const times = Array.isArray(value) ? value : [];
+  const normalized = times
+    .map((entry) => String(entry || '').trim())
+    .filter((entry) => Boolean(parseTimeOfDay(entry)));
+  return normalized.length ? normalized : DEFAULT_BATCH_TIMES;
+};
+
+const timeOfDayToCronExpression = (value: string): string | null => {
+  const parsed = parseTimeOfDay(value);
+  if (!parsed) return null;
+  return `${parsed.minute} ${parsed.hour} * * *`;
+};
+
+const pickEarliestIso = (values: Array<string | null | undefined>): string | null => {
+  const candidates = values
+    .map((v) => (v ? String(v) : ''))
+    .filter(Boolean)
+    .map((iso) => ({ iso, ts: Date.parse(iso) }))
+    .filter((entry) => Number.isFinite(entry.ts));
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => a.ts - b.ts);
+  return candidates[0]?.iso ?? null;
+};
+
+const getZonedParts = (date: Date, timeZone?: string | null) => {
+  const resolveParts = (zone: string) =>
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).formatToParts(date);
+
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = resolveParts(timeZone || 'UTC');
+  } catch {
+    parts = resolveParts('UTC');
+  }
+
+  const lookup: Record<string, string> = {};
+  for (const part of parts) {
+    if (part.type !== 'literal') {
+      lookup[part.type] = part.value;
+    }
+  }
+
+  if (!lookup.year || !lookup.month || !lookup.day || !lookup.hour || !lookup.minute) {
+    return null;
+  }
+
+  return {
+    year: lookup.year,
+    month: lookup.month,
+    day: lookup.day,
+    hour: lookup.hour,
+    minute: lookup.minute
+  };
+};
+
+const getBatchWindowKey = (date: Date, timeZone?: string | null) => {
+  const parts = getZonedParts(date, timeZone);
+  if (!parts) return null;
+  const time = `${parts.hour}:${parts.minute}`;
+  return {
+    time,
+    key: `${parts.year}-${parts.month}-${parts.day} ${time}`
+  };
+};
+
+const getBatchWindowStatus = (options: {
+  now: Date;
+  timezone?: string | null;
+  batchTimes?: unknown;
+  lastDispatchedAt?: string | null;
+}) => {
+  const times = normalizeBatchTimes(options.batchTimes);
+  const current = getBatchWindowKey(options.now, options.timezone);
+  if (!current) {
+    return { allowed: true, windowKey: null };
+  }
+
+  if (!times.includes(current.time)) {
+    return { allowed: false, reason: 'Outside batch window', windowKey: current.key };
+  }
+
+  if (options.lastDispatchedAt) {
+    const last = getBatchWindowKey(new Date(options.lastDispatchedAt), options.timezone);
+    if (last?.key === current.key) {
+      return { allowed: false, reason: 'Already dispatched for batch window', windowKey: current.key };
+    }
+  }
+
+  return { allowed: true, windowKey: current.key };
+};
+
+const computeNextBatchRunAt = (batchTimes: unknown, timezone?: string | null): string | null => {
+  const times = normalizeBatchTimes(batchTimes);
+  const candidates = times
+    .map((time) => timeOfDayToCronExpression(time))
+    .filter(Boolean)
+    .map((expr) => computeNextRunAt(expr as string, timezone));
+  return pickEarliestIso(candidates);
+};
+
 let globalSendChain: Promise<void> = Promise.resolve();
 let globalLastSentAtMs = 0;
 const globalLastSentByTargetId = new Map<string, number>();
@@ -641,6 +759,9 @@ type Schedule = {
   timezone?: string | null;
   last_run_at?: string | null;
   last_queued_at?: string | null;
+  delivery_mode?: string | null;
+  batch_times?: string[] | null;
+  last_dispatched_at?: string | null;
   active?: boolean;
 };
 
@@ -907,8 +1028,49 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
       return { sent: 0, queued: 0 };
     }
 
+    const deliveryMode = String(schedule.delivery_mode || 'immediate');
+    let queuedCount = 0;
+    let queueCursorAt: string | null = null;
+
     // Check if schedule has feed_id - if not, it's a manual dispatch only
     if (!schedule.feed_id) {
+      if (deliveryMode === 'batched') {
+        const windowStatus = getBatchWindowStatus({
+          now: new Date(),
+          timezone: schedule.timezone,
+          batchTimes: schedule.batch_times,
+          lastDispatchedAt: schedule.last_dispatched_at
+        });
+
+        if (!windowStatus.allowed) {
+          const nextRunAt = computeNextBatchRunAt(schedule.batch_times, schedule.timezone);
+          if (nextRunAt) {
+            const { error: nextRunAtError } = await supabase
+              .from('schedules')
+              .update({ next_run_at: nextRunAt })
+              .eq('id', scheduleId);
+            if (nextRunAtError) {
+              logger.warn(
+                { scheduleId, error: nextRunAtError },
+                'Failed to update next run time for batched schedule'
+              );
+            }
+          }
+
+          logger.info(
+            { scheduleId, reason: windowStatus.reason, window: windowStatus.windowKey },
+            'Skipping batched schedule send'
+          );
+          return {
+            sent: 0,
+            queued: queuedCount,
+            skipped: true,
+            reason: windowStatus.reason,
+            nextRunAt
+          };
+        }
+      }
+
       const shabbosStatus = await isCurrentlyShabbos();
       if (shabbosStatus.isShabbos) {
         logger.info({ scheduleId, reason: shabbosStatus.reason, endsAt: shabbosStatus.endsAt }, 
@@ -983,8 +1145,6 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
       logger.warn({ scheduleId, feedId: schedule.feed_id, error }, 'Failed to refresh feed during dispatch');
     }
 
-    let queuedCount = 0;
-    let queueCursorAt: string | null = null;
     if (schedule.last_queued_at || schedule.last_run_at) {
       const sinceResult = await queueSinceLastRunForSchedule(supabase, schedule, targets);
       queuedCount += sinceResult.queued;
@@ -1014,6 +1174,43 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
         } else {
           logger.warn({ scheduleId, error: queueCursorError }, 'Failed to update schedule queue cursor');
         }
+      }
+    }
+
+    if (deliveryMode === 'batched') {
+      const windowStatus = getBatchWindowStatus({
+        now: new Date(),
+        timezone: schedule.timezone,
+        batchTimes: schedule.batch_times,
+        lastDispatchedAt: schedule.last_dispatched_at
+      });
+
+      if (!windowStatus.allowed) {
+        const nextRunAt = computeNextBatchRunAt(schedule.batch_times, schedule.timezone);
+        if (nextRunAt) {
+          const { error: nextRunAtError } = await supabase
+            .from('schedules')
+            .update({ next_run_at: nextRunAt })
+            .eq('id', scheduleId);
+          if (nextRunAtError) {
+            logger.warn(
+              { scheduleId, error: nextRunAtError },
+              'Failed to update next run time for batched schedule'
+            );
+          }
+        }
+
+        logger.info(
+          { scheduleId, reason: windowStatus.reason, window: windowStatus.windowKey },
+          'Skipping batched schedule send'
+        );
+        return {
+          sent: 0,
+          queued: queuedCount,
+          skipped: true,
+          reason: windowStatus.reason,
+          nextRunAt
+        };
       }
     }
 
@@ -1290,22 +1487,44 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
     }
 
     const lastRunAt = new Date().toISOString();
-    const nextRunAt = schedule.cron_expression ? computeNextRunAt(schedule.cron_expression, schedule.timezone) : null;
+    const nextRunAt = schedule.cron_expression
+      ? computeNextRunAt(schedule.cron_expression, schedule.timezone)
+      : deliveryMode === 'batched'
+        ? computeNextBatchRunAt(schedule.batch_times, schedule.timezone)
+        : null;
     const scheduleUpdates: Record<string, unknown> = { last_run_at: lastRunAt, next_run_at: nextRunAt };
     if (queueCursorAt) {
       scheduleUpdates.last_queued_at = queueCursorAt;
+    }
+    if (deliveryMode === 'batched') {
+      scheduleUpdates.last_dispatched_at = lastRunAt;
     }
     const { error: scheduleUpdateError } = await supabase.from('schedules').update(scheduleUpdates).eq('id', scheduleId);
     if (scheduleUpdateError) {
       const msg = String((scheduleUpdateError as { message?: unknown })?.message || scheduleUpdateError);
       const missingQueueCursorColumn =
         msg.toLowerCase().includes('last_queued_at') && msg.toLowerCase().includes('does not exist');
-      if (missingQueueCursorColumn) {
+      const missingDispatchedColumn =
+        msg.toLowerCase().includes('last_dispatched_at') && msg.toLowerCase().includes('does not exist');
+      if (missingQueueCursorColumn || missingDispatchedColumn) {
+        const fallbackUpdates: Record<string, unknown> = { last_run_at: lastRunAt, next_run_at: nextRunAt };
+        if (!missingQueueCursorColumn && queueCursorAt) {
+          fallbackUpdates.last_queued_at = queueCursorAt;
+        }
+        if (!missingDispatchedColumn && deliveryMode === 'batched') {
+          fallbackUpdates.last_dispatched_at = lastRunAt;
+        }
+
+        const missingColumns = [
+          missingQueueCursorColumn ? 'last_queued_at' : null,
+          missingDispatchedColumn ? 'last_dispatched_at' : null
+        ].filter(Boolean);
+
         logger.warn(
-          { scheduleId, error: scheduleUpdateError },
-          'Schedule queue cursor columns missing; run SQL migrations (scripts/012_schedule_queue_cursor.sql)'
+          { scheduleId, error: scheduleUpdateError, missingColumns },
+          'Schedule cursor columns missing; run SQL migrations (scripts/012_schedule_queue_cursor.sql, scripts/014_schedule_delivery_modes.sql)'
         );
-        await supabase.from('schedules').update({ last_run_at: lastRunAt, next_run_at: nextRunAt }).eq('id', scheduleId);
+        await supabase.from('schedules').update(fallbackUpdates).eq('id', scheduleId);
       } else {
         logger.warn({ scheduleId, error: scheduleUpdateError }, 'Failed to update schedule run timestamps');
       }

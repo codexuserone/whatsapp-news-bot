@@ -105,8 +105,13 @@ const feedsRoutes = () => {
 
       if (error) {
         const msg = String((error as { message?: unknown })?.message || error);
+        const msgLower = msg.toLowerCase();
         const missingParseConfigColumn =
-          msg.toLowerCase().includes('parse_config') && msg.toLowerCase().includes('does not exist');
+          msgLower.includes('parse_config') &&
+          (msgLower.includes('does not exist') ||
+            msgLower.includes('schema cache') ||
+            msgLower.includes("could not find") ||
+            msgLower.includes('unknown field'));
         if (missingParseConfigColumn) {
           const { parse_config: _parseConfig, ...fallbackBody } = req.body as Record<string, unknown>;
           const retry = await getDb().from('feeds').insert(fallbackBody).select().single();
@@ -135,8 +140,13 @@ const feedsRoutes = () => {
 
       if (error) {
         const msg = String((error as { message?: unknown })?.message || error);
+        const msgLower = msg.toLowerCase();
         const missingParseConfigColumn =
-          msg.toLowerCase().includes('parse_config') && msg.toLowerCase().includes('does not exist');
+          msgLower.includes('parse_config') &&
+          (msgLower.includes('does not exist') ||
+            msgLower.includes('schema cache') ||
+            msgLower.includes("could not find") ||
+            msgLower.includes('unknown field'));
         if (missingParseConfigColumn) {
           const { parse_config: _parseConfig, ...fallbackBody } = req.body as Record<string, unknown>;
           const retry = await getDb()

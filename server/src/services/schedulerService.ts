@@ -4,6 +4,7 @@ const { getSupabaseClient } = require('../db/supabase');
 const { fetchAndProcessFeed, queueFeedItemsForSchedules } = require('./feedProcessor');
 const { sendQueuedForSchedule } = require('./queueService');
 const { computeNextRunAt } = require('../utils/cron');
+const { withScheduleLock, cleanupStaleLocks } = require('./scheduleLockService');
 const logger = require('../utils/logger');
 
 type WhatsAppClient = { getStatus?: () => { status: string } };
@@ -25,13 +26,39 @@ const clearAll = () => {
 };
 
 const runScheduleOnce = async (scheduleId: string, whatsappClient?: WhatsAppClient) => {
+  // Check local in-flight first (fast path)
   if (scheduleInFlight.get(scheduleId)) {
-    logger.info({ scheduleId }, 'Skipping schedule run - already in progress');
+    logger.info({ scheduleId }, 'Skipping schedule run - already in progress locally');
     return;
   }
+  
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    logger.warn({ scheduleId }, 'Supabase not available, skipping schedule run');
+    return;
+  }
+  
   scheduleInFlight.set(scheduleId, true);
+  
   try {
-    await sendQueuedForSchedule(scheduleId, whatsappClient);
+    // Use distributed lock to prevent multiple instances from running the same schedule
+    const lockResult = await withScheduleLock(
+      supabase,
+      scheduleId,
+      async () => {
+        logger.info({ scheduleId }, 'Acquired distributed lock, running schedule');
+        return await sendQueuedForSchedule(scheduleId, whatsappClient);
+      },
+      { timeoutMs: 300000, skipIfLocked: true } // 5 minute lock timeout
+    );
+    
+    if (lockResult.skipped) {
+      logger.info({ scheduleId, reason: lockResult.reason }, 'Skipping schedule run - distributed lock held');
+    } else if (lockResult.result) {
+      logger.info({ scheduleId, result: lockResult.result }, 'Schedule completed');
+    }
+  } catch (error) {
+    logger.error({ scheduleId, error }, 'Error running schedule');
   } finally {
     scheduleInFlight.set(scheduleId, false);
   }
@@ -181,6 +208,16 @@ const initSchedulers = async (whatsappClient?: WhatsAppClient) => {
     logger.warn('Schedulers are disabled via DISABLE_SCHEDULERS');
     return;
   }
+  
+  // Cleanup stale locks on startup
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    const cleanedCount = await cleanupStaleLocks(supabase);
+    if (cleanedCount > 0) {
+      logger.info({ cleanedCount }, 'Cleaned up stale schedule locks');
+    }
+  }
+  
   await scheduleFeedPolling(whatsappClient);
   await scheduleSenders(whatsappClient);
 };

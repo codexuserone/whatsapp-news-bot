@@ -12,6 +12,55 @@ const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const feedsRoutes = () => {
   const router = express.Router();
 
+  const normalizeCleaningWithParseConfig = (
+    existingCleaning: unknown,
+    incomingCleaning: unknown,
+    parseConfig: unknown
+  ): Record<string, unknown> | undefined => {
+    const shouldWrite =
+      (incomingCleaning !== null && incomingCleaning !== undefined) ||
+      (parseConfig !== null && parseConfig !== undefined);
+    if (!shouldWrite) return undefined;
+
+    const base =
+      existingCleaning && typeof existingCleaning === 'object'
+        ? { ...(existingCleaning as Record<string, unknown>) }
+        : {};
+
+    if (incomingCleaning && typeof incomingCleaning === 'object') {
+      Object.assign(base, incomingCleaning as Record<string, unknown>);
+    }
+    if (parseConfig !== null && parseConfig !== undefined) {
+      base.parse_config = parseConfig;
+    }
+    return Object.keys(base).length ? base : undefined;
+  };
+
+  const projectFeedForResponse = (feed: Record<string, unknown>) => {
+    if (!feed || typeof feed !== 'object') return feed;
+    if (feed.parse_config !== null && feed.parse_config !== undefined) return feed;
+    const cleaning = feed.cleaning;
+    if (!cleaning || typeof cleaning !== 'object') return feed;
+    const fallback = (cleaning as Record<string, unknown>).parse_config;
+    if (fallback === null || fallback === undefined) return feed;
+    return {
+      ...feed,
+      parse_config: fallback
+    };
+  };
+
+  const isMissingParseConfigColumnError = (error: unknown) => {
+    const msg = String((error as { message?: unknown })?.message || error || '');
+    const msgLower = msg.toLowerCase();
+    return (
+      msgLower.includes('parse_config') &&
+      (msgLower.includes('does not exist') ||
+        msgLower.includes('schema cache') ||
+        msgLower.includes('could not find') ||
+        msgLower.includes('unknown field'))
+    );
+  };
+
   const runAsync = (label: string, work: () => Promise<void>) => {
     setImmediate(() => {
       work().catch((error) => {
@@ -88,7 +137,8 @@ const feedsRoutes = () => {
         .order('created_at', { ascending: false });
       
       if (error) throw error;
-      res.json(feeds);
+      const projected = (feeds || []).map((feed: Record<string, unknown>) => projectFeedForResponse(feed));
+      res.json(projected);
     } catch (error) {
       console.error('Error fetching feeds:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
@@ -97,35 +147,61 @@ const feedsRoutes = () => {
 
   router.post('/', validate(schemas.feed), async (req: Request, res: Response) => {
     try {
+      const incomingBody = req.body as Record<string, unknown>;
+      const incomingParseConfig = incomingBody.parse_config;
+      const incomingCleaning = incomingBody.cleaning;
+
       let { data: feed, error } = await getDb()
         .from('feeds')
         .insert(req.body)
         .select()
         .single();
 
-      if (error) {
-        const msg = String((error as { message?: unknown })?.message || error);
-        const msgLower = msg.toLowerCase();
-        const missingParseConfigColumn =
-          msgLower.includes('parse_config') &&
-          (msgLower.includes('does not exist') ||
-            msgLower.includes('schema cache') ||
-            msgLower.includes("could not find") ||
-            msgLower.includes('unknown field'));
-        if (missingParseConfigColumn) {
-          const body = req.body as Record<string, unknown>;
-          if (body.parse_config !== null && body.parse_config !== undefined) {
-            return res.status(400).json({
-              error:
-                "Database schema does not support 'feeds.parse_config' yet. Apply migration scripts/013_feed_parse_config.sql (or set SUPABASE_DB_URL + RUN_MIGRATIONS_ON_START on Render) and retry."
-            });
-          }
-        }
+      if (error && isMissingParseConfigColumnError(error)) {
+        const { parse_config: parseConfig, cleaning, ...rest } = incomingBody;
+        const fallbackBody = {
+          ...rest,
+          cleaning: normalizeCleaningWithParseConfig(undefined, cleaning, parseConfig)
+        };
+
+        const retry = await getDb().from('feeds').insert(fallbackBody).select().single();
+        feed = retry.data;
+        error = retry.error;
       }
 
       if (error) throw error;
+
+      if (
+        incomingParseConfig !== null &&
+        incomingParseConfig !== undefined &&
+        feed &&
+        typeof feed === 'object' &&
+        (feed as Record<string, unknown>).parse_config === undefined &&
+        ((feed as Record<string, unknown>).cleaning === null ||
+          (feed as Record<string, unknown>).cleaning === undefined ||
+          typeof (feed as Record<string, unknown>).cleaning !== 'object' ||
+          ((feed as Record<string, unknown>).cleaning as Record<string, unknown>).parse_config === undefined)
+      ) {
+        const updatedCleaning = normalizeCleaningWithParseConfig(
+          (feed as Record<string, unknown>).cleaning,
+          incomingCleaning,
+          incomingParseConfig
+        );
+
+        const patch = await getDb()
+          .from('feeds')
+          .update({ cleaning: updatedCleaning })
+          .eq('id', (feed as Record<string, unknown>).id)
+          .select()
+          .single();
+
+        if (!patch.error && patch.data) {
+          feed = patch.data;
+        }
+      }
+
       refreshSchedulers(req.app.locals.whatsapp);
-      res.json(feed);
+      res.json(feed ? projectFeedForResponse(feed as Record<string, unknown>) : feed);
     } catch (error) {
       console.error('Error creating feed:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
@@ -134,6 +210,10 @@ const feedsRoutes = () => {
 
   router.put('/:id', validate(schemas.feed), async (req: Request, res: Response) => {
     try {
+      const incomingBody = req.body as Record<string, unknown>;
+      const incomingParseConfig = incomingBody.parse_config;
+      const incomingCleaning = incomingBody.cleaning;
+
       let { data: feed, error } = await getDb()
         .from('feeds')
         .update(req.body)
@@ -141,29 +221,64 @@ const feedsRoutes = () => {
         .select()
         .single();
 
-      if (error) {
-        const msg = String((error as { message?: unknown })?.message || error);
-        const msgLower = msg.toLowerCase();
-        const missingParseConfigColumn =
-          msgLower.includes('parse_config') &&
-          (msgLower.includes('does not exist') ||
-            msgLower.includes('schema cache') ||
-            msgLower.includes("could not find") ||
-            msgLower.includes('unknown field'));
-        if (missingParseConfigColumn) {
-          const body = req.body as Record<string, unknown>;
-          if (body.parse_config !== null && body.parse_config !== undefined) {
-            return res.status(400).json({
-              error:
-                "Database schema does not support 'feeds.parse_config' yet. Apply migration scripts/013_feed_parse_config.sql (or set SUPABASE_DB_URL + RUN_MIGRATIONS_ON_START on Render) and retry."
-            });
-          }
-        }
+      if (error && isMissingParseConfigColumnError(error)) {
+        const { parse_config: parseConfig, cleaning, ...rest } = incomingBody;
+        const { data: existingFeed, error: existingError } = await getDb()
+          .from('feeds')
+          .select('cleaning')
+          .eq('id', req.params.id)
+          .single();
+
+        if (existingError) throw existingError;
+
+        const fallbackBody = {
+          ...rest,
+          cleaning: normalizeCleaningWithParseConfig(existingFeed?.cleaning, cleaning, parseConfig)
+        };
+
+        const retry = await getDb()
+          .from('feeds')
+          .update(fallbackBody)
+          .eq('id', req.params.id)
+          .select()
+          .single();
+        feed = retry.data;
+        error = retry.error;
       }
 
       if (error) throw error;
+
+      if (
+        incomingParseConfig !== null &&
+        incomingParseConfig !== undefined &&
+        feed &&
+        typeof feed === 'object' &&
+        (feed as Record<string, unknown>).parse_config === undefined &&
+        ((feed as Record<string, unknown>).cleaning === null ||
+          (feed as Record<string, unknown>).cleaning === undefined ||
+          typeof (feed as Record<string, unknown>).cleaning !== 'object' ||
+          ((feed as Record<string, unknown>).cleaning as Record<string, unknown>).parse_config === undefined)
+      ) {
+        const updatedCleaning = normalizeCleaningWithParseConfig(
+          (feed as Record<string, unknown>).cleaning,
+          incomingCleaning,
+          incomingParseConfig
+        );
+
+        const patch = await getDb()
+          .from('feeds')
+          .update({ cleaning: updatedCleaning })
+          .eq('id', (feed as Record<string, unknown>).id)
+          .select()
+          .single();
+
+        if (!patch.error && patch.data) {
+          feed = patch.data;
+        }
+      }
+
       refreshSchedulers(req.app.locals.whatsapp);
-      res.json(feed);
+      res.json(feed ? projectFeedForResponse(feed as Record<string, unknown>) : feed);
     } catch (error) {
       console.error('Error updating feed:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });

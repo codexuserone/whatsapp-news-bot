@@ -177,7 +177,12 @@ const extractFirstImageFromHtml = (html?: string) => {
   }
 };
 
-type FeedCleaning = { stripUtm?: boolean; decodeEntities?: boolean; removePhrases?: string[] };
+type FeedCleaning = {
+  stripUtm?: boolean;
+  decodeEntities?: boolean;
+  removePhrases?: string[];
+  parse_config?: Record<string, unknown>;
+};
 
 const applyCleaning = (value: string = '', cleaning?: FeedCleaning) => {
   let output = value;
@@ -206,8 +211,14 @@ type FeedConfig = {
 const resolveParseConfig = (feed: FeedConfig): Record<string, unknown> => {
   const raw =
     (feed.parseConfig && typeof feed.parseConfig === 'object' ? feed.parseConfig : null) ||
-    (feed.parse_config && typeof feed.parse_config === 'object' ? feed.parse_config : null);
-  return raw || {};
+    (feed.parse_config && typeof feed.parse_config === 'object' ? feed.parse_config : null) ||
+    (feed.cleaning && typeof feed.cleaning === 'object'
+      ? (feed.cleaning as { parse_config?: unknown }).parse_config
+      : null);
+  if (raw && typeof raw === 'object') {
+    return raw as Record<string, unknown>;
+  }
+  return {} as Record<string, unknown>;
 };
 
 type FeedItemResult = {

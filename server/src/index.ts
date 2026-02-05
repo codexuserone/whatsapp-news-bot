@@ -182,7 +182,24 @@ const start = async () => {
   if (disableSchedulers) {
     logger.warn('Schedulers are disabled via DISABLE_SCHEDULERS');
   } else {
-    await initSchedulers(whatsappClient);
+    // If WhatsApp leasing is supported, only the lease-holder should run polling/schedulers.
+    // This avoids duplicate feed polling + queue churn during rolling deploys.
+    const status = whatsappClient?.getStatus?.();
+    const lease = status?.lease;
+    const leaseSupported = Boolean(lease && typeof lease.supported === 'boolean' ? lease.supported : false);
+    const leaseHeld = Boolean(lease && typeof lease.held === 'boolean' ? lease.held : false);
+    if (whatsappClient && leaseSupported && !leaseHeld) {
+      logger.warn(
+        {
+          whatsappStatus: status?.status,
+          instanceId: status?.instanceId,
+          lease
+        },
+        'Skipping schedulers: WhatsApp lease not held (another instance is active)'
+      );
+    } else {
+      await initSchedulers(whatsappClient);
+    }
   }
 };
 

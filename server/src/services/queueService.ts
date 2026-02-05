@@ -531,6 +531,7 @@ type Schedule = {
   cron_expression?: string | null;
   timezone?: string | null;
   last_run_at?: string | null;
+  last_queued_at?: string | null;
   active?: boolean;
 };
 
@@ -538,57 +539,96 @@ const queueSinceLastRunForSchedule = async (
   supabase: SupabaseClient,
   schedule: Schedule,
   targets: Target[]
-): Promise<{ queued: number; feedItemCount: number }> => {
-  if (!schedule.feed_id) return { queued: 0, feedItemCount: 0 };
-  if (!schedule.last_run_at) return { queued: 0, feedItemCount: 0 };
-  if (!targets.length) return { queued: 0, feedItemCount: 0 };
-
-  const maxItems = 100;
-  const { data: items, error: itemsError } = await supabase
-    .from('feed_items')
-    .select('id')
-    .eq('feed_id', schedule.feed_id)
-    .gt('created_at', schedule.last_run_at)
-    .order('created_at', { ascending: true })
-    .limit(maxItems);
-
-  if (itemsError) {
-    logger.warn({ scheduleId: schedule.id, error: itemsError }, 'Failed to load feed items since last run');
-    return { queued: 0, feedItemCount: 0 };
-  }
-
-  const feedItemIds = (items || []).map((i: { id?: string }) => i.id).filter(Boolean) as string[];
-  if (!feedItemIds.length) return { queued: 0, feedItemCount: 0 };
+): Promise<{ queued: number; feedItemCount: number; cursorAt: string | null }> => {
+  if (!schedule.feed_id) return { queued: 0, feedItemCount: 0, cursorAt: null };
+  const sinceIso = schedule.last_queued_at || schedule.last_run_at;
+  if (!sinceIso) return { queued: 0, feedItemCount: 0, cursorAt: null };
+  if (!targets.length) return { queued: 0, feedItemCount: 0, cursorAt: null };
 
   const targetIds = targets.map((t) => t.id).filter(Boolean) as string[];
-  if (!targetIds.length) return { queued: 0, feedItemCount: feedItemIds.length };
+  if (!targetIds.length) return { queued: 0, feedItemCount: 0, cursorAt: null };
 
-  const toUpsert: Array<Record<string, unknown>> = [];
-  for (const feedItemId of feedItemIds) {
-    for (const targetId of targetIds) {
-      toUpsert.push({
-        feed_item_id: feedItemId,
-        target_id: targetId,
-        schedule_id: schedule.id,
-        template_id: schedule.template_id,
-        status: 'pending'
-      });
+  const FEED_PAGE_SIZE = 200;
+  const LOG_BATCH_SIZE = 1000;
+
+  let cursorAt = sinceIso;
+  let cursorId: string | null = null;
+  let totalQueued = 0;
+  let totalFeedItems = 0;
+
+  const flushBatch = async (batch: Array<Record<string, unknown>>) => {
+    if (!batch.length) return 0;
+    const { data: insertedRows, error: upsertError } = await supabase
+      .from('message_logs')
+      .upsert(batch, { onConflict: 'schedule_id,feed_item_id,target_id', ignoreDuplicates: true })
+      .select('id');
+    if (upsertError) {
+      logger.warn({ scheduleId: schedule.id, error: upsertError }, 'Failed to queue items since last run');
+      return 0;
+    }
+    return insertedRows?.length || 0;
+  };
+
+  while (true) {
+    let query = supabase
+      .from('feed_items')
+      .select('id, created_at')
+      .eq('feed_id', schedule.feed_id)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(FEED_PAGE_SIZE);
+
+    if (cursorId) {
+      query = query.or(`created_at.gt.${cursorAt},and(created_at.eq.${cursorAt},id.gt.${cursorId})`);
+    } else {
+      query = query.gt('created_at', cursorAt);
+    }
+
+    const { data: page, error: itemsError } = await query;
+    if (itemsError) {
+      logger.warn({ scheduleId: schedule.id, error: itemsError }, 'Failed to load feed items since last queued');
+      break;
+    }
+
+    const items = (page || []) as Array<{ id?: string; created_at?: string }>;
+    if (!items.length) {
+      break;
+    }
+
+    totalFeedItems += items.length;
+
+    let batch: Array<Record<string, unknown>> = [];
+    for (const item of items) {
+      const feedItemId = item?.id ? String(item.id) : null;
+      if (!feedItemId) continue;
+      for (const targetId of targetIds) {
+        batch.push({
+          feed_item_id: feedItemId,
+          target_id: targetId,
+          schedule_id: schedule.id,
+          template_id: schedule.template_id,
+          status: 'pending'
+        });
+        if (batch.length >= LOG_BATCH_SIZE) {
+          totalQueued += await flushBatch(batch);
+          batch = [];
+        }
+      }
+    }
+    if (batch.length) {
+      totalQueued += await flushBatch(batch);
+    }
+
+    const last = items[items.length - 1];
+    if (last?.created_at) {
+      cursorAt = String(last.created_at);
+    }
+    if (last?.id) {
+      cursorId = String(last.id);
     }
   }
 
-  if (!toUpsert.length) return { queued: 0, feedItemCount: feedItemIds.length };
-
-  const { data: insertedRows, error: upsertError } = await supabase
-    .from('message_logs')
-    .upsert(toUpsert, { onConflict: 'schedule_id,feed_item_id,target_id', ignoreDuplicates: true })
-    .select('id');
-
-  if (upsertError) {
-    logger.warn({ scheduleId: schedule.id, error: upsertError }, 'Failed to queue items since last run');
-    return { queued: 0, feedItemCount: feedItemIds.length };
-  }
-
-  return { queued: insertedRows?.length || 0, feedItemCount: feedItemIds.length };
+  return { queued: totalQueued, feedItemCount: totalFeedItems, cursorAt: cursorAt || null };
 };
 
 type QueueLatestResult = {
@@ -599,6 +639,7 @@ type QueueLatestResult = {
   reason?: string;
   feedItemId?: string;
   feedItemTitle?: string | null;
+  cursorAt?: string | null;
 };
 
 const queueLatestForSchedule = async (
@@ -640,7 +681,7 @@ const queueLatestForSchedule = async (
 
   const { data: latestFeedItem } = await supabase
     .from('feed_items')
-    .select('id, title')
+    .select('id, title, created_at')
     .eq('feed_id', schedule.feed_id)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -730,7 +771,8 @@ const queueLatestForSchedule = async (
     revived,
     skipped,
     feedItemId: latestFeedItem.id,
-    feedItemTitle: latestFeedItem.title || null
+    feedItemTitle: latestFeedItem.title || null,
+    cursorAt: latestFeedItem.created_at ? String(latestFeedItem.created_at) : null
   };
 };
 
@@ -833,12 +875,15 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
     }
 
     let queuedCount = 0;
-    if (schedule.last_run_at) {
+    let queueCursorAt: string | null = null;
+    if (schedule.last_queued_at || schedule.last_run_at) {
       const sinceResult = await queueSinceLastRunForSchedule(supabase, schedule, targets);
       queuedCount += sinceResult.queued;
+      queueCursorAt = sinceResult.cursorAt;
     } else {
       const latestResult = await queueLatestForSchedule(scheduleId, { schedule, targets });
       queuedCount += latestResult.queued;
+      queueCursorAt = latestResult.cursorAt || null;
     }
 
     const shabbosStatus = await isCurrentlyShabbos();
@@ -1115,10 +1160,11 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
 
     const lastRunAt = new Date().toISOString();
     const nextRunAt = schedule.cron_expression ? computeNextRunAt(schedule.cron_expression, schedule.timezone) : null;
-    await supabase
-      .from('schedules')
-      .update({ last_run_at: lastRunAt, next_run_at: nextRunAt })
-      .eq('id', scheduleId);
+    const scheduleUpdates: Record<string, unknown> = { last_run_at: lastRunAt, next_run_at: nextRunAt };
+    if (queueCursorAt) {
+      scheduleUpdates.last_queued_at = queueCursorAt;
+    }
+    await supabase.from('schedules').update(scheduleUpdates).eq('id', scheduleId);
 
     logger.info({ scheduleId, sentCount }, 'Dispatch completed successfully');
     return { sent: sentCount, queued: queuedCount };

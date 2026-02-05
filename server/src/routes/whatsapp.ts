@@ -206,6 +206,41 @@ const whatsappRoutes = () => {
     res.json({ ok: true, messageId: result?.key?.id });
   }));
 
+  // Get recent outbox: messages the client believes it sent (for debugging ordering/media)
+  router.get('/outbox', asyncHandler(async (req: Request, res: Response) => {
+    const whatsapp = req.app.locals.whatsapp;
+    if (!whatsapp) {
+      return res.json({ messages: [], statuses: [] });
+    }
+    const recentSent: Map<string, unknown> = whatsapp.recentSentMessages || new Map();
+    const recentStatuses: Map<string, unknown> = whatsapp.recentMessageStatuses || new Map();
+    const messages = Array.from(recentSent.entries()).map(([id, msg]) => {
+      const m = msg as Record<string, unknown>;
+      const key = m.key as Record<string, unknown> | undefined;
+      const message = m.message as Record<string, unknown> | undefined;
+      return {
+        id,
+        remoteJid: key?.remoteJid ?? null,
+        fromMe: key?.fromMe ?? null,
+        timestamp: m.messageTimestamp ?? null,
+        hasImage: Boolean(message?.imageMessage),
+        hasText: Boolean(message?.conversation || message?.extendedTextMessage),
+        hasCaption: Boolean((message?.imageMessage as Record<string,unknown>)?.caption)
+      };
+    });
+    const statuses = Array.from(recentStatuses.entries()).map(([id, snap]) => {
+      const s = snap as Record<string, unknown>;
+      return {
+        id,
+        status: s.status ?? null,
+        statusLabel: s.statusLabel ?? null,
+        remoteJid: s.remoteJid ?? null,
+        updatedAtMs: s.updatedAtMs ?? null
+      };
+    });
+    res.json({ messages, statuses });
+  }));
+
   return router;
 };
 

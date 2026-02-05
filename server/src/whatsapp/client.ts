@@ -471,37 +471,42 @@ class WhatsAppClient {
           this.leaseExpiresAt = lease.expiresAt;
 
           if (lease.supported && !lease.ok) {
-            // Auto-takeover: force acquire the lease after a short delay
+            // Auto-takeover: force acquire the lease immediately
             // This prevents users from having to manually click "Take Over"
-            logger.warn({ holder: lease.ownerId }, 'Lease held by another instance, attempting auto-takeover in 10s...');
+            logger.warn({ holder: lease.ownerId }, 'Lease held, attempting auto-takeover...');
             this.status = 'connecting';
-            this.lastError = 'Taking over session from previous instance...';
+            this.lastError = 'Taking over WhatsApp session...';
             
-            // Wait 10 seconds then force takeover
-            setTimeout(async () => {
-              try {
-                if (authStore.forceAcquireLease) {
-                  const takeover = await authStore.forceAcquireLease(this.instanceId, 90_000);
-                  if (takeover.ok) {
-                    logger.info('Auto-takeover successful, reconnecting...');
-                    this.leaseHeld = true;
-                    this.leaseOwnerId = takeover.ownerId;
-                    this.leaseExpiresAt = takeover.expiresAt;
-                    this.startLeaseRenewal(90_000);
-                    await this.connect();
-                  } else {
-                    logger.error('Auto-takeover failed, will retry...');
-                    this.scheduleReconnect(30000);
-                  }
+            try {
+              if (authStore.forceAcquireLease) {
+                const takeover = await authStore.forceAcquireLease(this.instanceId, 90_000);
+                if (takeover.ok) {
+                  logger.info('Auto-takeover successful');
+                  this.leaseHeld = true;
+                  this.leaseOwnerId = takeover.ownerId;
+                  this.leaseExpiresAt = takeover.expiresAt;
+                  this.startLeaseRenewal(90_000);
+                  // Continue with connection below (don't return)
+                } else {
+                  logger.error({ reason: takeover.reason }, 'Auto-takeover failed');
+                  this.status = 'disconnected';
+                  this.lastError = 'Could not take over session. Retrying...';
+                  this.isConnecting = false;
+                  this.scheduleReconnect(30000);
+                  return;
                 }
-              } catch (error) {
-                logger.error({ error }, 'Auto-takeover error, will retry...');
-                this.scheduleReconnect(30000);
+              } else {
+                logger.warn('Force acquire not supported, continuing without lease');
+                this.leaseHeld = true;
               }
-            }, 10000);
-            
-            this.isConnecting = false;
-            return;
+            } catch (error) {
+              logger.error({ error }, 'Auto-takeover error');
+              this.status = 'disconnected';
+              this.lastError = 'Session takeover error. Retrying...';
+              this.isConnecting = false;
+              this.scheduleReconnect(30000);
+              return;
+            }
           }
 
           if (lease.supported && lease.ok) {

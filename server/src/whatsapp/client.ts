@@ -55,6 +55,7 @@ class WhatsAppClient {
   leaseExpiresAt: string | null;
   leaseRenewTimer: NodeJS.Timeout | null;
   reconnectAttempts: number;
+  conflictAttempts: number;
   maxReconnectAttempts: number;
   isConnecting: boolean;
   reconnectTimer: NodeJS.Timeout | null;
@@ -85,6 +86,7 @@ class WhatsAppClient {
     this.leaseExpiresAt = null;
     this.leaseRenewTimer = null;
     this.reconnectAttempts = 0;
+    this.conflictAttempts = 0;
     this.maxReconnectAttempts = 5;
     this.isConnecting = false;
     this.reconnectTimer = null;
@@ -626,6 +628,7 @@ class WhatsAppClient {
           this.lastError = null;
           this.lastSeenAt = new Date();
           this.reconnectAttempts = 0;
+          this.conflictAttempts = 0; // Reset conflict counter on successful connection
           this.isAuthCorrupted = false;
           this.lastSenderKeyResetAt = null;
           this.lastKeyCacheResetAt = null;
@@ -683,11 +686,25 @@ class WhatsAppClient {
 
           // Connection conflict - another device logged in
           if (statusCode === 440 || reason?.includes('conflict')) {
-            logger.warn('Connection conflict detected - another session is active, will auto-retry');
+            this.conflictAttempts = (this.conflictAttempts || 0) + 1;
+            
+            if (this.conflictAttempts > 3) {
+              // After 3 conflict attempts, stay disconnected to prevent fighting
+              logger.error('Too many connection conflicts, staying disconnected. Another instance is likely active.');
+              this.status = 'disconnected';
+              this.lastError = 'Another WhatsApp instance is active. If this persists, click Hard Refresh.';
+              return;
+            }
+            
+            logger.warn({ attempt: this.conflictAttempts }, 'Connection conflict detected - another session is active, will retry with backoff');
             this.status = 'connecting';
-            this.lastError = 'Session conflict detected, reconnecting...';
-            // Auto-reconnect after a delay instead of requiring manual action
-            this.scheduleReconnect(10000);
+            this.lastError = null; // Don't show confusing message
+            // Exponential backoff: 15s, 30s, 60s + random jitter to prevent simultaneous reconnection
+            const baseDelay = Math.min(15000 * Math.pow(2, this.conflictAttempts - 1), 60000);
+            const jitter = Math.random() * 5000; // 0-5s random delay
+            const delay = baseDelay + jitter;
+            logger.info({ delay: Math.round(delay/1000) }, 'Scheduling reconnect with jitter');
+            this.scheduleReconnect(delay);
             return;
           }
 

@@ -575,6 +575,7 @@ class WhatsAppClient {
       const socketConfig: Record<string, unknown> = {
         auth: state,
         printQRInTerminal: false,
+        syncFullHistory: false,
         markOnlineOnConnect: false,
         emitOwnEvents: true,
         browser,

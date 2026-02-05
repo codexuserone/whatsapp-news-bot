@@ -135,11 +135,13 @@ const SchedulesPage = () => {
           <CardContent>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
               {Object.keys(form.formState.errors).length > 0 && (
-                <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-                  <ul className="list-disc list-inside space-y-0.5">
-                    {form.formState.errors.target_ids && <li>Select at least one target</li>}
-                    {form.formState.errors.template_id && <li>Select a template</li>}
+                <div className="rounded-lg border-2 border-destructive bg-destructive/10 p-4 text-sm text-destructive">
+                  <p className="font-semibold mb-2 text-base">Please complete all required fields:</p>
+                  <ul className="list-disc list-inside space-y-1">
                     {form.formState.errors.name && <li>Name is required</li>}
+                    {form.formState.errors.feed_id && <li>Select a feed from the dropdown</li>}
+                    {form.formState.errors.target_ids && <li>Select at least one target (WhatsApp group/channel)</li>}
+                    {form.formState.errors.template_id && <li>Select a message template</li>}
                   </ul>
                 </div>
               )}

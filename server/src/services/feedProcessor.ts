@@ -86,6 +86,8 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
       const normalizedUrlValue = normalizeUrl(item.url || '');
       const contentHash = hashContent(item.title || '', item.url || '');
 
+      const extraRaw = item.raw && typeof item.raw === 'object' ? item.raw : null;
+
       const { data: feedItem, error } = await supabase
         .from('feed_items')
         .insert({
@@ -103,7 +105,7 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
             normalizedTitle: normalizedTitle,
             normalizedUrl: normalizedUrlValue,
             hash: contentHash,
-            source: item.raw || null
+            ...(extraRaw ? extraRaw : {})
           },
           content: item.content,
           author: item.author,

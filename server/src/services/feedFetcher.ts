@@ -108,12 +108,62 @@ const isValidUrl = (value?: string) => {
   }
 };
 
+const isDisallowedImageCandidate = (value?: string | null) => {
+  if (!value) return true;
+  const normalized = String(value).toLowerCase();
+  return [
+    '.mp4',
+    '.mov',
+    '.m4v',
+    '.webm',
+    '.avi',
+    '.mkv',
+    '.mp3',
+    '.wav',
+    '.m3u8'
+  ].some((ext) => normalized.includes(ext));
+};
+
 const pickFirstUrl = (...candidates: Array<string | undefined | null>) => {
   for (const candidate of candidates) {
     const value = typeof candidate === 'string' ? candidate.trim() : '';
     if (value && isValidUrl(value)) return value;
   }
   return undefined;
+};
+
+const pickFirstImageUrl = (...candidates: Array<string | undefined | null>) => {
+  for (const candidate of candidates) {
+    const value = typeof candidate === 'string' ? candidate.trim() : '';
+    if (!value) continue;
+    if (!isValidUrl(value)) continue;
+    if (isDisallowedImageCandidate(value)) continue;
+    return value;
+  }
+  return undefined;
+};
+
+const toRenderedTextValue = (value: unknown): string | undefined => {
+  const direct = toTextValue(value);
+  if (direct != null) return direct;
+  if (value && typeof value === 'object') {
+    const rendered = (value as Record<string, unknown>).rendered;
+    const renderedText = toTextValue(rendered);
+    if (renderedText != null) return renderedText;
+  }
+  return undefined;
+};
+
+const withWordPressEmbed = (url: string) => {
+  try {
+    const parsed = new URL(url);
+    if (parsed.pathname.includes('/wp-json/wp/v2/') && !parsed.searchParams.has('_embed')) {
+      parsed.searchParams.set('_embed', '1');
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 };
 
 const extractFirstImageFromHtml = (html?: string) => {
@@ -181,6 +231,9 @@ const fetchRssItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
       };
       const guidRaw = rssItem.guid || rssItem.id || rssItem.link;
       const guidValue = toStringValue(guidRaw) || `${feed.url}-${rssItem.title}-${Date.now()}`;
+      const htmlImage = extractFirstImageFromHtml(
+        toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet)
+      );
       return {
         guid: guidValue,
         title: toStringValue(rssItem.title),
@@ -188,8 +241,10 @@ const fetchRssItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
         description: toStringValue(rssItem.contentSnippet || rssItem.content || rssItem['content:encoded']),
         content: toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet),
         author: toStringValue(rssItem.creator || rssItem.author || rssItem['dc:creator']),
-        imageUrl: toStringValue(
-          rssItem.enclosure?.url || rssItem['media:content']?.$?.url || rssItem['media:content']?.url
+        imageUrl: pickFirstImageUrl(
+          toStringValue(rssItem.enclosure?.url),
+          toStringValue(rssItem['media:content']?.$?.url || rssItem['media:content']?.url),
+          htmlImage
         ),
         publishedAt: toStringValue(rssItem.isoDate || rssItem.pubDate),
         categories: Array.isArray(rssItem.categories) ? rssItem.categories.map((value) => String(value)) : []
@@ -242,7 +297,7 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
     const htmlImage = extractFirstImageFromHtml(
       toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet)
     );
-    const imageUrl = pickFirstUrl(
+    const imageUrl = pickFirstImageUrl(
       toStringValue(rssItem.enclosure?.url),
       toStringValue(rssItem['media:content']?.$?.url || rssItem['media:content']?.url),
       toStringValue(rssItem['media:thumbnail']?.$?.url || rssItem['media:thumbnail']?.url),
@@ -269,35 +324,47 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
 
 const fetchJsonItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
   try {
-    await assertSafeOutboundUrl(feed.url);
-    const response = await axios.get(feed.url, { timeout: 15000 });
+    const requestUrl = withWordPressEmbed(feed.url);
+    await assertSafeOutboundUrl(requestUrl);
+    const response = await axios.get(requestUrl, { timeout: 15000 });
     const json = response.data;
     const itemsPath = (feed.parseConfig?.itemsPath as string) || 'items';
-    const itemsRaw = getPath(json as Record<string, unknown>, itemsPath);
-    const items = Array.isArray(itemsRaw) ? itemsRaw : [];
+    const items = extractJsonItemsArray(json, itemsPath);
     return (items as Record<string, unknown>[]).map((item) => {
       const url =
         getPath(item, (feed.parseConfig?.linkPath as string) || 'link') || getPath(item, 'url');
       const guidRaw = getPath(item, 'id') || getPath(item, 'guid') || url;
       return {
         guid: toStringValue(guidRaw) || `${feed.url}-${Date.now()}-${Math.random()}`,
-        title: toStringValue(getPath(item, (feed.parseConfig?.titlePath as string) || 'title')),
+        title:
+          toRenderedTextValue(getPath(item, (feed.parseConfig?.titlePath as string) || 'title')) ||
+          toRenderedTextValue(getPath(item, 'title.rendered')) ||
+          toRenderedTextValue(getPath(item, 'name')),
         url: removeUtm(String(url || '')),
         description:
-          toStringValue(getPath(item, (feed.parseConfig?.descriptionPath as string) || 'description')) ||
-          toStringValue(getPath(item, 'summary')),
+          toRenderedTextValue(getPath(item, (feed.parseConfig?.descriptionPath as string) || 'description')) ||
+          toRenderedTextValue(getPath(item, 'excerpt.rendered')) ||
+          toRenderedTextValue(getPath(item, 'summary')),
         content:
-          toStringValue(getPath(item, 'content')) ||
-          toStringValue(getPath(item, 'content_html')) ||
-          toStringValue(getPath(item, 'content_text')),
+          toRenderedTextValue(getPath(item, 'content.rendered')) ||
+          toRenderedTextValue(getPath(item, 'content')) ||
+          toRenderedTextValue(getPath(item, 'content_html')) ||
+          toRenderedTextValue(getPath(item, 'content_text')),
         author:
           toStringValue(getPath(item, 'author')) || toStringValue(getPath(item, 'author.name')),
-        imageUrl:
-          toStringValue(getPath(item, (feed.parseConfig?.imagePath as string) || 'image')) ||
-          toStringValue(getPath(item, 'banner_image')),
+        imageUrl: pickFirstImageUrl(
+          toRenderedTextValue(getPath(item, (feed.parseConfig?.imagePath as string) || 'image')),
+          toRenderedTextValue(getPath(item, 'image_url')),
+          toRenderedTextValue(getPath(item, 'featured_image')),
+          toRenderedTextValue(getPath(item, 'banner_image')),
+          toRenderedTextValue(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.full.source_url')),
+          toRenderedTextValue(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.large.source_url')),
+          toRenderedTextValue(getPath(item, '_embedded.wp:featuredmedia[0].source_url'))
+        ),
         publishedAt:
-          toStringValue(getPath(item, 'date_published')) ||
+          toStringValue(getPath(item, 'date_gmt')) ||
           toStringValue(getPath(item, 'date')) ||
+          toStringValue(getPath(item, 'date_published')) ||
           toStringValue(getPath(item, 'pubDate')) ||
           toStringValue(getPath(item, 'publishedAt')),
         categories: (getPath(item, 'tags') as string[]) || (getPath(item, 'categories') as string[]) || []
@@ -310,14 +377,15 @@ const fetchJsonItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
 };
 
 const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedItemResult[]; meta: FetchMeta }> => {
-  await assertSafeOutboundUrl(feed.url);
+  const requestUrl = withWordPressEmbed(feed.url);
+  await assertSafeOutboundUrl(requestUrl);
   const headers: Record<string, string> = {};
   if (feed.etag) headers['If-None-Match'] = String(feed.etag);
   if (feed.last_modified) headers['If-Modified-Since'] = String(feed.last_modified);
   headers['User-Agent'] = DEFAULT_USER_AGENT;
   headers['Accept'] = 'application/json, text/json, */*;q=0.8';
 
-  const response = await axios.get(feed.url, {
+  const response = await axios.get(requestUrl, {
     timeout: 15000,
     headers,
     validateStatus: (status: number) => (status >= 200 && status < 300) || status === 304
@@ -350,33 +418,50 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
       toTextValue(getPath(rawUrl as Record<string, unknown>, 'url')) ||
       toTextValue(getPath(rawUrl as Record<string, unknown>, 'href'));
     const guidRaw = getPath(item, 'id') || getPath(item, 'guid') || url;
-    const imageCandidate = pickFirstUrl(
-      toTextValue(getPath(item, (feed.parseConfig?.imagePath as string) || 'image')),
-      toTextValue(getPath(item, 'image_url')),
-      toTextValue(getPath(item, 'imageUrl')),
-      toTextValue(getPath(item, 'image.url')),
-      toTextValue(getPath(item, 'image.href')),
-      toTextValue(getPath(item, 'thumbnail')),
-      toTextValue(getPath(item, 'thumbnail_url')),
-      toTextValue(getPath(item, 'featured_image')),
-      toTextValue(getPath(item, 'banner_image'))
+    const imageCandidate = pickFirstImageUrl(
+      toRenderedTextValue(getPath(item, (feed.parseConfig?.imagePath as string) || 'image')),
+      toRenderedTextValue(getPath(item, 'image_url')),
+      toRenderedTextValue(getPath(item, 'imageUrl')),
+      toRenderedTextValue(getPath(item, 'image.url')),
+      toRenderedTextValue(getPath(item, 'image.href')),
+      toRenderedTextValue(getPath(item, 'thumbnail')),
+      toRenderedTextValue(getPath(item, 'thumbnail_url')),
+      toRenderedTextValue(getPath(item, 'featured_image')),
+      toRenderedTextValue(getPath(item, 'banner_image')),
+      toRenderedTextValue(getPath(item, 'yoast_head_json.og_image[0].url')),
+      toRenderedTextValue(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.full.source_url')),
+      toRenderedTextValue(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.large.source_url')),
+      toRenderedTextValue(getPath(item, '_embedded.wp:featuredmedia[0].source_url'))
     );
+    const titleCandidate =
+      toRenderedTextValue(getPath(item, (feed.parseConfig?.titlePath as string) || 'title')) ||
+      toRenderedTextValue(getPath(item, 'title.rendered')) ||
+      toRenderedTextValue(getPath(item, 'name'));
+    const descriptionCandidate =
+      toRenderedTextValue(getPath(item, (feed.parseConfig?.descriptionPath as string) || 'description')) ||
+      toRenderedTextValue(getPath(item, 'excerpt.rendered')) ||
+      toRenderedTextValue(getPath(item, 'summary'));
+    const contentCandidate =
+      toRenderedTextValue(getPath(item, 'content.rendered')) ||
+      toRenderedTextValue(getPath(item, 'content')) ||
+      toRenderedTextValue(getPath(item, 'content_html')) ||
+      toRenderedTextValue(getPath(item, 'content_text'));
+    const authorCandidate =
+      toRenderedTextValue(getPath(item, '_embedded.author[0].name')) ||
+      toRenderedTextValue(getPath(item, 'author.name')) ||
+      toRenderedTextValue(getPath(item, 'author'));
+    const wpId = toStringValue(getPath(item, 'id'));
     return {
       guid: toStringValue(guidRaw) || `${feed.url}-${Date.now()}-${Math.random()}`,
-      title: toTextValue(getPath(item, (feed.parseConfig?.titlePath as string) || 'title')),
+      title: titleCandidate || descriptionCandidate || contentCandidate,
       url: removeUtm(String(url || '')),
-      description:
-        toTextValue(getPath(item, (feed.parseConfig?.descriptionPath as string) || 'description')) ||
-        toTextValue(getPath(item, 'summary')),
-      content:
-        toTextValue(getPath(item, 'content')) ||
-        toTextValue(getPath(item, 'content_html')) ||
-        toTextValue(getPath(item, 'content_text')),
-      author:
-        toTextValue(getPath(item, 'author.name')) || toTextValue(getPath(item, 'author')),
+      description: descriptionCandidate,
+      content: contentCandidate,
+      author: authorCandidate,
       imageUrl: imageCandidate,
       publishedAt:
         toTextValue(getPath(item, 'date_published')) ||
+        toTextValue(getPath(item, 'date_gmt')) ||
         toTextValue(getPath(item, 'date')) ||
         toTextValue(getPath(item, 'pubDate')) ||
         toTextValue(getPath(item, 'publishedAt')),
@@ -384,7 +469,15 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
         ? (getPath(item, 'tags') as unknown[]).map((value) => String(value))
         : Array.isArray(getPath(item, 'categories'))
           ? (getPath(item, 'categories') as unknown[]).map((value) => String(value))
-          : []
+          : [],
+      raw: {
+        ...(wpId ? { wp_id: wpId } : {}),
+        wp_slug: toTextValue(getPath(item, 'slug')),
+        wp_type: toTextValue(getPath(item, 'type')),
+        wp_status: toTextValue(getPath(item, 'status')),
+        wp_featured_media: toTextValue(getPath(item, 'featured_media')),
+        wp_featured_image: imageCandidate
+      }
     };
   });
 

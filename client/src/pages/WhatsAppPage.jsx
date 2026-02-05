@@ -106,7 +106,7 @@ const WhatsAppPage = () => {
     if (statusLoading) return <Badge variant="secondary">Loading...</Badge>;
     if (isConnected) return <Badge variant="success">Connected</Badge>;
     if (isQrReady) return <Badge variant="warning">Scan QR Code</Badge>;
-    if (status?.status === 'connecting') return <Badge variant="secondary">Connecting...</Badge>;
+    if (status?.status === 'connecting' || status?.status === 'conflict') return <Badge variant="secondary">Connecting...</Badge>;
     return <Badge variant="destructive">{status?.status || 'Disconnected'}</Badge>;
   };
 
@@ -140,17 +140,7 @@ const WhatsAppPage = () => {
             {clearSenderKeys.isPending ? 'Clearing Keys...' : 'Clear Sender Keys'}
           </Button>
 
-          {isConflict && status?.lease?.supported && (
-            <Button
-              variant="destructive"
-              onClick={() => takeover.mutate()}
-              disabled={takeover.isPending}
-              title="If a previous deploy is holding the session, take it over"
-            >
-              <RefreshCw className={`mr-2 h-4 w-4 ${takeover.isPending ? 'animate-spin' : ''}`} />
-              {takeover.isPending ? 'Taking Over...' : 'Take Over Session'}
-            </Button>
-          )}
+
         </div>
       </div>
 
@@ -172,11 +162,9 @@ const WhatsAppPage = () => {
               </div>
               {status?.lease?.supported && (
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Lease</span>
-                  <span className="font-medium font-mono text-xs">
-                    {status.lease.held
-                      ? `held (this instance)`
-                      : `held by ${status.lease.ownerId || 'unknown'}${status.lease.expiresAt ? ` until ${new Date(status.lease.expiresAt).toLocaleTimeString()}` : ''}`}
+                  <span className="text-muted-foreground">Session</span>
+                  <span className="font-medium text-xs">
+                    {status.lease.held ? 'Active' : 'Initializing...'}
                   </span>
                 </div>
               )}
@@ -194,9 +182,16 @@ const WhatsAppPage = () => {
               )}
             </div>
             
-            {status?.lastError && (
+            {status?.lastError && !status.lastError.includes('Taking over') && (
               <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
                 <strong>Error:</strong> {status.lastError}
+              </div>
+            )}
+            
+            {status?.lastError?.includes('Taking over') && (
+              <div className="rounded-lg bg-secondary/50 p-3 text-sm">
+                <RefreshCw className="inline h-4 w-4 mr-2 animate-spin" />
+                Connecting to WhatsApp...
               </div>
             )}
 

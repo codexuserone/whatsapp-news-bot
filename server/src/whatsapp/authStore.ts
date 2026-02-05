@@ -575,6 +575,12 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
       
       const { error: statusError } = await supabase.from('auth_state').update(updates).eq('session_id', sessionId);
       if (statusError) {
+        // Silently ignore constraint violations - they'll be fixed by migration 014
+        const msg = String(statusError);
+        if (msg.includes('auth_state_status_check') && status === 'conflict') {
+          // This is expected until migration runs - don't spam logs
+          return;
+        }
         console.warn('Failed to update auth_state status:', statusError);
       }
     },

@@ -471,16 +471,36 @@ class WhatsAppClient {
           this.leaseExpiresAt = lease.expiresAt;
 
           if (lease.supported && !lease.ok) {
-            this.status = 'conflict';
-            const holder = lease.ownerId || 'unknown';
-            const until = lease.expiresAt || 'unknown';
-            this.lastError = `Another bot instance is active (lease held by ${holder} until ${until}).`;
-            if (authStore.updateStatus) {
-              await authStore.updateStatus('conflict');
-            }
+            // Auto-takeover: force acquire the lease after a short delay
+            // This prevents users from having to manually click "Take Over"
+            logger.warn({ holder: lease.ownerId }, 'Lease held by another instance, attempting auto-takeover in 10s...');
+            this.status = 'connecting';
+            this.lastError = 'Taking over session from previous instance...';
+            
+            // Wait 10 seconds then force takeover
+            setTimeout(async () => {
+              try {
+                if (authStore.forceAcquireLease) {
+                  const takeover = await authStore.forceAcquireLease(this.instanceId, 90_000);
+                  if (takeover.ok) {
+                    logger.info('Auto-takeover successful, reconnecting...');
+                    this.leaseHeld = true;
+                    this.leaseOwnerId = takeover.ownerId;
+                    this.leaseExpiresAt = takeover.expiresAt;
+                    this.startLeaseRenewal(90_000);
+                    await this.connect();
+                  } else {
+                    logger.error('Auto-takeover failed, will retry...');
+                    this.scheduleReconnect(30000);
+                  }
+                }
+              } catch (error) {
+                logger.error({ error }, 'Auto-takeover error, will retry...');
+                this.scheduleReconnect(30000);
+              }
+            }, 10000);
+            
             this.isConnecting = false;
-            // Retry periodically to take over after old instance stops.
-            this.scheduleReconnect(15000);
             return;
           }
 
@@ -656,12 +676,11 @@ class WhatsAppClient {
 
           // Connection conflict - another device logged in
           if (statusCode === 440 || reason?.includes('conflict')) {
-            logger.warn('Connection conflict detected - another session is active');
-            this.status = 'conflict';
-            this.lastError =
-              'Another session is active. Close other WhatsApp Web sessions or wait for the other bot instance to stop, then click Hard Refresh.';
-            // Don't auto-reconnect on conflict - let user decide
-            await authStore.updateStatus('conflict');
+            logger.warn('Connection conflict detected - another session is active, will auto-retry');
+            this.status = 'connecting';
+            this.lastError = 'Session conflict detected, reconnecting...';
+            // Auto-reconnect after a delay instead of requiring manual action
+            this.scheduleReconnect(10000);
             return;
           }
 

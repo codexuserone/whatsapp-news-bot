@@ -2,6 +2,7 @@ const { getSupabaseClient } = require('../db/supabase');
 const { isCurrentlyShabbos } = require('./shabbosService');
 const logger = require('../utils/logger');
 const { getErrorMessage } = require('../utils/errorUtils');
+const { normalizeMessageText } = require('../utils/messageText');
 
 type FeedItem = {
   id?: string;
@@ -23,47 +24,54 @@ type WhatsAppClient = { getStatus?: () => { status: string } };
 
 const applyTemplate = (templateBody: string, data: Record<string, unknown>): string => {
   if (!templateBody) return '';
-  return templateBody.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
+  const rendered = templateBody.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
     const value = data[key];
     return value != null ? String(value) : '';
   });
+  return normalizeMessageText(rendered);
 };
 
-const buildMessageData = (feedItem: FeedItem) => ({
-  id: feedItem?.id,
-  guid: (feedItem as unknown as { guid?: string }).guid,
-  title: feedItem?.title,
-  url: feedItem?.link,
-  link: feedItem?.link,
-  description: feedItem?.description,
-  content: feedItem?.content,
-  author: feedItem?.author,
-  image_url: feedItem?.image_url,
-  imageUrl: feedItem?.image_url,
-  normalized_url: (feedItem as unknown as { normalized_url?: string }).normalized_url,
-  normalizedUrl: (feedItem as unknown as { normalized_url?: string }).normalized_url,
-  content_hash: (feedItem as unknown as { content_hash?: string }).content_hash,
-  contentHash: (feedItem as unknown as { content_hash?: string }).content_hash,
-  pub_date: feedItem?.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
-  publishedAt: feedItem?.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
-  categories: Array.isArray(feedItem?.categories) ? feedItem.categories.join(', ') : '',
-  ...(typeof (feedItem as unknown as { raw_data?: unknown }).raw_data === 'object' &&
-  (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
-    ? Object.fromEntries(
-        Object.entries((feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data || {}).map(
-          ([key, value]) => {
-            if (value == null) return [key, ''];
-            if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return [key, value];
-            try {
-              return [key, JSON.stringify(value)];
-            } catch {
-              return [key, String(value)];
+const buildMessageData = (feedItem: FeedItem) => {
+  const normalizedDescription = String(feedItem?.description || '').trim();
+  const normalizedContent = String(feedItem?.content || '').trim();
+  const fallbackDescription = normalizedDescription || normalizedContent.slice(0, 280);
+
+  return {
+    id: feedItem?.id,
+    guid: (feedItem as unknown as { guid?: string }).guid,
+    title: feedItem?.title,
+    url: feedItem?.link,
+    link: feedItem?.link,
+    description: fallbackDescription,
+    content: feedItem?.content,
+    author: feedItem?.author,
+    image_url: feedItem?.image_url,
+    imageUrl: feedItem?.image_url,
+    normalized_url: (feedItem as unknown as { normalized_url?: string }).normalized_url,
+    normalizedUrl: (feedItem as unknown as { normalized_url?: string }).normalized_url,
+    content_hash: (feedItem as unknown as { content_hash?: string }).content_hash,
+    contentHash: (feedItem as unknown as { content_hash?: string }).content_hash,
+    pub_date: feedItem?.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
+    publishedAt: feedItem?.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
+    categories: Array.isArray(feedItem?.categories) ? feedItem.categories.join(', ') : '',
+    ...(typeof (feedItem as unknown as { raw_data?: unknown }).raw_data === 'object' &&
+    (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
+      ? Object.fromEntries(
+          Object.entries((feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data || {}).map(
+            ([key, value]) => {
+              if (value == null) return [key, ''];
+              if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return [key, value];
+              try {
+                return [key, JSON.stringify(value)];
+              } catch {
+                return [key, String(value)];
+              }
             }
-          }
+          )
         )
-      )
-    : {})
-});
+      : {})
+  };
+};
 
 const getScheduleDiagnostics = async (scheduleId: string, whatsappClient?: WhatsAppClient) => {
   const supabase = getSupabaseClient();

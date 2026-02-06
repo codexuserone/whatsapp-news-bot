@@ -67,6 +67,15 @@ const emptyResult = (): FeedProcessResult => ({
   errorCount: 0
 });
 
+const collapseWhitespace = (value: string) => String(value || '').replace(/\s+/g, ' ').trim();
+
+const makeSnippet = (value: string, maxLen = 280) => {
+  const normalized = collapseWhitespace(value);
+  if (!normalized) return '';
+  if (normalized.length <= maxLen) return normalized;
+  return `${normalized.slice(0, Math.max(maxLen - 1, 1)).trim()}…`;
+};
+
 const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult> => {
   const supabase = getSupabaseClient();
   if (!supabase || !feed.active) return emptyResult();
@@ -216,6 +225,11 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
         hash: contentHash
       };
 
+      const normalizedDescription = collapseWhitespace(String(item.description || ''));
+      const normalizedContent = collapseWhitespace(String(item.content || ''));
+      const fallbackSnippet = makeSnippet(normalizedContent, 280);
+      const descriptionForStorage = normalizedDescription || fallbackSnippet;
+
       for (const [key, value] of Object.entries(rawInput)) {
         if (value == null) continue;
         if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
@@ -230,14 +244,14 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
           guid,
           title: item.title,
           link: item.url,
-          description: item.description,
+          description: descriptionForStorage,
           image_url: item.imageUrl,
           image_source: item.imageUrl ? 'feed' : null,
           pub_date: item.publishedAt ? new Date(item.publishedAt).toISOString() : null,
           normalized_url: normalizedUrlValue || null,
           content_hash: contentHash || null,
           raw_data: rawData,
-          content: item.content,
+          content: normalizedContent || item.content,
           author: item.author,
           categories: item.categories || []
         })

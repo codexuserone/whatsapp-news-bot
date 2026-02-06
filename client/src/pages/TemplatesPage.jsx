@@ -12,6 +12,7 @@ import { Switch } from '../components/ui/switch';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Label } from '../components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '../components/ui/table';
 import { Layers, Pencil, Trash2, Eye, Loader2 } from 'lucide-react';
 
@@ -20,7 +21,8 @@ const schema = z.object({
   content: z.string().min(1),
   description: z.string().optional(),
   active: z.boolean().default(true),
-  send_images: z.boolean().default(true)
+  send_images: z.boolean().default(true),
+  send_mode: z.enum(['image', 'link_preview', 'text_only']).default('image')
 });
 
 const applyTemplate = (content, data) => {
@@ -56,21 +58,29 @@ const TemplatesPage = () => {
   const queryClient = useQueryClient();
   const textareaRef = useRef(null);
   const { data: templates = [] } = useQuery({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
+  const { data: feeds = [] } = useQuery({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
+  const [selectedFeedId, setSelectedFeedId] = useState('');
   const { data: feedItems = [] } = useQuery({ 
-    queryKey: ['feed-items'], 
-    queryFn: () => api.get('/api/feed-items') 
+    queryKey: ['feed-items', selectedFeedId], 
+    queryFn: () => api.get(selectedFeedId ? `/api/feed-items/by-feed/${selectedFeedId}` : '/api/feed-items'),
+    enabled: Boolean(selectedFeedId)
   });
-  const feedId = feedItems[0]?.feed_id;
   const { data: availableVariables = [] } = useQuery({ 
-    queryKey: ['available-variables', feedId], 
-    queryFn: () => api.get(`/api/templates/available-variables${feedId ? `?feed_id=${feedId}` : ''}`) 
+    queryKey: ['available-variables', selectedFeedId], 
+    queryFn: () => api.get(`/api/templates/available-variables${selectedFeedId ? `?feed_id=${selectedFeedId}` : ''}`) 
   });
   const [active, setActive] = useState(null);
   const [previewWithData, setPreviewWithData] = useState(true);
+
+  useEffect(() => {
+    if (!selectedFeedId && feeds.length > 0) {
+      setSelectedFeedId(feeds[0].id);
+    }
+  }, [selectedFeedId, feeds]);
   
   const sampleData = feedItems[0] ? {
     title: feedItems[0].title || 'Sample Title',
-    description: feedItems[0].description || 'Sample description text',
+    description: feedItems[0].description || feedItems[0].content || 'Sample description text',
     content: feedItems[0].content || feedItems[0].description || 'Full content here',
     link: feedItems[0].link || 'https://example.com/article',
     url: feedItems[0].link || 'https://example.com/article',
@@ -94,7 +104,7 @@ const TemplatesPage = () => {
 
   const form = useForm({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', content: '', description: '', active: true, send_images: true }
+    defaultValues: { name: '', content: '', description: '', active: true, send_images: true, send_mode: 'image' }
   });
 
   useEffect(() => {
@@ -104,7 +114,8 @@ const TemplatesPage = () => {
         content: active.content,
         description: active.description || '',
         active: active.active ?? true,
-        send_images: active.send_images ?? true
+        send_images: active.send_images ?? true,
+        send_mode: active.send_mode || (active.send_images === false ? 'link_preview' : 'image')
       });
     }
   }, [active, form]);
@@ -127,19 +138,21 @@ const TemplatesPage = () => {
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
       if (active?.id === id) {
         setActive(null);
-        form.reset({ name: '', content: '', description: '', active: true });
+        form.reset({ name: '', content: '', description: '', active: true, send_images: true, send_mode: 'image' });
       }
     },
     onError: (error) => alert(`Failed to delete template: ${error?.message || 'Unknown error'}`)
   });
 
   const onSubmit = (values) => {
+    const sendMode = values.send_mode || 'image';
     saveTemplate.mutate({
       name: values.name,
       content: values.content,
       description: values.description,
       active: values.active,
-      send_images: values.send_images
+      send_mode: sendMode,
+      send_images: sendMode === 'image'
     });
   };
 
@@ -204,6 +217,22 @@ const TemplatesPage = () => {
                 
                 {/* Available Variables */}
                 <div className="space-y-2">
+                  <Label htmlFor="template_feed_source">Feed source for variables</Label>
+                  <Select value={selectedFeedId || undefined} onValueChange={setSelectedFeedId}>
+                    <SelectTrigger id="template_feed_source">
+                      <SelectValue placeholder="Select feed source" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {feeds.map((feed) => (
+                        <SelectItem key={feed.id} value={feed.id}>
+                          {feed.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
                   <Label>Available Variables (click to insert)</Label>
                   <div className="flex flex-wrap gap-2 rounded-lg border p-3">
                     {availableVariables.length > 0 ? (
@@ -249,15 +278,23 @@ const TemplatesPage = () => {
                 
                 <Controller
                   control={form.control}
-                  name="send_images"
+                  name="send_mode"
                   render={({ field }) => (
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        id="send_images"
-                        checked={field.value}
-                        onCheckedChange={(checked) => field.onChange(checked === true)}
-                      />
-                      <Label htmlFor="send_images" className="cursor-pointer">Send Images with Message</Label>
+                    <div className="space-y-2">
+                      <Label htmlFor="send_mode">Message format</Label>
+                      <Select value={field.value || 'image'} onValueChange={field.onChange}>
+                        <SelectTrigger id="send_mode">
+                          <SelectValue placeholder="Select message format" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="image">Image + caption</SelectItem>
+                          <SelectItem value="link_preview">Text + link preview</SelectItem>
+                          <SelectItem value="text_only">Text only</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Choose exactly how this template should be sent.
+                      </p>
                     </div>
                   )}
                 />
@@ -268,7 +305,7 @@ const TemplatesPage = () => {
                     {active ? 'Update Template' : 'Save Template'}
                   </Button>
                   {active && (
-                    <Button type="button" variant="outline" onClick={() => { setActive(null); form.reset({ name: '', content: '', description: '', active: true, send_images: true }); }}>
+                    <Button type="button" variant="outline" onClick={() => { setActive(null); form.reset({ name: '', content: '', description: '', active: true, send_images: true, send_mode: 'image' }); }}>
                       Cancel
                     </Button>
                   )}

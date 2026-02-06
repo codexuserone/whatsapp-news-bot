@@ -8,6 +8,7 @@ const axios = require('axios');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { getErrorMessage } = require('../utils/errorUtils');
 const { getSupabaseClient } = require('../db/supabase');
+const { normalizeMessageText } = require('../utils/messageText');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const DEFAULT_USER_AGENT =
@@ -70,8 +71,43 @@ const whatsappRoutes = () => {
 
   router.get('/channels', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
-    const channels = await whatsapp?.getChannels() || [];
+    const enriched =
+      whatsapp && typeof whatsapp.getChannelsWithDiagnostics === 'function'
+        ? await whatsapp.getChannelsWithDiagnostics()
+        : null;
+    const channels = enriched?.channels || await whatsapp?.getChannels() || [];
     res.json(channels);
+  }));
+
+  router.get('/channels/diagnostics', asyncHandler(async (req: Request, res: Response) => {
+    const whatsapp = req.app.locals.whatsapp;
+    if (!whatsapp) {
+      return res.json({
+        channels: [],
+        diagnostics: {
+          methodsTried: [],
+          methodErrors: [],
+          sourceCounts: { api: 0, cache: 0, metadata: 0 },
+          limitation: 'WhatsApp is not connected.'
+        }
+      });
+    }
+
+    if (typeof whatsapp.getChannelsWithDiagnostics === 'function') {
+      const result = await whatsapp.getChannelsWithDiagnostics();
+      return res.json(result);
+    }
+
+    const channels = await whatsapp.getChannels?.() || [];
+    return res.json({
+      channels,
+      diagnostics: {
+        methodsTried: [],
+        methodErrors: [],
+        sourceCounts: { api: 0, cache: 0, metadata: 0 },
+        limitation: channels.length ? null : 'Channel diagnostics are unavailable in this server build.'
+      }
+    });
   }));
 
   router.post('/disconnect', asyncHandler(async (req: Request, res: Response) => {
@@ -116,8 +152,9 @@ const whatsappRoutes = () => {
   router.post('/send-test', validate(schemas.testMessage), asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
     const { jid, message, imageUrl, confirm } = req.body;
+    const normalizedMessage = normalizeMessageText(message);
 
-    if (!jid || !message) {
+    if (!jid || !normalizedMessage) {
       throw badRequest('jid and message are required');
     }
 
@@ -139,14 +176,14 @@ const whatsappRoutes = () => {
       try {
         const { buffer, mimetype } = await downloadImageBuffer(imageUrl);
         content = mimetype
-          ? { image: buffer, mimetype, caption: message || '' }
-          : { image: buffer, caption: message || '' };
+          ? { image: buffer, mimetype, caption: normalizedMessage || '' }
+          : { image: buffer, caption: normalizedMessage || '' };
       } catch (error) {
         // Fall back to URL sending (Baileys will attempt to download)
-        content = { image: { url: imageUrl }, caption: message || '' };
+        content = { image: { url: imageUrl }, caption: normalizedMessage || '' };
       }
     } else {
-      content = { text: message };
+      content = { text: normalizedMessage };
     }
 
     const sendPromise = isStatusBroadcast(normalizedJid)
@@ -186,7 +223,7 @@ const whatsappRoutes = () => {
           feed_item_id: null,
           target_id: targetId,
           template_id: null,
-          message_content: message,
+          message_content: normalizedMessage,
           status: 'sent',
           error_message: null,
           whatsapp_message_id: messageId || null,

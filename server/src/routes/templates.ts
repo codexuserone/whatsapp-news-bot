@@ -4,6 +4,7 @@ const { getSupabaseClient } = require('../db/supabase');
 const { validate, schemas } = require('../middleware/validation');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
+const { normalizeMessageText } = require('../utils/messageText');
 
 const getDb = () => {
   const supabase = getSupabaseClient();
@@ -45,12 +46,13 @@ const templateRoutes = () => {
 
   router.post('/', validate(schemas.template), async (req: Request, res: Response) => {
     try {
+      const normalizedContent = normalizeMessageText(req.body.content);
       // Extract variables from template content
-      const variables = extractVariables(String(req.body.content || ''));
+      const variables = extractVariables(normalizedContent);
       
       const { data: template, error } = await getDb()
         .from('templates')
-        .insert({ ...req.body, variables })
+        .insert({ ...req.body, content: normalizedContent, variables })
         .select()
         .single();
       
@@ -64,12 +66,13 @@ const templateRoutes = () => {
 
   router.put('/:id', validate(schemas.template), async (req: Request, res: Response) => {
     try {
+      const normalizedContent = normalizeMessageText(req.body.content);
       // Extract variables from template content
-      const variables = extractVariables(String(req.body.content || ''));
+      const variables = extractVariables(normalizedContent);
       
       const { data: template, error } = await getDb()
         .from('templates')
-        .update({ ...req.body, variables })
+        .update({ ...req.body, content: normalizedContent, variables })
         .eq('id', req.params.id)
         .select()
         .single();

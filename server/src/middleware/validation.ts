@@ -98,13 +98,30 @@ const schemas = {
     notes: z.string().max(1000).optional().nullable().transform(normalizeOptional)
   }),
 
-  template: z.object({
-    name: z.string().min(1).max(255),
-    content: z.string().min(1).max(5000),
-    description: z.string().max(1000).optional().nullable().transform(normalizeOptional),
-    active: z.boolean().default(true),
-    send_images: z.boolean().default(true)
-  }),
+  template: z
+    .object({
+      name: z.string().min(1).max(255),
+      content: z.string().min(1).max(5000),
+      description: z.string().max(1000).optional().nullable().transform(normalizeOptional),
+      active: z.boolean().default(true),
+      send_images: z.boolean().default(true),
+      send_mode: z.enum(['image', 'link_preview', 'text_only']).optional().nullable()
+    })
+    .transform((value: {
+      name: string;
+      content: string;
+      description?: string | null;
+      active: boolean;
+      send_images: boolean;
+      send_mode?: 'image' | 'link_preview' | 'text_only' | null;
+    }) => {
+      const sendMode = value.send_mode || (value.send_images === false ? 'link_preview' : 'image');
+      return {
+        ...value,
+        send_mode: sendMode,
+        send_images: sendMode === 'image'
+      };
+    }),
 
   testMessage: z.object({
     jid: z.string().regex(JID_PATTERN),

@@ -34,9 +34,9 @@ const WhatsAppPage = () => {
     enabled: status?.status === 'connected'
   });
 
-  const { data: channels = [], isLoading: channelsLoading } = useQuery({
-    queryKey: ['whatsapp-channels'],
-    queryFn: () => api.get('/api/whatsapp/channels'),
+  const { data: channelsResponse, isLoading: channelsLoading } = useQuery({
+    queryKey: ['whatsapp-channels-diagnostics'],
+    queryFn: () => api.get('/api/whatsapp/channels/diagnostics'),
     enabled: status?.status === 'connected'
   });
 
@@ -50,7 +50,7 @@ const WhatsAppPage = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
       queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels-diagnostics'] });
     }
   });
 
@@ -60,7 +60,7 @@ const WhatsAppPage = () => {
       queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
       queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
       queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels-diagnostics'] });
     }
   });
 
@@ -70,7 +70,7 @@ const WhatsAppPage = () => {
       queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
       queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
       queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels-diagnostics'] });
     }
   });
 
@@ -80,7 +80,7 @@ const WhatsAppPage = () => {
       queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
       queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
       queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels-diagnostics'] });
     }
   });
 
@@ -99,6 +99,8 @@ const WhatsAppPage = () => {
   const isConnected = status?.status === 'connected';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
   const isConflict = status?.status === 'conflict';
+  const channels = channelsResponse?.channels || [];
+  const channelLimitation = channelsResponse?.diagnostics?.limitation || null;
   const existingPhones = new Set(existingTargets.map((t) => t.phone_number));
   const activeTargets = existingTargets.filter((target) => target.active);
 
@@ -439,7 +441,7 @@ const WhatsAppPage = () => {
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : channels.length === 0 ? (
-            <p className="text-center text-muted-foreground py-8">No channels found (you need to be an admin)</p>
+            <p className="text-center text-muted-foreground py-8">{channelLimitation || 'No channels found (you need to be an admin)'}</p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {channels.map((channel) => (

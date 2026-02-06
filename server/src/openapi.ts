@@ -134,6 +134,9 @@ const spec = {
     '/api/whatsapp/channels': {
       get: { tags: ['whatsapp'], summary: 'List WhatsApp channels', responses: { 200: { description: 'OK' } } }
     },
+    '/api/whatsapp/channels/diagnostics': {
+      get: { tags: ['whatsapp'], summary: 'List WhatsApp channels with diagnostics', responses: { 200: { description: 'OK' } } }
+    },
     '/api/whatsapp/disconnect': {
       post: { tags: ['whatsapp'], summary: 'Disconnect WhatsApp', responses: { 200: { description: 'OK' } } }
     },

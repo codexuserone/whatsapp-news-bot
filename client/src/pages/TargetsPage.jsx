@@ -51,13 +51,15 @@ const TargetsPage = () => {
     enabled: waStatus?.status === 'connected'
   });
 
-  const { data: waChannels = [] } = useQuery({
-    queryKey: ['whatsapp-channels'],
-    queryFn: () => api.get('/api/whatsapp/channels'),
+  const { data: waChannelsResponse } = useQuery({
+    queryKey: ['whatsapp-channels-diagnostics'],
+    queryFn: () => api.get('/api/whatsapp/channels/diagnostics'),
     enabled: waStatus?.status === 'connected'
   });
 
   const isConnected = waStatus?.status === 'connected';
+  const waChannels = waChannelsResponse?.channels || [];
+  const channelsLimitation = waChannelsResponse?.diagnostics?.limitation || null;
   const existingJids = new Set(targets.map((t) => t.phone_number));
 
   const addTarget = useMutation({
@@ -213,6 +215,11 @@ const TargetsPage = () => {
                     <p className="text-sm text-muted-foreground">
                       {availableChannels.length} to import
                     </p>
+                    {availableChannels.length === 0 && channelsLimitation && (
+                      <p className="text-xs text-muted-foreground max-w-[220px] line-clamp-2">
+                        {channelsLimitation}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <Button

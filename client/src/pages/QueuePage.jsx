@@ -29,14 +29,11 @@ const QueuePage = () => {
     refetchInterval: 60000
   });
 
-  const { data: schedules = [] } = useQuery({
-    queryKey: ['schedules'],
-    queryFn: () => api.get('/api/schedules')
-  });
-
-  const getScheduleName = (id) => {
-    const schedule = schedules.find(s => s.id === id);
-    return schedule?.name || 'Unknown Schedule';
+  const getScheduleName = (item) => item?.schedule_name || 'Unknown Schedule';
+  const getTargetLabel = (item) => {
+    const name = item?.target_name || 'Unknown Target';
+    const type = item?.target_type ? ` (${item.target_type})` : '';
+    return `${name}${type}`;
   };
 
   const deleteItem = useMutation({
@@ -191,7 +188,10 @@ const QueuePage = () => {
                       <div className="flex items-center gap-2 mb-1">
                         {getStatusBadge(item.status)}
                         <span className="text-xs text-muted-foreground">
-                          {getScheduleName(item.schedule_id)}
+                          {getScheduleName(item)}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          to {getTargetLabel(item)}
                         </span>
                       </div>
                       <p className="font-medium truncate">{item.title || 'No title'}</p>
@@ -219,7 +219,7 @@ const QueuePage = () => {
 
                   {item.rendered_content && (
                     <div className="rounded-md bg-muted p-3">
-                      <p className="text-xs text-muted-foreground mb-1">Preview:</p>
+                      <p className="text-xs text-muted-foreground mb-1">Sent content:</p>
                       <p className="text-sm whitespace-pre-wrap line-clamp-3">
                         {item.rendered_content}
                       </p>

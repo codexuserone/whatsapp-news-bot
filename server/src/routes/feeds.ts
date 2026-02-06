@@ -50,7 +50,7 @@ const feedsRoutes = () => {
       };
     }
 
-    if (message.includes('eai_again') || message.includes('enotfound')) {
+    if (message.includes('eai_again') || message.includes('eai again') || message.includes('enotfound') || message.includes('getaddrinfo')) {
       return {
         status: 400,
         error: 'DNS resolution failed for this host. The domain may be temporarily unreachable from the server.'
@@ -120,7 +120,9 @@ const feedsRoutes = () => {
       const { items, meta } = await fetchFeedItemsWithMeta(testFeed);
 
       if (!items || items.length === 0) {
-        return res.status(404).json({ error: 'No items found in feed. Check the URL or feed type.' });
+        return res.status(404).json({
+          error: 'No items were detected in the feed response. Verify the exact RSS/Atom/JSON feed URL.'
+        });
       }
 
       // Detect all fields from the first item

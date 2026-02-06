@@ -279,30 +279,35 @@ const resolveImageUrlForFeedItem = async (
     return { url: null, source: null, scraped: false, error: null };
   }
 
+  let existingUrlIssue: string | null = null;
   const existing = typeof feedItem.image_url === 'string' ? feedItem.image_url : null;
   if (existing && isHttpUrl(existing)) {
-    // Skip video URLs - they can't be sent as images
-    if (!isImageUrl(existing)) {
-      return { url: null, source: null, scraped: false, error: 'URL is not an image (possibly video)' };
-    }
-    try {
-      await assertSafeOutboundUrl(existing);
-      return { url: existing, source: feedItem.image_source || 'feed', scraped: false, error: null };
-    } catch (error) {
-      const message = getErrorMessage(error);
-      return { url: null, source: null, scraped: false, error: message };
+    if (isImageUrl(existing)) {
+      try {
+        await assertSafeOutboundUrl(existing);
+        return { url: existing, source: feedItem.image_source || 'feed', scraped: false, error: null };
+      } catch (error) {
+        existingUrlIssue = getErrorMessage(error);
+      }
+    } else {
+      existingUrlIssue = 'Feed media URL is not an image';
     }
   }
 
   const link = typeof feedItem.link === 'string' ? feedItem.link : null;
   if (!link || !isHttpUrl(link)) {
-    return { url: null, source: null, scraped: false, error: null };
+    return { url: null, source: null, scraped: false, error: existingUrlIssue };
   }
 
   const scrapedAt = feedItem.image_scraped_at ? new Date(feedItem.image_scraped_at).getTime() : 0;
   const recentlyScraped = scrapedAt && !Number.isNaN(scrapedAt) && Date.now() - scrapedAt < 24 * 60 * 60 * 1000;
   if (recentlyScraped) {
-    return { url: null, source: null, scraped: false, error: feedItem.image_scrape_error || null };
+    return {
+      url: null,
+      source: null,
+      scraped: false,
+      error: feedItem.image_scrape_error || existingUrlIssue || null
+    };
   }
 
   try {

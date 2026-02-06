@@ -9,7 +9,7 @@ import { ListOrdered, RefreshCw, Trash2, AlertTriangle, Loader2 } from 'lucide-r
 
 const QueuePage = () => {
   const queryClient = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState('pending');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   const { data: queueStats } = useQuery({
     queryKey: ['queue-stats'],
@@ -160,6 +160,9 @@ const QueuePage = () => {
             {queueStats.pending} pending · {queueStats.processing} processing · {queueStats.failed} failed
           </span>
         )}
+        <span className="text-xs text-muted-foreground">
+          Manual/test sends are hidden from queue by default.
+        </span>
       </div>
 
       {/* Queue Items */}

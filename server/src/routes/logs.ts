@@ -13,6 +13,7 @@ const logRoutes = () => {
       
       const { status } = req.query;
       const statusFilter = typeof status === 'string' ? status : undefined;
+      const includeManual = String(req.query.include_manual || '').toLowerCase() === 'true';
       
       let query = supabase
         .from('message_logs')
@@ -28,6 +29,9 @@ const logRoutes = () => {
       
       if (statusFilter) {
         query = query.eq('status', statusFilter);
+      }
+      if (!includeManual) {
+        query = query.not('schedule_id', 'is', null);
       }
       
       const { data: logs, error } = await query;

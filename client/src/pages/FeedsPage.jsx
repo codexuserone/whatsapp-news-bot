@@ -3,6 +3,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
@@ -22,6 +23,8 @@ const schema = z.object({
 const FeedsPage = () => {
   const queryClient = useQueryClient();
   const { data: feeds = [] } = useQuery({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
+  const { data: schedules = [] } = useQuery({ queryKey: ['schedules'], queryFn: () => api.get('/api/schedules') });
+  const { data: targets = [] } = useQuery({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
   const [active, setActive] = useState(null);
   const [testResult, setTestResult] = useState(null);
   const [testLoading, setTestLoading] = useState(false);
@@ -112,12 +115,64 @@ const FeedsPage = () => {
     saveFeed.mutate(payload);
   };
 
+  const activeTargetIds = new Set(targets.filter((target) => target.active).map((target) => target.id));
+
+  const getFeedRoutingStatus = (feedId) => {
+    const activeSchedules = schedules.filter(
+      (schedule) => schedule.active && String(schedule.feed_id || '') === String(feedId)
+    );
+    const routedSchedules = activeSchedules.filter((schedule) =>
+      Array.isArray(schedule.target_ids) && schedule.target_ids.some((targetId) => activeTargetIds.has(targetId))
+    );
+    const activeTargetsCovered = new Set(
+      routedSchedules.flatMap((schedule) =>
+        Array.isArray(schedule.target_ids)
+          ? schedule.target_ids.filter((targetId) => activeTargetIds.has(targetId))
+          : []
+      )
+    );
+    return {
+      activeSchedules: activeSchedules.length,
+      routedSchedules: routedSchedules.length,
+      activeTargetsCovered: activeTargetsCovered.size
+    };
+  };
+
+  const unroutedActiveFeeds = feeds
+    .filter((feed) => feed.active)
+    .filter((feed) => getFeedRoutingStatus(feed.id).routedSchedules === 0);
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Feeds</h1>
         <p className="text-muted-foreground">Add any feed URL. Type and variables are auto-detected.</p>
       </div>
+
+      {unroutedActiveFeeds.length > 0 && (
+        <Card className="border-warning/40 bg-warning/5">
+          <CardHeader>
+            <CardTitle className="text-lg">Feeds Missing Automations</CardTitle>
+            <CardDescription>
+              {unroutedActiveFeeds.length} active feed{unroutedActiveFeeds.length !== 1 ? 's' : ''} have no active
+              automation, so new items will stay as "New" and never send.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {unroutedActiveFeeds.map((feed) => (
+              <div key={feed.id} className="flex items-center justify-between rounded-lg border bg-background/70 px-3 py-2">
+                <div className="min-w-0">
+                  <p className="font-medium truncate">{feed.name}</p>
+                  <p className="text-xs text-muted-foreground truncate">{feed.url}</p>
+                </div>
+                <Button size="sm" asChild>
+                  <Link to={`/schedules?feed_id=${feed.id}`}>Create Automation</Link>
+                </Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_400px]">
         <div className="space-y-6">
@@ -301,6 +356,26 @@ const FeedsPage = () => {
             <div className="space-y-3">
               {feeds.map((feed) => (
                 <div key={feed.id} className="rounded-lg border p-3">
+                  {(() => {
+                    const routing = getFeedRoutingStatus(feed.id);
+                    const missingAutomation = feed.active && routing.routedSchedules === 0;
+                    return (
+                      <>
+                        {missingAutomation && (
+                          <div className="mb-3 rounded-md border border-warning/50 bg-warning/10 px-2 py-1.5 text-xs text-warning-foreground">
+                            No active automation connected to this feed yet.
+                          </div>
+                        )}
+                        {!missingAutomation && (
+                          <div className="mb-3 rounded-md border border-success/30 bg-success/5 px-2 py-1.5 text-xs text-muted-foreground">
+                            {routing.routedSchedules} automation{routing.routedSchedules !== 1 ? 's' : ''} routing to{' '}
+                            {routing.activeTargetsCovered} active target
+                            {routing.activeTargetsCovered !== 1 ? 's' : ''}.
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <div className="min-w-0 flex-1">
                       <p className="font-medium truncate">{feed.name}</p>
@@ -335,6 +410,9 @@ const FeedsPage = () => {
                       className="text-destructive hover:text-destructive"
                     >
                       <Trash2 className="h-3 w-3" />
+                    </Button>
+                    <Button size="sm" variant="outline" asChild>
+                      <Link to={`/schedules?feed_id=${feed.id}`}>Automation</Link>
                     </Button>
                   </div>
                 </div>

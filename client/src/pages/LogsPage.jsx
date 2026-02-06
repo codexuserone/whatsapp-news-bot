@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Badge } from '../components/ui/badge';
+import { Checkbox } from '../components/ui/checkbox';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '../components/ui/table';
 import { Activity, Loader2 } from 'lucide-react';
 
@@ -19,9 +20,16 @@ const STATUS_COLORS = {
 
 const LogsPage = () => {
   const [status, setStatus] = useState('all');
+  const [includeManual, setIncludeManual] = useState(false);
   const { data: logs = [], isLoading } = useQuery({
-    queryKey: ['logs', status],
-    queryFn: () => api.get(status === 'all' ? '/api/logs' : `/api/logs?status=${status}`),
+    queryKey: ['logs', status, includeManual],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (status !== 'all') params.set('status', status);
+      if (includeManual) params.set('include_manual', 'true');
+      const query = params.toString();
+      return api.get(query ? `/api/logs?${query}` : '/api/logs');
+    },
     refetchInterval: 10000
   });
 
@@ -40,23 +48,32 @@ const LogsPage = () => {
                 <Activity className="h-5 w-5" />
                 Delivery Logs
               </CardTitle>
-              <CardDescription>{logs.length} log{logs.length !== 1 ? 's' : ''}</CardDescription>
+              <CardDescription>
+                {logs.length} log{logs.length !== 1 ? 's' : ''}
+                {!includeManual && ' (automation sends only)'}
+              </CardDescription>
             </div>
-            <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger className="w-40">
-                <SelectValue placeholder="All statuses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="pending">Pending</SelectItem>
-                <SelectItem value="processing">Processing</SelectItem>
-                <SelectItem value="sent">Sent</SelectItem>
-                <SelectItem value="delivered">Delivered</SelectItem>
-                <SelectItem value="read">Read</SelectItem>
-                <SelectItem value="failed">Failed</SelectItem>
-                <SelectItem value="skipped">Skipped</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Checkbox checked={includeManual} onCheckedChange={(checked) => setIncludeManual(checked === true)} />
+                Include manual/test sends
+              </label>
+              <Select value={status} onValueChange={setStatus}>
+                <SelectTrigger className="w-40">
+                  <SelectValue placeholder="All statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All statuses</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="processing">Processing</SelectItem>
+                  <SelectItem value="sent">Sent</SelectItem>
+                  <SelectItem value="delivered">Delivered</SelectItem>
+                  <SelectItem value="read">Read</SelectItem>
+                  <SelectItem value="failed">Failed</SelectItem>
+                  <SelectItem value="skipped">Skipped</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </CardHeader>
         <CardContent>

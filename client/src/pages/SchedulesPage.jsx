@@ -3,6 +3,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
@@ -57,6 +58,7 @@ const normalizeBatchTimes = (value) => {
 
 const SchedulesPage = () => {
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { data: schedules = [] } = useQuery({ queryKey: ['schedules'], queryFn: () => api.get('/api/schedules') });
   const { data: feeds = [] } = useQuery({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: targets = [] } = useQuery({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
@@ -87,6 +89,21 @@ const SchedulesPage = () => {
       form.clearErrors();
     }
   }, [active, form]);
+
+  useEffect(() => {
+    if (active) return;
+    const prefillFeedId = String(searchParams.get('feed_id') || '');
+    if (!prefillFeedId) return;
+    if (!feeds.some((feed) => String(feed.id) === prefillFeedId)) return;
+
+    if (!form.getValues('feed_id')) {
+      form.setValue('feed_id', prefillFeedId, { shouldDirty: true });
+    }
+
+    const next = new URLSearchParams(searchParams);
+    next.delete('feed_id');
+    setSearchParams(next, { replace: true });
+  }, [active, feeds, form, searchParams, setSearchParams]);
 
   const saveSchedule = useMutation({
     mutationFn: (payload) =>

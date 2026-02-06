@@ -182,8 +182,7 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
     if (error) throw error;
 
     const immediateSchedules = (schedules || []).filter(
-      (schedule: ScheduleRow) =>
-        getDeliveryMode(schedule) !== 'batched' && !normalizeCronExpression(schedule.cron_expression)
+      (schedule: ScheduleRow) => getDeliveryMode(schedule) !== 'batched'
     );
     logger.info({ feedId, count: immediateSchedules.length }, 'Triggering immediate schedules');
     

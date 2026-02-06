@@ -1,9 +1,11 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '../components/ui/table';
 import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
 import { ClipboardList, ExternalLink, Loader2 } from 'lucide-react';
 
 const STATUS_VARIANTS = {
@@ -54,12 +56,72 @@ const FeedItemsPage = () => {
     refetchInterval: 15000
   });
 
+  const { data: schedules = [] } = useQuery({
+    queryKey: ['schedules'],
+    queryFn: () => api.get('/api/schedules')
+  });
+
+  const { data: targets = [] } = useQuery({
+    queryKey: ['targets'],
+    queryFn: () => api.get('/api/targets')
+  });
+
+  const activeTargetIds = new Set(targets.filter((target) => target.active).map((target) => target.id));
+  const feedsWithAutomation = new Set(
+    schedules
+      .filter(
+        (schedule) =>
+          schedule.active &&
+          Array.isArray(schedule.target_ids) &&
+          schedule.target_ids.some((targetId) => activeTargetIds.has(targetId))
+      )
+      .map((schedule) => schedule.feed_id)
+      .filter(Boolean)
+  );
+
+  const unroutedFeedCounts = items.reduce((acc, item) => {
+    if (item.delivery_status !== 'not_queued') return acc;
+    const feedId = item.feed_id;
+    if (!feedId || feedsWithAutomation.has(feedId)) return acc;
+    const key = String(feedId);
+    const current = acc.get(key) || { feedId, feedName: item.feed?.name || 'Unknown feed', count: 0 };
+    current.count += 1;
+    acc.set(key, current);
+    return acc;
+  }, new Map());
+
+  const unroutedFeeds = Array.from(unroutedFeedCounts.values()).sort((a, b) => b.count - a.count);
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Feed Items</h1>
         <p className="text-muted-foreground">Recently ingested feed entries available for dispatch.</p>
       </div>
+
+      {unroutedFeeds.length > 0 && (
+        <Card className="border-warning/40 bg-warning/5">
+          <CardHeader>
+            <CardTitle className="text-lg">Unrouted Feed Items Detected</CardTitle>
+            <CardDescription>
+              These feeds have new items but no active automation, so items remain "New" and are never queued.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {unroutedFeeds.slice(0, 4).map((entry) => (
+              <div key={entry.feedId} className="flex items-center justify-between rounded-lg border bg-background/70 px-3 py-2">
+                <div>
+                  <p className="font-medium">{entry.feedName}</p>
+                  <p className="text-xs text-muted-foreground">{entry.count} item{entry.count !== 1 ? 's' : ''} waiting</p>
+                </div>
+                <Button size="sm" asChild>
+                  <Link to={`/schedules?feed_id=${entry.feedId}`}>Add Automation</Link>
+                </Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -89,7 +151,11 @@ const FeedItemsPage = () => {
               <TableBody>
                 {items.map((item) => {
                   const deliveryMeta = getDeliveryMeta(item);
-                  const summary = formatDeliverySummary(item.delivery, deliveryMeta.status);
+                  const missingAutomation =
+                    deliveryMeta.status === 'not_queued' && item.feed_id && !feedsWithAutomation.has(item.feed_id);
+                  const summary = missingAutomation
+                    ? 'No active automation for this feed'
+                    : formatDeliverySummary(item.delivery, deliveryMeta.status);
                   return (
                     <TableRow key={item.id}>
                       <TableCell className="max-w-xs truncate font-medium" title={item.title}>

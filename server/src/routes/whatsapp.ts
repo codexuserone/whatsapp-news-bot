@@ -53,6 +53,14 @@ const downloadImageBuffer = async (url: string) => {
 const whatsappRoutes = () => {
   const router = express.Router();
 
+  const runAsync = (label: string, work: () => Promise<void>) => {
+    setImmediate(() => {
+      work().catch((error) => {
+        console.warn(`${label} failed:`, error);
+      });
+    });
+  };
+
   router.get('/status', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
     res.json(whatsapp?.getStatus() || { status: 'disconnected' });
@@ -116,10 +124,30 @@ const whatsappRoutes = () => {
     res.json({ ok: true });
   }));
 
+  router.post('/reconnect', asyncHandler(async (req: Request, res: Response) => {
+    const whatsapp = req.app.locals.whatsapp;
+    if (!whatsapp || typeof whatsapp.reconnect !== 'function') {
+      throw badRequest('WhatsApp client not available');
+    }
+
+    runAsync('WhatsApp reconnect', async () => {
+      await whatsapp.reconnect();
+    });
+
+    res.json({ ok: true, started: true });
+  }));
+
   router.post('/hard-refresh', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
-    await whatsapp?.hardRefresh();
-    res.json({ ok: true });
+    if (!whatsapp || typeof whatsapp.hardRefresh !== 'function') {
+      throw badRequest('WhatsApp client not available');
+    }
+
+    runAsync('WhatsApp hard refresh', async () => {
+      await whatsapp.hardRefresh();
+    });
+
+    res.json({ ok: true, started: true });
   }));
 
   // Force this instance to take over the WhatsApp lease (for recovery after deploy conflicts)
@@ -137,8 +165,12 @@ const whatsappRoutes = () => {
     if (!whatsapp || typeof whatsapp.clearSenderKeys !== 'function') {
       throw badRequest('WhatsApp client not available');
     }
-    await whatsapp.clearSenderKeys();
-    res.json({ ok: true });
+
+    runAsync('Clear sender keys', async () => {
+      await whatsapp.clearSenderKeys();
+    });
+
+    res.json({ ok: true, started: true });
   }));
 
   const normalizeTestJid = (jid: string) => {

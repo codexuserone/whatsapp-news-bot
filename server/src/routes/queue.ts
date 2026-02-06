@@ -19,8 +19,11 @@ const queueRoutes = () => {
   router.get('/', async (req: Request, res: Response) => {
     try {
       const supabase = getDb();
-      const { status } = req.query;
+      const { status, schedule_id: scheduleId, target_id: targetId, feed_item_id: feedItemId } = req.query;
       const statusFilter = typeof status === 'string' ? status : undefined;
+      const scheduleFilter = typeof scheduleId === 'string' ? scheduleId : undefined;
+      const targetFilter = typeof targetId === 'string' ? targetId : undefined;
+      const feedItemFilter = typeof feedItemId === 'string' ? feedItemId : undefined;
       const includeManual = String(req.query.include_manual || '').toLowerCase() === 'true';
 
       let query = supabase
@@ -60,6 +63,15 @@ const queueRoutes = () => {
 
       if (statusFilter) {
         query = query.eq('status', statusFilter);
+      }
+      if (scheduleFilter) {
+        query = query.eq('schedule_id', scheduleFilter);
+      }
+      if (targetFilter) {
+        query = query.eq('target_id', targetFilter);
+      }
+      if (feedItemFilter) {
+        query = query.eq('feed_item_id', feedItemFilter);
       }
       if (!includeManual) {
         query = query.not('schedule_id', 'is', null);

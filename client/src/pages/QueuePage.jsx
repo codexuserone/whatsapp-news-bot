@@ -10,6 +10,12 @@ import { ListOrdered, RefreshCw, Trash2, AlertTriangle, Loader2 } from 'lucide-r
 const QueuePage = () => {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState('all');
+  const [scheduleFilter, setScheduleFilter] = useState('all');
+
+  const { data: schedules = [] } = useQuery({
+    queryKey: ['schedules'],
+    queryFn: () => api.get('/api/schedules')
+  });
 
   const { data: queueStats } = useQuery({
     queryKey: ['queue-stats'],
@@ -18,8 +24,14 @@ const QueuePage = () => {
   });
 
   const { data: queueItems = [], isLoading } = useQuery({
-    queryKey: ['queue', statusFilter],
-    queryFn: () => api.get(statusFilter === 'all' ? '/api/queue' : `/api/queue?status=${statusFilter}`),
+    queryKey: ['queue', statusFilter, scheduleFilter],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (statusFilter !== 'all') params.set('status', statusFilter);
+      if (scheduleFilter !== 'all') params.set('schedule_id', scheduleFilter);
+      const query = params.toString();
+      return api.get(query ? `/api/queue?${query}` : '/api/queue');
+    },
     refetchInterval: 10000
   });
 
@@ -150,6 +162,19 @@ const QueuePage = () => {
             <SelectItem value="failed">Failed</SelectItem>
             <SelectItem value="skipped">Skipped</SelectItem>
             <SelectItem value="all">All</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={scheduleFilter} onValueChange={setScheduleFilter}>
+          <SelectTrigger className="w-56">
+            <SelectValue placeholder="All schedules" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All schedules</SelectItem>
+            {schedules.map((schedule) => (
+              <SelectItem key={schedule.id} value={schedule.id}>
+                {schedule.name}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <span className="text-sm text-muted-foreground">

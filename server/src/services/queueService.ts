@@ -39,6 +39,7 @@ type FeedItem = {
   image_source?: string | null;
   image_scraped_at?: string | Date | null;
   image_scrape_error?: string | null;
+  created_at?: string | Date | null;
   pub_date?: string | Date;
   categories?: string[];
 };
@@ -739,7 +740,12 @@ const sendMessageWithTemplate = async (
   return {
     response,
     text: textWithPreview,
-    media: { type: null, url: null, sent: false, error: null }
+    media: {
+      type: 'image',
+      url: resolved.url || feedItem.image_url || null,
+      sent: false,
+      error: resolved.error || 'No usable image found for feed item; sent text with preview fallback'
+    }
   };
 };
 
@@ -1285,6 +1291,8 @@ const sendQueuedForSchedule = async (
 
     const maxPendingAgeHours = Math.max(Number(settings.max_pending_age_hours || 48), 1);
     const staleCutoffMs = Date.now() - maxPendingAgeHours * 60 * 60 * 1000;
+    const maxFeedItemAgeHours = Math.max(Number(settings.max_feed_item_age_hours || 72), 1);
+    const staleFeedItemCutoffMs = Date.now() - maxFeedItemAgeHours * 60 * 60 * 1000;
 
     // Get template
     const { data: template, error: templateError } = await supabase
@@ -1303,19 +1311,66 @@ const sendQueuedForSchedule = async (
     let sentCount = 0;
 
     for (const target of targets || []) {
-      // Get pending message logs for this target and schedule
-      const { data: logs, error: logsError } = await supabase
-        .from('message_logs')
-        .select('*')
-        .eq('schedule_id', scheduleId)
-        .eq('target_id', target.id)
-        .eq('status', 'pending')
-        .order('created_at', { ascending: true })
-        .order('id', { ascending: true });
+      const pendingReadRetries = Math.max(Number(settings.dispatch_pending_read_retries || 8), 0);
+      const pendingReadDelayMs = Math.max(Number(settings.dispatch_pending_read_delay_ms || 500), 50);
 
-      if (logsError) continue;
+      // Recently upserted queue rows can be briefly invisible to an immediate follow-up SELECT.
+      // Retry pending reads to avoid returning sent=0 while rows exist.
+      let logs: Array<{
+        id?: string;
+        created_at?: string | null;
+        feed_item_id?: string | null;
+        retry_count?: number | null;
+      }> = [];
+      let logsError: unknown = null;
 
-      if (!logs || logs.length === 0) {
+      for (let attempt = 0; attempt <= pendingReadRetries; attempt += 1) {
+        const result = await supabase
+          .from('message_logs')
+          .select('*')
+          .eq('schedule_id', scheduleId)
+          .eq('target_id', target.id)
+          .eq('status', 'pending')
+          .order('created_at', { ascending: true })
+          .order('id', { ascending: true });
+
+        logs =
+          ((result.data || []) as Array<{
+            id?: string;
+            created_at?: string | null;
+            feed_item_id?: string | null;
+            retry_count?: number | null;
+          }>) || [];
+        logsError = result.error;
+
+        if (logsError) {
+          break;
+        }
+
+        if (logs.length > 0 || queuedCount <= 0 || attempt >= pendingReadRetries) {
+          break;
+        }
+
+        logger.info(
+          {
+            scheduleId,
+            targetId: target.id,
+            attempt: attempt + 1,
+            retries: pendingReadRetries,
+            queuedCount,
+            pendingReadDelayMs
+          },
+          'Pending logs not visible yet; retrying pending read'
+        );
+        await sleep(pendingReadDelayMs);
+      }
+
+      if (logsError) {
+        logger.warn({ scheduleId, targetId: target.id, error: logsError }, 'Failed reading pending logs for target');
+        continue;
+      }
+
+      if (!logs.length) {
         continue;
       }
 
@@ -1378,22 +1433,56 @@ const sendQueuedForSchedule = async (
         }
       }
 
-      for (const log of runnableLogs || []) {
-        const { data: claimedRows, error: claimError } = await supabase
-          .from('message_logs')
-          .update({ status: 'processing', processing_started_at: new Date().toISOString() })
-          .eq('id', log.id)
-          .eq('status', 'pending')
-          .select('id');
+      const runnableIds = (runnableLogs || [])
+        .map((log: { id?: string }) => String(log?.id || ''))
+        .filter(Boolean);
 
-        if (claimError) {
-          logger.warn({ scheduleId, logId: log.id, error: claimError }, 'Failed to claim message log');
-          continue;
-        }
+      const claimedAt = new Date().toISOString();
+      const { data: claimedRows, error: claimError } = await supabase
+        .from('message_logs')
+        .update({ status: 'processing', processing_started_at: claimedAt })
+        .in('id', runnableIds)
+        .eq('status', 'pending')
+        .select('*');
 
-        if (!claimedRows || claimedRows.length === 0) {
-          continue;
-        }
+      if (claimError) {
+        logger.warn({ scheduleId, targetId: target.id, error: claimError }, 'Failed to claim pending logs for target');
+        continue;
+      }
+
+      const claimedLogs = ((claimedRows || []) as Array<{
+        id?: string;
+        feed_item_id?: string | null;
+        retry_count?: number | null;
+        created_at?: string | null;
+      }>)
+        .filter((row) => Boolean(row?.id))
+        .sort((a, b) => {
+          const aTime = a?.created_at ? new Date(a.created_at).getTime() : 0;
+          const bTime = b?.created_at ? new Date(b.created_at).getTime() : 0;
+          if (aTime !== bTime) return aTime - bTime;
+          return String(a?.id || '').localeCompare(String(b?.id || ''));
+        });
+
+      const claimMisses = Math.max(runnableIds.length - claimedLogs.length, 0);
+      if (!claimedLogs.length) {
+        logger.info(
+          {
+            scheduleId,
+            targetId: target.id,
+            pendingCount: logs.length,
+            runnableCount: runnableLogs.length,
+            claimMisses,
+            sentCount: 0
+          },
+          'Dispatch target summary'
+        );
+        continue;
+      }
+
+      let targetSentCount = 0;
+
+      for (const log of claimedLogs) {
         // Get feed item
         const { data: feedItem, error: feedItemError } = await supabase
           .from('feed_items')
@@ -1408,6 +1497,30 @@ const sendQueuedForSchedule = async (
               status: 'failed',
               error_message: 'Feed item missing',
               processing_started_at: null,
+              media_url: null,
+              media_type: null,
+              media_sent: false,
+              media_error: null
+            })
+            .eq('id', log.id);
+          continue;
+        }
+
+        const feedItemPublishedAtMs = feedItem?.pub_date ? new Date(feedItem.pub_date).getTime() : NaN;
+        const feedItemCreatedAtMs = feedItem?.created_at ? new Date(feedItem.created_at).getTime() : NaN;
+        const feedItemAgeMs = Number.isFinite(feedItemPublishedAtMs)
+          ? feedItemPublishedAtMs
+          : Number.isFinite(feedItemCreatedAtMs)
+            ? feedItemCreatedAtMs
+            : NaN;
+
+        if (Number.isFinite(feedItemAgeMs) && feedItemAgeMs < staleFeedItemCutoffMs) {
+          await supabase
+            .from('message_logs')
+            .update({
+              status: 'skipped',
+              processing_started_at: null,
+              error_message: `Skipped stale feed item (> ${maxFeedItemAgeHours}h old by publish/create timestamp)`,
               media_url: null,
               media_type: null,
               media_sent: false,
@@ -1483,6 +1596,7 @@ const sendQueuedForSchedule = async (
           }
           
           sentCount += 1;
+          targetSentCount += 1;
         } catch (error) {
           logger.error({ error, scheduleId, feedItemId: feedItem.id, targetId: target.id }, 'Failed to send message');
 
@@ -1569,6 +1683,18 @@ const sendQueuedForSchedule = async (
 
         // Delay is handled via waitForDelays() under a global send lock.
       }
+
+      logger.info(
+        {
+          scheduleId,
+          targetId: target.id,
+          pendingCount: logs.length,
+          runnableCount: runnableLogs.length,
+          claimMisses,
+          sentCount: targetSentCount
+        },
+        'Dispatch target summary'
+      );
     }
 
     const lastRunAt = new Date().toISOString();

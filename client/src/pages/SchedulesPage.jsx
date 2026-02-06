@@ -125,11 +125,10 @@ const SchedulesPage = () => {
 
   const dispatchSchedule = useMutation({
     mutationFn: async (id) => {
-      const queueResult = await api.post(`/api/schedules/${id}/queue-latest`);
       const dispatchResult = await api.post(`/api/schedules/${id}/dispatch`);
-      return { queueResult, dispatchResult };
+      return { dispatchResult };
     },
-    onSuccess: ({ queueResult, dispatchResult }) => {
+    onSuccess: ({ dispatchResult }) => {
       queryClient.invalidateQueries({ queryKey: ['logs'] });
       queryClient.invalidateQueries({ queryKey: ['queue'] });
       queryClient.invalidateQueries({ queryKey: ['feed-items'] });
@@ -142,10 +141,8 @@ const SchedulesPage = () => {
         message = `Skipped: ${dispatchResult.reason}`;
       } else if (dispatchResult?.error) {
         message = `Dispatch failed: ${dispatchResult.error}`;
-      } else if (queueResult?.reason) {
-        message = `No new messages queued: ${queueResult.reason}`;
       } else if (queued > 0) {
-        message = `Queued ${queued} message${queued !== 1 ? 's' : ''}, but nothing was sent in this run.`;
+        message = `Queued ${queued} message${queued !== 1 ? 's' : ''} in this run, but nothing was sent yet.`;
       } else {
         message = 'No new feed items available to send right now.';
       }

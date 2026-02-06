@@ -18,6 +18,9 @@ const schema = z.object({
   default_timezone: z.string().min(1),
   log_retention_days: z.coerce.number().min(1),
   message_delay_ms: z.coerce.number().min(100),
+  max_feed_item_age_hours: z.coerce.number().min(1),
+  dispatch_pending_read_retries: z.coerce.number().min(0),
+  dispatch_pending_read_delay_ms: z.coerce.number().min(50),
   dedupeThreshold: z.coerce.number().min(0).max(1).optional()
 });
 
@@ -50,14 +53,17 @@ const SettingsPage = () => {
 
   const form = useForm({
     resolver: zodResolver(schema),
-    defaultValues: {
-      app_name: 'WhatsApp News Bot',
-      default_timezone: 'UTC',
-      log_retention_days: 30,
-      message_delay_ms: 2000,
-      dedupeThreshold: 0.88
-    }
-  });
+      defaultValues: {
+        app_name: 'WhatsApp News Bot',
+        default_timezone: 'UTC',
+        log_retention_days: 30,
+        message_delay_ms: 2000,
+        max_feed_item_age_hours: 72,
+        dispatch_pending_read_retries: 8,
+        dispatch_pending_read_delay_ms: 500,
+        dedupeThreshold: 0.88
+      }
+    });
 
   useEffect(() => {
     if (settings) {
@@ -157,6 +163,21 @@ const SettingsPage = () => {
               <Label htmlFor="log_retention_days">Log Retention (days)</Label>
               <Input id="log_retention_days" type="number" {...form.register('log_retention_days', { valueAsNumber: true })} />
               <p className="text-xs text-muted-foreground">How long to keep message logs</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="max_feed_item_age_hours">Max Feed Item Age (hours)</Label>
+              <Input id="max_feed_item_age_hours" type="number" {...form.register('max_feed_item_age_hours', { valueAsNumber: true })} />
+              <p className="text-xs text-muted-foreground">Skip dispatching very old feed items to prevent stale sends</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="dispatch_pending_read_retries">Pending Read Retries</Label>
+              <Input id="dispatch_pending_read_retries" type="number" {...form.register('dispatch_pending_read_retries', { valueAsNumber: true })} />
+              <p className="text-xs text-muted-foreground">Retry count when newly queued rows are not immediately visible</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="dispatch_pending_read_delay_ms">Pending Read Retry Delay (ms)</Label>
+              <Input id="dispatch_pending_read_delay_ms" type="number" {...form.register('dispatch_pending_read_delay_ms', { valueAsNumber: true })} />
+              <p className="text-xs text-muted-foreground">Wait between pending-read retries during dispatch</p>
             </div>
           </CardContent>
         </Card>

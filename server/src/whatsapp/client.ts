@@ -855,16 +855,17 @@ class WhatsAppClient {
 
           await authStore.updateStatus('disconnected');
 
-          // Auto-reconnect with exponential backoff for other errors
-          if (this.reconnectAttempts < this.maxReconnectAttempts) {
-            this.reconnectAttempts++;
-            const delay = Math.min(2000 * Math.pow(2, this.reconnectAttempts), 60000);
-            logger.info({ attempt: this.reconnectAttempts, delay }, 'Reconnecting...');
-            this.scheduleReconnect(delay);
+          // Auto-reconnect with exponential backoff (never gives up entirely).
+          this.reconnectAttempts += 1;
+          const exponent = Math.min(this.reconnectAttempts, 6);
+          const delay = Math.min(2000 * Math.pow(2, exponent), 60000);
+          if (this.reconnectAttempts > this.maxReconnectAttempts) {
+            this.lastError = `Connection unstable. Auto-retrying in ${Math.round(delay / 1000)}s.`;
+            logger.warn({ attempt: this.reconnectAttempts, delay }, 'Reconnect attempts exceeded threshold; continuing retries');
           } else {
-            logger.error('Max reconnect attempts reached');
-            this.lastError = 'Max reconnect attempts reached. Click Hard Refresh to retry.';
+            logger.info({ attempt: this.reconnectAttempts, delay }, 'Reconnecting...');
           }
+          this.scheduleReconnect(delay);
         }
       });
 
@@ -1121,6 +1122,26 @@ class WhatsAppClient {
 
   getQrCode(): string | null {
     return this.qrCode;
+  }
+
+  async reconnect(): Promise<void> {
+    if (this.isConnecting) {
+      return;
+    }
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    this.lastError = null;
+    this.status = 'connecting';
+
+    if (this.authStore?.updateStatus) {
+      await this.authStore.updateStatus('connecting');
+    }
+
+    this.scheduleReconnect(100);
   }
 
   async getGroups(): Promise<Array<{ id: string; jid: string; name: string; size: number }>> {

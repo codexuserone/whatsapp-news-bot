@@ -54,6 +54,16 @@ const WhatsAppPage = () => {
     }
   });
 
+  const reconnect = useMutation({
+    mutationFn: () => api.post('/api/whatsapp/reconnect'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels-diagnostics'] });
+    }
+  });
+
   const hardRefresh = useMutation({
     mutationFn: () => api.post('/api/whatsapp/hard-refresh'),
     onSuccess: () => {
@@ -125,12 +135,21 @@ const WhatsAppPage = () => {
             onClick={() => disconnect.mutate()}
             disabled={disconnect.isPending || !isConnected}
           >
-            <Power className="mr-2 h-4 w-4" />
-            {disconnect.isPending ? 'Disconnecting...' : 'Disconnect'}
+              <Power className="mr-2 h-4 w-4" />
+              {disconnect.isPending ? 'Disconnecting...' : 'Disconnect'}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => reconnect.mutate()}
+            disabled={reconnect.isPending || isConnected}
+            title="Reconnect using existing session (no QR reset)"
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${reconnect.isPending ? 'animate-spin' : ''}`} />
+            {reconnect.isPending ? 'Reconnecting...' : 'Reconnect'}
           </Button>
           <Button onClick={() => hardRefresh.mutate()} disabled={hardRefresh.isPending}>
             <RefreshCw className={`mr-2 h-4 w-4 ${hardRefresh.isPending ? 'animate-spin' : ''}`} />
-            {hardRefresh.isPending ? 'Refreshing...' : 'Hard Refresh'}
+            {hardRefresh.isPending ? 'Resetting...' : 'Hard Refresh (Reset Session)'}
           </Button>
           <Button
             variant="outline"
@@ -208,10 +227,16 @@ const WhatsAppPage = () => {
                 Sender keys cleared. Reconnecting...
               </div>
             )}
-            
+
+            {reconnect.isSuccess && (
+              <div className="rounded-lg bg-success/10 p-3 text-sm text-success">
+                Reconnect requested. Waiting for WhatsApp session...
+              </div>
+            )}
+             
             {!isConnected && !isQrReady && (
               <div className="rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
-                Click <strong>Hard Refresh</strong> to generate a new QR code.
+                Try <strong>Reconnect</strong> first. If login still fails, use <strong>Hard Refresh (Reset Session)</strong> for a new QR.
               </div>
             )}
             

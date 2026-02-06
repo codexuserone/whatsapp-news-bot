@@ -35,6 +35,22 @@ type FeedItemInput = {
 
 type FeedItemRecord = { id: string } & Record<string, unknown>;
 
+const extractWordpressNumericId = (value?: string) => {
+  if (!value) return null;
+  const text = String(value);
+  const queryMatch = text.match(/[?&]p=(\d+)/i);
+  if (queryMatch?.[1]) {
+    const parsed = Number(queryMatch[1]);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const statusMatch = text.match(/\/status\/(\d+)(?:\/|$)/i);
+  if (statusMatch?.[1]) {
+    const parsed = Number(statusMatch[1]);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
 type FeedProcessResult = {
   items: FeedItemRecord[];
   fetchedCount: number;
@@ -102,20 +118,59 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
     );
 
     const sourceItems = isFirstFetch
-      ? byMostRecent.slice(0, bootstrapLimit)
+      ? [...byMostRecent.slice(0, bootstrapLimit)].reverse()
       : (() => {
-          const fresh: FeedItemInput[] = [];
-          for (const candidate of byMostRecent) {
+          const freshNewestFirst: FeedItemInput[] = [];
+          const maxKnownNumericGuid = Array.from(knownGuids)
+            .map((guid) => extractWordpressNumericId(String(guid)))
+            .filter((value): value is number => value != null)
+            .reduce<number | null>((max, value) => (max == null || value > max ? value : max), null);
+          const lookaheadLimit = 8;
+
+          let stopIndex: number | null = null;
+          for (let i = 0; i < byMostRecent.length; i += 1) {
+            const candidate = byMostRecent[i];
             const guid = candidate?.guid ? String(candidate.guid) : '';
             const normalizedCandidateUrl = normalizeUrl(candidate?.url || '');
             const seenByGuid = guid ? knownGuids.has(guid) : false;
             const seenByUrl = normalizedCandidateUrl ? knownUrls.has(normalizedCandidateUrl) : false;
             if (seenByGuid || seenByUrl) {
+              stopIndex = i;
               break;
             }
-            fresh.push(candidate);
+            freshNewestFirst.push(candidate);
           }
-          return fresh;
+
+          if (stopIndex != null && maxKnownNumericGuid != null) {
+            const upperBound = Math.min(stopIndex + 1 + lookaheadLimit, byMostRecent.length);
+            for (let i = stopIndex + 1; i < upperBound; i += 1) {
+              const candidate = byMostRecent[i];
+              const guid = candidate?.guid ? String(candidate.guid) : '';
+              const normalizedCandidateUrl = normalizeUrl(candidate?.url || '');
+              const seenByGuid = guid ? knownGuids.has(guid) : false;
+              const seenByUrl = normalizedCandidateUrl ? knownUrls.has(normalizedCandidateUrl) : false;
+              if (seenByGuid || seenByUrl) continue;
+
+              const numericGuid = extractWordpressNumericId(guid) || extractWordpressNumericId(candidate?.url || '');
+              if (numericGuid != null && numericGuid > maxKnownNumericGuid) {
+                freshNewestFirst.push(candidate);
+              }
+            }
+          }
+
+          const dedupedNewestFirst: FeedItemInput[] = [];
+          const seenKeys = new Set<string>();
+          for (const candidate of freshNewestFirst) {
+            const key =
+              (candidate?.guid ? `g:${String(candidate.guid)}` : '') ||
+              (candidate?.url ? `u:${normalizeUrl(candidate.url)}` : '') ||
+              '';
+            if (!key || seenKeys.has(key)) continue;
+            seenKeys.add(key);
+            dedupedNewestFirst.push(candidate);
+          }
+
+          return dedupedNewestFirst.reverse();
         })();
 
     if (isFirstFetch && items.length > sourceItems.length) {

@@ -31,16 +31,10 @@ const saveIncomingMessages = async (messages: BaileysMessage[] = []) => {
       raw_message: message
     };
 
-    if (urls.length === 0) {
-      entries.push(base);
-    } else {
-      urls.forEach((url: string) => {
-        entries.push({
-          ...base,
-          media_url: url
-        });
-      });
-    }
+    entries.push({
+      ...base,
+      media_url: urls.length ? urls[0] : null
+    });
   }
 
   if (entries.length) {
@@ -48,7 +42,9 @@ const saveIncomingMessages = async (messages: BaileysMessage[] = []) => {
     if (!supabase) return;
     
     try {
-      await supabase.from('chat_messages').insert(entries);
+      await supabase
+        .from('chat_messages')
+        .upsert(entries, { onConflict: 'whatsapp_id', ignoreDuplicates: true });
     } catch (error) {
       console.error('Error saving incoming messages:', error);
     }

@@ -14,6 +14,8 @@ const DEFAULTS = {
   defaultIntraTargetDelaySec: env.DEFAULT_INTRA_TARGET_DELAY_SEC,
   initial_fetch_limit: Number(process.env.INITIAL_FETCH_LIMIT || 1),
   max_pending_age_hours: Number(process.env.MAX_PENDING_AGE_HOURS || 48),
+  send_timeout_ms: Number(process.env.SEND_TIMEOUT_MS || 45000),
+  reconcile_queue_lookback_hours: Number(process.env.RECONCILE_QUEUE_LOOKBACK_HOURS || 12),
   dedupeThreshold: 0.88,
   processingTimeoutMinutes: Number(process.env.PROCESSING_TIMEOUT_MINUTES || 30)
 };

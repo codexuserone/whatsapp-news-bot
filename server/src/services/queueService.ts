@@ -56,7 +56,7 @@ type WhatsAppClient = {
   ) => Promise<{ announce: boolean; me: { isAdmin: boolean } } | null>;
 };
 
-const DEFAULT_SEND_TIMEOUT_MS = 15000;
+const DEFAULT_SEND_TIMEOUT_MS = 45000;
 const AUTH_ERROR_HINT =
   'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
 
@@ -452,7 +452,7 @@ const sendMessageWithTemplate = async (
   target: Target,
   template: Template,
   feedItem: FeedItem,
-  options?: { sendImages?: boolean; supabase?: SupabaseClient }
+  options?: { sendImages?: boolean; supabase?: SupabaseClient; sendTimeoutMs?: number }
 ): Promise<SendWithMediaResult> => {
   const payload = buildMessageData(feedItem);
   const text = applyTemplate(template.content, payload).trim();
@@ -470,18 +470,19 @@ const sendMessageWithTemplate = async (
 
   const jid = normalizeTargetJid(target);
   const allowImages = options?.sendImages !== false;
+  const sendTimeoutMs = Math.max(Number(options?.sendTimeoutMs || DEFAULT_SEND_TIMEOUT_MS), 10000);
 
   const sendText = async () => {
     if (target.type === 'status') {
       return withTimeout(
         whatsappClient.sendStatusBroadcast({ text }),
-        DEFAULT_SEND_TIMEOUT_MS,
+        sendTimeoutMs,
         'Timed out sending status message'
       );
     }
     return withTimeout(
       whatsappClient.sendMessage(jid, { text }),
-      DEFAULT_SEND_TIMEOUT_MS,
+      sendTimeoutMs,
       'Timed out sending message'
     );
   };
@@ -516,12 +517,12 @@ const sendMessageWithTemplate = async (
         target.type === 'status'
           ? await withTimeout(
               whatsappClient.sendStatusBroadcast(content),
-              DEFAULT_SEND_TIMEOUT_MS,
+              sendTimeoutMs,
               'Timed out sending image status message'
             )
           : await withTimeout(
               whatsappClient.sendMessage(jid, content),
-              DEFAULT_SEND_TIMEOUT_MS,
+              sendTimeoutMs,
               'Timed out sending image message'
             );
 
@@ -546,12 +547,12 @@ const sendMessageWithTemplate = async (
           target.type === 'status'
             ? await withTimeout(
                 whatsappClient.sendStatusBroadcast(content),
-                DEFAULT_SEND_TIMEOUT_MS,
+                sendTimeoutMs,
                 'Timed out sending image status message'
               )
             : await withTimeout(
                 whatsappClient.sendMessage(jid, content),
-                DEFAULT_SEND_TIMEOUT_MS,
+                sendTimeoutMs,
                 'Timed out sending image message'
               );
 
@@ -732,6 +733,71 @@ const queueSinceLastRunForSchedule = async (
   }
 
   return { queued: totalQueued, feedItemCount: totalFeedItems, cursorAt: cursorAt || null };
+};
+
+const queueRecentMissingForSchedule = async (
+  supabase: SupabaseClient,
+  schedule: Schedule,
+  targets: Target[],
+  lookbackHours: number
+): Promise<number> => {
+  if (!schedule.feed_id) return 0;
+  if (!Array.isArray(targets) || !targets.length) return 0;
+  if (!schedule.last_run_at && !schedule.last_queued_at) return 0;
+
+  const lookback = Math.min(Math.max(Number(lookbackHours) || 0, 1), 72);
+  const sinceIso = new Date(Date.now() - lookback * 60 * 60 * 1000).toISOString();
+
+  const { data: recentItems, error: itemsError } = await supabase
+    .from('feed_items')
+    .select('id')
+    .eq('feed_id', schedule.feed_id)
+    .gte('created_at', sinceIso)
+    .order('created_at', { ascending: true })
+    .limit(400);
+
+  if (itemsError || !recentItems?.length) {
+    if (itemsError) {
+      logger.warn({ scheduleId: schedule.id, error: itemsError }, 'Failed loading recent feed items for reconciliation');
+    }
+    return 0;
+  }
+
+  const targetIds = targets.map((target) => target.id).filter(Boolean) as string[];
+  if (!targetIds.length) return 0;
+
+  const pendingRows: Array<Record<string, unknown>> = [];
+  for (const item of recentItems as Array<{ id?: string }>) {
+    const feedItemId = item?.id ? String(item.id) : null;
+    if (!feedItemId) continue;
+    for (const targetId of targetIds) {
+      pendingRows.push({
+        feed_item_id: feedItemId,
+        target_id: targetId,
+        schedule_id: schedule.id,
+        template_id: schedule.template_id,
+        status: 'pending'
+      });
+    }
+  }
+
+  if (!pendingRows.length) return 0;
+
+  const { data: insertedRows, error: insertError } = await supabase
+    .from('message_logs')
+    .upsert(pendingRows, { onConflict: 'schedule_id,feed_item_id,target_id', ignoreDuplicates: true })
+    .select('id');
+
+  if (insertError) {
+    logger.warn({ scheduleId: schedule.id, error: insertError }, 'Failed reconciling recent queue items');
+    return 0;
+  }
+
+  const inserted = insertedRows?.length || 0;
+  if (inserted > 0) {
+    logger.info({ scheduleId: schedule.id, inserted, lookbackHours: lookback }, 'Reconciled missing recent queue items');
+  }
+  return inserted;
 };
 
 type QueueLatestResult = {
@@ -971,6 +1037,8 @@ const sendQueuedForSchedule = async (
     }
     logger.info({ scheduleId, targetCount: targets?.length || 0 }, 'Found targets for schedule');
 
+    const settings = await settingsService.getSettings();
+
     if (!options?.skipFeedRefresh) {
       try {
         const { data: feed } = await supabase.from('feeds').select('*').eq('id', schedule.feed_id).single();
@@ -1008,6 +1076,11 @@ const sendQueuedForSchedule = async (
       const latestResult = await queueLatestForSchedule(scheduleId, { schedule, targets });
       queuedCount += latestResult.queued;
       queueCursorAt = latestResult.cursorAt || null;
+    }
+
+    if (deliveryMode !== 'batched') {
+      const lookbackHours = Math.max(Number(settings.reconcile_queue_lookback_hours || 12), 1);
+      queuedCount += await queueRecentMissingForSchedule(supabase, schedule, targets, lookbackHours);
     }
 
     // Persist the queue cursor even if we skip sending (e.g. WhatsApp disconnected or Shabbos).
@@ -1057,7 +1130,6 @@ const sendQueuedForSchedule = async (
       return { sent: 0, queued: queuedCount, skipped: true, reason: 'WhatsApp not connected' };
     }
 
-    const settings = await settingsService.getSettings();
     const maxPendingAgeHours = Math.max(Number(settings.max_pending_age_hours || 48), 1);
     const staleCutoffMs = Date.now() - maxPendingAgeHours * 60 * 60 * 1000;
 
@@ -1197,7 +1269,8 @@ const sendQueuedForSchedule = async (
             await waitForDelays(String(target.id), settings);
             const result = await sendMessageWithTemplate(whatsappClient, target, template, feedItem, {
               sendImages: template?.send_images !== false,
-              supabase
+              supabase,
+              sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS)
             });
             const nowMs = Date.now();
             globalLastSentAtMs = nowMs;
@@ -1265,6 +1338,7 @@ const sendQueuedForSchedule = async (
           const errorMessage = authError
             ? `${AUTH_ERROR_HINT} (${rawErrorMessage || 'unknown auth error'})`
             : rawErrorMessage;
+          const timeoutUnknownDelivery = /timed out sending/i.test(rawErrorMessage);
           const nonRetryable = [
             'Template rendered empty message',
             'Target phone number missing',
@@ -1273,13 +1347,18 @@ const sendQueuedForSchedule = async (
             'Phone number invalid'
           ].some((needle) => rawErrorMessage.includes(needle));
 
-          if (nonRetryable) {
+          const shouldNotRetry = nonRetryable || timeoutUnknownDelivery;
+
+          if (shouldNotRetry) {
+            const finalErrorMessage = timeoutUnknownDelivery
+              ? `Timed out while sending (delivery may have succeeded). Not auto-retrying to avoid duplicates. ${errorMessage}`
+              : errorMessage;
             await supabase
               .from('message_logs')
               .update({
                 status: 'failed',
                 processing_started_at: null,
-                error_message: errorMessage,
+                error_message: finalErrorMessage,
                 media_url: null,
                 media_type: null,
                 media_sent: false,

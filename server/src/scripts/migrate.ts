@@ -78,6 +78,38 @@ const listSqlFiles = async (dir: string) => {
   });
 };
 
+const resolveClientConfig = async (databaseUrl: string) => {
+  const parsed = new URL(databaseUrl);
+  const host = parsed.hostname;
+  let resolvedHost = host;
+
+  try {
+    const lookup = await dns.promises.lookup(host, { family: 4 });
+    if (lookup?.address) {
+      resolvedHost = lookup.address;
+      process.stdout.write(`Resolved ${host} -> ${resolvedHost} (IPv4)\n`);
+    }
+  } catch {
+    // Fall back to original host. NODE_OPTIONS/ipv4first still applies globally.
+  }
+
+  const database = parsed.pathname.replace(/^\//, '') || 'postgres';
+  const port = Number(parsed.port || 5432);
+
+  const config: any = {
+    user: decodeURIComponent(parsed.username || ''),
+    password: decodeURIComponent(parsed.password || ''),
+    host: resolvedHost,
+    port,
+    database,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 15000,
+    keepAlive: true
+  };
+
+  return config;
+};
+
 const runMigrations = async () => {
   preferIpv4();
   loadEnv();
@@ -104,14 +136,7 @@ const runMigrations = async () => {
     throw new Error(`No .sql files found in ${migrationsDir}`);
   }
 
-  const clientConfig: any = {
-    connectionString: databaseUrl,
-    ssl: { rejectUnauthorized: false },
-    // Render frequently has IPv4-only egress. Avoid AAAA-first connection attempts.
-    family: 4,
-    connectionTimeoutMillis: 15000,
-    keepAlive: true
-  };
+  const clientConfig = await resolveClientConfig(databaseUrl);
 
   const client = new Client(clientConfig);
 

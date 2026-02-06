@@ -57,11 +57,6 @@ const scheduleRoutes = () => {
     return next;
   };
 
-  const dispatchImmediate = (scheduleId: string, whatsappClient: unknown) =>
-    runAsync(`Dispatch schedule ${scheduleId}`, async () => {
-      await sendQueuedForSchedule(scheduleId, whatsappClient as never);
-    });
-  
   const getDb = () => {
     const supabase = getSupabaseClient();
     if (!supabase) throw serviceUnavailable('Database not available');
@@ -115,15 +110,6 @@ const scheduleRoutes = () => {
       if (error) throw error;
       refreshSchedulers(req.app.locals.whatsapp);
 
-      // For immediate schedules, queue+send once so the system shows activity
-      if (
-        schedule?.active &&
-        !schedule?.cron_expression &&
-        schedule?.delivery_mode !== 'batched' &&
-        schedule?.delivery_mode !== 'batch'
-      ) {
-        dispatchImmediate(schedule.id, req.app.locals.whatsapp);
-      }
       res.json(schedule);
     } catch (error) {
       console.error('Error creating schedule:', error);
@@ -144,14 +130,6 @@ const scheduleRoutes = () => {
       if (error) throw error;
       refreshSchedulers(req.app.locals.whatsapp);
 
-      if (
-        schedule?.active &&
-        !schedule?.cron_expression &&
-        schedule?.delivery_mode !== 'batched' &&
-        schedule?.delivery_mode !== 'batch'
-      ) {
-        dispatchImmediate(schedule.id, req.app.locals.whatsapp);
-      }
       res.json(schedule);
     } catch (error) {
       console.error('Error updating schedule:', error);

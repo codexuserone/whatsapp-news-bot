@@ -578,6 +578,60 @@ type SendWithMediaResult = {
   };
 };
 
+const toTimestampIso = (value: unknown) => {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return new Date(value * 1000).toISOString();
+  }
+  if (typeof value === 'object' && value && 'low' in (value as Record<string, unknown>)) {
+    const low = Number((value as Record<string, unknown>).low);
+    if (Number.isFinite(low) && low > 0) {
+      return new Date(low * 1000).toISOString();
+    }
+  }
+  return new Date().toISOString();
+};
+
+const persistOutgoingChatMessage = async (
+  supabase: SupabaseClient,
+  params: {
+    messageId: string;
+    remoteJid: string;
+    text: string;
+    mediaUrl: string | null;
+    mediaType: string | null;
+    messageTimestamp: unknown;
+    scheduleId: string;
+    feedItemId: string;
+  }
+) => {
+  try {
+    await supabase
+      .from('chat_messages')
+      .upsert(
+        {
+          whatsapp_id: params.messageId,
+          remote_jid: params.remoteJid,
+          from_me: true,
+          message_type: params.mediaType || 'text',
+          content: params.text,
+          media_url: params.mediaUrl,
+          status: 'sent',
+          timestamp: toTimestampIso(params.messageTimestamp),
+          raw_message: {
+            source: 'dispatch',
+            schedule_id: params.scheduleId,
+            feed_item_id: params.feedItemId,
+            media_type: params.mediaType,
+            media_url: params.mediaUrl
+          }
+        },
+        { onConflict: 'whatsapp_id' }
+      );
+  } catch (error) {
+    logger.warn({ error, messageId: params.messageId }, 'Failed to persist outgoing chat message snapshot');
+  }
+};
+
 const sendMessageWithTemplate = async (
   whatsappClient: WhatsAppClient,
   target: Target,
@@ -1551,6 +1605,21 @@ const sendQueuedForSchedule = async (
 
           const messageId = response?.key?.id;
           if (messageId) {
+            const remoteJid =
+              (response?.key?.remoteJid ? String(response.key.remoteJid) : null) ||
+              normalizeTargetJid(target);
+
+            await persistOutgoingChatMessage(supabase, {
+              messageId: String(messageId),
+              remoteJid,
+              text: String(sendResult?.text || ''),
+              mediaUrl: sendResult?.media?.url || null,
+              mediaType: sendResult?.media?.type || null,
+              messageTimestamp: response?.messageTimestamp,
+              scheduleId,
+              feedItemId: String(feedItem.id)
+            });
+
             if (whatsappClient.confirmSend) {
               const isImage = sendResult?.media?.type === 'image' && Boolean(sendResult?.media?.sent);
               const confirmation = await whatsappClient.confirmSend(

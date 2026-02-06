@@ -21,7 +21,8 @@ type FetchMeta = {
 };
 
 const DEFAULT_USER_AGENT =
-  'Mozilla/5.0 (compatible; WhatsAppNewsBot/0.2; +https://example.invalid)';
+  process.env.FEED_USER_AGENT ||
+  'Mozilla/5.0 (compatible; AnashNewsBot/1.0; +https://whatsapp-news-bot-3-69qh.onrender.com)';
 
 const getPath = (obj: Record<string, unknown>, path?: string) => {
   if (!path) return undefined;

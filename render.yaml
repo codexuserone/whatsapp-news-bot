@@ -19,7 +19,9 @@ services:
       - key: RUN_MIGRATIONS_ON_START
         value: "true"
       - key: MIGRATIONS_STRICT
-        value: "false"
+        value: "true"
+      - key: NODE_OPTIONS
+        value: "--dns-result-order=ipv4first"
       - key: KEEP_ALIVE
         value: "true"
       - key: KEEP_ALIVE_URL
@@ -36,5 +38,5 @@ services:
         value: "false"
       - key: SKIP_WHATSAPP_LEASE
         value: "false"
-    healthCheckPath: /health
+    healthCheckPath: /ready
     autoDeploy: true

@@ -10,7 +10,9 @@ const { getErrorMessage } = require('../utils/errorUtils');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const DEFAULT_USER_AGENT =
-  'Mozilla/5.0 (compatible; WhatsAppNewsBot/0.2; +https://example.invalid)';
+  process.env.MEDIA_FETCH_USER_AGENT ||
+  process.env.FEED_USER_AGENT ||
+  'Mozilla/5.0 (compatible; AnashNewsBot/1.0; +https://whatsapp-news-bot-3-69qh.onrender.com)';
 
 const isHttpUrl = (value: string) => {
   try {

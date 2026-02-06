@@ -12,7 +12,7 @@ const OverviewPage = () => {
   const { data: status } = useQuery({
     queryKey: ['whatsapp-status'],
     queryFn: () => api.get('/api/whatsapp/status'),
-    refetchInterval: 5000
+    refetchInterval: 15000
   });
   const { data: feeds = [] } = useQuery({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: templates = [] } = useQuery({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });

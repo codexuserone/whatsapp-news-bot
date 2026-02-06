@@ -6,7 +6,11 @@ const { badRequest } = require('../core/errors');
 const JID_PATTERN = /^([0-9+\s\-\(\)]+|status@broadcast|[0-9\-]+@g\.us|[0-9]+@s\.whatsapp\.net|[0-9]+@newsletter)$/i;
 
 // Validation schemas
-const normalizeOptional = (value: string | null | undefined) => (value === '' ? null : value);
+const normalizeOptional = (value: string | null | undefined) => {
+  if (value == null) return value;
+  const normalized = String(value).trim();
+  return normalized === '' ? null : normalized;
+};
 
 const schemas = {
   scheduleBatchTime: z

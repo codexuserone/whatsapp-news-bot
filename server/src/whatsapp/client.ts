@@ -19,6 +19,15 @@ type MessageStatusSnapshot = {
   updatedAtMs: number;
 };
 
+const redactSensitiveText = (value?: string | null) => {
+  const text = String(value || '');
+  if (!text) return '';
+  return text
+    .replace(/\b\d{8,15}\b/g, '[redacted-number]')
+    .replace(/(<stream:error[^>]*>)[\s\S]*?(<\/stream:error>)/gi, '$1[redacted]$2')
+    .slice(0, 320);
+};
+
 class WhatsAppClient {
   socket: WASocket | null;
   status: WhatsAppStatus;
@@ -464,8 +473,8 @@ class WhatsAppClient {
 
       // Acquire a cross-instance lease so only one bot connects at a time.
       // This prevents WhatsApp "conflict/replaced" errors during rolling deploys.
-      // Can be disabled via env var if causing issues.
-      const skipLease = process.env.SKIP_WHATSAPP_LEASE !== 'false';
+      const skipLease = process.env.SKIP_WHATSAPP_LEASE === 'true';
+      const allowAutoTakeover = process.env.WHATSAPP_LEASE_AUTO_TAKEOVER === 'true';
       if (!skipLease && authStore.acquireLease) {
         try {
           const lease = await authStore.acquireLease(this.instanceId, 90_000);
@@ -475,14 +484,9 @@ class WhatsAppClient {
           this.leaseExpiresAt = lease.expiresAt;
 
           if (lease.supported && !lease.ok) {
-            // Auto-takeover: force acquire the lease immediately
-            // This prevents users from having to manually click "Take Over"
-            logger.warn({ holder: lease.ownerId }, 'Lease held, attempting auto-takeover...');
-            this.status = 'connecting';
-            this.lastError = null; // Don't show confusing messages to users
-            
-            try {
-              if (authStore.forceAcquireLease) {
+            if (allowAutoTakeover && authStore.forceAcquireLease) {
+              logger.warn({ holder: lease.ownerId }, 'Lease held; attempting auto-takeover');
+              try {
                 const takeover = await authStore.forceAcquireLease(this.instanceId, 90_000);
                 if (takeover.ok) {
                   logger.info('Auto-takeover successful');
@@ -490,18 +494,30 @@ class WhatsAppClient {
                   this.leaseOwnerId = takeover.ownerId;
                   this.leaseExpiresAt = takeover.expiresAt;
                   this.startLeaseRenewal(90_000);
-                  // Continue with connection below (don't return)
+                  // Continue with connection below.
                 } else {
-                  logger.error({ reason: takeover.reason }, 'Auto-takeover failed, continuing without lease');
-                  this.leaseHeld = true; // Continue anyway - don't block
+                  logger.warn({ holder: takeover.ownerId }, 'Lease held by another instance; skipping connect');
+                  this.status = 'conflict';
+                  this.lastError = 'Another instance currently holds the WhatsApp lease.';
+                  await authStore.updateStatus('conflict');
+                  this.scheduleReconnect(15000 + Math.random() * 5000);
+                  return;
                 }
-              } else {
-                logger.warn('Force acquire not supported, continuing without lease');
-                this.leaseHeld = true;
+              } catch (error) {
+                logger.warn({ error }, 'Auto-takeover failed; skipping connect until lease is available');
+                this.status = 'conflict';
+                this.lastError = 'Failed to acquire WhatsApp lease.';
+                await authStore.updateStatus('conflict');
+                this.scheduleReconnect(15000 + Math.random() * 5000);
+                return;
               }
-            } catch (error) {
-              logger.error({ error }, 'Auto-takeover error, continuing without lease');
-              this.leaseHeld = true; // Continue anyway - don't block
+            } else {
+              logger.warn({ holder: lease.ownerId }, 'Lease held by another instance; skipping connect');
+              this.status = 'conflict';
+              this.lastError = 'Another instance currently holds the WhatsApp lease.';
+              await authStore.updateStatus('conflict');
+              this.scheduleReconnect(15000 + Math.random() * 5000);
+              return;
             }
           }
 
@@ -509,8 +525,12 @@ class WhatsAppClient {
             this.startLeaseRenewal(90_000);
           }
         } catch (error) {
-          logger.warn({ error }, 'Failed to acquire WhatsApp lease; continuing without lock');
-          this.leaseHeld = true; // Don't let lease errors block connection
+          logger.warn({ error }, 'Failed to acquire WhatsApp lease; refusing to connect without lock');
+          this.status = 'conflict';
+          this.lastError = 'Unable to acquire WhatsApp lease; retrying.';
+          await authStore.updateStatus('conflict');
+          this.scheduleReconnect(15000 + Math.random() * 5000);
+          return;
         }
       } else {
         // Lease disabled or not supported - just connect
@@ -654,11 +674,12 @@ class WhatsAppClient {
           this.isConnecting = false;
           const disconnectError = lastDisconnect?.error as { output?: { statusCode?: number; payload?: { message?: string } }; message?: string } | undefined;
           const statusCode = disconnectError?.output?.statusCode;
-          const reason = disconnectError?.output?.payload?.message || disconnectError?.message;
+          const rawReason = disconnectError?.output?.payload?.message || disconnectError?.message;
+          const reason = redactSensitiveText(rawReason);
           this.status = 'disconnected';
           this.meJid = null;
           this.meName = null;
-          if (reason?.includes('QR refs attempts ended')) {
+          if (String(rawReason || '').includes('QR refs attempts ended')) {
             this.lastError = 'QR expired. Click Hard Refresh to generate a new QR code.';
           } else {
             this.lastError = reason || 'Connection closed';
@@ -676,7 +697,7 @@ class WhatsAppClient {
             return;
           }
 
-          if (statusCode === DisconnectReason.restartRequired || reason?.includes('restart required')) {
+          if (statusCode === DisconnectReason.restartRequired || String(rawReason || '').includes('restart required')) {
             logger.info('Restart required, reconnecting');
             this.lastError = null;
             this.status = 'connecting';
@@ -686,7 +707,7 @@ class WhatsAppClient {
           }
 
           // Connection conflict - another device logged in
-          if (statusCode === 440 || reason?.includes('conflict')) {
+          if (statusCode === 440 || String(rawReason || '').includes('conflict')) {
             this.conflictAttempts = (this.conflictAttempts || 0) + 1;
             
             if (this.conflictAttempts > 3) {

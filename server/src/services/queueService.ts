@@ -155,7 +155,9 @@ const isImageUrl = (url: string): boolean => {
 };
 
 const DEFAULT_USER_AGENT =
-  'Mozilla/5.0 (compatible; WhatsAppNewsBot/0.2; +https://example.invalid)';
+  process.env.MEDIA_FETCH_USER_AGENT ||
+  process.env.FEED_USER_AGENT ||
+  'Mozilla/5.0 (compatible; AnashNewsBot/1.0; +https://whatsapp-news-bot-3-69qh.onrender.com)';
 
 const normalizeUrlCandidate = (candidate?: string | null, baseUrl?: string | null) => {
   const raw = String(candidate || '').trim();

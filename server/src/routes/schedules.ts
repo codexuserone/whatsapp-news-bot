@@ -33,14 +33,22 @@ const scheduleRoutes = () => {
     return Array.from(seen).sort();
   };
 
+  const normalizeCronExpression = (value: unknown): string | null => {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    return raw.replace(/\s+/g, ' ');
+  };
+
   const normalizeSchedulePayload = (payload: Record<string, unknown>, options?: { forInsert?: boolean }) => {
     const next = { ...payload } as Record<string, unknown>;
     const mode = next.delivery_mode === 'batch' || next.delivery_mode === 'batched' ? 'batched' : 'immediate';
     const defaultBatchTimes = ['07:00', '15:00', '22:00'];
     const batchTimes = normalizeBatchTimes(next.batch_times);
+    const cronExpression = normalizeCronExpression(next.cron_expression);
 
     next.delivery_mode = mode;
     next.batch_times = batchTimes.length ? batchTimes : defaultBatchTimes;
+    next.cron_expression = cronExpression;
 
     if (options?.forInsert && mode === 'batched') {
       next.last_queued_at = new Date().toISOString();

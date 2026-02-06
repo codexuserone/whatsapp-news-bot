@@ -147,8 +147,15 @@ const start = async () => {
 
   const disableWhatsApp = process.env.DISABLE_WHATSAPP === 'true';
   const disableSchedulers = process.env.DISABLE_SCHEDULERS === 'true';
+  const migrationsRequired = process.env.RUN_MIGRATIONS_ON_START === 'true';
 
   app.locals.whatsapp = null;
+  app.locals.startup = {
+    bootCompleted: false,
+    migrationsRequired,
+    migrationsOk: migrationsRequired ? null : true,
+    migrationsError: null
+  };
   registerRoutes(app);
 
   app.use('/api', notFoundHandler);
@@ -180,13 +187,17 @@ const start = async () => {
 
   const boot = async () => {
     // Optional: apply SQL migrations.
-    if (process.env.RUN_MIGRATIONS_ON_START === 'true') {
+    if (migrationsRequired) {
       try {
         logger.info('Running database migrations');
         await runMigrations();
         logger.info('Database migrations complete');
+        app.locals.startup.migrationsOk = true;
+        app.locals.startup.migrationsError = null;
       } catch (error) {
         logger.error({ error }, 'Database migrations failed');
+        app.locals.startup.migrationsOk = false;
+        app.locals.startup.migrationsError = error instanceof Error ? error.message : String(error);
         const strict = process.env.MIGRATIONS_STRICT === 'true';
         if (strict) {
           throw error;
@@ -239,10 +250,17 @@ const start = async () => {
         await initSchedulers(whatsappClient);
       }
     }
+
+    app.locals.startup.bootCompleted = true;
   };
 
   void boot().catch((error) => {
     logger.error({ error }, 'Background boot failed');
+    app.locals.startup.bootCompleted = false;
+    if (app.locals.startup.migrationsOk == null) {
+      app.locals.startup.migrationsOk = false;
+      app.locals.startup.migrationsError = error instanceof Error ? error.message : String(error);
+    }
   });
 };
 

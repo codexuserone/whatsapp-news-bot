@@ -24,7 +24,7 @@ const MainLayout = () => {
   const { data: status } = useQuery({
     queryKey: ['whatsapp-status'],
     queryFn: () => api.get('/api/whatsapp/status'),
-    refetchInterval: 5000
+    refetchInterval: 15000
   });
 
   return (

@@ -82,11 +82,12 @@ const runMigrations = async () => {
   preferIpv4();
   loadEnv();
 
-  const databaseUrl = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
-  const databaseUrlSource = process.env.DATABASE_URL
-    ? 'DATABASE_URL'
-    : process.env.SUPABASE_DB_URL
-      ? 'SUPABASE_DB_URL'
+  // Prefer SUPABASE_DB_URL (typically a pooler/IPv4-friendly endpoint) when available.
+  const databaseUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+  const databaseUrlSource = process.env.SUPABASE_DB_URL
+    ? 'SUPABASE_DB_URL'
+    : process.env.DATABASE_URL
+      ? 'DATABASE_URL'
       : null;
   if (!databaseUrl) {
     throw new Error(
@@ -103,10 +104,16 @@ const runMigrations = async () => {
     throw new Error(`No .sql files found in ${migrationsDir}`);
   }
 
-  const client = new Client({
+  const clientConfig: any = {
     connectionString: databaseUrl,
-    ssl: { rejectUnauthorized: false }
-  });
+    ssl: { rejectUnauthorized: false },
+    // Render frequently has IPv4-only egress. Avoid AAAA-first connection attempts.
+    family: 4,
+    connectionTimeoutMillis: 15000,
+    keepAlive: true
+  };
+
+  const client = new Client(clientConfig);
 
   await client.connect();
   try {

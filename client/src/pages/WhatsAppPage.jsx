@@ -18,13 +18,13 @@ const WhatsAppPage = () => {
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['whatsapp-status'],
     queryFn: () => api.get('/api/whatsapp/status'),
-    refetchInterval: 3000
+    refetchInterval: 10000
   });
 
   const { data: qr } = useQuery({
     queryKey: ['whatsapp-qr'],
     queryFn: () => api.get('/api/whatsapp/qr'),
-    refetchInterval: 3000,
+    refetchInterval: 10000,
     enabled: status?.status !== 'connected'
   });
 

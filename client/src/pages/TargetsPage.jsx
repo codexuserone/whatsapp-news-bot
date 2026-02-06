@@ -42,7 +42,7 @@ const TargetsPage = () => {
   const { data: waStatus } = useQuery({
     queryKey: ['whatsapp-status'],
     queryFn: () => api.get('/api/whatsapp/status'),
-    refetchInterval: 5000
+    refetchInterval: 15000
   });
 
   const { data: waGroups = [] } = useQuery({

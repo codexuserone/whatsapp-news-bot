@@ -85,7 +85,7 @@ const runScheduleOnce = async (
 };
 
 const getDeliveryMode = (schedule: { delivery_mode?: string | null }) =>
-  schedule?.delivery_mode === 'batch' ? 'batch' : 'immediate';
+  schedule?.delivery_mode === 'batch' || schedule?.delivery_mode === 'batched' ? 'batched' : 'immediate';
 
 const parseBatchTimes = (value: unknown): string[] => {
   const seen = new Set<string>();
@@ -136,7 +136,7 @@ const queueBatchSchedulesForFeed = async (feedId: string) => {
     if (error) throw error;
 
     const batchSchedules = (schedules || []).filter(
-      (schedule: ScheduleRow) => getDeliveryMode(schedule) === 'batch'
+      (schedule: ScheduleRow) => getDeliveryMode(schedule) === 'batched'
     );
 
     if (!batchSchedules.length) return;
@@ -175,7 +175,7 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
     if (error) throw error;
 
     const immediateSchedules = (schedules || []).filter(
-      (schedule: ScheduleRow) => getDeliveryMode(schedule) !== 'batch' && !schedule.cron_expression
+      (schedule: ScheduleRow) => getDeliveryMode(schedule) !== 'batched' && !schedule.cron_expression
     );
     logger.info({ feedId, count: immediateSchedules.length }, 'Triggering immediate schedules');
     
@@ -265,7 +265,7 @@ const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
       const mode = getDeliveryMode(schedule);
       const timezone = schedule.timezone || 'UTC';
 
-      if (mode === 'batch') {
+      if (mode === 'batched') {
         const batchTimes = parseBatchTimes(schedule.batch_times);
         if (!batchTimes.length) {
           logger.warn({ scheduleId: schedule.id }, 'Batch schedule has no valid batch_times');

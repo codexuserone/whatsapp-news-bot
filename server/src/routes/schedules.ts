@@ -35,14 +35,14 @@ const scheduleRoutes = () => {
 
   const normalizeSchedulePayload = (payload: Record<string, unknown>, options?: { forInsert?: boolean }) => {
     const next = { ...payload } as Record<string, unknown>;
-    const mode = next.delivery_mode === 'batch' ? 'batch' : 'immediate';
+    const mode = next.delivery_mode === 'batch' || next.delivery_mode === 'batched' ? 'batched' : 'immediate';
     const defaultBatchTimes = ['07:00', '15:00', '22:00'];
     const batchTimes = normalizeBatchTimes(next.batch_times);
 
     next.delivery_mode = mode;
     next.batch_times = batchTimes.length ? batchTimes : defaultBatchTimes;
 
-    if (options?.forInsert && mode === 'batch') {
+    if (options?.forInsert && mode === 'batched') {
       next.last_queued_at = new Date().toISOString();
     }
 
@@ -108,7 +108,12 @@ const scheduleRoutes = () => {
       refreshSchedulers(req.app.locals.whatsapp);
 
       // For immediate schedules, queue+send once so the system shows activity
-      if (schedule?.active && !schedule?.cron_expression && schedule?.delivery_mode !== 'batch') {
+      if (
+        schedule?.active &&
+        !schedule?.cron_expression &&
+        schedule?.delivery_mode !== 'batched' &&
+        schedule?.delivery_mode !== 'batch'
+      ) {
         dispatchImmediate(schedule.id, req.app.locals.whatsapp);
       }
       res.json(schedule);
@@ -131,7 +136,12 @@ const scheduleRoutes = () => {
       if (error) throw error;
       refreshSchedulers(req.app.locals.whatsapp);
 
-      if (schedule?.active && !schedule?.cron_expression && schedule?.delivery_mode !== 'batch') {
+      if (
+        schedule?.active &&
+        !schedule?.cron_expression &&
+        schedule?.delivery_mode !== 'batched' &&
+        schedule?.delivery_mode !== 'batch'
+      ) {
         dispatchImmediate(schedule.id, req.app.locals.whatsapp);
       }
       res.json(schedule);

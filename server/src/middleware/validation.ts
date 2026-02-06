@@ -21,13 +21,13 @@ const schemas = {
     target_ids: z.array(z.string().uuid()).min(1),
     template_id: z.string().uuid(),
     active: z.boolean().default(true),
-    delivery_mode: z.enum(['immediate', 'batch']).default('immediate'),
+    delivery_mode: z.enum(['immediate', 'batch', 'batched']).default('immediate'),
     batch_times: z.array(z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/)).default(['07:00', '15:00', '22:00'])
   }).superRefine((value: {
-    delivery_mode?: 'immediate' | 'batch';
+    delivery_mode?: 'immediate' | 'batch' | 'batched';
     batch_times?: string[];
   }, ctx: { addIssue: (issue: { code: string; path: string[]; message: string }) => void }) => {
-    if (value.delivery_mode !== 'batch') return;
+    if (value.delivery_mode !== 'batch' && value.delivery_mode !== 'batched') return;
     const times = Array.isArray(value.batch_times) ? value.batch_times : [];
     if (!times.length) {
       ctx.addIssue({

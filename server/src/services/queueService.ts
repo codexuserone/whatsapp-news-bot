@@ -589,7 +589,7 @@ type Schedule = {
   feed_id?: string | null;
   template_id?: string | null;
   target_ids?: string[];
-  delivery_mode?: 'immediate' | 'batch' | null;
+  delivery_mode?: 'immediate' | 'batched' | 'batch' | null;
   batch_times?: string[] | null;
   cron_expression?: string | null;
   timezone?: string | null;
@@ -900,7 +900,7 @@ const sendQueuedForSchedule = async (
       return { sent: 0, queued: 0 };
     }
 
-    const deliveryMode = schedule.delivery_mode === 'batch' ? 'batch' : 'immediate';
+    const deliveryMode = schedule.delivery_mode === 'batch' || schedule.delivery_mode === 'batched' ? 'batched' : 'immediate';
 
     // Check if schedule has feed_id - if not, it's a manual dispatch only
     if (!schedule.feed_id) {
@@ -980,7 +980,7 @@ const sendQueuedForSchedule = async (
     let queuedCount = 0;
     let queueCursorAt: string | null = null;
 
-    if (deliveryMode === 'batch') {
+    if (deliveryMode === 'batched') {
       const initialCursor =
         schedule.last_queued_at ||
         schedule.last_run_at ||
@@ -1335,7 +1335,7 @@ const sendQueuedForSchedule = async (
 
     const lastRunAt = new Date().toISOString();
     let nextRunAt: string | null = null;
-    if (deliveryMode === 'batch') {
+    if (deliveryMode === 'batched') {
       const batchTimes = parseBatchTimes(schedule.batch_times);
       nextRunAt = computeNextBatchRunAt(batchTimes, schedule.timezone || 'UTC');
     } else if (schedule.cron_expression) {
@@ -1345,7 +1345,7 @@ const sendQueuedForSchedule = async (
     if (queueCursorAt) {
       scheduleUpdates.last_queued_at = queueCursorAt;
     }
-    if (deliveryMode === 'batch') {
+    if (deliveryMode === 'batched') {
       scheduleUpdates.last_dispatched_at = lastRunAt;
     }
     const { error: scheduleUpdateError } = await supabase.from('schedules').update(scheduleUpdates).eq('id', scheduleId);
@@ -1397,7 +1397,7 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
 
     const batchScheduleIds = new Set(
       (scheduleRows || [])
-        .filter((row: { id?: string; delivery_mode?: string | null }) => row?.delivery_mode === 'batch')
+        .filter((row: { id?: string; delivery_mode?: string | null }) => row?.delivery_mode === 'batched' || row?.delivery_mode === 'batch')
         .map((row: { id?: string }) => String(row.id || ''))
         .filter(Boolean)
     );

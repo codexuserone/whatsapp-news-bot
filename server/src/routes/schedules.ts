@@ -22,41 +22,37 @@ const scheduleRoutes = () => {
   const refreshSchedulers = (whatsappClient: unknown) =>
     runAsync('Scheduler refresh', () => initSchedulers(whatsappClient));
 
-  const missingScheduleColumn = (error: unknown, column: string) => {
-    const message = String((error as { message?: unknown; details?: unknown })?.message || (error as { details?: unknown })?.details || error || '').toLowerCase();
-    const needle = String(column || '').toLowerCase();
-    if (!needle) return false;
-
-    const codeRaw = (error as { code?: unknown })?.code;
-    const code = typeof codeRaw === 'string' ? codeRaw.toUpperCase() : '';
-    if (code === 'PGRST204' && message.includes(needle)) {
-      return true;
+  const normalizeBatchTimes = (value: unknown): string[] => {
+    const seen = new Set<string>();
+    const items = Array.isArray(value) ? value : [];
+    for (const item of items) {
+      const normalized = String(item || '').trim();
+      if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(normalized)) continue;
+      seen.add(normalized);
     }
-    if (code === '42703' && message.includes(needle)) {
-      return true;
-    }
-    return (
-      message.includes(`could not find the '${needle}' column`) ||
-      message.includes(`could not find the \"${needle}\" column`) ||
-      message.includes(`could not find the ${needle} column`) ||
-      (message.includes(needle) && message.includes('schema cache')) ||
-      (message.includes(needle) && message.includes('does not exist'))
-    );
+    return Array.from(seen).sort();
   };
 
-  const stripUnsupportedScheduleFields = (payload: Record<string, unknown>, error: unknown) => {
-    const cleaned = { ...payload };
-    const maybeStrip = (column: string) => {
-      if (missingScheduleColumn(error, column)) {
-        delete (cleaned as Record<string, unknown>)[column];
-      }
-    };
-    maybeStrip('delivery_mode');
-    maybeStrip('batch_times');
-    maybeStrip('last_dispatched_at');
-    maybeStrip('last_queued_at');
-    return cleaned;
+  const normalizeSchedulePayload = (payload: Record<string, unknown>, options?: { forInsert?: boolean }) => {
+    const next = { ...payload } as Record<string, unknown>;
+    const mode = next.delivery_mode === 'batch' ? 'batch' : 'immediate';
+    const defaultBatchTimes = ['07:00', '15:00', '22:00'];
+    const batchTimes = normalizeBatchTimes(next.batch_times);
+
+    next.delivery_mode = mode;
+    next.batch_times = batchTimes.length ? batchTimes : defaultBatchTimes;
+
+    if (options?.forInsert && mode === 'batch') {
+      next.last_queued_at = new Date().toISOString();
+    }
+
+    return next;
   };
+
+  const dispatchImmediate = (scheduleId: string, whatsappClient: unknown) =>
+    runAsync(`Dispatch schedule ${scheduleId}`, async () => {
+      await sendQueuedForSchedule(scheduleId, whatsappClient as never);
+    });
   
   const getDb = () => {
     const supabase = getSupabaseClient();
@@ -101,34 +97,20 @@ const scheduleRoutes = () => {
 
   router.post('/', validate(schemas.schedule), async (req: Request, res: Response) => {
     try {
-      // Do NOT set last_queued_at on creation - let first dispatch queue existing items
-      const payload: Record<string, unknown> = {
-        ...req.body
-      };
-
-      const supabase = getDb();
-      let schedule: Record<string, unknown> | null = null;
-      let attemptPayload: Record<string, unknown> = payload;
-
-      for (let attempt = 0; attempt < 6; attempt += 1) {
-        const { data, error } = await supabase.from('schedules').insert(attemptPayload).select().single();
-        if (!error) {
-          schedule = data;
-          break;
-        }
-
-        const cleaned = stripUnsupportedScheduleFields(attemptPayload, error);
-        const changed = Object.keys(attemptPayload).some((key) => !(key in cleaned));
-        if (!changed) {
-          throw error;
-        }
-        attemptPayload = cleaned;
-      }
-
-      if (!schedule) {
-        throw new Error('Failed to create schedule');
-      }
+      const payload = normalizeSchedulePayload(req.body, { forInsert: true });
+      const { data: schedule, error } = await getDb()
+        .from('schedules')
+        .insert(payload)
+        .select()
+        .single();
+      
+      if (error) throw error;
       refreshSchedulers(req.app.locals.whatsapp);
+
+      // For immediate schedules, queue+send once so the system shows activity
+      if (schedule?.active && !schedule?.cron_expression && schedule?.delivery_mode !== 'batch') {
+        dispatchImmediate(schedule.id, req.app.locals.whatsapp);
+      }
       res.json(schedule);
     } catch (error) {
       console.error('Error creating schedule:', error);
@@ -138,67 +120,23 @@ const scheduleRoutes = () => {
 
   router.put('/:id', validate(schemas.schedule), async (req: Request, res: Response) => {
     try {
-      const supabase = getDb();
-      let schedule: Record<string, unknown> | null = null;
-      let attemptPayload: Record<string, unknown> = req.body;
-
-      for (let attempt = 0; attempt < 6; attempt += 1) {
-        const { data, error } = await supabase
-          .from('schedules')
-          .update(attemptPayload)
-          .eq('id', req.params.id)
-          .select()
-          .single();
-
-        if (!error) {
-          schedule = data;
-          break;
-        }
-
-        const cleaned = stripUnsupportedScheduleFields(attemptPayload, error);
-        const changed = Object.keys(attemptPayload).some((key) => !(key in cleaned));
-        if (!changed) {
-          throw error;
-        }
-        attemptPayload = cleaned;
-      }
-
-      if (!schedule) {
-        throw new Error('Failed to update schedule');
-      }
-      refreshSchedulers(req.app.locals.whatsapp);
-      res.json(schedule);
-    } catch (error) {
-      console.error('Error updating schedule:', error);
-      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
-    }
-  });
-
-  // PATCH for partial updates (e.g., toggling active status)
-  router.patch('/:id', async (req: Request, res: Response) => {
-    try {
-      const supabase = getDb();
-      const allowedFields = ['active', 'name', 'timezone', 'cron_expression', 'delivery_mode', 'batch_times'];
-      const updates: Record<string, unknown> = {};
-      for (const field of allowedFields) {
-        if (field in req.body) {
-          updates[field] = req.body[field];
-        }
-      }
-      if (Object.keys(updates).length === 0) {
-        return res.status(400).json({ error: 'No valid fields to update' });
-      }
-      const { data, error } = await supabase
+      const payload = normalizeSchedulePayload(req.body);
+      const { data: schedule, error } = await getDb()
         .from('schedules')
-        .update(updates)
+        .update(payload)
         .eq('id', req.params.id)
         .select()
         .single();
+      
       if (error) throw error;
       refreshSchedulers(req.app.locals.whatsapp);
-      res.json(data);
+
+      if (schedule?.active && !schedule?.cron_expression && schedule?.delivery_mode !== 'batch') {
+        dispatchImmediate(schedule.id, req.app.locals.whatsapp);
+      }
+      res.json(schedule);
     } catch (error) {
-      console.error('Error patching schedule:', error);
+      console.error('Error updating schedule:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
     }
   });

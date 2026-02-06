@@ -4,12 +4,15 @@ const { z } = require('zod');
 const { badRequest } = require('../core/errors');
 
 const JID_PATTERN = /^([0-9+\s\-\(\)]+|status@broadcast|[0-9\-]+@g\.us|[0-9]+@s\.whatsapp\.net|[0-9]+@newsletter)$/i;
-const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 // Validation schemas
 const normalizeOptional = (value: string | null | undefined) => (value === '' ? null : value);
 
 const schemas = {
+  scheduleBatchTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):([0-5]\d)$/, 'Batch times must be HH:MM (24h)'),
+
   schedule: z.object({
     name: z.string().min(1).max(255),
     cron_expression: z.string().optional().nullable().transform(normalizeOptional),
@@ -18,17 +21,42 @@ const schemas = {
     target_ids: z.array(z.string().uuid()).min(1),
     template_id: z.string().uuid(),
     active: z.boolean().default(true),
-    delivery_mode: z.enum(['immediate', 'batched']).optional().default('immediate'),
-    batch_times: z
-      .array(z.string().regex(TIME_OF_DAY_PATTERN))
-      .optional()
-      .default(['07:00', '15:00', '22:00'])
-  }).superRefine((value: { delivery_mode?: string; batch_times?: string[] }, ctx: { addIssue: (issue: { code: string; message: string; path: string[] }) => void }) => {
-    if (value.delivery_mode === 'batched') {
-      const times = Array.isArray(value.batch_times) ? value.batch_times : [];
-      if (times.length === 0) {
-        ctx.addIssue({ code: 'custom', message: 'batch_times is required when delivery_mode is batched', path: ['batch_times'] });
+    delivery_mode: z.enum(['immediate', 'batch']).default('immediate'),
+    batch_times: z.array(z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/)).default(['07:00', '15:00', '22:00'])
+  }).superRefine((value: {
+    delivery_mode?: 'immediate' | 'batch';
+    batch_times?: string[];
+  }, ctx: { addIssue: (issue: { code: string; path: string[]; message: string }) => void }) => {
+    if (value.delivery_mode !== 'batch') return;
+    const times = Array.isArray(value.batch_times) ? value.batch_times : [];
+    if (!times.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['batch_times'],
+        message: 'At least one batch time is required for batch delivery mode'
+      });
+      return;
+    }
+
+    const seen = new Set<string>();
+    for (const time of times) {
+      const normalized = String(time || '').trim();
+      if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(normalized)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['batch_times'],
+          message: `Invalid batch time: ${time}`
+        });
+        continue;
       }
+      if (seen.has(normalized)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['batch_times'],
+          message: `Duplicate batch time: ${normalized}`
+        });
+      }
+      seen.add(normalized);
     }
   }),
 
@@ -38,13 +66,23 @@ const schemas = {
     type: z.enum(['rss', 'atom', 'json']).optional(),
     active: z.boolean().default(true),
     fetch_interval: z.number().int().min(60).default(300),
-    parse_config: z.record(z.unknown()).optional(),
+    parse_config: z
+      .object({
+        itemsPath: z.string().max(255).optional().nullable().transform(normalizeOptional),
+        titlePath: z.string().max(255).optional().nullable().transform(normalizeOptional),
+        descriptionPath: z.string().max(255).optional().nullable().transform(normalizeOptional),
+        linkPath: z.string().max(255).optional().nullable().transform(normalizeOptional),
+        imagePath: z.string().max(255).optional().nullable().transform(normalizeOptional)
+      })
+      .partial()
+      .optional(),
     cleaning: z
       .object({
         stripUtm: z.boolean().optional(),
         decodeEntities: z.boolean().optional(),
-        removePhrases: z.array(z.string()).optional()
+        removePhrases: z.array(z.string().max(500)).optional()
       })
+      .partial()
       .optional()
   }),
 

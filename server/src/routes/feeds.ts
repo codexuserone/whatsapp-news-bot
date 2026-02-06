@@ -1,8 +1,8 @@
 import type { Request, Response } from 'express';
 const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
-const { fetchAndProcessFeed, queueFeedItemsForSchedules } = require('../services/feedProcessor');
-const { initSchedulers, triggerImmediateSchedules } = require('../services/schedulerService');
+const { fetchAndProcessFeed } = require('../services/feedProcessor');
+const { initSchedulers, triggerImmediateSchedules, queueBatchSchedulesForFeed } = require('../services/schedulerService');
 const { fetchFeedItemsWithMeta } = require('../services/feedFetcher');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { validate, schemas } = require('../middleware/validation');
@@ -11,55 +11,6 @@ const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 
 const feedsRoutes = () => {
   const router = express.Router();
-
-  const normalizeCleaningWithParseConfig = (
-    existingCleaning: unknown,
-    incomingCleaning: unknown,
-    parseConfig: unknown
-  ): Record<string, unknown> | undefined => {
-    const shouldWrite =
-      (incomingCleaning !== null && incomingCleaning !== undefined) ||
-      (parseConfig !== null && parseConfig !== undefined);
-    if (!shouldWrite) return undefined;
-
-    const base =
-      existingCleaning && typeof existingCleaning === 'object'
-        ? { ...(existingCleaning as Record<string, unknown>) }
-        : {};
-
-    if (incomingCleaning && typeof incomingCleaning === 'object') {
-      Object.assign(base, incomingCleaning as Record<string, unknown>);
-    }
-    if (parseConfig !== null && parseConfig !== undefined) {
-      base.parse_config = parseConfig;
-    }
-    return Object.keys(base).length ? base : undefined;
-  };
-
-  const projectFeedForResponse = (feed: Record<string, unknown>) => {
-    if (!feed || typeof feed !== 'object') return feed;
-    if (feed.parse_config !== null && feed.parse_config !== undefined) return feed;
-    const cleaning = feed.cleaning;
-    if (!cleaning || typeof cleaning !== 'object') return feed;
-    const fallback = (cleaning as Record<string, unknown>).parse_config;
-    if (fallback === null || fallback === undefined) return feed;
-    return {
-      ...feed,
-      parse_config: fallback
-    };
-  };
-
-  const isMissingParseConfigColumnError = (error: unknown) => {
-    const msg = String((error as { message?: unknown })?.message || error || '');
-    const msgLower = msg.toLowerCase();
-    return (
-      msgLower.includes('parse_config') &&
-      (msgLower.includes('does not exist') ||
-        msgLower.includes('schema cache') ||
-        msgLower.includes('could not find') ||
-        msgLower.includes('unknown field'))
-    );
-  };
 
   const runAsync = (label: string, work: () => Promise<void>) => {
     setImmediate(() => {
@@ -79,105 +30,29 @@ const feedsRoutes = () => {
     return supabase;
   };
 
-  // Normalize URL: add https:// if missing, try common feed paths
-  const normalizeAndDiscoverFeedUrl = async (rawUrl: string): Promise<{ url: string; items: unknown[]; meta: unknown } | null> => {
-    let url = rawUrl.trim();
-    // Add protocol if missing
-    if (!url.match(/^https?:\/\//i)) {
-      url = 'https://' + url.replace(/^\/\//, '');
-    }
-    // Remove trailing slash for consistency
-    url = url.replace(/\/+$/, '');
-
-    // Common feed path suffixes to try
-    const suffixes = [
-      '', // Try as-is first
-      '/feed',
-      '/rss',
-      '/feed.xml',
-      '/rss.xml',
-      '/atom.xml',
-      '/wp-json/wp/v2/posts?per_page=10&_embed'
-    ];
-
-    for (const suffix of suffixes) {
-      const testUrl = url + suffix;
-      try {
-        await assertSafeOutboundUrl(testUrl);
-        const { items, meta } = await fetchFeedItemsWithMeta({ url: testUrl });
-        if (items && items.length > 0) {
-          return { url: testUrl, items, meta };
-        }
-      } catch {
-        // Try next suffix
-      }
-    }
-    return null;
-  };
-
-  // Discover feed URL - automatically finds the right feed path
-  router.post('/discover', async (req: Request, res: Response) => {
-    try {
-      const { url } = req.body;
-      if (!url) {
-        return res.status(400).json({ error: 'URL is required' });
-      }
-
-      const result = await normalizeAndDiscoverFeedUrl(String(url));
-      if (!result) {
-        return res.status(404).json({ 
-          error: 'Could not find a valid feed. Tried common paths like /feed, /rss, /wp-json/wp/v2/posts',
-          triedUrl: url
-        });
-      }
-
-      const sampleItem = (result.items[0] || {}) as Record<string, unknown>;
-      res.json({
-        discoveredUrl: result.url,
-        feedTitle: `Feed from ${new URL(result.url).hostname}`,
-        itemCount: result.items.length,
-        sampleItem
-      });
-    } catch (error) {
-      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error, 'Failed to discover feed') });
-    }
-  });
-
   // Test a feed URL without saving - returns detected fields and sample item
   router.post('/test', async (req: Request, res: Response) => {
     try {
-      let { url } = req.body;
+      const { url, type, parse_config, cleaning } = req.body;
       if (!url) {
         return res.status(400).json({ error: 'URL is required' });
       }
 
-      // Auto-normalize URL
-      url = String(url).trim();
-      if (!url.match(/^https?:\/\//i)) {
-        url = 'https://' + url.replace(/^\/\//, '');
-      }
-
       try {
-        await assertSafeOutboundUrl(url);
+        await assertSafeOutboundUrl(String(url));
       } catch (error) {
         return res.status(400).json({ error: getErrorMessage(error, 'URL is not allowed') });
       }
 
-      // Try the URL as-is first, then discover if it fails
-      let items, meta;
-      try {
-        const result = await fetchFeedItemsWithMeta({ url });
-        items = result.items;
-        meta = result.meta;
-      } catch {
-        // Try auto-discovery
-        const discovered = await normalizeAndDiscoverFeedUrl(url);
-        if (discovered) {
-          items = discovered.items;
-          meta = discovered.meta;
-          url = discovered.url;
-        }
-      }
+      const testFeed = {
+        url: String(url),
+        ...(type ? { type } : {}),
+        ...(parse_config ? { parseConfig: parse_config } : {}),
+        ...(cleaning ? { cleaning } : {})
+      };
+
+      // Create a temporary feed object for testing (cleaning is optional, uses defaults)
+      const { items, meta } = await fetchFeedItemsWithMeta(testFeed);
 
       if (!items || items.length === 0) {
         return res.status(404).json({ error: 'No items found in feed. Check the URL or feed type.' });
@@ -200,7 +75,6 @@ const feedsRoutes = () => {
 
       res.json({
         feedTitle: sampleItem.title ? `Feed from ${new URL(url).hostname}` : 'Unknown Feed',
-        discoveredUrl: url,
         detectedType: meta?.detectedType || null,
         contentType: meta?.contentType || null,
         itemCount: items.length,
@@ -221,8 +95,7 @@ const feedsRoutes = () => {
         .order('created_at', { ascending: false });
       
       if (error) throw error;
-      const projected = (feeds || []).map((feed: Record<string, unknown>) => projectFeedForResponse(feed));
-      res.json(projected);
+      res.json(feeds);
     } catch (error) {
       console.error('Error fetching feeds:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
@@ -231,61 +104,15 @@ const feedsRoutes = () => {
 
   router.post('/', validate(schemas.feed), async (req: Request, res: Response) => {
     try {
-      const incomingBody = req.body as Record<string, unknown>;
-      const incomingParseConfig = incomingBody.parse_config;
-      const incomingCleaning = incomingBody.cleaning;
-
-      let { data: feed, error } = await getDb()
+      const { data: feed, error } = await getDb()
         .from('feeds')
         .insert(req.body)
         .select()
         .single();
-
-      if (error && isMissingParseConfigColumnError(error)) {
-        const { parse_config: parseConfig, cleaning, ...rest } = incomingBody;
-        const fallbackBody = {
-          ...rest,
-          cleaning: normalizeCleaningWithParseConfig(undefined, cleaning, parseConfig)
-        };
-
-        const retry = await getDb().from('feeds').insert(fallbackBody).select().single();
-        feed = retry.data;
-        error = retry.error;
-      }
-
+      
       if (error) throw error;
-
-      if (
-        incomingParseConfig !== null &&
-        incomingParseConfig !== undefined &&
-        feed &&
-        typeof feed === 'object' &&
-        (feed as Record<string, unknown>).parse_config === undefined &&
-        ((feed as Record<string, unknown>).cleaning === null ||
-          (feed as Record<string, unknown>).cleaning === undefined ||
-          typeof (feed as Record<string, unknown>).cleaning !== 'object' ||
-          ((feed as Record<string, unknown>).cleaning as Record<string, unknown>).parse_config === undefined)
-      ) {
-        const updatedCleaning = normalizeCleaningWithParseConfig(
-          (feed as Record<string, unknown>).cleaning,
-          incomingCleaning,
-          incomingParseConfig
-        );
-
-        const patch = await getDb()
-          .from('feeds')
-          .update({ cleaning: updatedCleaning })
-          .eq('id', (feed as Record<string, unknown>).id)
-          .select()
-          .single();
-
-        if (!patch.error && patch.data) {
-          feed = patch.data;
-        }
-      }
-
       refreshSchedulers(req.app.locals.whatsapp);
-      res.json(feed ? projectFeedForResponse(feed as Record<string, unknown>) : feed);
+      res.json(feed);
     } catch (error) {
       console.error('Error creating feed:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
@@ -294,75 +121,16 @@ const feedsRoutes = () => {
 
   router.put('/:id', validate(schemas.feed), async (req: Request, res: Response) => {
     try {
-      const incomingBody = req.body as Record<string, unknown>;
-      const incomingParseConfig = incomingBody.parse_config;
-      const incomingCleaning = incomingBody.cleaning;
-
-      let { data: feed, error } = await getDb()
+      const { data: feed, error } = await getDb()
         .from('feeds')
         .update(req.body)
         .eq('id', req.params.id)
         .select()
         .single();
-
-      if (error && isMissingParseConfigColumnError(error)) {
-        const { parse_config: parseConfig, cleaning, ...rest } = incomingBody;
-        const { data: existingFeed, error: existingError } = await getDb()
-          .from('feeds')
-          .select('cleaning')
-          .eq('id', req.params.id)
-          .single();
-
-        if (existingError) throw existingError;
-
-        const fallbackBody = {
-          ...rest,
-          cleaning: normalizeCleaningWithParseConfig(existingFeed?.cleaning, cleaning, parseConfig)
-        };
-
-        const retry = await getDb()
-          .from('feeds')
-          .update(fallbackBody)
-          .eq('id', req.params.id)
-          .select()
-          .single();
-        feed = retry.data;
-        error = retry.error;
-      }
-
+      
       if (error) throw error;
-
-      if (
-        incomingParseConfig !== null &&
-        incomingParseConfig !== undefined &&
-        feed &&
-        typeof feed === 'object' &&
-        (feed as Record<string, unknown>).parse_config === undefined &&
-        ((feed as Record<string, unknown>).cleaning === null ||
-          (feed as Record<string, unknown>).cleaning === undefined ||
-          typeof (feed as Record<string, unknown>).cleaning !== 'object' ||
-          ((feed as Record<string, unknown>).cleaning as Record<string, unknown>).parse_config === undefined)
-      ) {
-        const updatedCleaning = normalizeCleaningWithParseConfig(
-          (feed as Record<string, unknown>).cleaning,
-          incomingCleaning,
-          incomingParseConfig
-        );
-
-        const patch = await getDb()
-          .from('feeds')
-          .update({ cleaning: updatedCleaning })
-          .eq('id', (feed as Record<string, unknown>).id)
-          .select()
-          .single();
-
-        if (!patch.error && patch.data) {
-          feed = patch.data;
-        }
-      }
-
       refreshSchedulers(req.app.locals.whatsapp);
-      res.json(feed ? projectFeedForResponse(feed as Record<string, unknown>) : feed);
+      res.json(feed);
     } catch (error) {
       console.error('Error updating feed:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
@@ -399,8 +167,8 @@ const feedsRoutes = () => {
       }
       
       const result = await fetchAndProcessFeed(feed);
-      const queuedLogs = await queueFeedItemsForSchedules(feed.id, result.items);
       if (result.items.length) {
+        await queueBatchSchedulesForFeed(feed.id);
         await triggerImmediateSchedules(feed.id, req.app.locals.whatsapp);
       }
       res.json({
@@ -410,7 +178,7 @@ const feedsRoutes = () => {
         insertedCount: result.insertedCount,
         duplicateCount: result.duplicateCount,
         errorCount: result.errorCount,
-        queuedCount: queuedLogs.length
+        queuedCount: 0
       });
     } catch (error) {
       console.error('Error refreshing feed:', error);
@@ -436,8 +204,8 @@ const feedsRoutes = () => {
 
       for (const feed of feeds || []) {
         const result = await fetchAndProcessFeed(feed);
-        const queuedLogs = await queueFeedItemsForSchedules(feed.id, result.items);
         if (result.items.length) {
+          await queueBatchSchedulesForFeed(feed.id);
           await triggerImmediateSchedules(feed.id, req.app.locals.whatsapp);
         }
 
@@ -445,7 +213,6 @@ const feedsRoutes = () => {
         totalInserted += result.insertedCount;
         totalDuplicates += result.duplicateCount;
         totalErrors += result.errorCount;
-        totalQueued += queuedLogs.length;
 
         results.push({
           feedId: feed.id,
@@ -455,7 +222,7 @@ const feedsRoutes = () => {
           insertedCount: result.insertedCount,
           duplicateCount: result.duplicateCount,
           errorCount: result.errorCount,
-          queuedCount: queuedLogs.length
+          queuedCount: 0
         });
       }
 

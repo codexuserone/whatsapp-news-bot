@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 const { getSupabaseClient } = require('../db/supabase');
-const { fetchAndProcessFeed, queueFeedItemsForSchedules } = require('./feedProcessor');
+const { fetchAndProcessFeed } = require('./feedProcessor');
 const settingsService = require('./settingsService');
 const { isCurrentlyShabbos } = require('./shabbosService');
 const axios = require('axios');
@@ -60,126 +60,9 @@ const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const AUTH_ERROR_HINT =
   'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
 
-const DEFAULT_BATCH_TIMES = ['07:00', '15:00', '22:00'];
-
-const parseTimeOfDay = (value: string): { hour: number; minute: number } | null => {
-  const raw = String(value || '').trim();
-  const match = raw.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
-  if (!match) return null;
-  return { hour: Number(match[1]), minute: Number(match[2]) };
-};
-
-const normalizeBatchTimes = (value: unknown): string[] => {
-  const times = Array.isArray(value) ? value : [];
-  const normalized = times
-    .map((entry) => String(entry || '').trim())
-    .filter((entry) => Boolean(parseTimeOfDay(entry)));
-  return normalized.length ? normalized : DEFAULT_BATCH_TIMES;
-};
-
-const timeOfDayToCronExpression = (value: string): string | null => {
-  const parsed = parseTimeOfDay(value);
-  if (!parsed) return null;
-  return `${parsed.minute} ${parsed.hour} * * *`;
-};
-
-const pickEarliestIso = (values: Array<string | null | undefined>): string | null => {
-  const candidates = values
-    .map((v) => (v ? String(v) : ''))
-    .filter(Boolean)
-    .map((iso) => ({ iso, ts: Date.parse(iso) }))
-    .filter((entry) => Number.isFinite(entry.ts));
-  if (!candidates.length) return null;
-  candidates.sort((a, b) => a.ts - b.ts);
-  return candidates[0]?.iso ?? null;
-};
-
-const getZonedParts = (date: Date, timeZone?: string | null) => {
-  const resolveParts = (zone: string) =>
-    new Intl.DateTimeFormat('en-GB', {
-      timeZone: zone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    }).formatToParts(date);
-
-  let parts: Intl.DateTimeFormatPart[];
-  try {
-    parts = resolveParts(timeZone || 'UTC');
-  } catch {
-    parts = resolveParts('UTC');
-  }
-
-  const lookup: Record<string, string> = {};
-  for (const part of parts) {
-    if (part.type !== 'literal') {
-      lookup[part.type] = part.value;
-    }
-  }
-
-  if (!lookup.year || !lookup.month || !lookup.day || !lookup.hour || !lookup.minute) {
-    return null;
-  }
-
-  return {
-    year: lookup.year,
-    month: lookup.month,
-    day: lookup.day,
-    hour: lookup.hour,
-    minute: lookup.minute
-  };
-};
-
-const getBatchWindowKey = (date: Date, timeZone?: string | null) => {
-  const parts = getZonedParts(date, timeZone);
-  if (!parts) return null;
-  const time = `${parts.hour}:${parts.minute}`;
-  return {
-    time,
-    key: `${parts.year}-${parts.month}-${parts.day} ${time}`
-  };
-};
-
-const getBatchWindowStatus = (options: {
-  now: Date;
-  timezone?: string | null;
-  batchTimes?: unknown;
-  lastDispatchedAt?: string | null;
-}) => {
-  const times = normalizeBatchTimes(options.batchTimes);
-  const current = getBatchWindowKey(options.now, options.timezone);
-  if (!current) {
-    return { allowed: true, windowKey: null };
-  }
-
-  if (!times.includes(current.time)) {
-    return { allowed: false, reason: 'Outside batch window', windowKey: current.key };
-  }
-
-  if (options.lastDispatchedAt) {
-    const last = getBatchWindowKey(new Date(options.lastDispatchedAt), options.timezone);
-    if (last?.key === current.key) {
-      return { allowed: false, reason: 'Already dispatched for batch window', windowKey: current.key };
-    }
-  }
-
-  return { allowed: true, windowKey: current.key };
-};
-
-const computeNextBatchRunAt = (batchTimes: unknown, timezone?: string | null): string | null => {
-  const times = normalizeBatchTimes(batchTimes);
-  const candidates = times
-    .map((time) => timeOfDayToCronExpression(time))
-    .filter(Boolean)
-    .map((expr) => computeNextRunAt(expr as string, timezone));
-  return pickEarliestIso(candidates);
-};
-
 let globalSendChain: Promise<void> = Promise.resolve();
 let globalLastSentAtMs = 0;
+let globalLastTargetId: string | null = null;
 const globalLastSentByTargetId = new Map<string, number>();
 
 const withGlobalSendLock = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -204,7 +87,7 @@ const waitForDelays = async (
   const interTargetDelayMs = Number(settings.defaultInterTargetDelaySec || 0) * 1000;
   const intraTargetDelayMs = Number(settings.defaultIntraTargetDelaySec || 0) * 1000;
 
-  const minBetweenAnyMs = Math.max(messageDelayMs, interTargetDelayMs, 0);
+  const minBetweenAnyMs = Math.max(messageDelayMs, 0);
   const minBetweenSameTargetMs = Math.max(messageDelayMs, intraTargetDelayMs, 0);
 
   const now = Date.now();
@@ -213,8 +96,12 @@ const waitForDelays = async (
   const sinceTarget = lastTargetSent ? now - lastTargetSent : Number.POSITIVE_INFINITY;
 
   const waitGlobal = Number.isFinite(sinceGlobal) ? Math.max(minBetweenAnyMs - sinceGlobal, 0) : 0;
-  const waitTarget = Number.isFinite(sinceTarget) ? Math.max(minBetweenSameTargetMs - sinceTarget, 0) : 0;
-  const waitMs = Math.max(waitGlobal, waitTarget);
+  const waitSameTarget = Number.isFinite(sinceTarget) ? Math.max(minBetweenSameTargetMs - sinceTarget, 0) : 0;
+  const switchedTargets = Boolean(globalLastTargetId && globalLastTargetId !== targetId);
+  const waitSwitchTarget = switchedTargets && Number.isFinite(sinceGlobal)
+    ? Math.max(interTargetDelayMs - sinceGlobal, 0)
+    : 0;
+  const waitMs = Math.max(waitGlobal, waitSameTarget, waitSwitchTarget);
   if (waitMs > 0) {
     await sleep(waitMs);
   }
@@ -234,53 +121,10 @@ const isAuthStateError = (message: string) => {
   ].some((needle) => normalized.includes(needle));
 };
 
-const tokenizeTemplatePath = (value: string): Array<string | number> => {
-  const tokens: Array<string | number> = [];
-  const input = String(value || '').trim();
-  if (!input) return tokens;
-  const re = /([^.[\]]+)|\[(\d+)\]/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(input)) !== null) {
-    if (match[1]) {
-      tokens.push(match[1]);
-    } else if (match[2]) {
-      tokens.push(Number(match[2]));
-    }
-  }
-  return tokens;
-};
-
-const getTemplateValue = (data: Record<string, unknown>, key: string): unknown => {
-  if (!key) return undefined;
-  if (Object.prototype.hasOwnProperty.call(data, key)) {
-    return data[key];
-  }
-  const tokens = tokenizeTemplatePath(key);
-  let current: any = data;
-  for (const token of tokens) {
-    if (current == null) return undefined;
-    current = current[token as any];
-  }
-  return current;
-};
-
-const formatTemplateValue = (value: unknown): string => {
-  if (value == null) return '';
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return String(value);
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-};
-
 const applyTemplate = (templateBody: string, data: Record<string, unknown>): string => {
-  if (!templateBody) return '';
-  return templateBody.replace(/{{\s*([^{}\s]+)\s*}}/g, (_, rawKey) => {
-    const key = String(rawKey || '').trim();
-    return formatTemplateValue(getTemplateValue(data, key));
+  return templateBody.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
+    const value = data[key];
+    return value != null ? String(value) : '';
   });
 };
 
@@ -301,18 +145,13 @@ const isImageUrl = (url: string): boolean => {
   const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp', '.svg'];
   const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v'];
   const audioExtensions = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.wma'];
-  const nonImageExtensions = ['.html', '.htm', '.php', '.asp', '.aspx', '.jsp'];
-
-  // Explicitly exclude videos, audio, and obvious HTML endpoints
-  if (videoExtensions.some((ext) => lower.includes(ext))) return false;
-  if (audioExtensions.some((ext) => lower.includes(ext))) return false;
-  if (nonImageExtensions.some((ext) => lower.includes(ext))) return false;
-
-  // Known image extension = true
-  if (imageExtensions.some((ext) => lower.includes(ext))) return true;
-
-  // Unknown extension: still allow, we'll validate by content-type on download
-  return true;
+  
+  // Explicitly exclude videos and audio
+  if (videoExtensions.some(ext => lower.includes(ext))) return false;
+  if (audioExtensions.some(ext => lower.includes(ext))) return false;
+  
+  // Check if it's a known image extension
+  return imageExtensions.some(ext => lower.includes(ext));
 };
 
 const DEFAULT_USER_AGENT =
@@ -470,21 +309,6 @@ const resolveImageUrlForFeedItem = async (
     const scraped = await scrapeImageFromPage(link);
     const nowIso = new Date().toISOString();
     if (scraped) {
-      if (!isImageUrl(scraped)) {
-        feedItem.image_scraped_at = nowIso;
-        feedItem.image_scrape_error = 'Scraped URL is not an image (possibly video/audio)';
-        await maybeUpdateFeedItemImage(supabase, feedItem.id, {
-          image_scraped_at: nowIso,
-          image_scrape_error: feedItem.image_scrape_error
-        });
-        return {
-          url: null,
-          source: null,
-          scraped: true,
-          error: feedItem.image_scrape_error
-        };
-      }
-
       try {
         await assertSafeOutboundUrl(scraped);
       } catch (error) {
@@ -571,59 +395,15 @@ const normalizeTargetJid = (target: Target) => {
   return `${phoneDigits}@s.whatsapp.net`;
 };
 
-const fixMojibake = (value: string): string => {
-  const input = String(value || '');
-  if (!/[ÃÂâ�]/.test(input)) return input;
-  try {
-    const decoded = Buffer.from(input, 'latin1').toString('utf8');
-    const decodedErrors = (decoded.match(/\uFFFD/g) || []).length;
-    const inputErrors = (input.match(/\uFFFD/g) || []).length;
-    return decodedErrors <= inputErrors ? decoded : input;
-  } catch {
-    return input;
-  }
-};
-
-const stripControlChars = (value: string): string =>
-  value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
-
-const sanitizeText = (text: string | null | undefined): string => {
-  if (!text) return '';
-  // Fix common encoding issues - replace problematic characters with safe equivalents
-  return stripControlChars(
-    fixMojibake(String(text))
-      .replace(/[\u0080-\u009F]/g, '') // Remove C1 control characters
-      .replace(/\uFFFD/g, '') // Remove replacement characters (question mark boxes)
-      .replace(/â€™/g, "'") // Curly apostrophe
-      .replace(/â€œ/g, '"') // Left double quote
-      .replace(/â€/g, '"') // Right double quote
-      .replace(/â€"/g, '-') // Em dash
-      .replace(/â€"/g, '-') // En dash
-      .replace(/Ã©/g, 'é') // é
-      .replace(/Ã¨/g, 'è') // è
-      .replace(/Ã´/g, 'ô') // ô
-      .replace(/Ã®/g, 'î') // î
-      .replace(/Ã§/g, 'ç') // ç
-      .replace(/Ã /g, 'à') // à
-      .replace(/Ã¢/g, 'â') // â
-      .replace(/Ã«/g, 'ë') // ë
-      .replace(/Ã¯/g, 'ï') // ï
-      .replace(/Ã¼/g, 'ü') // ü
-      .replace(/Ã¶/g, 'ö') // ö
-      .replace(/Ã¤/g, 'ä') // ä
-      .replace(/Ã±/g, 'ñ') // ñ
-  ).trim();
-};
-
 const buildMessageData = (feedItem: FeedItem) => ({
   id: feedItem.id,
   guid: (feedItem as unknown as { guid?: string }).guid,
-  title: sanitizeText(feedItem.title),
+  title: feedItem.title,
   url: feedItem.link,
   link: feedItem.link,
-  description: sanitizeText(feedItem.description || feedItem.content),
-  content: sanitizeText(feedItem.content || feedItem.description),
-  author: sanitizeText(feedItem.author),
+  description: feedItem.description,
+  content: feedItem.content,
+  author: feedItem.author,
   image_url: feedItem.image_url,
   imageUrl: feedItem.image_url,
   normalized_url: (feedItem as unknown as { normalized_url?: string }).normalized_url,
@@ -633,16 +413,6 @@ const buildMessageData = (feedItem: FeedItem) => ({
   pub_date: feedItem.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
   publishedAt: feedItem.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
   categories: Array.isArray(feedItem.categories) ? feedItem.categories.join(', ') : '',
-  raw_data:
-    typeof (feedItem as unknown as { raw_data?: unknown }).raw_data === 'object' &&
-    (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
-      ? (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
-      : {},
-  raw:
-    typeof (feedItem as unknown as { raw_data?: unknown }).raw_data === 'object' &&
-    (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
-      ? (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
-      : {},
   ...(typeof (feedItem as unknown as { raw_data?: unknown }).raw_data === 'object' &&
   (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
     ? Object.fromEntries(
@@ -680,7 +450,7 @@ const sendMessageWithTemplate = async (
   options?: { sendImages?: boolean; supabase?: SupabaseClient }
 ): Promise<SendWithMediaResult> => {
   const payload = buildMessageData(feedItem);
-  const text = sanitizeText(applyTemplate(template.content, payload)).trim();
+  const text = applyTemplate(template.content, payload).trim();
   if (!text) {
     throw new Error('Template rendered empty message');
   }
@@ -819,21 +589,54 @@ type Schedule = {
   feed_id?: string | null;
   template_id?: string | null;
   target_ids?: string[];
+  delivery_mode?: 'immediate' | 'batch' | null;
+  batch_times?: string[] | null;
   cron_expression?: string | null;
   timezone?: string | null;
   last_run_at?: string | null;
   last_queued_at?: string | null;
-  delivery_mode?: string | null;
-  batch_times?: string[] | null;
   last_dispatched_at?: string | null;
+  created_at?: string | null;
   active?: boolean;
+};
+
+type SendQueuedOptions = {
+  skipFeedRefresh?: boolean;
+};
+
+const parseBatchTimes = (value: unknown): string[] => {
+  const seen = new Set<string>();
+  const times = Array.isArray(value) ? value : [];
+  for (const time of times) {
+    const normalized = String(time || '').trim();
+    if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(normalized)) continue;
+    seen.add(normalized);
+  }
+  return Array.from(seen).sort();
+};
+
+const toDailyCronExpression = (time: string) => {
+  const [hour, minute] = time.split(':').map((part) => Number(part));
+  return `${minute} ${hour} * * *`;
+};
+
+const computeNextBatchRunAt = (times: string[], timezone?: string | null) => {
+  let nextValue: string | null = null;
+  for (const time of times) {
+    const expression = toDailyCronExpression(time);
+    const candidate = computeNextRunAt(expression, timezone || 'UTC');
+    if (!candidate) continue;
+    if (!nextValue || new Date(candidate).getTime() < new Date(nextValue).getTime()) {
+      nextValue = candidate;
+    }
+  }
+  return nextValue;
 };
 
 const queueSinceLastRunForSchedule = async (
   supabase: SupabaseClient,
   schedule: Schedule,
-  targets: Target[],
-  options?: { minPublishedAt?: string }
+  targets: Target[]
 ): Promise<{ queued: number; feedItemCount: number; cursorAt: string | null }> => {
   if (!schedule.feed_id) return { queued: 0, feedItemCount: 0, cursorAt: null };
   const sinceIso = schedule.last_queued_at || schedule.last_run_at;
@@ -850,7 +653,6 @@ const queueSinceLastRunForSchedule = async (
   let cursorId: string | null = null;
   let totalQueued = 0;
   let totalFeedItems = 0;
-  const minPublishedAtMs = options?.minPublishedAt ? new Date(options.minPublishedAt).getTime() : null;
 
   const flushBatch = async (batch: Array<Record<string, unknown>>) => {
     if (!batch.length) return 0;
@@ -868,7 +670,7 @@ const queueSinceLastRunForSchedule = async (
   while (true) {
     let query = supabase
       .from('feed_items')
-      .select('id, created_at, pub_date')
+      .select('id, created_at')
       .eq('feed_id', schedule.feed_id)
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
@@ -886,7 +688,7 @@ const queueSinceLastRunForSchedule = async (
       break;
     }
 
-    const items = (page || []) as Array<{ id?: string; created_at?: string; pub_date?: string }>;
+    const items = (page || []) as Array<{ id?: string; created_at?: string }>;
     if (!items.length) {
       break;
     }
@@ -897,12 +699,6 @@ const queueSinceLastRunForSchedule = async (
     for (const item of items) {
       const feedItemId = item?.id ? String(item.id) : null;
       if (!feedItemId) continue;
-      if (minPublishedAtMs && item?.pub_date) {
-        const pubMs = new Date(item.pub_date).getTime();
-        if (!Number.isNaN(pubMs) && pubMs < minPublishedAtMs) {
-          continue;
-        }
-      }
       for (const targetId of targetIds) {
         batch.push({
           feed_item_id: feedItemId,
@@ -1078,7 +874,11 @@ const queueLatestForSchedule = async (
   };
 };
 
-const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsAppClient | null) => {
+const sendQueuedForSchedule = async (
+  scheduleId: string,
+  whatsappClient?: WhatsAppClient | null,
+  options?: SendQueuedOptions
+) => {
   const supabase = getSupabaseClient();
   if (!supabase) {
     logger.error({ scheduleId }, 'Database not available - cannot send messages');
@@ -1100,49 +900,10 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
       return { sent: 0, queued: 0 };
     }
 
-    const deliveryMode = String(schedule.delivery_mode || 'immediate');
-    let queuedCount = 0;
-    let queueCursorAt: string | null = null;
+    const deliveryMode = schedule.delivery_mode === 'batch' ? 'batch' : 'immediate';
 
     // Check if schedule has feed_id - if not, it's a manual dispatch only
     if (!schedule.feed_id) {
-      if (deliveryMode === 'batched') {
-        const windowStatus = getBatchWindowStatus({
-          now: new Date(),
-          timezone: schedule.timezone,
-          batchTimes: schedule.batch_times,
-          lastDispatchedAt: schedule.last_dispatched_at
-        });
-
-        if (!windowStatus.allowed) {
-          const nextRunAt = computeNextBatchRunAt(schedule.batch_times, schedule.timezone);
-          if (nextRunAt) {
-            const { error: nextRunAtError } = await supabase
-              .from('schedules')
-              .update({ next_run_at: nextRunAt })
-              .eq('id', scheduleId);
-            if (nextRunAtError) {
-              logger.warn(
-                { scheduleId, error: nextRunAtError },
-                'Failed to update next run time for batched schedule'
-              );
-            }
-          }
-
-          logger.info(
-            { scheduleId, reason: windowStatus.reason, window: windowStatus.windowKey },
-            'Skipping batched schedule send'
-          );
-          return {
-            sent: 0,
-            queued: queuedCount,
-            skipped: true,
-            reason: windowStatus.reason,
-            nextRunAt
-          };
-        }
-      }
-
       const shabbosStatus = await isCurrentlyShabbos();
       if (shabbosStatus.isShabbos) {
         logger.info({ scheduleId, reason: shabbosStatus.reason, endsAt: shabbosStatus.endsAt }, 
@@ -1205,30 +966,43 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
     }
     logger.info({ scheduleId, targetCount: targets?.length || 0 }, 'Found targets for schedule');
 
-    try {
-      const { data: feed } = await supabase.from('feeds').select('*').eq('id', schedule.feed_id).single();
-      if (feed) {
-        const refreshResult = await fetchAndProcessFeed(feed);
-        if (refreshResult.items.length) {
-          await queueFeedItemsForSchedules(feed.id, refreshResult.items);
+    if (!options?.skipFeedRefresh) {
+      try {
+        const { data: feed } = await supabase.from('feeds').select('*').eq('id', schedule.feed_id).single();
+        if (feed) {
+          await fetchAndProcessFeed(feed);
         }
+      } catch (error) {
+        logger.warn({ scheduleId, feedId: schedule.feed_id, error }, 'Failed to refresh feed during dispatch');
       }
-    } catch (error) {
-      logger.warn({ scheduleId, feedId: schedule.feed_id, error }, 'Failed to refresh feed during dispatch');
     }
 
-    if (schedule.last_queued_at || schedule.last_run_at) {
+    let queuedCount = 0;
+    let queueCursorAt: string | null = null;
+
+    if (deliveryMode === 'batch') {
+      const initialCursor =
+        schedule.last_queued_at ||
+        schedule.last_run_at ||
+        schedule.created_at ||
+        new Date().toISOString();
+
+      const scheduleForQueue: Schedule =
+        schedule.last_queued_at || schedule.last_run_at
+          ? schedule
+          : { ...schedule, last_queued_at: initialCursor };
+
+      const sinceResult = await queueSinceLastRunForSchedule(supabase, scheduleForQueue, targets);
+      queuedCount += sinceResult.queued;
+      queueCursorAt = sinceResult.cursorAt || initialCursor;
+    } else if (schedule.last_queued_at || schedule.last_run_at) {
       const sinceResult = await queueSinceLastRunForSchedule(supabase, schedule, targets);
       queuedCount += sinceResult.queued;
       queueCursorAt = sinceResult.cursorAt;
     } else {
-      // New schedule with no cursor - queue recent items only (avoid old articles)
-      const lookbackHours = Number(process.env.INITIAL_SCHEDULE_LOOKBACK_HOURS || 24);
-      const minPublishedAt = new Date(Date.now() - lookbackHours * 60 * 60 * 1000).toISOString();
-      const recentSchedule = { ...schedule, last_queued_at: minPublishedAt };
-      const recentResult = await queueSinceLastRunForSchedule(supabase, recentSchedule, targets, { minPublishedAt });
-      queuedCount += recentResult.queued;
-      queueCursorAt = recentResult.cursorAt;
+      const latestResult = await queueLatestForSchedule(scheduleId, { schedule, targets });
+      queuedCount += latestResult.queued;
+      queueCursorAt = latestResult.cursorAt || null;
     }
 
     // Persist the queue cursor even if we skip sending (e.g. WhatsApp disconnected or Shabbos).
@@ -1250,43 +1024,6 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
         } else {
           logger.warn({ scheduleId, error: queueCursorError }, 'Failed to update schedule queue cursor');
         }
-      }
-    }
-
-    if (deliveryMode === 'batched') {
-      const windowStatus = getBatchWindowStatus({
-        now: new Date(),
-        timezone: schedule.timezone,
-        batchTimes: schedule.batch_times,
-        lastDispatchedAt: schedule.last_dispatched_at
-      });
-
-      if (!windowStatus.allowed) {
-        const nextRunAt = computeNextBatchRunAt(schedule.batch_times, schedule.timezone);
-        if (nextRunAt) {
-          const { error: nextRunAtError } = await supabase
-            .from('schedules')
-            .update({ next_run_at: nextRunAt })
-            .eq('id', scheduleId);
-          if (nextRunAtError) {
-            logger.warn(
-              { scheduleId, error: nextRunAtError },
-              'Failed to update next run time for batched schedule'
-            );
-          }
-        }
-
-        logger.info(
-          { scheduleId, reason: windowStatus.reason, window: windowStatus.windowKey },
-          'Skipping batched schedule send'
-        );
-        return {
-          sent: 0,
-          queued: queuedCount,
-          skipped: true,
-          reason: windowStatus.reason,
-          nextRunAt
-        };
       }
     }
 
@@ -1316,6 +1053,8 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
     }
 
     const settings = await settingsService.getSettings();
+    const maxPendingAgeHours = Math.max(Number(settings.max_pending_age_hours || 48), 1);
+    const staleCutoffMs = Date.now() - maxPendingAgeHours * 60 * 60 * 1000;
 
     // Get template
     const { data: template, error: templateError } = await supabase
@@ -1349,13 +1088,44 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
         continue;
       }
 
+      const staleLogIds = (logs || [])
+        .filter((entry: { id?: string; created_at?: string | null }) => {
+          const createdAt = entry?.created_at ? new Date(entry.created_at).getTime() : 0;
+          return Boolean(entry?.id) && Number.isFinite(createdAt) && createdAt > 0 && createdAt < staleCutoffMs;
+        })
+        .map((entry: { id?: string }) => entry.id)
+        .filter(Boolean) as string[];
+
+      if (staleLogIds.length) {
+        await supabase
+          .from('message_logs')
+          .update({
+            status: 'skipped',
+            processing_started_at: null,
+            error_message: `Skipped stale queued item (> ${maxPendingAgeHours}h old)`,
+            media_url: null,
+            media_type: null,
+            media_sent: false,
+            media_error: null
+          })
+          .in('id', staleLogIds);
+      }
+
+      const runnableLogs = (logs || []).filter(
+        (entry: { id?: string }) => Boolean(entry?.id) && !staleLogIds.includes(String(entry.id))
+      );
+
+      if (!runnableLogs.length) {
+        continue;
+      }
+
       if (target.type === 'group' && whatsappClient.getGroupInfo) {
         try {
           const jid = normalizeTargetJid(target);
           const info = await whatsappClient.getGroupInfo(jid);
           if (info?.announce && !info?.me?.isAdmin) {
             const reason = 'Group is admin-only (announce mode) and this WhatsApp account is not an admin';
-            const ids = (logs || []).map((l: { id?: string }) => l.id).filter(Boolean) as string[];
+            const ids = (runnableLogs || []).map((l: { id?: string }) => l.id).filter(Boolean) as string[];
             if (ids.length) {
               await supabase
                 .from('message_logs')
@@ -1377,7 +1147,7 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
         }
       }
 
-      for (const log of logs || []) {
+      for (const log of runnableLogs || []) {
         const { data: claimedRows, error: claimError } = await supabase
           .from('message_logs')
           .update({ status: 'processing', processing_started_at: new Date().toISOString() })
@@ -1425,6 +1195,7 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
             });
             const nowMs = Date.now();
             globalLastSentAtMs = nowMs;
+            globalLastTargetId = String(target.id);
             globalLastSentByTargetId.set(String(target.id), nowMs);
             if (globalLastSentByTargetId.size > 1000) {
               globalLastSentByTargetId.clear();
@@ -1563,16 +1334,18 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
     }
 
     const lastRunAt = new Date().toISOString();
-    const nextRunAt = schedule.cron_expression
-      ? computeNextRunAt(schedule.cron_expression, schedule.timezone)
-      : deliveryMode === 'batched'
-        ? computeNextBatchRunAt(schedule.batch_times, schedule.timezone)
-        : null;
+    let nextRunAt: string | null = null;
+    if (deliveryMode === 'batch') {
+      const batchTimes = parseBatchTimes(schedule.batch_times);
+      nextRunAt = computeNextBatchRunAt(batchTimes, schedule.timezone || 'UTC');
+    } else if (schedule.cron_expression) {
+      nextRunAt = computeNextRunAt(schedule.cron_expression, schedule.timezone);
+    }
     const scheduleUpdates: Record<string, unknown> = { last_run_at: lastRunAt, next_run_at: nextRunAt };
     if (queueCursorAt) {
       scheduleUpdates.last_queued_at = queueCursorAt;
     }
-    if (deliveryMode === 'batched') {
+    if (deliveryMode === 'batch') {
       scheduleUpdates.last_dispatched_at = lastRunAt;
     }
     const { error: scheduleUpdateError } = await supabase.from('schedules').update(scheduleUpdates).eq('id', scheduleId);
@@ -1580,27 +1353,12 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
       const msg = String((scheduleUpdateError as { message?: unknown })?.message || scheduleUpdateError);
       const missingQueueCursorColumn =
         msg.toLowerCase().includes('last_queued_at') && msg.toLowerCase().includes('does not exist');
-      const missingDispatchedColumn =
-        msg.toLowerCase().includes('last_dispatched_at') && msg.toLowerCase().includes('does not exist');
-      if (missingQueueCursorColumn || missingDispatchedColumn) {
-        const fallbackUpdates: Record<string, unknown> = { last_run_at: lastRunAt, next_run_at: nextRunAt };
-        if (!missingQueueCursorColumn && queueCursorAt) {
-          fallbackUpdates.last_queued_at = queueCursorAt;
-        }
-        if (!missingDispatchedColumn && deliveryMode === 'batched') {
-          fallbackUpdates.last_dispatched_at = lastRunAt;
-        }
-
-        const missingColumns = [
-          missingQueueCursorColumn ? 'last_queued_at' : null,
-          missingDispatchedColumn ? 'last_dispatched_at' : null
-        ].filter(Boolean);
-
+      if (missingQueueCursorColumn) {
         logger.warn(
-          { scheduleId, error: scheduleUpdateError, missingColumns },
-          'Schedule cursor columns missing; run SQL migrations (scripts/012_schedule_queue_cursor.sql, scripts/014_schedule_delivery_modes.sql)'
+          { scheduleId, error: scheduleUpdateError },
+          'Schedule queue cursor columns missing; run SQL migrations (scripts/012_schedule_queue_cursor.sql)'
         );
-        await supabase.from('schedules').update(fallbackUpdates).eq('id', scheduleId);
+        await supabase.from('schedules').update({ last_run_at: lastRunAt, next_run_at: nextRunAt }).eq('id', scheduleId);
       } else {
         logger.warn({ scheduleId, error: scheduleUpdateError }, 'Failed to update schedule run timestamps');
       }
@@ -1632,10 +1390,27 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
     }
 
     const scheduleIds = [...new Set((pendingLogs || []).map((log: { schedule_id?: string }) => log.schedule_id).filter(Boolean))] as string[];
+    const { data: scheduleRows } = await supabase
+      .from('schedules')
+      .select('id,delivery_mode')
+      .in('id', scheduleIds);
+
+    const batchScheduleIds = new Set(
+      (scheduleRows || [])
+        .filter((row: { id?: string; delivery_mode?: string | null }) => row?.delivery_mode === 'batch')
+        .map((row: { id?: string }) => String(row.id || ''))
+        .filter(Boolean)
+    );
+
     let totalSent = 0;
     let totalQueued = 0;
+    let skippedBatch = 0;
 
     for (const scheduleId of scheduleIds) {
+      if (batchScheduleIds.has(scheduleId)) {
+        skippedBatch += 1;
+        continue;
+      }
       const result = await sendQueuedForSchedule(scheduleId, whatsappClient);
       if (result?.sent) {
         totalSent += result.sent;
@@ -1645,7 +1420,10 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
       }
     }
 
-    logger.info({ scheduleCount: scheduleIds.length, totalSent, totalQueued }, 'Processed pending schedules after reconnect');
+    logger.info(
+      { scheduleCount: scheduleIds.length, skippedBatch, totalSent, totalQueued },
+      'Processed pending schedules after reconnect'
+    );
     return { sent: totalSent, queued: totalQueued, schedules: scheduleIds.length };
   } catch (error) {
       logger.error({ error }, 'Failed to send pending schedules after reconnect');

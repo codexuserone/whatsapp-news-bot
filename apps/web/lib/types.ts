@@ -61,6 +61,7 @@ export type LogEntry = {
 
 export type FeedItem = {
   id: string;
+  feed_id?: string | null;
   title?: string | null;
   description?: string | null;
   content?: string | null;

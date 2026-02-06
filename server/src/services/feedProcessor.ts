@@ -11,10 +11,12 @@ type FeedConfig = {
   type?: 'rss' | 'atom' | 'json';
   active?: boolean;
   fetch_interval?: number;
+  last_fetched_at?: string | null;
   etag?: string | null;
   last_modified?: string | null;
   consecutive_failures?: number | null;
   parseConfig?: Record<string, unknown>;
+  parse_config?: Record<string, unknown>;
   cleaning?: { stripUtm?: boolean; decodeEntities?: boolean; removePhrases?: string[] };
 };
 
@@ -54,27 +56,44 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
   if (!supabase || !feed.active) return emptyResult();
   
   try {
+    const parsedConfig =
+      (feed.parseConfig && typeof feed.parseConfig === 'object' ? feed.parseConfig : null) ||
+      (feed.parse_config && typeof feed.parse_config === 'object' ? feed.parse_config : null);
+
+    const normalizedFeed: FeedConfig = parsedConfig
+      ? { ...feed, parseConfig: parsedConfig }
+      : { ...feed };
+
     const settings = await settingsService.getSettings();
     const now = new Date();
     const nowIso = now.toISOString();
     const retentionDays = Number(settings.log_retention_days ?? settings.retentionDays ?? 14);
+    const bootstrapLimitRaw = Number(settings.initial_fetch_limit);
+    const bootstrapLimit = Number.isFinite(bootstrapLimitRaw) ? Math.max(1, Math.floor(bootstrapLimitRaw)) : 1;
     const since = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
-    const parseConfigFallback = (feed as unknown as { cleaning?: { parse_config?: Record<string, unknown> } }).cleaning
-      ?.parse_config;
-    const { items, meta } = await fetchFeedItemsWithMeta({
-      ...feed,
-      parseConfig:
-        (feed as unknown as { parseConfig?: Record<string, unknown>; parse_config?: Record<string, unknown> })
-          .parseConfig ||
-        (feed as unknown as { parse_config?: Record<string, unknown> }).parse_config ||
-        parseConfigFallback
+    const { items, meta } = await fetchFeedItemsWithMeta(normalizedFeed);
+
+    const byMostRecent = [...items].sort((a: FeedItemInput, b: FeedItemInput) => {
+      const aTs = a?.publishedAt ? new Date(a.publishedAt).getTime() : 0;
+      const bTs = b?.publishedAt ? new Date(b.publishedAt).getTime() : 0;
+      return bTs - aTs;
     });
+
+    const isFirstFetch = !feed.last_fetched_at;
+    const sourceItems = isFirstFetch ? byMostRecent.slice(0, bootstrapLimit) : byMostRecent;
+
+    if (isFirstFetch && items.length > sourceItems.length) {
+      console.info(
+        `Initial fetch for ${feed.url}: limiting inserts to ${sourceItems.length}/${items.length} latest item(s)`
+      );
+    }
+
     const newItems: FeedItemRecord[] = [];
-    const fetchedCount = Array.isArray(items) ? items.length : 0;
+    const fetchedCount = Array.isArray(sourceItems) ? sourceItems.length : 0;
     let duplicateCount = 0;
     let errorCount = 0;
 
-    for (const item of items as FeedItemInput[]) {
+    for (const item of sourceItems as FeedItemInput[]) {
       const duplicate = await isDuplicateFeedItem({
         title: item.title,
         url: item.url,
@@ -95,7 +114,23 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
       const normalizedUrlValue = normalizeUrl(item.url || '');
       const contentHash = hashContent(item.title || '', item.url || '');
 
-      const extraRaw = item.raw && typeof item.raw === 'object' ? item.raw : null;
+      const rawInput =
+        item.raw && typeof item.raw === 'object'
+          ? (item.raw as Record<string, unknown>)
+          : {};
+
+      const rawData: Record<string, unknown> = {
+        normalizedTitle,
+        normalizedUrl: normalizedUrlValue,
+        hash: contentHash
+      };
+
+      for (const [key, value] of Object.entries(rawInput)) {
+        if (value == null) continue;
+        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+          rawData[key] = value;
+        }
+      }
 
       const { data: feedItem, error } = await supabase
         .from('feed_items')
@@ -110,12 +145,7 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
           pub_date: item.publishedAt ? new Date(item.publishedAt).toISOString() : null,
           normalized_url: normalizedUrlValue || null,
           content_hash: contentHash || null,
-          raw_data: {
-            normalizedTitle: normalizedTitle,
-            normalizedUrl: normalizedUrlValue,
-            hash: contentHash,
-            ...(extraRaw ? extraRaw : {})
-          },
+          raw_data: rawData,
           content: item.content,
           author: item.author,
           categories: item.categories || []

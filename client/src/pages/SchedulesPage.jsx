@@ -14,17 +14,6 @@ import { Label } from '../components/ui/label';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '../components/ui/table';
 import { CalendarClock, Play, Pencil, Trash2, Loader2 } from 'lucide-react';
 
-const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
-const DEFAULT_BATCH_TIMES = ['07:00', '15:00', '22:00'];
-
-const parseBatchTimesInput = (value) =>
-  String(value || '')
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-
-const formatBatchTimesInput = (value) => (Array.isArray(value) ? value.join(', ') : '');
-
 const schema = z.object({
   name: z.string().min(1),
   cron_expression: z.string().optional(),
@@ -33,19 +22,26 @@ const schema = z.object({
   target_ids: z.array(z.string()).min(1),
   template_id: z.string().min(1),
   active: z.boolean().default(true),
-  delivery_mode: z.enum(['immediate', 'batched']).default('immediate'),
-  batch_times: z
-    .array(z.string().regex(TIME_OF_DAY_PATTERN, 'Use HH:MM (24h)'))
-    .optional()
-    .default(DEFAULT_BATCH_TIMES)
-}).superRefine((value, ctx) => {
-  if (value.delivery_mode === 'batched') {
-    const times = Array.isArray(value.batch_times) ? value.batch_times : [];
-    if (times.length === 0) {
-      ctx.addIssue({ code: 'custom', message: 'Batch times are required for batched delivery.', path: ['batch_times'] });
+  delivery_mode: z.enum(['immediate', 'batch']).default('immediate'),
+  batch_times: z.array(z.string()).default(['07:00', '15:00', '22:00'])
+});
+
+const normalizeBatchTimes = (value) => {
+  const parts = Array.isArray(value)
+    ? value
+    : String(value || '')
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean);
+
+  const unique = new Set();
+  for (const part of parts) {
+    if (/^([01]\d|2[0-3]):([0-5]\d)$/.test(part)) {
+      unique.add(part);
     }
   }
-});
+  return Array.from(unique).sort();
+};
 
 const SchedulesPage = () => {
   const queryClient = useQueryClient();
@@ -67,7 +63,7 @@ const SchedulesPage = () => {
       template_id: '',
       active: true,
       delivery_mode: 'immediate',
-      batch_times: DEFAULT_BATCH_TIMES
+      batch_times: ['07:00', '15:00', '22:00']
     }
   });
 
@@ -84,10 +80,7 @@ const SchedulesPage = () => {
         template_id: active.template_id || '',
         active: active.active ?? true,
         delivery_mode: active.delivery_mode || 'immediate',
-        batch_times:
-          Array.isArray(active.batch_times) && active.batch_times.length > 0
-            ? active.batch_times
-            : DEFAULT_BATCH_TIMES
+        batch_times: normalizeBatchTimes(active.batch_times || ['07:00', '15:00', '22:00'])
       });
     }
   }, [active, form]);
@@ -129,13 +122,8 @@ const SchedulesPage = () => {
     }
   });
 
-  const togglePause = useMutation({
-    mutationFn: ({ id, active }) => api.patch(`/api/schedules/${id}`, { active: !active }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['schedules'] }),
-    onError: (error) => alert(`Failed to toggle pause: ${error?.message || 'Unknown error'}`)
-  });
-
   const onSubmit = (values) => {
+    const batchTimes = normalizeBatchTimes(values.batch_times);
     saveSchedule.mutate({
       name: values.name,
       cron_expression: values.cron_expression || null,
@@ -145,12 +133,7 @@ const SchedulesPage = () => {
       template_id: values.template_id,
       active: values.active,
       delivery_mode: values.delivery_mode,
-      batch_times:
-        values.delivery_mode === 'batched'
-          ? values.batch_times
-          : values.batch_times?.length
-            ? values.batch_times
-            : DEFAULT_BATCH_TIMES
+      batch_times: values.delivery_mode === 'batch' && batchTimes.length ? batchTimes : ['07:00', '15:00', '22:00']
     });
   };
 
@@ -195,9 +178,17 @@ const SchedulesPage = () => {
                 <Input id="name" {...form.register('name')} placeholder="Daily Morning Dispatch" />
               </div>
 
-              {/* Hidden cron field - use delivery mode instead */}
-              <input type="hidden" {...form.register('cron_expression')} />
-              <input type="hidden" {...form.register('timezone')} value="UTC" />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="cron">Cron Expression (optional)</Label>
+                  <Input id="cron" {...form.register('cron_expression')} placeholder="0 9 * * *" />
+                  <p className="text-xs text-muted-foreground">Leave empty for immediate dispatch</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="timezone">Timezone</Label>
+                  <Input id="timezone" {...form.register('timezone')} placeholder="UTC" />
+                </div>
+              </div>
 
               <div className="space-y-2">
                 <Label htmlFor="delivery_mode">Delivery Mode</Label>
@@ -205,39 +196,38 @@ const SchedulesPage = () => {
                   control={form.control}
                   name="delivery_mode"
                   render={({ field }) => (
-                    <Select value={field.value} onValueChange={field.onChange}>
+                    <Select value={field.value || 'immediate'} onValueChange={field.onChange}>
                       <SelectTrigger id="delivery_mode">
                         <SelectValue placeholder="Select delivery mode" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="immediate">Immediate (send as items arrive)</SelectItem>
-                        <SelectItem value="batched">Batched (send at set times)</SelectItem>
+                        <SelectItem value="immediate">Immediate - send as soon as new item arrives</SelectItem>
+                        <SelectItem value="batch">Batch - queue and send at specific times</SelectItem>
                       </SelectContent>
                     </Select>
                   )}
                 />
               </div>
 
-              {deliveryMode === 'batched' && (
-                <div className="space-y-2">
-                  <Label htmlFor="batch_times">Batch Times</Label>
-                  <Controller
-                    control={form.control}
-                    name="batch_times"
-                    render={({ field }) => (
+              {deliveryMode === 'batch' && (
+                <Controller
+                  control={form.control}
+                  name="batch_times"
+                  render={({ field }) => (
+                    <div className="space-y-2">
+                      <Label htmlFor="batch_times">Batch Times (HH:MM)</Label>
                       <Input
                         id="batch_times"
-                        value={formatBatchTimesInput(field.value)}
-                        onChange={(event) => field.onChange(parseBatchTimesInput(event.target.value))}
+                        value={Array.isArray(field.value) ? field.value.join(', ') : ''}
+                        onChange={(event) => field.onChange(normalizeBatchTimes(event.target.value))}
                         placeholder="07:00, 15:00, 22:00"
                       />
-                    )}
-                  />
-                  <p className="text-xs text-muted-foreground">Use 24h time, comma-separated.</p>
-                  {form.formState.errors.batch_times && (
-                    <p className="text-xs text-destructive">{form.formState.errors.batch_times.message}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Messages will queue and dispatch at these local times.
+                      </p>
+                    </div>
                   )}
-                </div>
+                />
               )}
 
               <div className="space-y-2">
@@ -381,37 +371,22 @@ const SchedulesPage = () => {
             <div className="space-y-3">
               {schedules.map((schedule) => (
                 <div key={schedule.id} className="rounded-lg border p-3">
-                  {(() => {
-                    const mode = schedule.delivery_mode || 'immediate';
-                    const batchTimes =
-                      Array.isArray(schedule.batch_times) && schedule.batch_times.length > 0
-                        ? schedule.batch_times
-                        : DEFAULT_BATCH_TIMES;
-                    const timingLabel = mode === 'batched'
-                        ? `Batched at ${batchTimes.join(', ')}`
-                        : 'Sends immediately when new items arrive';
-                    return (
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <div className="min-w-0 flex-1">
                       <p className="font-medium truncate">{schedule.name}</p>
                       <p className="text-xs font-mono text-muted-foreground">
-                        {timingLabel}
+                        {schedule.delivery_mode === 'batch'
+                          ? `Batch: ${(schedule.batch_times || []).join(', ') || '07:00, 15:00, 22:00'}`
+                          : schedule.cron_expression || 'Immediate'}
                       </p>
                     </div>
                     <Badge variant={schedule.active ? 'success' : 'secondary'}>
                       {schedule.active ? 'Active' : 'Inactive'}
                     </Badge>
                   </div>
-                    );
-                  })()}
                   <div className="flex flex-wrap gap-2">
-                    <Button 
-                      size="sm" 
-                      variant={schedule.active ? "secondary" : "default"}
-                      onClick={() => togglePause.mutate({ id: schedule.id, active: schedule.active })}
-                      disabled={togglePause.isPending}
-                    >
-                      {schedule.active ? 'Pause' : 'Resume'}
+                    <Button size="sm" variant="outline" onClick={() => setActive(schedule)}>
+                      <Pencil className="mr-1 h-3 w-3" /> Edit
                     </Button>
                     <Button 
                       size="sm" 
@@ -419,10 +394,7 @@ const SchedulesPage = () => {
                       onClick={() => dispatchSchedule.mutate(schedule.id)}
                       disabled={dispatchSchedule.isPending}
                     >
-                      <Play className="mr-1 h-3 w-3" /> Send Now
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => setActive(schedule)}>
-                      <Pencil className="mr-1 h-3 w-3" /> Edit
+                      <Play className="mr-1 h-3 w-3" /> Dispatch
                     </Button>
                     <Button 
                       size="sm" 

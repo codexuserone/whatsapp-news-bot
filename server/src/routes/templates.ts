@@ -13,13 +13,13 @@ const getDb = () => {
 
 // Extract variable names from template content (e.g., {{title}}, {{description}})
 function extractVariables(content: string) {
-  const regex = /\{\{\s*([^{}\s]+)\s*\}\}/g;
+  const regex = /\{\{\s*(\w+)\s*\}\}/g;
   const input = String(content ?? '');
   const variables = new Set<string>();
   let match: RegExpExecArray | null;
   while ((match = regex.exec(input)) !== null) {
     if (match[1]) {
-      variables.add(String(match[1]).trim());
+      variables.add(match[1]);
     }
   }
   return Array.from(variables);
@@ -101,15 +101,13 @@ const templateRoutes = () => {
   router.get('/available-variables', async (req: Request, res: Response) => {
     try {
       const feedId = typeof req.query.feed_id === 'string' ? req.query.feed_id : null;
+
       // Get recent feed items to extract available fields
-      let query = getDb()
-        .from('feed_items')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(20);
+      let query = getDb().from('feed_items').select('*').order('created_at', { ascending: false }).limit(20);
       if (feedId) {
         query = query.eq('feed_id', feedId);
       }
+
       const { data: items, error } = await query;
       
       if (error) throw error;
@@ -129,19 +127,34 @@ const templateRoutes = () => {
         { name: 'guid', description: 'Feed GUID' }
       ];
       
+      // Extract additional fields from raw_data
       const additionalFields = new Set<string>();
-      const internalKeys = new Set(['normalizedUrl', 'normalizedTitle', 'hash']);
+      const ignoredRawKeys = new Set(['normalizedTitle', 'normalizedUrl', 'hash', 'source']);
 
-      items.forEach((item: Record<string, unknown>) => {
+      const appendRawField = (key: string, value: unknown) => {
+        if (!key || ignoredRawKeys.has(key)) return;
+        if (!/^[a-zA-Z_]\w{0,63}$/.test(key)) return;
+        if (value == null) return;
+        if (typeof value === 'object') return;
+        additionalFields.add(key);
+      };
+
+      (items || []).forEach((item: Record<string, unknown>) => {
         if (item.raw_data && typeof item.raw_data === 'object') {
-          const raw = item.raw_data as Record<string, unknown>;
-          Object.entries(raw).forEach(([key, value]) => {
-            if (standardFields.find((f) => f.name === key)) return;
-            if (internalKeys.has(key)) return;
-            if (value == null) return;
-            if (typeof value === 'object') return;
-            additionalFields.add(key);
+          const rawData = item.raw_data as Record<string, unknown>;
+
+          Object.entries(rawData).forEach(([key, value]) => {
+            if (standardFields.find((field) => field.name === key)) return;
+            appendRawField(key, value);
           });
+
+          const source = rawData.source;
+          if (source && typeof source === 'object') {
+            Object.entries(source as Record<string, unknown>).forEach(([key, value]) => {
+              if (standardFields.find((field) => field.name === key)) return;
+              appendRawField(key, value);
+            });
+          }
         }
       });
       

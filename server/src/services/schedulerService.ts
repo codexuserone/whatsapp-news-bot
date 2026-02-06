@@ -98,6 +98,16 @@ const parseBatchTimes = (value: unknown): string[] => {
   return Array.from(seen).sort();
 };
 
+<<<<<<< HEAD
+const normalizeCronExpression = (value: unknown): string | null => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const normalized = raw.replace(/\s+/g, ' ');
+  return normalized || null;
+};
+
+=======
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 const toDailyCronExpression = (time: string) => {
   const [hour, minute] = time.split(':').map((part) => Number(part));
   return `${minute} ${hour} * * *`;
@@ -175,7 +185,11 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
     if (error) throw error;
 
     const immediateSchedules = (schedules || []).filter(
+<<<<<<< HEAD
+      (schedule: ScheduleRow) => getDeliveryMode(schedule) !== 'batched'
+=======
       (schedule: ScheduleRow) => getDeliveryMode(schedule) !== 'batched' && !schedule.cron_expression
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
     );
     logger.info({ feedId, count: immediateSchedules.length }, 'Triggering immediate schedules');
     
@@ -293,16 +307,30 @@ const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
         continue;
       }
 
+<<<<<<< HEAD
+      const cronExpression = normalizeCronExpression(schedule.cron_expression);
+      if (cronExpression) {
+        if (!cron.validate(cronExpression)) {
+          logger.warn({ scheduleId: schedule.id, cronExpression }, 'Invalid cron expression; skipping schedule');
+          await supabase.from('schedules').update({ next_run_at: null }).eq('id', schedule.id);
+          continue;
+        }
+=======
       if (schedule.cron_expression) {
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
         try {
           const job = cron.schedule(
-            schedule.cron_expression,
+            cronExpression,
             () => runScheduleOnce(schedule.id, whatsappClient),
             { timezone }
           );
           scheduleJobs.set(`${schedule.id}:cron`, job);
 
+<<<<<<< HEAD
+          const nextRunAt = computeNextRunAt(cronExpression, timezone);
+=======
           const nextRunAt = computeNextRunAt(schedule.cron_expression, timezone);
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
           if (nextRunAt) {
             await supabase
               .from('schedules')

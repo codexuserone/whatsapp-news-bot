@@ -19,6 +19,34 @@ type MessageStatusSnapshot = {
   updatedAtMs: number;
 };
 
+<<<<<<< HEAD
+type ChannelSummary = {
+  id: string;
+  jid: string;
+  name: string;
+  subscribers: number;
+};
+
+type ChannelDiagnostics = {
+  methodsTried: string[];
+  methodErrors: string[];
+  sourceCounts: {
+    api: number;
+    cache: number;
+    metadata: number;
+  };
+  limitation: string | null;
+};
+
+type CachedNewsletterChat = {
+  jid: string;
+  name: string;
+  subscribers: number;
+  updatedAtMs: number;
+};
+
+=======
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 const redactSensitiveText = (value?: string | null) => {
   const text = String(value || '');
   if (!text) return '';
@@ -28,6 +56,101 @@ const redactSensitiveText = (value?: string | null) => {
     .slice(0, 320);
 };
 
+<<<<<<< HEAD
+const normalizeNewsletterJid = (value: unknown, options?: { allowNumeric?: boolean }) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.endsWith('@newsletter')) return raw;
+  if (raw.includes('@')) return '';
+  if (!options?.allowNumeric) return '';
+  const digits = raw.replace(/[^0-9]/g, '');
+  return digits ? `${digits}@newsletter` : '';
+};
+
+const readNumericValue = (value: unknown) => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const readTextValue = (value: unknown) => {
+  if (typeof value !== 'string') return '';
+  return value.trim();
+};
+
+const extractChannelSummary = (input: unknown, options?: { allowNumeric?: boolean }): ChannelSummary | null => {
+  if (typeof input === 'string') {
+    const jid = normalizeNewsletterJid(input, options);
+    if (!jid) return null;
+    return { id: jid, jid, name: jid, subscribers: 0 };
+  }
+
+  if (!input || typeof input !== 'object') return null;
+  const record = input as Record<string, unknown>;
+  const jid =
+    normalizeNewsletterJid(record.jid, options) ||
+    normalizeNewsletterJid(record.id, options) ||
+    normalizeNewsletterJid(record.newsletter_id, options);
+  if (!jid) return null;
+
+  const threadMetadata =
+    record.thread_metadata && typeof record.thread_metadata === 'object'
+      ? (record.thread_metadata as Record<string, unknown>)
+      : null;
+  const threadName =
+    threadMetadata?.name && typeof threadMetadata.name === 'object'
+      ? (threadMetadata.name as Record<string, unknown>)
+      : null;
+
+  const name =
+    readTextValue(record.name) ||
+    readTextValue(record.subject) ||
+    readTextValue(threadName?.text) ||
+    readTextValue(threadMetadata?.name) ||
+    jid;
+
+  const subscribers =
+    readNumericValue(record.subscribers) ||
+    readNumericValue(record.subscribers_count) ||
+    readNumericValue(threadMetadata?.subscribers_count);
+
+  return {
+    id: jid,
+    jid,
+    name,
+    subscribers
+  };
+};
+
+const extractChannelArray = (input: unknown): unknown[] => {
+  if (Array.isArray(input)) return input;
+  if (!input || typeof input !== 'object') return [];
+
+  const record = input as Record<string, unknown>;
+  const directKeys = ['channels', 'newsletters', 'items', 'data'];
+  for (const key of directKeys) {
+    const value = record[key];
+    if (Array.isArray(value)) return value;
+  }
+
+  const result = record.result;
+  if (Array.isArray(result)) return result;
+  if (result && typeof result === 'object') {
+    const resultRecord = result as Record<string, unknown>;
+    for (const key of directKeys) {
+      const value = resultRecord[key];
+      if (Array.isArray(value)) return value;
+    }
+    const maybeSingle = extractChannelSummary(resultRecord, { allowNumeric: true });
+    if (maybeSingle) return [resultRecord];
+  }
+
+  const maybeSingle = extractChannelSummary(record, { allowNumeric: true });
+  return maybeSingle ? [record] : [];
+};
+
+=======
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 class WhatsAppClient {
   socket: WASocket | null;
   status: WhatsAppStatus;
@@ -78,6 +201,7 @@ class WhatsAppClient {
   waVersionFetchedAtMs: number | null;
   recentSentMessages: Map<string, proto.IWebMessageInfo>;
   recentMessageStatuses: Map<string, MessageStatusSnapshot>;
+  newsletterChatCache: Map<string, CachedNewsletterChat>;
   meJid: string | null;
   meJid: string | null;
   meName: string | null;
@@ -111,6 +235,7 @@ class WhatsAppClient {
     this.waVersionFetchedAtMs = null;
     this.recentSentMessages = new Map();
     this.recentMessageStatuses = new Map();
+    this.newsletterChatCache = new Map();
     this.meJid = null;
     this.meName = null;
     this.hasConnectedOnce = false;
@@ -447,6 +572,10 @@ class WhatsAppClient {
     ev.removeAllListeners('creds.update');
     ev.removeAllListeners('messages.upsert');
     ev.removeAllListeners('messages.update');
+    ev.removeAllListeners('chats.set');
+    ev.removeAllListeners('chats.upsert');
+    ev.removeAllListeners('chats.update');
+    ev.removeAllListeners('chats.delete');
   }
 
   async connect(): Promise<void> {
@@ -476,8 +605,8 @@ class WhatsAppClient {
 
       // Acquire a cross-instance lease so only one bot connects at a time.
       // This prevents WhatsApp "conflict/replaced" errors during rolling deploys.
-      // Can be disabled via env var if causing issues.
       const skipLease = process.env.SKIP_WHATSAPP_LEASE === 'true';
+      const allowAutoTakeover = process.env.WHATSAPP_LEASE_AUTO_TAKEOVER === 'true';
       if (!skipLease && authStore.acquireLease) {
         try {
           const lease = await authStore.acquireLease(this.instanceId, 90_000);
@@ -487,6 +616,11 @@ class WhatsAppClient {
           this.leaseExpiresAt = lease.expiresAt;
 
           if (lease.supported && !lease.ok) {
+<<<<<<< HEAD
+            if (allowAutoTakeover && authStore.forceAcquireLease) {
+              logger.warn({ holder: lease.ownerId }, 'Lease held; attempting auto-takeover');
+              try {
+=======
             // Auto-takeover: force acquire the lease immediately
             // This prevents users from having to manually click "Take Over"
             logger.warn({ holder: lease.ownerId }, 'Lease held, attempting auto-takeover...');
@@ -495,6 +629,7 @@ class WhatsAppClient {
 
             try {
               if (authStore.forceAcquireLease) {
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
                 const takeover = await authStore.forceAcquireLease(this.instanceId, 90_000);
                 if (takeover.ok) {
                   logger.info('Auto-takeover successful');
@@ -502,18 +637,30 @@ class WhatsAppClient {
                   this.leaseOwnerId = takeover.ownerId;
                   this.leaseExpiresAt = takeover.expiresAt;
                   this.startLeaseRenewal(90_000);
-                  // Continue with connection below (don't return)
+                  // Continue with connection below.
                 } else {
-                  logger.error({ reason: takeover.reason }, 'Auto-takeover failed, continuing without lease');
-                  this.leaseHeld = true; // Continue anyway - don't block
+                  logger.warn({ holder: takeover.ownerId }, 'Lease held by another instance; skipping connect');
+                  this.status = 'conflict';
+                  this.lastError = 'Another instance currently holds the WhatsApp lease.';
+                  await authStore.updateStatus('conflict');
+                  this.scheduleReconnect(15000 + Math.random() * 5000);
+                  return;
                 }
-              } else {
-                logger.warn('Force acquire not supported, continuing without lease');
-                this.leaseHeld = true;
+              } catch (error) {
+                logger.warn({ error }, 'Auto-takeover failed; skipping connect until lease is available');
+                this.status = 'conflict';
+                this.lastError = 'Failed to acquire WhatsApp lease.';
+                await authStore.updateStatus('conflict');
+                this.scheduleReconnect(15000 + Math.random() * 5000);
+                return;
               }
-            } catch (error) {
-              logger.error({ error }, 'Auto-takeover error, continuing without lease');
-              this.leaseHeld = true; // Continue anyway - don't block
+            } else {
+              logger.warn({ holder: lease.ownerId }, 'Lease held by another instance; skipping connect');
+              this.status = 'conflict';
+              this.lastError = 'Another instance currently holds the WhatsApp lease.';
+              await authStore.updateStatus('conflict');
+              this.scheduleReconnect(15000 + Math.random() * 5000);
+              return;
             }
           }
 
@@ -521,8 +668,12 @@ class WhatsAppClient {
             this.startLeaseRenewal(90_000);
           }
         } catch (error) {
-          logger.warn({ error }, 'Failed to acquire WhatsApp lease; continuing without lock');
-          this.leaseHeld = true; // Don't let lease errors block connection
+          logger.warn({ error }, 'Failed to acquire WhatsApp lease; refusing to connect without lock');
+          this.status = 'conflict';
+          this.lastError = 'Unable to acquire WhatsApp lease; retrying.';
+          await authStore.updateStatus('conflict');
+          this.scheduleReconnect(15000 + Math.random() * 5000);
+          return;
         }
       } else {
         // Lease disabled or not supported - just connect
@@ -587,6 +738,7 @@ class WhatsAppClient {
       const socketConfig: Record<string, unknown> = {
         auth: state,
         printQRInTerminal: false,
+        syncFullHistory: false,
         markOnlineOnConnect: false,
         emitOwnEvents: true,
         browser,
@@ -666,11 +818,12 @@ class WhatsAppClient {
           this.isConnecting = false;
           const disconnectError = lastDisconnect?.error as { output?: { statusCode?: number; payload?: { message?: string } }; message?: string } | undefined;
           const statusCode = disconnectError?.output?.statusCode;
-          const reason = disconnectError?.output?.payload?.message || disconnectError?.message;
+          const rawReason = disconnectError?.output?.payload?.message || disconnectError?.message;
+          const reason = redactSensitiveText(rawReason);
           this.status = 'disconnected';
           this.meJid = null;
           this.meName = null;
-          if (reason?.includes('QR refs attempts ended')) {
+          if (String(rawReason || '').includes('QR refs attempts ended')) {
             this.lastError = 'QR expired. Click Hard Refresh to generate a new QR code.';
           } else {
             this.lastError = reason || 'Connection closed';
@@ -688,7 +841,7 @@ class WhatsAppClient {
             return;
           }
 
-          if (statusCode === DisconnectReason.restartRequired || reason?.includes('restart required')) {
+          if (statusCode === DisconnectReason.restartRequired || String(rawReason || '').includes('restart required')) {
             logger.info('Restart required, reconnecting');
             this.lastError = null;
             this.status = 'connecting';
@@ -698,7 +851,7 @@ class WhatsAppClient {
           }
 
           // Connection conflict - another device logged in
-          if (statusCode === 440 || reason?.includes('conflict')) {
+          if (statusCode === 440 || String(rawReason || '').includes('conflict')) {
             this.conflictAttempts = (this.conflictAttempts || 0) + 1;
 
             if (this.conflictAttempts > 3) {
@@ -793,6 +946,26 @@ class WhatsAppClient {
         } catch (e) {
           logger.warn({ e }, 'Failed to process messages.update');
         }
+      });
+
+      (socket.ev as any).on('chats.set', (payload: unknown) => {
+        const chats =
+          payload && typeof payload === 'object'
+            ? ((payload as { chats?: unknown[] }).chats || [])
+            : [];
+        this.cacheNewsletterChats(chats);
+      });
+
+      (socket.ev as any).on('chats.upsert', (chats: unknown) => {
+        this.cacheNewsletterChats(chats);
+      });
+
+      (socket.ev as any).on('chats.update', (updates: unknown) => {
+        this.cacheNewsletterChats(updates);
+      });
+
+      (socket.ev as any).on('chats.delete', (deletes: unknown) => {
+        this.removeNewsletterChats(deletes);
       });
     } catch (error) {
       this.isConnecting = false;
@@ -999,21 +1172,144 @@ class WhatsAppClient {
     }
   }
 
-  async getChannels(): Promise<Array<{ id: string; jid: string; name: string; subscribers: number }>> {
-    const socket = this.socket as any;
-    if (!socket) return [];
-    try {
-      const subscribed = await socket.newsletterGetSubscribed?.() || [];
-      return (subscribed || []).map((channel: { id?: string; name?: string; subscribers?: number }) => ({
-        id: channel.id || '',
-        jid: channel.id || '',
-        name: channel.name || channel.id || '',
-        subscribers: channel.subscribers || 0
-      }));
-    } catch (err) {
-      logger.warn({ err }, 'Channels not supported or failed to fetch');
-      return [];
+  cacheNewsletterChat(chatLike: unknown): void {
+    const channel = extractChannelSummary(chatLike, { allowNumeric: false });
+    if (!channel) return;
+    const existing = this.newsletterChatCache.get(channel.jid);
+    const subscribers = channel.subscribers || existing?.subscribers || 0;
+    const name = channel.name || existing?.name || channel.jid;
+    this.newsletterChatCache.set(channel.jid, {
+      jid: channel.jid,
+      name,
+      subscribers,
+      updatedAtMs: Date.now()
+    });
+    if (this.newsletterChatCache.size > 1000) {
+      const oldest = this.newsletterChatCache.keys().next().value;
+      if (oldest) {
+        this.newsletterChatCache.delete(oldest);
+      }
     }
+  }
+
+  cacheNewsletterChats(chatsLike: unknown): void {
+    const list = Array.isArray(chatsLike) ? chatsLike : [];
+    for (const chat of list) {
+      this.cacheNewsletterChat(chat);
+    }
+  }
+
+  removeNewsletterChats(jidsLike: unknown): void {
+    const list = Array.isArray(jidsLike) ? jidsLike : [];
+    for (const jidValue of list) {
+      const jid = normalizeNewsletterJid(jidValue, { allowNumeric: false });
+      if (!jid) continue;
+      this.newsletterChatCache.delete(jid);
+    }
+  }
+
+  async getChannelsWithDiagnostics(): Promise<{ channels: ChannelSummary[]; diagnostics: ChannelDiagnostics }> {
+    const socket = this.socket as any;
+    const diagnostics: ChannelDiagnostics = {
+      methodsTried: [],
+      methodErrors: [],
+      sourceCounts: { api: 0, cache: 0, metadata: 0 },
+      limitation: null
+    };
+
+    if (!socket) {
+      diagnostics.limitation = 'WhatsApp is not connected.';
+      return { channels: [], diagnostics };
+    }
+
+    const channelMap = new Map<string, ChannelSummary>();
+    const mergeChannel = (candidate: ChannelSummary, source: 'api' | 'cache' | 'metadata') => {
+      const existing = channelMap.get(candidate.jid);
+      const merged: ChannelSummary = {
+        id: candidate.jid,
+        jid: candidate.jid,
+        name: candidate.name || existing?.name || candidate.jid,
+        subscribers: candidate.subscribers || existing?.subscribers || 0
+      };
+      channelMap.set(candidate.jid, merged);
+      diagnostics.sourceCounts[source] += 1;
+    };
+
+    const methodCandidates = [
+      'newsletterGetSubscribed',
+      'newsletterList',
+      'newsletterGetAdmin',
+      'newsletterGetOwned',
+      'newsletterGetAll'
+    ];
+
+    for (const methodName of methodCandidates) {
+      const method = socket?.[methodName];
+      if (typeof method !== 'function') {
+        diagnostics.methodsTried.push(`${methodName}:missing`);
+        continue;
+      }
+
+      diagnostics.methodsTried.push(`${methodName}:called`);
+      try {
+        const result = await method.call(socket);
+        const entries = extractChannelArray(result);
+        for (const entry of entries) {
+          const normalized = extractChannelSummary(entry, { allowNumeric: true });
+          if (!normalized) continue;
+          mergeChannel(normalized, 'api');
+          this.cacheNewsletterChat(normalized);
+        }
+      } catch (error) {
+        diagnostics.methodErrors.push(`${methodName}: ${getErrorMessage(error)}`);
+      }
+    }
+
+    for (const cached of this.newsletterChatCache.values()) {
+      mergeChannel(
+        {
+          id: cached.jid,
+          jid: cached.jid,
+          name: cached.name || cached.jid,
+          subscribers: cached.subscribers || 0
+        },
+        'cache'
+      );
+    }
+
+    if (typeof socket.newsletterMetadata === 'function' && channelMap.size > 0) {
+      const toEnrich = Array.from(channelMap.values())
+        .filter((channel) => channel.name === channel.jid || channel.subscribers <= 0)
+        .slice(0, 50);
+
+      for (const channel of toEnrich) {
+        try {
+          const metadata = await socket.newsletterMetadata('jid', channel.jid);
+          const normalized = extractChannelSummary(metadata, { allowNumeric: true });
+          if (!normalized) continue;
+          mergeChannel(normalized, 'metadata');
+          this.cacheNewsletterChat(normalized);
+        } catch {
+          // Metadata fetch is best-effort only.
+        }
+      }
+    }
+
+    const channels = Array.from(channelMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+    if (!channels.length) {
+      const hasListingMethod = methodCandidates.some((name) => typeof socket?.[name] === 'function');
+      diagnostics.limitation = hasListingMethod
+        ? 'WhatsApp returned no discoverable channels for this session. Open the channel in your phone app, then refresh.'
+        : 'Current Baileys build does not expose a channel list API. This app can only discover channels that appear in chat history.';
+    }
+
+    return { channels, diagnostics };
+  }
+
+  async getChannels(): Promise<Array<{ id: string; jid: string; name: string; subscribers: number }>> {
+    const result = await this.getChannelsWithDiagnostics();
+    return result.channels;
   }
 
   async sendMessage(jid: string, content: AnyMessageContent, options: Record<string, unknown> = {}) {

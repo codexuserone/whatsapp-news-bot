@@ -11,6 +11,7 @@ const withTimeout = require('../utils/withTimeout');
 const { getErrorMessage } = require('../utils/errorUtils');
 const { computeNextRunAt } = require('../utils/cron');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
+const { normalizeMessageText } = require('../utils/messageText');
 
 type Target = {
   id?: string;
@@ -24,6 +25,7 @@ type Template = {
   id?: string;
   content: string;
   send_images?: boolean | null;
+  send_mode?: 'image' | 'link_preview' | 'text_only' | null;
 };
 
 type FeedItem = {
@@ -57,7 +59,12 @@ type WhatsAppClient = {
 };
 
 const DEFAULT_SEND_TIMEOUT_MS = 45000;
+<<<<<<< HEAD
+const AUTH_ERROR_HINT =
+  'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
+=======
 const AUTH_ERROR_HINT = 'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 
 // Simple Mutex with Timeout to replace the fragile Promise chain
 class SendMutex {
@@ -137,14 +144,21 @@ const waitForDelays = async (
 
   const waitGlobal = Number.isFinite(sinceGlobal) ? Math.max(minBetweenAnyMs - sinceGlobal, 0) : 0;
   const waitSameTarget = Number.isFinite(sinceTarget) ? Math.max(minBetweenSameTargetMs - sinceTarget, 0) : 0;
+<<<<<<< HEAD
+=======
 
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
   const switchedTargets = Boolean(globalLastTargetId && globalLastTargetId !== targetId);
   const waitSwitchTarget = switchedTargets && Number.isFinite(sinceGlobal)
     ? Math.max(interTargetDelayMs - sinceGlobal, 0)
     : 0;
+<<<<<<< HEAD
+  const waitMs = Math.max(waitGlobal, waitSameTarget, waitSwitchTarget);
+=======
 
   const waitMs = Math.min(Math.max(waitGlobal, waitSameTarget, waitSwitchTarget), 30000); // Cap wait at 30s
 
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
   if (waitMs > 0) {
     await sleep(waitMs);
   }
@@ -165,10 +179,11 @@ const isAuthStateError = (message: string) => {
 };
 
 const applyTemplate = (templateBody: string, data: Record<string, unknown>): string => {
-  return templateBody.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
+  const rendered = templateBody.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
     const value = data[key];
     return value != null ? String(value) : '';
   });
+  return normalizeMessageText(rendered);
 };
 
 const isHttpUrl = (value?: string | null) => {
@@ -183,11 +198,26 @@ const isHttpUrl = (value?: string | null) => {
 
 // Check if URL points to an image (not video/audio)
 const isImageUrl = (url: string): boolean => {
-  const lower = url.toLowerCase();
-  // Check file extensions
+  const lower = String(url || '').toLowerCase();
+  const hasExt = (ext: string) => new RegExp(`${ext.replace('.', '\\.')}([?#]|$)`).test(lower);
+
   const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp', '.svg'];
   const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v'];
   const audioExtensions = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.wma'];
+<<<<<<< HEAD
+  const otherNonImageExtensions = ['.pdf', '.zip', '.rar', '.7z', '.gz', '.tar'];
+  
+  // Explicitly exclude videos and audio
+  if (videoExtensions.some((ext) => hasExt(ext))) return false;
+  if (audioExtensions.some((ext) => hasExt(ext))) return false;
+  if (otherNonImageExtensions.some((ext) => hasExt(ext))) return false;
+  
+  // If extension is clearly an image, accept immediately.
+  if (imageExtensions.some((ext) => hasExt(ext))) return true;
+
+  // Many image CDNs use extension-less URLs. Allow and verify content-type during download.
+  return true;
+=======
 
   // Explicitly exclude videos and audio
   if (videoExtensions.some(ext => lower.includes(ext))) return false;
@@ -195,10 +225,13 @@ const isImageUrl = (url: string): boolean => {
 
   // Check if it's a known image extension
   return imageExtensions.some(ext => lower.includes(ext));
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 };
 
 const DEFAULT_USER_AGENT =
-  'Mozilla/5.0 (compatible; WhatsAppNewsBot/0.2; +https://example.invalid)';
+  process.env.MEDIA_FETCH_USER_AGENT ||
+  process.env.FEED_USER_AGENT ||
+  'Mozilla/5.0 (compatible; AnashNewsBot/1.0; +https://whatsapp-news-bot-3-69qh.onrender.com)';
 
 const normalizeUrlCandidate = (candidate?: string | null, baseUrl?: string | null) => {
   const raw = String(candidate || '').trim();
@@ -233,6 +266,96 @@ const pickFromSrcset = (srcset?: string | null) => {
   return entries.length ? entries[entries.length - 1] : undefined;
 };
 
+const isLikelyDecorativeImageUrl = (value: string) => {
+  const lower = String(value || '').toLowerCase();
+  const blockedHints = ['logo', 'sprite', 'icon', 'avatar', 'gravatar', 'emoji', 'pixel'];
+  return blockedHints.some((hint) => lower.includes(hint));
+};
+
+const normalizeImageCandidate = (candidate?: string | null, baseUrl?: string | null) => {
+  const resolved = normalizeUrlCandidate(candidate, baseUrl);
+  if (!resolved) return undefined;
+  if (!isImageUrl(resolved)) return undefined;
+  if (isLikelyDecorativeImageUrl(resolved)) return undefined;
+  return resolved;
+};
+
+const appendStructuredDataImageCandidates = (node: unknown, output: string[]) => {
+  if (node == null) return;
+  if (typeof node === 'string') {
+    output.push(node);
+    return;
+  }
+  if (Array.isArray(node)) {
+    for (const entry of node) {
+      appendStructuredDataImageCandidates(entry, output);
+    }
+    return;
+  }
+  if (typeof node !== 'object') return;
+
+  const record = node as Record<string, unknown>;
+  const imageLikeKeys = ['image', 'thumbnailUrl', 'contentUrl', 'primaryImageOfPage'];
+  for (const key of imageLikeKeys) {
+    appendStructuredDataImageCandidates(record[key], output);
+  }
+
+  if (record['@graph']) {
+    appendStructuredDataImageCandidates(record['@graph'], output);
+  }
+};
+
+const collectStructuredDataImageCandidates = ($: any) => {
+  const candidates: string[] = [];
+  $('script[type="application/ld+json"]').each((_: number, element: unknown) => {
+    try {
+      const raw = String($(element).contents().text() || '').trim();
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      appendStructuredDataImageCandidates(parsed, candidates);
+    } catch {
+      // Ignore malformed structured data blocks.
+    }
+  });
+  return candidates;
+};
+
+const collectDomImageCandidates = ($: any) => {
+  const selectors = [
+    'article img',
+    'main img',
+    '.entry-content img',
+    '.post-content img',
+    '.article-content img',
+    '.story-body img',
+    'img'
+  ];
+
+  const candidates: string[] = [];
+  const pushCandidate = (value?: string | null) => {
+    const normalized = String(value || '').trim();
+    if (!normalized) return;
+    candidates.push(normalized);
+  };
+
+  for (const selector of selectors) {
+    const elements = $(selector).slice(0, 8);
+    elements.each((_: number, element: unknown) => {
+      const img = $(element);
+      const srcset = img.attr('data-srcset') || img.attr('srcset');
+      pushCandidate(pickFromSrcset(srcset));
+      pushCandidate(img.attr('data-src'));
+      pushCandidate(img.attr('data-lazy-src'));
+      pushCandidate(img.attr('data-original'));
+      pushCandidate(img.attr('data-image'));
+      pushCandidate(img.attr('src'));
+    });
+    if (candidates.length >= 20) break;
+  }
+
+  return candidates;
+};
+
 const scrapeImageFromPage = async (pageUrl: string) => {
   await assertSafeOutboundUrl(pageUrl);
   const response = await axios.get(pageUrl, {
@@ -251,26 +374,31 @@ const scrapeImageFromPage = async (pageUrl: string) => {
     $('meta[property="og:image:secure_url"]').attr('content'),
     $('meta[property="og:image"]').attr('content'),
     $('meta[property="og:image:url"]').attr('content'),
+    $('meta[name="og:image"]').attr('content'),
     $('meta[name="twitter:image"]').attr('content'),
     $('meta[name="twitter:image:src"]').attr('content'),
+    $('meta[itemprop="image"]').attr('content'),
     $('link[rel="image_src"]').attr('href')
   ];
 
   for (const raw of metaCandidates) {
-    const resolved = normalizeUrlCandidate(raw, pageUrl);
+    const resolved = normalizeImageCandidate(raw, pageUrl);
     if (resolved) return resolved;
   }
 
-  const img = $('article img, .entry-content img, .post-content img, img').first();
-  const srcset = img.attr('data-srcset') || img.attr('srcset');
-  const src =
-    pickFromSrcset(srcset) ||
-    img.attr('data-src') ||
-    img.attr('data-lazy-src') ||
-    img.attr('data-original') ||
-    img.attr('src');
+  const structuredDataCandidates = collectStructuredDataImageCandidates($);
+  for (const raw of structuredDataCandidates) {
+    const resolved = normalizeImageCandidate(raw, pageUrl);
+    if (resolved) return resolved;
+  }
 
-  return normalizeUrlCandidate(src, pageUrl);
+  const domCandidates = collectDomImageCandidates($);
+  for (const raw of domCandidates) {
+    const resolved = normalizeImageCandidate(raw, pageUrl);
+    if (resolved) return resolved;
+  }
+
+  return null;
 };
 
 const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null) => {
@@ -447,6 +575,67 @@ const normalizeTargetJid = (target: Target) => {
   return `${phoneDigits}@s.whatsapp.net`;
 };
 
+<<<<<<< HEAD
+const buildMessageData = (feedItem: FeedItem) => {
+  const normalizedDescription = String(feedItem.description || '').trim();
+  const normalizedContent = String(feedItem.content || '').trim();
+  const fallbackDescription = normalizedDescription || normalizedContent.slice(0, 280);
+
+  return {
+    id: feedItem.id,
+    guid: (feedItem as unknown as { guid?: string }).guid,
+    title: feedItem.title,
+    url: feedItem.link,
+    link: feedItem.link,
+    description: fallbackDescription,
+    content: feedItem.content,
+    author: feedItem.author,
+    image_url: feedItem.image_url,
+    imageUrl: feedItem.image_url,
+    normalized_url: (feedItem as unknown as { normalized_url?: string }).normalized_url,
+    normalizedUrl: (feedItem as unknown as { normalized_url?: string }).normalized_url,
+    content_hash: (feedItem as unknown as { content_hash?: string }).content_hash,
+    contentHash: (feedItem as unknown as { content_hash?: string }).content_hash,
+    pub_date: feedItem.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
+    publishedAt: feedItem.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
+    categories: Array.isArray(feedItem.categories) ? feedItem.categories.join(', ') : '',
+    ...(typeof (feedItem as unknown as { raw_data?: unknown }).raw_data === 'object' &&
+    (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
+      ? Object.fromEntries(
+          Object.entries((feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data || {}).map(
+            ([key, value]) => {
+              if (value == null) return [key, ''];
+              if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return [key, value];
+              try {
+                return [key, JSON.stringify(value)];
+              } catch {
+                return [key, String(value)];
+              }
+            }
+          )
+        )
+      : {})
+  };
+};
+
+const hasHttpUrl = (value: string) => /https?:\/\/[^\s]+/i.test(String(value || ''));
+
+const ensurePreviewLink = (value: string, link?: string | null) => {
+  const text = String(value || '').trim();
+  const normalizedLink = String(link || '').trim();
+  if (!normalizedLink) return text;
+  if (hasHttpUrl(text)) return text;
+  if (!text) return normalizedLink;
+  return `${text}\n${normalizedLink}`;
+};
+
+const getTemplateSendMode = (template: Template) => {
+  if (template?.send_mode === 'image' || template?.send_mode === 'link_preview' || template?.send_mode === 'text_only') {
+    return template.send_mode;
+  }
+  return template?.send_images === false ? 'link_preview' : 'image';
+};
+=======
 const buildMessageData = (feedItem: FeedItem) => ({
   id: feedItem.id,
   guid: (feedItem as unknown as { guid?: string }).guid,
@@ -482,6 +671,7 @@ const buildMessageData = (feedItem: FeedItem) => ({
     )
     : {})
 });
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 
 type SendWithMediaResult = {
   response: any;
@@ -502,8 +692,8 @@ const sendMessageWithTemplate = async (
   options?: { sendImages?: boolean; supabase?: SupabaseClient; sendTimeoutMs?: number }
 ): Promise<SendWithMediaResult> => {
   const payload = buildMessageData(feedItem);
-  const text = applyTemplate(template.content, payload).trim();
-  if (!text) {
+  const renderedText = applyTemplate(template.content, payload).trim();
+  if (!renderedText) {
     throw new Error('Template rendered empty message');
   }
 
@@ -516,23 +706,58 @@ const sendMessageWithTemplate = async (
   }
 
   const jid = normalizeTargetJid(target);
+<<<<<<< HEAD
+  const sendMode = getTemplateSendMode(template);
+  const allowImages = options?.sendImages !== false && sendMode === 'image';
+=======
   const allowImages = options?.sendImages !== false;
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
   const sendTimeoutMs = Math.max(Number(options?.sendTimeoutMs || DEFAULT_SEND_TIMEOUT_MS), 10000);
 
-  const sendText = async () => {
+  const sendText = async (text: string, modeOptions?: { disableLinkPreview?: boolean }) => {
+    const content: Record<string, unknown> = modeOptions?.disableLinkPreview
+      ? { text, linkPreview: null }
+      : { text };
     if (target.type === 'status') {
       return withTimeout(
+<<<<<<< HEAD
+        whatsappClient.sendStatusBroadcast(content),
+=======
         whatsappClient.sendStatusBroadcast({ text }),
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
         sendTimeoutMs,
         'Timed out sending status message'
       );
     }
     return withTimeout(
+<<<<<<< HEAD
+      whatsappClient.sendMessage(jid, content),
+=======
       whatsappClient.sendMessage(jid, { text }),
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
       sendTimeoutMs,
       'Timed out sending message'
     );
   };
+
+  const textWithPreview = ensurePreviewLink(renderedText, feedItem.link);
+  if (sendMode === 'text_only') {
+    const response = await sendText(renderedText, { disableLinkPreview: true });
+    return {
+      response,
+      text: renderedText,
+      media: { type: null, url: null, sent: false, error: null }
+    };
+  }
+
+  if (sendMode === 'link_preview') {
+    const response = await sendText(textWithPreview);
+    return {
+      response,
+      text: textWithPreview,
+      media: { type: null, url: null, sent: false, error: null }
+    };
+  }
 
   const resolved = await resolveImageUrlForFeedItem(options?.supabase, feedItem, allowImages);
   if (allowImages && resolved.url) {
@@ -542,10 +767,10 @@ const sendMessageWithTemplate = async (
     } catch (error) {
       const message = getErrorMessage(error);
       logger.warn({ error, jid, imageUrl: resolved.url }, 'Blocked unsafe image URL');
-      const response = await sendText();
+      const response = await sendText(textWithPreview);
       return {
         response,
-        text,
+        text: textWithPreview,
         media: { type: 'image', url: resolved.url, sent: false, error: message }
       };
     }
@@ -554,7 +779,7 @@ const sendMessageWithTemplate = async (
       const { buffer, mimetype } = await downloadImageBuffer(safeUrl, feedItem.link);
       const content: Record<string, unknown> = {
         image: buffer,
-        caption: text
+        caption: renderedText
       };
       if (mimetype) {
         content.mimetype = mimetype;
@@ -563,6 +788,17 @@ const sendMessageWithTemplate = async (
       const response =
         target.type === 'status'
           ? await withTimeout(
+<<<<<<< HEAD
+              whatsappClient.sendStatusBroadcast(content),
+              sendTimeoutMs,
+              'Timed out sending image status message'
+            )
+          : await withTimeout(
+              whatsappClient.sendMessage(jid, content),
+              sendTimeoutMs,
+              'Timed out sending image message'
+            );
+=======
             whatsappClient.sendStatusBroadcast(content),
             sendTimeoutMs,
             'Timed out sending image status message'
@@ -572,10 +808,11 @@ const sendMessageWithTemplate = async (
             sendTimeoutMs,
             'Timed out sending image message'
           );
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 
       return {
         response,
-        text,
+        text: renderedText,
         media: { type: 'image', url: safeUrl, sent: true, error: null }
       };
     } catch (error) {
@@ -588,11 +825,22 @@ const sendMessageWithTemplate = async (
       try {
         const content: Record<string, unknown> = {
           image: { url: safeUrl },
-          caption: text
+          caption: renderedText
         };
         const response =
           target.type === 'status'
             ? await withTimeout(
+<<<<<<< HEAD
+                whatsappClient.sendStatusBroadcast(content),
+                sendTimeoutMs,
+                'Timed out sending image status message'
+              )
+            : await withTimeout(
+                whatsappClient.sendMessage(jid, content),
+                sendTimeoutMs,
+                'Timed out sending image message'
+              );
+=======
               whatsappClient.sendStatusBroadcast(content),
               sendTimeoutMs,
               'Timed out sending image status message'
@@ -602,10 +850,11 @@ const sendMessageWithTemplate = async (
               sendTimeoutMs,
               'Timed out sending image message'
             );
+>>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 
         return {
           response,
-          text,
+          text: renderedText,
           media: { type: 'image', url: safeUrl, sent: true, error: null }
         };
       } catch (urlError) {
@@ -614,10 +863,10 @@ const sendMessageWithTemplate = async (
           { error: urlError, jid, imageUrl: safeUrl, bufferError: bufferErrorMessage },
           'Failed to send image by URL, falling back to text'
         );
-        const response = await sendText();
+        const response = await sendText(textWithPreview);
         return {
           response,
-          text,
+          text: textWithPreview,
           media: {
             type: 'image',
             url: safeUrl,
@@ -629,10 +878,10 @@ const sendMessageWithTemplate = async (
     }
   }
 
-  const response = await sendText();
+  const response = await sendText(textWithPreview);
   return {
     response,
-    text,
+    text: textWithPreview,
     media: { type: null, url: null, sent: false, error: null }
   };
 };

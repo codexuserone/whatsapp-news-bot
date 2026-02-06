@@ -177,8 +177,13 @@ const TargetsPage = () => {
 
       {/* Quick Import */}
       {isConnected && (
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Card>
+        <div className="space-y-3">
+          <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
+            You can send only to groups (like your test group). Channels are optional and never required.
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Card>
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -188,8 +193,9 @@ const TargetsPage = () => {
                   <div>
                     <p className="font-medium">Groups</p>
                     <p className="text-sm text-muted-foreground">
-                      {availableGroups.length} to import
+                      {availableGroups.length} available to import
                     </p>
+                    <p className="text-xs text-muted-foreground">{counts.group} already saved</p>
                   </div>
                 </div>
                 <Button
@@ -203,7 +209,7 @@ const TargetsPage = () => {
             </CardContent>
           </Card>
 
-          <Card>
+            <Card>
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -213,8 +219,9 @@ const TargetsPage = () => {
                   <div>
                     <p className="font-medium">Channels</p>
                     <p className="text-sm text-muted-foreground">
-                      {availableChannels.length} to import
+                      {availableChannels.length} available to import (optional)
                     </p>
+                    <p className="text-xs text-muted-foreground">{counts.channel} already saved</p>
                     {availableChannels.length === 0 && channelsLimitation && (
                       <p className="text-xs text-muted-foreground max-w-[220px] line-clamp-2">
                         {channelsLimitation}
@@ -233,7 +240,7 @@ const TargetsPage = () => {
             </CardContent>
           </Card>
 
-          <Card>
+            <Card>
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -256,6 +263,7 @@ const TargetsPage = () => {
               </div>
             </CardContent>
           </Card>
+          </div>
         </div>
       )}
 
@@ -305,7 +313,9 @@ const TargetsPage = () => {
               <p className="text-muted-foreground">
                 {targets.length === 0
                   ? 'No targets yet. Import groups from WhatsApp above.'
-                  : 'No targets match your search.'}
+                  : filterType === 'channel'
+                    ? 'No saved channels yet. This is optional - group targets are enough for normal dispatch.'
+                    : 'No targets match your search.'}
               </p>
             </div>
           ) : (

@@ -53,10 +53,12 @@ const redactSensitiveText = (value?: string | null) => {
     .slice(0, 320);
 };
 
-const normalizeNewsletterJid = (value: unknown) => {
+const normalizeNewsletterJid = (value: unknown, options?: { allowNumeric?: boolean }) => {
   const raw = String(value || '').trim();
   if (!raw) return '';
   if (raw.endsWith('@newsletter')) return raw;
+  if (raw.includes('@')) return '';
+  if (!options?.allowNumeric) return '';
   const digits = raw.replace(/[^0-9]/g, '');
   return digits ? `${digits}@newsletter` : '';
 };
@@ -72,9 +74,9 @@ const readTextValue = (value: unknown) => {
   return value.trim();
 };
 
-const extractChannelSummary = (input: unknown): ChannelSummary | null => {
+const extractChannelSummary = (input: unknown, options?: { allowNumeric?: boolean }): ChannelSummary | null => {
   if (typeof input === 'string') {
-    const jid = normalizeNewsletterJid(input);
+    const jid = normalizeNewsletterJid(input, options);
     if (!jid) return null;
     return { id: jid, jid, name: jid, subscribers: 0 };
   }
@@ -82,9 +84,9 @@ const extractChannelSummary = (input: unknown): ChannelSummary | null => {
   if (!input || typeof input !== 'object') return null;
   const record = input as Record<string, unknown>;
   const jid =
-    normalizeNewsletterJid(record.jid) ||
-    normalizeNewsletterJid(record.id) ||
-    normalizeNewsletterJid(record.newsletter_id);
+    normalizeNewsletterJid(record.jid, options) ||
+    normalizeNewsletterJid(record.id, options) ||
+    normalizeNewsletterJid(record.newsletter_id, options);
   if (!jid) return null;
 
   const threadMetadata =
@@ -135,11 +137,11 @@ const extractChannelArray = (input: unknown): unknown[] => {
       const value = resultRecord[key];
       if (Array.isArray(value)) return value;
     }
-    const maybeSingle = extractChannelSummary(resultRecord);
+    const maybeSingle = extractChannelSummary(resultRecord, { allowNumeric: true });
     if (maybeSingle) return [resultRecord];
   }
 
-  const maybeSingle = extractChannelSummary(record);
+  const maybeSingle = extractChannelSummary(record, { allowNumeric: true });
   return maybeSingle ? [record] : [];
 };
 
@@ -1150,7 +1152,7 @@ class WhatsAppClient {
   }
 
   cacheNewsletterChat(chatLike: unknown): void {
-    const channel = extractChannelSummary(chatLike);
+    const channel = extractChannelSummary(chatLike, { allowNumeric: false });
     if (!channel) return;
     const existing = this.newsletterChatCache.get(channel.jid);
     const subscribers = channel.subscribers || existing?.subscribers || 0;
@@ -1179,7 +1181,7 @@ class WhatsAppClient {
   removeNewsletterChats(jidsLike: unknown): void {
     const list = Array.isArray(jidsLike) ? jidsLike : [];
     for (const jidValue of list) {
-      const jid = normalizeNewsletterJid(jidValue);
+      const jid = normalizeNewsletterJid(jidValue, { allowNumeric: false });
       if (!jid) continue;
       this.newsletterChatCache.delete(jid);
     }
@@ -1232,7 +1234,7 @@ class WhatsAppClient {
         const result = await method.call(socket);
         const entries = extractChannelArray(result);
         for (const entry of entries) {
-          const normalized = extractChannelSummary(entry);
+          const normalized = extractChannelSummary(entry, { allowNumeric: true });
           if (!normalized) continue;
           mergeChannel(normalized, 'api');
           this.cacheNewsletterChat(normalized);
@@ -1262,7 +1264,7 @@ class WhatsAppClient {
       for (const channel of toEnrich) {
         try {
           const metadata = await socket.newsletterMetadata('jid', channel.jid);
-          const normalized = extractChannelSummary(metadata);
+          const normalized = extractChannelSummary(metadata, { allowNumeric: true });
           if (!normalized) continue;
           mergeChannel(normalized, 'metadata');
           this.cacheNewsletterChat(normalized);

@@ -303,7 +303,10 @@ const SchedulesPage = () => {
               </div>
 
               <div className="space-y-2">
-                <Label>Targets (Groups, Channels)</Label>
+                <Label>Targets (Groups / Channels / Status)</Label>
+                <p className="text-xs text-muted-foreground">
+                  Group-only is totally fine. You are not required to use channels.
+                </p>
                 <Controller
                   control={form.control}
                   name="target_ids"

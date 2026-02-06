@@ -12,14 +12,16 @@ const STATUS_VARIANTS = {
   queued: 'warning',
   sent: 'success',
   failed: 'destructive',
-  not_queued: 'secondary'
+  not_queued: 'secondary',
+  historical: 'outline'
 };
 
 const STATUS_LABELS = {
   queued: 'Pending',
   sent: 'Sent',
   failed: 'Failed',
-  not_queued: 'New'
+  not_queued: 'New',
+  historical: 'Historical'
 };
 
 const getDeliveryMeta = (item) => {
@@ -78,6 +80,24 @@ const FeedItemsPage = () => {
       .map((schedule) => schedule.feed_id)
       .filter(Boolean)
   );
+
+  const feedCursorById = schedules.reduce((acc, schedule) => {
+    if (!schedule?.active || !schedule?.feed_id) return acc;
+    if (!Array.isArray(schedule.target_ids) || !schedule.target_ids.some((targetId) => activeTargetIds.has(targetId))) {
+      return acc;
+    }
+
+    const cursorCandidate =
+      schedule.last_queued_at || schedule.last_run_at || schedule.created_at || schedule.updated_at || null;
+    if (!cursorCandidate) return acc;
+
+    const key = String(schedule.feed_id);
+    const current = acc.get(key);
+    if (!current || new Date(cursorCandidate).getTime() > new Date(current).getTime()) {
+      acc.set(key, cursorCandidate);
+    }
+    return acc;
+  }, new Map());
 
   const unroutedFeedCounts = items.reduce((acc, item) => {
     if (item.delivery_status !== 'not_queued') return acc;
@@ -151,10 +171,19 @@ const FeedItemsPage = () => {
               <TableBody>
                 {items.map((item) => {
                   const deliveryMeta = getDeliveryMeta(item);
+                  const feedCursor = item.feed_id ? feedCursorById.get(String(item.feed_id)) : null;
+                  const isHistorical =
+                    deliveryMeta.status === 'not_queued' &&
+                    Boolean(feedCursor) &&
+                    new Date(item.created_at || 0).getTime() <= new Date(feedCursor).getTime();
+                  const visualStatus = isHistorical ? 'historical' : deliveryMeta.status;
+                  const visualLabel = STATUS_LABELS[visualStatus] || deliveryMeta.label;
                   const missingAutomation =
                     deliveryMeta.status === 'not_queued' && item.feed_id && !feedsWithAutomation.has(item.feed_id);
                   const summary = missingAutomation
                     ? 'No active automation for this feed'
+                    : isHistorical
+                      ? 'Older item from before the current automation cursor'
                     : formatDeliverySummary(item.delivery, deliveryMeta.status);
                   return (
                     <TableRow key={item.id}>
@@ -205,8 +234,8 @@ const FeedItemsPage = () => {
                         {item.pub_date ? new Date(item.pub_date).toLocaleString() : '—'}
                       </TableCell>
                       <TableCell>
-                        <Badge variant={STATUS_VARIANTS[deliveryMeta.status] || 'secondary'}>
-                          {deliveryMeta.label}
+                        <Badge variant={STATUS_VARIANTS[visualStatus] || 'secondary'}>
+                          {visualLabel}
                         </Badge>
                         <div className="text-xs text-muted-foreground mt-1">{summary}</div>
                       </TableCell>

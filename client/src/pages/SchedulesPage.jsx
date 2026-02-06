@@ -19,12 +19,24 @@ const schema = z.object({
   cron_expression: z.string().optional(),
   timezone: z.string().optional(),
   feed_id: z.string().min(1, 'Feed is required'),
-  target_ids: z.array(z.string()).min(1),
-  template_id: z.string().min(1),
+  target_ids: z.array(z.string()).min(1, 'Select at least one target'),
+  template_id: z.string().min(1, 'Select a template'),
   active: z.boolean().default(true),
   delivery_mode: z.enum(['immediate', 'batch']).default('immediate'),
   batch_times: z.array(z.string()).default(['07:00', '15:00', '22:00'])
 });
+
+const DEFAULT_FORM_VALUES = {
+  name: '',
+  cron_expression: '',
+  timezone: 'UTC',
+  feed_id: '',
+  target_ids: [],
+  template_id: '',
+  active: true,
+  delivery_mode: 'immediate',
+  batch_times: ['07:00', '15:00', '22:00']
+};
 
 const normalizeBatchTimes = (value) => {
   const parts = Array.isArray(value)
@@ -54,17 +66,7 @@ const SchedulesPage = () => {
 
   const form = useForm({
     resolver: zodResolver(schema),
-    defaultValues: {
-      name: '',
-      cron_expression: '',
-      timezone: 'UTC',
-      feed_id: '',
-      target_ids: [],
-      template_id: '',
-      active: true,
-      delivery_mode: 'immediate',
-      batch_times: ['07:00', '15:00', '22:00']
-    }
+    defaultValues: DEFAULT_FORM_VALUES
   });
 
   const deliveryMode = form.watch('delivery_mode');
@@ -82,6 +84,7 @@ const SchedulesPage = () => {
         delivery_mode: active.delivery_mode || 'immediate',
         batch_times: normalizeBatchTimes(active.batch_times || ['07:00', '15:00', '22:00'])
       });
+      form.clearErrors();
     }
   }, [active, form]);
 
@@ -91,7 +94,8 @@ const SchedulesPage = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['schedules'] });
       setActive(null);
-      form.reset();
+      form.clearErrors();
+      form.reset(DEFAULT_FORM_VALUES);
     },
     onError: (error) => alert(`Failed to save schedule: ${error?.message || 'Unknown error'}`)
   });
@@ -103,17 +107,30 @@ const SchedulesPage = () => {
   });
 
   const dispatchSchedule = useMutation({
-    mutationFn: (id) => api.post(`/api/schedules/${id}/dispatch`),
-    onSuccess: (data) => {
+    mutationFn: async (id) => {
+      const queueResult = await api.post(`/api/schedules/${id}/queue-latest`);
+      const dispatchResult = await api.post(`/api/schedules/${id}/dispatch`);
+      return { queueResult, dispatchResult };
+    },
+    onSuccess: ({ queueResult, dispatchResult }) => {
       queryClient.invalidateQueries({ queryKey: ['logs'] });
       queryClient.invalidateQueries({ queryKey: ['queue'] });
+      queryClient.invalidateQueries({ queryKey: ['feed-items'] });
       let message;
-      if (data?.sent > 0) {
-        message = `Successfully sent ${data.sent} message${data.sent !== 1 ? 's' : ''}`;
-      } else if (data?.skipped && data?.reason) {
-        message = `Skipped: ${data.reason}`;
+      const sent = Number(dispatchResult?.sent || 0);
+      const queued = Number(dispatchResult?.queued || 0);
+      if (sent > 0) {
+        message = `Successfully sent ${sent} message${sent !== 1 ? 's' : ''}`;
+      } else if (dispatchResult?.skipped && dispatchResult?.reason) {
+        message = `Skipped: ${dispatchResult.reason}`;
+      } else if (dispatchResult?.error) {
+        message = `Dispatch failed: ${dispatchResult.error}`;
+      } else if (queueResult?.reason) {
+        message = `No new messages queued: ${queueResult.reason}`;
+      } else if (queued > 0) {
+        message = `Queued ${queued} message${queued !== 1 ? 's' : ''}, but nothing was sent in this run.`;
       } else {
-        message = 'No messages were sent. Refresh the feed first to queue items, then dispatch.';
+        message = 'No new feed items available to send right now.';
       }
       alert(message);
     },
@@ -123,6 +140,7 @@ const SchedulesPage = () => {
   });
 
   const onSubmit = (values) => {
+    form.clearErrors();
     const batchTimes = normalizeBatchTimes(values.batch_times);
     saveSchedule.mutate({
       name: values.name,
@@ -162,7 +180,7 @@ const SchedulesPage = () => {
           </CardHeader>
           <CardContent>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-              {Object.keys(form.formState.errors).length > 0 && (
+              {form.formState.submitCount > 0 && Object.keys(form.formState.errors).length > 0 && (
                 <div className="rounded-lg border-2 border-destructive bg-destructive/10 p-4 text-sm text-destructive">
                   <p className="font-semibold mb-2 text-base">Please complete all required fields:</p>
                   <ul className="list-disc list-inside space-y-1">
@@ -240,7 +258,10 @@ const SchedulesPage = () => {
                     return (
                       <Select
                         value={value}
-                        onValueChange={(next) => field.onChange(next === '__none' ? '' : next)}
+                        onValueChange={(next) => {
+                          field.onChange(next === '__none' ? '' : next);
+                          form.clearErrors('feed_id');
+                        }}
                       >
                         <SelectTrigger id="feed_id">
                           <SelectValue placeholder="Select feed" />
@@ -269,34 +290,38 @@ const SchedulesPage = () => {
                 <Controller
                   control={form.control}
                   name="target_ids"
-                  render={({ field }) => (
-                    <div className="rounded-lg border p-3 max-h-48 overflow-y-auto space-y-2">
-                      {activeTargets.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No targets available. Add targets first.</p>
-                      ) : (
-                        activeTargets.map((target) => (
-                          <label key={target.id} className="flex items-center gap-2 text-sm cursor-pointer">
-                            <Checkbox
-                              checked={field.value.includes(target.id)}
-                              onCheckedChange={(checked) => {
-                                const next = new Set(field.value);
-                                if (checked === true) {
-                                  next.add(target.id);
-                                } else {
-                                  next.delete(target.id);
-                                }
-                                field.onChange(Array.from(next));
-                              }}
-                            />
-                            <span>{target.name}</span>
-                            <Badge variant="secondary" className="ml-auto">
-                              {target.type}
-                            </Badge>
-                          </label>
-                        ))
-                      )}
-                    </div>
-                  )}
+                  render={({ field }) => {
+                    const selected = Array.isArray(field.value) ? field.value : [];
+                    return (
+                      <div className="rounded-lg border p-3 max-h-48 overflow-y-auto space-y-2">
+                        {activeTargets.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">No targets available. Add targets first.</p>
+                        ) : (
+                          activeTargets.map((target) => (
+                            <label key={target.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                              <Checkbox
+                                checked={selected.includes(target.id)}
+                                onCheckedChange={(checked) => {
+                                  const next = new Set(selected);
+                                  if (checked === true) {
+                                    next.add(target.id);
+                                  } else {
+                                    next.delete(target.id);
+                                  }
+                                  field.onChange(Array.from(next));
+                                  form.clearErrors('target_ids');
+                                }}
+                              />
+                              <span>{target.name}</span>
+                              <Badge variant="secondary" className="ml-auto">
+                                {target.type}
+                              </Badge>
+                            </label>
+                          ))
+                        )}
+                      </div>
+                    );
+                  }}
                 />
               </div>
 
@@ -310,7 +335,10 @@ const SchedulesPage = () => {
                     return (
                       <Select
                         value={value}
-                        onValueChange={(next) => field.onChange(next === '__none' ? '' : next)}
+                        onValueChange={(next) => {
+                          field.onChange(next === '__none' ? '' : next);
+                          form.clearErrors('template_id');
+                        }}
                       >
                         <SelectTrigger id="template_id">
                           <SelectValue placeholder="Select template" />
@@ -352,7 +380,7 @@ const SchedulesPage = () => {
                   {active ? 'Update Automation' : 'Create Automation'}
                 </Button>
                 {active && (
-                  <Button type="button" variant="outline" onClick={() => { setActive(null); form.reset(); }}>
+                  <Button type="button" variant="outline" onClick={() => { setActive(null); form.clearErrors(); form.reset(DEFAULT_FORM_VALUES); }}>
                     Cancel
                   </Button>
                 )}

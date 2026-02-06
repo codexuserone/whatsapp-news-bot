@@ -7,6 +7,7 @@ const withTimeout = require('../utils/withTimeout');
 const axios = require('axios');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { getErrorMessage } = require('../utils/errorUtils');
+const { getSupabaseClient } = require('../db/supabase');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const DEFAULT_USER_AGENT =
@@ -164,6 +165,36 @@ const whatsappRoutes = () => {
         ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
         : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 };
       confirmation = await whatsapp.confirmSend(messageId, timeouts);
+    }
+
+    try {
+      const supabase = getSupabaseClient();
+      if (supabase) {
+        let targetId: string | null = null;
+        const { data: target } = await supabase
+          .from('targets')
+          .select('id')
+          .eq('phone_number', normalizedJid)
+          .limit(1)
+          .maybeSingle();
+        if (target?.id) {
+          targetId = String(target.id);
+        }
+
+        await supabase.from('message_logs').insert({
+          schedule_id: null,
+          feed_item_id: null,
+          target_id: targetId,
+          template_id: null,
+          message_content: message,
+          status: 'sent',
+          error_message: null,
+          whatsapp_message_id: messageId || null,
+          sent_at: new Date().toISOString()
+        });
+      }
+    } catch {
+      // Best effort only: test-message logging should not fail the send endpoint.
     }
 
     res.json({ ok: true, messageId, confirmation });

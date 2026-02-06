@@ -4,6 +4,23 @@ import * as dns from 'dns';
 import dotenv from 'dotenv';
 import { Client } from 'pg';
 
+type ClientConfig = {
+  user: string;
+  password: string;
+  host: string;
+  port: number;
+  database: string;
+  ssl: { rejectUnauthorized: boolean };
+  connectionTimeoutMillis: number;
+  keepAlive: boolean;
+};
+
+type ConnectionCandidate = {
+  label: string;
+  summary: string;
+  config: ClientConfig;
+};
+
 const preferIpv4 = () => {
   try {
     const setter = (dns as unknown as { setDefaultResultOrder?: (order: string) => void }).setDefaultResultOrder;
@@ -110,6 +127,156 @@ const resolveClientConfig = async (databaseUrl: string) => {
   return config;
 };
 
+const unique = (values: string[]) => {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of values) {
+    const next = String(value || '').trim();
+    if (!next || seen.has(next)) continue;
+    seen.add(next);
+    output.push(next);
+  }
+  return output;
+};
+
+const redactConnectionString = (value: string) => {
+  try {
+    const parsed = new URL(value);
+    if (parsed.password) parsed.password = '***';
+    return parsed.toString();
+  } catch {
+    return value;
+  }
+};
+
+const extractSupabaseRef = (databaseUrl: string) => {
+  try {
+    const parsed = new URL(databaseUrl);
+    const hostMatch = parsed.hostname.match(/^db\.([a-z0-9]+)\.supabase\.co$/i);
+    if (hostMatch?.[1]) {
+      return hostMatch[1].toLowerCase();
+    }
+
+    const userMatch = decodeURIComponent(parsed.username || '').match(/^postgres\.([a-z0-9]+)$/i);
+    if (userMatch?.[1]) {
+      return userMatch[1].toLowerCase();
+    }
+  } catch {
+    // ignore
+  }
+
+  const supabaseUrl = String(process.env.SUPABASE_URL || '').trim();
+  if (supabaseUrl) {
+    try {
+      const parsedSupabaseUrl = new URL(supabaseUrl);
+      const ref = parsedSupabaseUrl.hostname.split('.')[0];
+      if (ref) return ref.toLowerCase();
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
+};
+
+const buildPoolerFallbackUrls = (databaseUrl: string) => {
+  let parsed: URL;
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    return [] as Array<{ label: string; url: string }>;
+  }
+
+  const isDirectSupabaseHost = /^db\.[a-z0-9]+\.supabase\.co$/i.test(parsed.hostname);
+  if (!isDirectSupabaseHost) {
+    return [] as Array<{ label: string; url: string }>;
+  }
+
+  const ref = extractSupabaseRef(databaseUrl);
+  if (!ref) {
+    return [] as Array<{ label: string; url: string }>;
+  }
+
+  const poolerPort = Number(process.env.SUPABASE_POOLER_PORT || 6543);
+  const explicitPoolerUrl = String(process.env.SUPABASE_POOLER_URL || '').trim();
+  const explicitPoolerHost = String(process.env.SUPABASE_POOLER_HOST || '').trim();
+  const explicitPoolerRegion = String(process.env.SUPABASE_POOLER_REGION || '').trim();
+
+  const hostCandidates = unique([
+    explicitPoolerHost,
+    explicitPoolerRegion ? `aws-0-${explicitPoolerRegion}.pooler.supabase.com` : '',
+    'aws-0-us-west-2.pooler.supabase.com',
+    'aws-0-us-east-1.pooler.supabase.com',
+    'aws-0-eu-west-1.pooler.supabase.com'
+  ]);
+
+  const userCandidates = unique([
+    String(process.env.SUPABASE_POOLER_USER || ''),
+    `postgres.${ref}`,
+    decodeURIComponent(parsed.username || ''),
+    'postgres'
+  ]);
+
+  const out: Array<{ label: string; url: string }> = [];
+  if (explicitPoolerUrl) {
+    out.push({
+      label: 'SUPABASE_POOLER_URL',
+      url: explicitPoolerUrl
+    });
+  }
+
+  for (const host of hostCandidates) {
+    for (const user of userCandidates) {
+      try {
+        const candidate = new URL(databaseUrl);
+        candidate.hostname = host;
+        candidate.port = String(poolerPort);
+        candidate.username = user;
+        if (!candidate.searchParams.get('sslmode')) {
+          candidate.searchParams.set('sslmode', 'require');
+        }
+        out.push({
+          label: `pooler ${host} as ${user}`,
+          url: candidate.toString()
+        });
+      } catch {
+        // ignore invalid candidate
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  return out.filter((entry) => {
+    if (!entry.url || seen.has(entry.url)) return false;
+    seen.add(entry.url);
+    return true;
+  });
+};
+
+const buildConnectionCandidates = async (databaseUrl: string) => {
+  const fallbacks = buildPoolerFallbackUrls(databaseUrl);
+  const candidates: Array<{ label: string; url: string }> = [
+    { label: 'primary', url: databaseUrl },
+    ...fallbacks
+  ];
+
+  const output: ConnectionCandidate[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of candidates) {
+    if (!candidate.url || seen.has(candidate.url)) continue;
+    seen.add(candidate.url);
+    const config = (await resolveClientConfig(candidate.url)) as ClientConfig;
+    output.push({
+      label: candidate.label,
+      summary: redactConnectionString(candidate.url),
+      config
+    });
+  }
+
+  return output;
+};
+
 const runMigrations = async () => {
   preferIpv4();
   loadEnv();
@@ -136,11 +303,34 @@ const runMigrations = async () => {
     throw new Error(`No .sql files found in ${migrationsDir}`);
   }
 
-  const clientConfig = await resolveClientConfig(databaseUrl);
+  const candidates = await buildConnectionCandidates(databaseUrl);
+  let client: Client | null = null;
+  let lastError: unknown = null;
 
-  const client = new Client(clientConfig);
+  for (const candidate of candidates) {
+    process.stdout.write(`Connecting with ${candidate.label}: ${candidate.summary}\n`);
+    const attempt = new Client(candidate.config);
+    try {
+      await attempt.connect();
+      client = attempt;
+      process.stdout.write(`Connected using ${candidate.label}.\n`);
+      break;
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      process.stdout.write(`Connection failed for ${candidate.label}: ${message}\n`);
+      try {
+        await attempt.end();
+      } catch {
+        // ignore
+      }
+    }
+  }
 
-  await client.connect();
+  if (!client) {
+    throw lastError instanceof Error ? lastError : new Error('Unable to connect to database for migrations');
+  }
+
   try {
     await client.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (

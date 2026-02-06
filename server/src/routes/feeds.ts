@@ -12,6 +12,71 @@ const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const feedsRoutes = () => {
   const router = express.Router();
 
+  const normalizeFeedUrl = (value: unknown) => {
+    const raw = String(value || '').trim();
+    if (!raw) return raw;
+    try {
+      const parsed = new URL(raw);
+      parsed.hash = '';
+      if ((parsed.protocol === 'http:' && parsed.port === '80') || (parsed.protocol === 'https:' && parsed.port === '443')) {
+        parsed.port = '';
+      }
+      if (parsed.pathname !== '/' && parsed.pathname.endsWith('/')) {
+        parsed.pathname = parsed.pathname.replace(/\/+$/, '/');
+      }
+      return parsed.toString();
+    } catch {
+      return raw;
+    }
+  };
+
+  const toFeedTestError = (error: unknown) => {
+    const status = getErrorStatus(error);
+    const rawMessage = getErrorMessage(error, 'Failed to fetch feed');
+    const message = rawMessage.toLowerCase();
+
+    if (status === 403) {
+      return {
+        status,
+        error:
+          'Feed host blocked the request (HTTP 403). This feed likely requires browser headers or blocks bot traffic. Try an alternate feed endpoint.'
+      };
+    }
+
+    if (status === 429 || message.includes('too many requests')) {
+      return {
+        status,
+        error: 'Feed host rate-limited this request (HTTP 429). Wait a bit and retry.'
+      };
+    }
+
+    if (message.includes('eai_again') || message.includes('enotfound')) {
+      return {
+        status: 400,
+        error: 'DNS resolution failed for this host. The domain may be temporarily unreachable from the server.'
+      };
+    }
+
+    if (message.includes('etimedout') || message.includes('timeout')) {
+      return {
+        status: 504,
+        error: 'Feed request timed out. The source may be slow or blocking requests from the server.'
+      };
+    }
+
+    if (message.includes('no items found in feed')) {
+      return {
+        status: 404,
+        error: 'No items were detected in the feed response. Verify the exact RSS/Atom/JSON feed URL.'
+      };
+    }
+
+    return {
+      status,
+      error: rawMessage
+    };
+  };
+
   const runAsync = (label: string, work: () => Promise<void>) => {
     setImmediate(() => {
       work().catch((error) => {
@@ -83,7 +148,8 @@ const feedsRoutes = () => {
       });
     } catch (error) {
       console.error('Error testing feed:', error);
-      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error, 'Failed to fetch feed') });
+      const mapped = toFeedTestError(error);
+      res.status(mapped.status).json({ error: mapped.error });
     }
   });
 
@@ -104,9 +170,25 @@ const feedsRoutes = () => {
 
   router.post('/', validate(schemas.feed), async (req: Request, res: Response) => {
     try {
+      const payload = { ...req.body, url: normalizeFeedUrl(req.body.url) };
+
+      const { data: existing, error: existingError } = await getDb()
+        .from('feeds')
+        .select('id, name, url')
+        .eq('url', payload.url)
+        .limit(1);
+
+      if (existingError) throw existingError;
+      if (existing && existing.length > 0) {
+        return res.status(409).json({
+          error: `Feed already exists: ${existing[0]?.name || existing[0]?.url || payload.url}`,
+          existing: existing[0]
+        });
+      }
+
       const { data: feed, error } = await getDb()
         .from('feeds')
-        .insert(req.body)
+        .insert(payload)
         .select()
         .single();
       
@@ -121,9 +203,26 @@ const feedsRoutes = () => {
 
   router.put('/:id', validate(schemas.feed), async (req: Request, res: Response) => {
     try {
+      const payload = { ...req.body, url: normalizeFeedUrl(req.body.url) };
+
+      const { data: existing, error: existingError } = await getDb()
+        .from('feeds')
+        .select('id, name, url')
+        .eq('url', payload.url)
+        .neq('id', req.params.id)
+        .limit(1);
+
+      if (existingError) throw existingError;
+      if (existing && existing.length > 0) {
+        return res.status(409).json({
+          error: `Feed already exists: ${existing[0]?.name || existing[0]?.url || payload.url}`,
+          existing: existing[0]
+        });
+      }
+
       const { data: feed, error } = await getDb()
         .from('feeds')
-        .update(req.body)
+        .update(payload)
         .eq('id', req.params.id)
         .select()
         .single();

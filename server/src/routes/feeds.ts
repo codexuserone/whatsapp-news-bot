@@ -106,7 +106,8 @@ const feedsRoutes = () => {
       try {
         await assertSafeOutboundUrl(String(url));
       } catch (error) {
-        return res.status(400).json({ error: getErrorMessage(error, 'URL is not allowed') });
+        const mapped = toFeedTestError(error);
+        return res.status(mapped.status).json({ error: mapped.error });
       }
 
       const testFeed = {

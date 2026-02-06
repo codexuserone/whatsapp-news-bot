@@ -170,6 +170,147 @@ const toStringValue = (value: unknown): string | undefined => {
   return String(value);
 };
 
+const toTextLike = (value: unknown): string | undefined => {
+  const direct = toTextValue(value);
+  if (direct !== undefined) return direct;
+  if (!value || typeof value !== 'object') return undefined;
+  return (
+    toTextValue(getPath(value as Record<string, unknown>, 'rendered')) ||
+    toTextValue(getPath(value as Record<string, unknown>, 'url')) ||
+    toTextValue(getPath(value as Record<string, unknown>, 'href')) ||
+    toTextValue(getPath(value as Record<string, unknown>, 'name'))
+  );
+};
+
+const extractJsonRawFields = (item: Record<string, unknown>, imageUrl?: string) => {
+  const raw: Record<string, unknown> = {};
+  const set = (key: string, value: unknown) => {
+    const text = toTextLike(value);
+    if (text === undefined || text === '') return;
+    raw[key] = text;
+  };
+
+  // WordPress REST API common fields
+  set('wp_id', getPath(item, 'id'));
+  set('wp_slug', getPath(item, 'slug'));
+  set('wp_type', getPath(item, 'type'));
+  set('wp_status', getPath(item, 'status'));
+  set('wp_featured_media', getPath(item, 'featured_media'));
+  set('wp_date', getPath(item, 'date'));
+  set('wp_modified', getPath(item, 'modified'));
+  if (imageUrl) {
+    raw.wp_featured_image = imageUrl;
+  }
+
+  const tags = getPath(item, 'tags');
+  if (Array.isArray(tags) && tags.length) {
+    raw.wp_tags = tags.map((value) => String(value)).join(', ');
+  }
+
+  const categories = getPath(item, 'categories');
+  if (Array.isArray(categories) && categories.length) {
+    raw.wp_categories = categories.map((value) => String(value)).join(', ');
+  }
+
+  // Generic scalar fields from JSON feeds
+  const reserved = new Set([
+    'id',
+    'guid',
+    'title',
+    'description',
+    'summary',
+    'content',
+    'link',
+    'url',
+    'author',
+    'image',
+    'image_url',
+    'imageUrl',
+    'categories',
+    'tags'
+  ]);
+
+  for (const [key, value] of Object.entries(item || {})) {
+    if (!/^[a-zA-Z_]\w{0,63}$/.test(key)) continue;
+    if (reserved.has(key)) continue;
+    if (value == null) continue;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      raw[key] = value;
+    }
+  }
+
+  return raw;
+};
+
+const mapJsonFeedItem = (feed: FeedConfig, item: Record<string, unknown>): FeedItemResult => {
+  const rawUrl =
+    getPath(item, (feed.parseConfig?.linkPath as string) || 'link') ||
+    getPath(item, 'url') ||
+    getPath(item, 'link') ||
+    getPath(item, 'external_url') ||
+    getPath(item, 'permalink') ||
+    getPath(item, 'guid.rendered') ||
+    getPath(item, 'guid');
+
+  const url =
+    toTextLike(rawUrl) ||
+    toTextLike(getPath(rawUrl as Record<string, unknown>, 'url')) ||
+    toTextLike(getPath(rawUrl as Record<string, unknown>, 'href'));
+
+  const guidRaw = getPath(item, 'id') || getPath(item, 'guid') || url;
+
+  const title =
+    toTextLike(getPath(item, (feed.parseConfig?.titlePath as string) || 'title')) ||
+    toTextLike(getPath(item, 'title.rendered'));
+
+  const description =
+    toTextLike(getPath(item, (feed.parseConfig?.descriptionPath as string) || 'description')) ||
+    toTextLike(getPath(item, 'excerpt.rendered')) ||
+    toTextLike(getPath(item, 'summary'));
+
+  const content =
+    toTextLike(getPath(item, 'content.rendered')) ||
+    toTextLike(getPath(item, 'content')) ||
+    toTextLike(getPath(item, 'content_html')) ||
+    toTextLike(getPath(item, 'content_text'));
+
+  const imageCandidate = pickFirstUrl(
+    toTextLike(getPath(item, (feed.parseConfig?.imagePath as string) || 'image')),
+    toTextLike(getPath(item, 'image_url')),
+    toTextLike(getPath(item, 'imageUrl')),
+    toTextLike(getPath(item, 'image.url')),
+    toTextLike(getPath(item, 'image.href')),
+    toTextLike(getPath(item, 'thumbnail')),
+    toTextLike(getPath(item, 'thumbnail_url')),
+    toTextLike(getPath(item, 'featured_image')),
+    toTextLike(getPath(item, 'banner_image')),
+    toTextLike(getPath(item, 'yoast_head_json.og_image[0].url')),
+    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].source_url')),
+    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.full.source_url'))
+  );
+
+  return {
+    guid: toStringValue(guidRaw) || `${feed.url}-${Date.now()}-${Math.random()}`,
+    title,
+    url: removeUtm(String(url || '')),
+    description,
+    content,
+    author: toTextLike(getPath(item, 'author.name')) || toTextLike(getPath(item, 'author')),
+    imageUrl: imageCandidate,
+    publishedAt:
+      toTextLike(getPath(item, 'date_published')) ||
+      toTextLike(getPath(item, 'date')) ||
+      toTextLike(getPath(item, 'pubDate')) ||
+      toTextLike(getPath(item, 'publishedAt')),
+    categories: Array.isArray(getPath(item, 'tags'))
+      ? (getPath(item, 'tags') as unknown[]).map((value) => String(value))
+      : Array.isArray(getPath(item, 'categories'))
+        ? (getPath(item, 'categories') as unknown[]).map((value) => String(value))
+        : [],
+    raw: extractJsonRawFields(item, imageCandidate)
+  };
+};
+
 const fetchRssItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
   try {
     const data = await parser.parseURL(feed.url);
@@ -206,12 +347,14 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
   const headers: Record<string, string> = {};
   if (feed.etag) headers['If-None-Match'] = String(feed.etag);
   if (feed.last_modified) headers['If-Modified-Since'] = String(feed.last_modified);
-  headers['User-Agent'] = DEFAULT_USER_AGENT;
-  headers['Accept'] = 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.7';
+  // User Agent: Pretend to be Chrome to avoid blocking
+  headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8';
 
   const response = await axios.get(feed.url, {
-    timeout: 15000,
+    timeout: 20000,
     headers,
+    responseType: 'arraybuffer', // CRITICAL: Get raw bytes to handle encoding manually
     validateStatus: (status: number) => (status >= 200 && status < 300) || status === 304
   });
 
@@ -227,7 +370,12 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
     return { items: [], meta };
   }
 
-  const data = await parser.parseString(String(response.data || ''));
+  // Convert buffer to string, handling encoding if possible
+  const buffer = response.data;
+  const decoder = new TextDecoder('utf-8'); // Default to utf-8
+  const xmlString = decoder.decode(buffer);
+
+  const data = await parser.parseString(xmlString);
   const items = (data.items || []).map((item: Record<string, unknown>) => {
     const rssItem = item as Record<string, unknown> & {
       enclosure?: { url?: string };
@@ -275,34 +423,7 @@ const fetchJsonItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
     const itemsPath = (feed.parseConfig?.itemsPath as string) || 'items';
     const itemsRaw = getPath(json as Record<string, unknown>, itemsPath);
     const items = Array.isArray(itemsRaw) ? itemsRaw : [];
-    return (items as Record<string, unknown>[]).map((item) => {
-      const url =
-        getPath(item, (feed.parseConfig?.linkPath as string) || 'link') || getPath(item, 'url');
-      const guidRaw = getPath(item, 'id') || getPath(item, 'guid') || url;
-      return {
-        guid: toStringValue(guidRaw) || `${feed.url}-${Date.now()}-${Math.random()}`,
-        title: toStringValue(getPath(item, (feed.parseConfig?.titlePath as string) || 'title')),
-        url: removeUtm(String(url || '')),
-        description:
-          toStringValue(getPath(item, (feed.parseConfig?.descriptionPath as string) || 'description')) ||
-          toStringValue(getPath(item, 'summary')),
-        content:
-          toStringValue(getPath(item, 'content')) ||
-          toStringValue(getPath(item, 'content_html')) ||
-          toStringValue(getPath(item, 'content_text')),
-        author:
-          toStringValue(getPath(item, 'author')) || toStringValue(getPath(item, 'author.name')),
-        imageUrl:
-          toStringValue(getPath(item, (feed.parseConfig?.imagePath as string) || 'image')) ||
-          toStringValue(getPath(item, 'banner_image')),
-        publishedAt:
-          toStringValue(getPath(item, 'date_published')) ||
-          toStringValue(getPath(item, 'date')) ||
-          toStringValue(getPath(item, 'pubDate')) ||
-          toStringValue(getPath(item, 'publishedAt')),
-        categories: (getPath(item, 'tags') as string[]) || (getPath(item, 'categories') as string[]) || []
-      };
-    });
+    return (items as Record<string, unknown>[]).map((item) => mapJsonFeedItem(feed, item));
   } catch (error) {
     console.error(`Error fetching JSON feed ${feed.url}:`, error instanceof Error ? error.message : String(error));
     throw error;
@@ -338,55 +459,7 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
   const json = response.data;
   const itemsPath = (feed.parseConfig?.itemsPath as string) || 'items';
   const items = extractJsonItemsArray(json, itemsPath);
-  const mapped = (items as Record<string, unknown>[]).map((item) => {
-    const rawUrl =
-      getPath(item, (feed.parseConfig?.linkPath as string) || 'link') ||
-      getPath(item, 'url') ||
-      getPath(item, 'link') ||
-      getPath(item, 'external_url') ||
-      getPath(item, 'permalink');
-    const url =
-      toTextValue(rawUrl) ||
-      toTextValue(getPath(rawUrl as Record<string, unknown>, 'url')) ||
-      toTextValue(getPath(rawUrl as Record<string, unknown>, 'href'));
-    const guidRaw = getPath(item, 'id') || getPath(item, 'guid') || url;
-    const imageCandidate = pickFirstUrl(
-      toTextValue(getPath(item, (feed.parseConfig?.imagePath as string) || 'image')),
-      toTextValue(getPath(item, 'image_url')),
-      toTextValue(getPath(item, 'imageUrl')),
-      toTextValue(getPath(item, 'image.url')),
-      toTextValue(getPath(item, 'image.href')),
-      toTextValue(getPath(item, 'thumbnail')),
-      toTextValue(getPath(item, 'thumbnail_url')),
-      toTextValue(getPath(item, 'featured_image')),
-      toTextValue(getPath(item, 'banner_image'))
-    );
-    return {
-      guid: toStringValue(guidRaw) || `${feed.url}-${Date.now()}-${Math.random()}`,
-      title: toTextValue(getPath(item, (feed.parseConfig?.titlePath as string) || 'title')),
-      url: removeUtm(String(url || '')),
-      description:
-        toTextValue(getPath(item, (feed.parseConfig?.descriptionPath as string) || 'description')) ||
-        toTextValue(getPath(item, 'summary')),
-      content:
-        toTextValue(getPath(item, 'content')) ||
-        toTextValue(getPath(item, 'content_html')) ||
-        toTextValue(getPath(item, 'content_text')),
-      author:
-        toTextValue(getPath(item, 'author.name')) || toTextValue(getPath(item, 'author')),
-      imageUrl: imageCandidate,
-      publishedAt:
-        toTextValue(getPath(item, 'date_published')) ||
-        toTextValue(getPath(item, 'date')) ||
-        toTextValue(getPath(item, 'pubDate')) ||
-        toTextValue(getPath(item, 'publishedAt')),
-      categories: Array.isArray(getPath(item, 'tags'))
-        ? (getPath(item, 'tags') as unknown[]).map((value) => String(value))
-        : Array.isArray(getPath(item, 'categories'))
-          ? (getPath(item, 'categories') as unknown[]).map((value) => String(value))
-          : []
-    };
-  });
+  const mapped = (items as Record<string, unknown>[]).map((item) => mapJsonFeedItem(feed, item));
 
   return { items: mapped, meta };
 };
@@ -478,4 +551,4 @@ module.exports = {
   applyCleaning,
   stripHtml
 };
-export {};
+export { };

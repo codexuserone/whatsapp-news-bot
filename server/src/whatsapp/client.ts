@@ -19,6 +19,15 @@ type MessageStatusSnapshot = {
   updatedAtMs: number;
 };
 
+const redactSensitiveText = (value?: string | null) => {
+  const text = String(value || '');
+  if (!text) return '';
+  return text
+    .replace(/\b\d{8,15}\b/g, '[redacted-number]')
+    .replace(/(<stream:error[^>]*>)[\s\S]*?(<\/stream:error>)/gi, '$1[redacted]$2')
+    .slice(0, 320);
+};
+
 class WhatsAppClient {
   socket: WASocket | null;
   status: WhatsAppStatus;
@@ -70,7 +79,9 @@ class WhatsAppClient {
   recentSentMessages: Map<string, proto.IWebMessageInfo>;
   recentMessageStatuses: Map<string, MessageStatusSnapshot>;
   meJid: string | null;
+  meJid: string | null;
   meName: string | null;
+  hasConnectedOnce: boolean;
 
   constructor() {
     this.socket = null;
@@ -102,6 +113,7 @@ class WhatsAppClient {
     this.recentMessageStatuses = new Map();
     this.meJid = null;
     this.meName = null;
+    this.hasConnectedOnce = false;
   }
 
   async init(): Promise<void> {
@@ -120,7 +132,7 @@ class WhatsAppClient {
   setupErrorHandlers(): void {
     if (!this.socket || this.processErrorHandlersBound) return;
     this.processErrorHandlersBound = true;
-    
+
     // Handle process-level uncaught exceptions from crypto errors
     const handleUncaught = async (err: Error) => {
       // Check if it's a crypto/auth error
@@ -480,7 +492,7 @@ class WhatsAppClient {
             logger.warn({ holder: lease.ownerId }, 'Lease held, attempting auto-takeover...');
             this.status = 'connecting';
             this.lastError = null; // Don't show confusing messages to users
-            
+
             try {
               if (authStore.forceAcquireLease) {
                 const takeover = await authStore.forceAcquireLease(this.instanceId, 90_000);
@@ -530,7 +542,7 @@ class WhatsAppClient {
       } = await loadBaileys();
 
       const { state, saveCreds } = authStore;
-      
+
       const now = Date.now();
       const versionTtlMs = 6 * 60 * 60 * 1000;
       const shouldRefreshVersion =
@@ -591,7 +603,7 @@ class WhatsAppClient {
       }
 
       this.socket = makeWASocket(socketConfig);
-      
+
       this.setupErrorHandlers();
 
       const socket = this.socket;
@@ -601,7 +613,7 @@ class WhatsAppClient {
 
       socket.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
-        
+
         if (qr) {
           try {
             this.qrCode = await qrcode.toDataURL(qr);
@@ -630,6 +642,7 @@ class WhatsAppClient {
           this.reconnectAttempts = 0;
           this.conflictAttempts = 0; // Reset conflict counter on successful connection
           this.isAuthCorrupted = false;
+          this.hasConnectedOnce = true;
           this.lastSenderKeyResetAt = null;
           this.lastKeyCacheResetAt = null;
           try {
@@ -662,7 +675,7 @@ class WhatsAppClient {
           } else {
             this.lastError = reason || 'Connection closed';
           }
-          
+
           logger.warn({ statusCode, reason }, 'WhatsApp connection closed');
 
           // Handle specific disconnect reasons
@@ -687,7 +700,7 @@ class WhatsAppClient {
           // Connection conflict - another device logged in
           if (statusCode === 440 || reason?.includes('conflict')) {
             this.conflictAttempts = (this.conflictAttempts || 0) + 1;
-            
+
             if (this.conflictAttempts > 3) {
               // After 3 conflict attempts, stay disconnected to prevent fighting
               logger.error('Too many connection conflicts, staying disconnected. Another instance is likely active.');
@@ -695,7 +708,7 @@ class WhatsAppClient {
               this.lastError = 'Another WhatsApp instance is active. If this persists, click Hard Refresh.';
               return;
             }
-            
+
             logger.warn({ attempt: this.conflictAttempts }, 'Connection conflict detected - another session is active, will retry with backoff');
             this.status = 'connecting';
             this.lastError = null; // Don't show confusing message
@@ -703,7 +716,7 @@ class WhatsAppClient {
             const baseDelay = Math.min(15000 * Math.pow(2, this.conflictAttempts - 1), 60000);
             const jitter = Math.random() * 5000; // 0-5s random delay
             const delay = baseDelay + jitter;
-            logger.info({ delay: Math.round(delay/1000) }, 'Scheduling reconnect with jitter');
+            logger.info({ delay: Math.round(delay / 1000) }, 'Scheduling reconnect with jitter');
             this.scheduleReconnect(delay);
             return;
           }
@@ -787,7 +800,7 @@ class WhatsAppClient {
       const message = error instanceof Error ? error.message : String(error);
       this.lastError = message;
       this.status = 'error';
-      
+
       // If it's a crypto/auth error, clear state and retry
       if (this.isAuthStateCorrupted(message)) {
         logger.warn('Auth state corrupted, clearing and retrying');
@@ -830,15 +843,15 @@ class WhatsAppClient {
     timeoutMs = 15000
   ): Promise<
     | {
-        jid: string;
-        name: string;
-        size: number;
-        announce: boolean;
-        restrict: boolean;
-        ephemeralDuration: number | null;
-        participantCount: number;
-        me: { jid: string | null; isAdmin: boolean; admin: string | null };
-      }
+      jid: string;
+      name: string;
+      size: number;
+      announce: boolean;
+      restrict: boolean;
+      ephemeralDuration: number | null;
+      participantCount: number;
+      me: { jid: string | null; isAdmin: boolean; admin: string | null };
+    }
     | null
   > {
     const socket = this.socket as any;
@@ -1166,7 +1179,7 @@ class WhatsAppClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    
+
     // Cleanup existing socket
     if (this.socket) {
       try {
@@ -1183,7 +1196,7 @@ class WhatsAppClient {
     this.recentMessageStatuses.clear();
     this.meJid = null;
     this.meName = null;
-    
+
     // Reset state
     this.isConnecting = false;
     this.reconnectAttempts = 0;
@@ -1193,12 +1206,12 @@ class WhatsAppClient {
 
     // Stop renewing while we clear/recreate auth state.
     this.stopLeaseRenewal();
-    
+
     // Clear auth state to force new QR
     if (this.authStore?.clearState) {
       await this.authStore.clearState();
     }
-    
+
     // Reconnect
     await this.connect();
   }

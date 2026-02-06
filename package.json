@@ -17,6 +17,7 @@
     "build:client": "npm install --prefix client && npm run build --prefix client",
     "build:web": "npm run build --prefix apps/web",
     "db:migrate": "npm run migrate --prefix server",
+    "db:check": "node scripts/check-migrations.js",
     "smoke": "node tools/smoke.mjs"
   },
   "dependencies": {

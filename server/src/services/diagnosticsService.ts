@@ -101,6 +101,8 @@ const getScheduleDiagnostics = async (scheduleId: string, whatsappClient?: Whats
       feed_id: schedule.feed_id,
       template_id: schedule.template_id,
       target_ids: Array.isArray(schedule.target_ids) ? schedule.target_ids : [],
+      delivery_mode: schedule.delivery_mode || 'immediate',
+      batch_times: Array.isArray(schedule.batch_times) ? schedule.batch_times : [],
       cron_expression: schedule.cron_expression || null,
       timezone: schedule.timezone || 'UTC',
       last_run_at: schedule.last_run_at || null

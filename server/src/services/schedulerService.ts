@@ -1,13 +1,27 @@
 import type { ScheduledTask } from 'node-cron';
 const cron = require('node-cron');
 const { getSupabaseClient } = require('../db/supabase');
-const { fetchAndProcessFeed, queueFeedItemsForSchedules } = require('./feedProcessor');
+const { fetchAndProcessFeed } = require('./feedProcessor');
 const { sendQueuedForSchedule } = require('./queueService');
 const { computeNextRunAt } = require('../utils/cron');
 const { withScheduleLock, cleanupStaleLocks } = require('./scheduleLockService');
 const logger = require('../utils/logger');
 
 type WhatsAppClient = { getStatus?: () => { status: string } };
+
+type ScheduleRow = {
+  id: string;
+  feed_id?: string | null;
+  active?: boolean;
+  cron_expression?: string | null;
+  timezone?: string | null;
+  delivery_mode?: string | null;
+  batch_times?: string[] | null;
+};
+
+type RunScheduleOptions = {
+  skipFeedRefresh?: boolean;
+};
 
 const feedIntervals = new Map<string, NodeJS.Timeout>();
 const scheduleJobs = new Map<string, ScheduledTask>();
@@ -25,7 +39,11 @@ const clearAll = () => {
   scheduleInFlight.clear();
 };
 
-const runScheduleOnce = async (scheduleId: string, whatsappClient?: WhatsAppClient) => {
+const runScheduleOnce = async (
+  scheduleId: string,
+  whatsappClient?: WhatsAppClient,
+  options?: RunScheduleOptions
+) => {
   // Check local in-flight first (fast path)
   if (scheduleInFlight.get(scheduleId)) {
     logger.info({ scheduleId }, 'Skipping schedule run - already in progress locally');
@@ -47,7 +65,9 @@ const runScheduleOnce = async (scheduleId: string, whatsappClient?: WhatsAppClie
       scheduleId,
       async () => {
         logger.info({ scheduleId }, 'Acquired distributed lock, running schedule');
-        return await sendQueuedForSchedule(scheduleId, whatsappClient);
+        return await sendQueuedForSchedule(scheduleId, whatsappClient, {
+          skipFeedRefresh: Boolean(options?.skipFeedRefresh)
+        });
       },
       { timeoutMs: 300000, skipIfLocked: true } // 5 minute lock timeout
     );
@@ -61,6 +81,72 @@ const runScheduleOnce = async (scheduleId: string, whatsappClient?: WhatsAppClie
     logger.error({ scheduleId, error }, 'Error running schedule');
   } finally {
     scheduleInFlight.set(scheduleId, false);
+  }
+};
+
+const getDeliveryMode = (schedule: { delivery_mode?: string | null }) =>
+  schedule?.delivery_mode === 'batch' || schedule?.delivery_mode === 'batched' ? 'batched' : 'immediate';
+
+const parseBatchTimes = (value: unknown): string[] => {
+  const seen = new Set<string>();
+  const times = Array.isArray(value) ? value : [];
+  for (const item of times) {
+    const normalized = String(item || '').trim();
+    if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(normalized)) continue;
+    seen.add(normalized);
+  }
+  return Array.from(seen).sort();
+};
+
+const toDailyCronExpression = (time: string) => {
+  const [hour, minute] = time.split(':').map((part) => Number(part));
+  return `${minute} ${hour} * * *`;
+};
+
+const computeNextBatchRunAt = (times: string[], timezone?: string | null) => {
+  let nextValue: string | null = null;
+  for (const time of times) {
+    const expression = toDailyCronExpression(time);
+    const candidate = computeNextRunAt(expression, timezone || 'UTC');
+    if (!candidate) continue;
+    if (!nextValue || new Date(candidate).getTime() < new Date(nextValue).getTime()) {
+      nextValue = candidate;
+    }
+  }
+  return nextValue;
+};
+
+const queueBatchSchedulesForFeed = async (feedId: string) => {
+  if (schedulersDisabled()) return;
+
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+
+  const disconnectedClient: WhatsAppClient = {
+    getStatus: () => ({ status: 'disconnected' })
+  };
+
+  try {
+    const { data: schedules, error } = await supabase
+      .from('schedules')
+      .select('*')
+      .eq('active', true)
+      .eq('feed_id', feedId);
+
+    if (error) throw error;
+
+    const batchSchedules = (schedules || []).filter(
+      (schedule: ScheduleRow) => getDeliveryMode(schedule) === 'batched'
+    );
+
+    if (!batchSchedules.length) return;
+
+    logger.info({ feedId, count: batchSchedules.length }, 'Queueing batch schedules after feed refresh');
+    for (const schedule of batchSchedules) {
+      await runScheduleOnce(schedule.id, disconnectedClient, { skipFeedRefresh: true });
+    }
+  } catch (error) {
+    logger.error({ error, feedId }, 'Failed to queue batch schedules');
   }
 };
 
@@ -89,12 +175,12 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
     if (error) throw error;
 
     const immediateSchedules = (schedules || []).filter(
-      (s: { cron_expression?: string | null }) => !s.cron_expression
+      (schedule: ScheduleRow) => getDeliveryMode(schedule) !== 'batched' && !schedule.cron_expression
     );
     logger.info({ feedId, count: immediateSchedules.length }, 'Triggering immediate schedules');
     
     for (const schedule of immediateSchedules) {
-      await runScheduleOnce(schedule.id, whatsappClient);
+      await runScheduleOnce(schedule.id, whatsappClient, { skipFeedRefresh: true });
     }
   } catch (error) {
     logger.error({ error, feedId }, 'Failed to trigger immediate schedules');
@@ -137,8 +223,8 @@ const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
         let ok = true;
         try {
           const result = await fetchAndProcessFeed(feed);
-          await queueFeedItemsForSchedules(feed.id, result.items);
           if (result.items.length) {
+            await queueBatchSchedulesForFeed(feed.id);
             await triggerImmediateSchedules(feed.id, whatsappClient);
           }
         } catch (error) {
@@ -176,16 +262,47 @@ const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
     if (error) throw error;
 
     for (const schedule of schedules || []) {
+      const mode = getDeliveryMode(schedule);
+      const timezone = schedule.timezone || 'UTC';
+
+      if (mode === 'batched') {
+        const batchTimes = parseBatchTimes(schedule.batch_times);
+        if (!batchTimes.length) {
+          logger.warn({ scheduleId: schedule.id }, 'Batch schedule has no valid batch_times');
+          continue;
+        }
+
+        for (const time of batchTimes) {
+          try {
+            const expression = toDailyCronExpression(time);
+            const job = cron.schedule(
+              expression,
+              () => runScheduleOnce(schedule.id, whatsappClient),
+              { timezone }
+            );
+            scheduleJobs.set(`${schedule.id}:batch:${time}`, job);
+          } catch (cronError) {
+            logger.error({ error: cronError, scheduleId: schedule.id, time }, 'Invalid batch dispatch time');
+          }
+        }
+
+        const nextBatchRunAt = computeNextBatchRunAt(batchTimes, timezone);
+        if (nextBatchRunAt) {
+          await supabase.from('schedules').update({ next_run_at: nextBatchRunAt }).eq('id', schedule.id);
+        }
+        continue;
+      }
+
       if (schedule.cron_expression) {
         try {
           const job = cron.schedule(
             schedule.cron_expression,
             () => runScheduleOnce(schedule.id, whatsappClient),
-            { timezone: schedule.timezone || 'UTC' }
+            { timezone }
           );
-          scheduleJobs.set(schedule.id, job);
+          scheduleJobs.set(`${schedule.id}:cron`, job);
 
-          const nextRunAt = computeNextRunAt(schedule.cron_expression, schedule.timezone);
+          const nextRunAt = computeNextRunAt(schedule.cron_expression, timezone);
           if (nextRunAt) {
             await supabase
               .from('schedules')
@@ -225,5 +342,6 @@ const initSchedulers = async (whatsappClient?: WhatsAppClient) => {
 module.exports = {
   initSchedulers,
   clearAll,
-  triggerImmediateSchedules
+  triggerImmediateSchedules,
+  queueBatchSchedulesForFeed
 };

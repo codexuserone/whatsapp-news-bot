@@ -142,6 +142,21 @@ CREATE TABLE IF NOT EXISTS feed_images (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Chat messages table (incoming/outgoing)
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    whatsapp_id TEXT,
+    remote_jid TEXT NOT NULL,
+    from_me BOOLEAN DEFAULT false,
+    message_type TEXT DEFAULT 'text',
+    content TEXT,
+    media_url TEXT,
+    timestamp TIMESTAMPTZ DEFAULT NOW(),
+    status TEXT DEFAULT 'received',
+    raw_message JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Schedule locks table (migration 013)
 CREATE TABLE IF NOT EXISTS schedule_locks (
     schedule_id UUID PRIMARY KEY REFERENCES schedules(id) ON DELETE CASCADE,
@@ -161,6 +176,8 @@ CREATE INDEX IF NOT EXISTS idx_message_logs_feed_item_id ON message_logs(feed_it
 CREATE INDEX IF NOT EXISTS idx_schedules_active ON schedules(active);
 CREATE INDEX IF NOT EXISTS idx_schedules_feed_id ON schedules(feed_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_locks_locked_until ON schedule_locks(locked_until);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_remote_jid ON chat_messages(remote_jid);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_timestamp ON chat_messages(timestamp DESC);
 
 -- Insert default settings
 INSERT INTO settings (key, value) VALUES

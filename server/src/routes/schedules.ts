@@ -22,6 +22,33 @@ const scheduleRoutes = () => {
   const refreshSchedulers = (whatsappClient: unknown) =>
     runAsync('Scheduler refresh', () => initSchedulers(whatsappClient));
 
+  const normalizeBatchTimes = (value: unknown): string[] => {
+    const seen = new Set<string>();
+    const items = Array.isArray(value) ? value : [];
+    for (const item of items) {
+      const normalized = String(item || '').trim();
+      if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(normalized)) continue;
+      seen.add(normalized);
+    }
+    return Array.from(seen).sort();
+  };
+
+  const normalizeSchedulePayload = (payload: Record<string, unknown>, options?: { forInsert?: boolean }) => {
+    const next = { ...payload } as Record<string, unknown>;
+    const mode = next.delivery_mode === 'batch' || next.delivery_mode === 'batched' ? 'batched' : 'immediate';
+    const defaultBatchTimes = ['07:00', '15:00', '22:00'];
+    const batchTimes = normalizeBatchTimes(next.batch_times);
+
+    next.delivery_mode = mode;
+    next.batch_times = batchTimes.length ? batchTimes : defaultBatchTimes;
+
+    if (options?.forInsert && mode === 'batched') {
+      next.last_queued_at = new Date().toISOString();
+    }
+
+    return next;
+  };
+
   const dispatchImmediate = (scheduleId: string, whatsappClient: unknown) =>
     runAsync(`Dispatch schedule ${scheduleId}`, async () => {
       await sendQueuedForSchedule(scheduleId, whatsappClient as never);
@@ -70,9 +97,10 @@ const scheduleRoutes = () => {
 
   router.post('/', validate(schemas.schedule), async (req: Request, res: Response) => {
     try {
+      const payload = normalizeSchedulePayload(req.body, { forInsert: true });
       const { data: schedule, error } = await getDb()
         .from('schedules')
-        .insert(req.body)
+        .insert(payload)
         .select()
         .single();
       
@@ -80,7 +108,12 @@ const scheduleRoutes = () => {
       refreshSchedulers(req.app.locals.whatsapp);
 
       // For immediate schedules, queue+send once so the system shows activity
-      if (schedule?.active && !schedule?.cron_expression) {
+      if (
+        schedule?.active &&
+        !schedule?.cron_expression &&
+        schedule?.delivery_mode !== 'batched' &&
+        schedule?.delivery_mode !== 'batch'
+      ) {
         dispatchImmediate(schedule.id, req.app.locals.whatsapp);
       }
       res.json(schedule);
@@ -92,9 +125,10 @@ const scheduleRoutes = () => {
 
   router.put('/:id', validate(schemas.schedule), async (req: Request, res: Response) => {
     try {
+      const payload = normalizeSchedulePayload(req.body);
       const { data: schedule, error } = await getDb()
         .from('schedules')
-        .update(req.body)
+        .update(payload)
         .eq('id', req.params.id)
         .select()
         .single();
@@ -102,7 +136,12 @@ const scheduleRoutes = () => {
       if (error) throw error;
       refreshSchedulers(req.app.locals.whatsapp);
 
-      if (schedule?.active && !schedule?.cron_expression) {
+      if (
+        schedule?.active &&
+        !schedule?.cron_expression &&
+        schedule?.delivery_mode !== 'batched' &&
+        schedule?.delivery_mode !== 'batch'
+      ) {
         dispatchImmediate(schedule.id, req.app.locals.whatsapp);
       }
       res.json(schedule);
@@ -114,10 +153,21 @@ const scheduleRoutes = () => {
 
   router.delete('/:id', async (req: Request, res: Response) => {
     try {
+      const scheduleId = req.params.id;
+
+      // Prevent orphaned unsent queue items when a schedule is removed.
+      // Sent logs can remain for audit history (they will become schedule_id = null via FK).
+      const { error: unsentCleanupError } = await getDb()
+        .from('message_logs')
+        .delete()
+        .eq('schedule_id', scheduleId)
+        .in('status', ['pending', 'processing', 'failed', 'skipped']);
+      if (unsentCleanupError) throw unsentCleanupError;
+
       const { error } = await getDb()
         .from('schedules')
         .delete()
-        .eq('id', req.params.id);
+        .eq('id', scheduleId);
       
       if (error) throw error;
       refreshSchedulers(req.app.locals.whatsapp);

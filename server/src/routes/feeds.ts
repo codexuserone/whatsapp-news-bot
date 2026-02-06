@@ -1,8 +1,8 @@
 import type { Request, Response } from 'express';
 const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
-const { fetchAndProcessFeed, queueFeedItemsForSchedules } = require('../services/feedProcessor');
-const { initSchedulers, triggerImmediateSchedules } = require('../services/schedulerService');
+const { fetchAndProcessFeed } = require('../services/feedProcessor');
+const { initSchedulers, triggerImmediateSchedules, queueBatchSchedulesForFeed } = require('../services/schedulerService');
 const { fetchFeedItemsWithMeta } = require('../services/feedFetcher');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { validate, schemas } = require('../middleware/validation');
@@ -33,7 +33,7 @@ const feedsRoutes = () => {
   // Test a feed URL without saving - returns detected fields and sample item
   router.post('/test', async (req: Request, res: Response) => {
     try {
-      const { url } = req.body;
+      const { url, type, parse_config, cleaning } = req.body;
       if (!url) {
         return res.status(400).json({ error: 'URL is required' });
       }
@@ -44,8 +44,15 @@ const feedsRoutes = () => {
         return res.status(400).json({ error: getErrorMessage(error, 'URL is not allowed') });
       }
 
+      const testFeed = {
+        url: String(url),
+        ...(type ? { type } : {}),
+        ...(parse_config ? { parseConfig: parse_config } : {}),
+        ...(cleaning ? { cleaning } : {})
+      };
+
       // Create a temporary feed object for testing (cleaning is optional, uses defaults)
-      const { items, meta } = await fetchFeedItemsWithMeta({ url });
+      const { items, meta } = await fetchFeedItemsWithMeta(testFeed);
 
       if (!items || items.length === 0) {
         return res.status(404).json({ error: 'No items found in feed. Check the URL or feed type.' });
@@ -160,8 +167,8 @@ const feedsRoutes = () => {
       }
       
       const result = await fetchAndProcessFeed(feed);
-      const queuedLogs = await queueFeedItemsForSchedules(feed.id, result.items);
       if (result.items.length) {
+        await queueBatchSchedulesForFeed(feed.id);
         await triggerImmediateSchedules(feed.id, req.app.locals.whatsapp);
       }
       res.json({
@@ -171,7 +178,7 @@ const feedsRoutes = () => {
         insertedCount: result.insertedCount,
         duplicateCount: result.duplicateCount,
         errorCount: result.errorCount,
-        queuedCount: queuedLogs.length
+        queuedCount: 0
       });
     } catch (error) {
       console.error('Error refreshing feed:', error);
@@ -197,8 +204,8 @@ const feedsRoutes = () => {
 
       for (const feed of feeds || []) {
         const result = await fetchAndProcessFeed(feed);
-        const queuedLogs = await queueFeedItemsForSchedules(feed.id, result.items);
         if (result.items.length) {
+          await queueBatchSchedulesForFeed(feed.id);
           await triggerImmediateSchedules(feed.id, req.app.locals.whatsapp);
         }
 
@@ -206,7 +213,6 @@ const feedsRoutes = () => {
         totalInserted += result.insertedCount;
         totalDuplicates += result.duplicateCount;
         totalErrors += result.errorCount;
-        totalQueued += queuedLogs.length;
 
         results.push({
           feedId: feed.id,
@@ -216,7 +222,7 @@ const feedsRoutes = () => {
           insertedCount: result.insertedCount,
           duplicateCount: result.duplicateCount,
           errorCount: result.errorCount,
-          queuedCount: queuedLogs.length
+          queuedCount: 0
         });
       }
 

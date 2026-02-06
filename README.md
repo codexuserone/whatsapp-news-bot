@@ -1,143 +1,217 @@
 # WhatsApp News Bot
 
-Automated WhatsApp news distribution system for Anash.org. Fetches content from RSS/Atom/JSON feeds and publishes to WhatsApp Groups, Channels, and Status with scheduling, throttling, and deduplication.
+Production-ready WhatsApp bot that fetches RSS/Atom feeds and sends formatted news messages to WhatsApp groups and channels. Built with Express + TypeScript backend, Next.js frontend, and Supabase PostgreSQL database.
 
 ## Features
-- **WhatsApp Connection** - QR code auth displayed in-app, real-time status
-- **Targets** - Send to Groups, Channels, and Status broadcasts
-- **Feeds** - RSS/Atom/JSON with variable extraction and cleaning rules
-- **Templates** - WhatsApp markdown with dynamic variables
-- **Schedules** - Immediate, interval, or set times dispatch
-- **Deduplication** - Fuzzy title/URL matching + chat history check
-- **Throttling** - Configurable inter/intra target delays
-- **Retention** - Auto-cleanup of old logs and auth states
+- **WhatsApp Connection** - QR code authentication, multi-instance coordination, auto-recovery
+- **Feed Management** - RSS/Atom/JSON feed fetching with deduplication and content scraping
+- **Message Templates** - Dynamic templates with variables, image support, markdown formatting
+- **Scheduling** - Cron-based automation with queue processing and retry logic
+- **Multi-Instance Safety** - Database-backed lease system prevents WhatsApp conflicts
+- **Deduplication** - URL + content hash deduplication to prevent duplicate messages
+- **Security** - Rate limiting, SSRF protection, CORS allowlist, Basic Auth
+- **Monitoring** - Health checks, debug endpoints, comprehensive logging
 
 ## Tech Stack
-- **Backend**: Express, Baileys (@whiskeysockets/baileys), Supabase (Postgres), node-cron, TypeScript
-- **Frontend**: React, shadcn/ui, TanStack Query, react-hook-form + zod
-- **Hosting**: Render (with keep-alive endpoint)
+- **Backend**: Express.js 4.x, TypeScript, Baileys (WhatsApp Web), Supabase PostgreSQL
+- **Frontend**: Next.js 16 (App Router), React 18, Tailwind CSS, shadcn/ui
+- **Infrastructure**: Render hosting, Supabase database, cron-job.org for backup
 
 ## Project Structure
 ```
-├── server/          # Express API + Baileys WhatsApp client
+├── server/                    # Express API + WhatsApp client
 │   ├── src/
-│   │   ├── routes/      # API endpoints
-│   │   ├── models/      # Mongoose schemas
-│   │   ├── services/    # Business logic
-│   │   └── whatsapp/    # Baileys client wrapper
-│   └── public/          # Built frontend (after npm run build:client)
-├── client/          # React frontend
-│   └── src/
-│       ├── pages/       # Route pages
-│       ├── components/  # UI components
-│       └── lib/         # Utilities
-└── render.yaml      # Render deployment config
+│   │   ├── api/              # Route handlers and registration
+│   │   ├── controllers/      # Business logic
+│   │   ├── services/         # Core services (feed, queue, whatsapp)
+│   │   ├── whatsapp/         # Baileys integration
+│   │   ├── middleware/       # Express middleware (security, validation)
+│   │   ├── db/              # Supabase client
+│   │   └── scripts/         # Migration scripts
+│   └── package.json
+├── apps/web/                 # Next.js 16 frontend (new)
+│   ├── app/                 # App Router pages
+│   ├── src/
+│   │   ├── components/      # Shared UI
+│   │   └── lib/             # Utilities and API client
+│   └── package.json
+├── client/                   # Legacy Vite React app (being migrated)
+├── scripts/                  # Utility scripts
+├── docs/                     # Documentation
+│   ├── architecture.md       # System architecture
+│   ├── ops-runbook.md       # Operations guide
+│   └── migration-checklist.md # Database migration guide
+└── render.yaml              # Render deployment config
 ```
 
-## Local Development
+## Quick Start
 
-1. **Install dependencies**:
-   ```bash
-   npm run setup
-   ```
+### 1. Install & Setup
+```bash
+# Clone and install dependencies
+git clone <repository>
+cd whatsapp-news-bot
+npm run setup
 
-2. **Configure environment** (required for full CRUD; WhatsApp auth can run in-memory):
-   ```bash
-   cp server/.env.example server/.env
-   # You can also use a root .env if preferred
-   ```
+# Configure environment
+cp server/.env.example server/.env
+# Edit server/.env with your Supabase credentials
+```
 
-3. **Start development servers**:
-    ```bash
-    # Terminal 1 - Backend (port 10000 by default)
-    npm run dev:server
-    
-    # Terminal 2 - Frontend (Next.js 16)
-    npm run dev:web
+### 2. Database Setup
+```bash
+# Run database migrations
+npm run db:migrate
 
-    # Optional: legacy Vite client (port 5173)
-    npm run dev:client
-    ```
+# Verify migrations applied
+npm run db:check
+```
 
-   If your backend runs on a different host/port, set `NEXT_PUBLIC_API_URL` in `apps/web/.env`.
-   Example: `NEXT_PUBLIC_API_URL=http://localhost:10000`
-   If you run the Vite UI (`npm run dev:client`), set `VITE_API_URL` in `client/.env`.
-   Example: `VITE_API_URL=http://localhost:10000`
+### 3. Development
+```bash
+# Start development (backend + frontend)
+npm run dev
 
-4. **Open the app**: http://localhost:3000
+# Or start individually:
+npm run dev:server  # Backend on :10000
+npm run dev:web     # Frontend on :3000
+```
 
-## Database Setup (Supabase)
-1. Create a Supabase project and grab your:
-   - `SUPABASE_URL`
-   - `SUPABASE_SERVICE_ROLE_KEY`
-   - Database connection string (`DATABASE_URL` or `SUPABASE_DB_URL`)
-2. Run migrations (from the repo root):
-   ```bash
-   # Set DATABASE_URL or SUPABASE_DB_URL first
-   npm run db:migrate
-   ```
-   The migration runner tracks applied files in the `schema_migrations` table.
-3. Alternatively, run the SQL files in `scripts/` (001-012) using the Supabase SQL editor.
+### 4. Production Deployment
+```bash
+# Quick deploy (checks migrations, builds, provides instructions)
+./scripts/quick-deploy.sh
 
-## Render Deployment
+# Then deploy via Render dashboard
+```
 
-### Option 1: Using render.yaml (Single Service, Recommended)
+## Environment Variables
+
+Required in `server/.env`:
+```bash
+DATABASE_URL=postgresql://user:pass@host:port/dbname
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your-supabase-key
+CORS_ORIGINS=https://yourdomain.com
+```
+
+Optional (production):
+```bash
+BASIC_AUTH_USER=admin
+BASIC_AUTH_PASS=secure-password
+SKIP_WHATSAPP_LEASE=false
+```
+### Environment URLs
+- Backend API: `http://localhost:10000` (with Swagger docs at `/api-docs`)
+- Next.js App: `http://localhost:3000` (production-like app)
+- Legacy Vite App: `http://localhost:5173` (being migrated)
+
+**Note**: Set `NEXT_PUBLIC_API_URL` in `apps/web/.env` or `VITE_API_URL` in `client/.env` if backend runs elsewhere.
+
+## Production Deployment
+
+### Quick Deploy (Recommended)
+```bash
+./scripts/quick-deploy.sh
+```
+This script:
+1. ✅ Checks database migrations
+2. 🔍 Runs type checking
+3. 🔨 Builds all packages  
+4. 📋 Provides deployment instructions
+
+### Render Deployment
+
+**Required Environment Variables**:
+```bash
+DATABASE_URL=postgresql://user:pass@host:port/dbname
+SUPABASE_URL=https://your-project.supabase.co  
+SUPABASE_KEY=your-supabase-key
+BASE_URL=https://your-app.onrender.com
+```
+
+**Optional Security**:
+```bash
+BASIC_AUTH_USER=admin
+BASIC_AUTH_PASS=secure-password
+CORS_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
+```
+
+**Deploy Steps**:
 1. Push to GitHub
 2. Connect repo to Render
-3. Render will auto-detect `render.yaml` and configure one service that runs the API and serves the built UI from `server/public`.
-4. Set environment variables in Render dashboard:
-   - `SUPABASE_URL` - Supabase project URL
-   - `SUPABASE_SERVICE_ROLE_KEY` - Supabase service role key
-   - `DATABASE_URL` - Postgres connection string (used for automatic migrations)
-   - `BASE_URL` - Your Render app URL (e.g., https://your-app.onrender.com)
-   - `KEEP_ALIVE_URL` - Same as BASE_URL + /ping
-   - `KEEP_ALIVE` - true
-   - `RUN_MIGRATIONS_ON_START` - optional (recommended: run migrations manually in Supabase)
-   - `MIGRATIONS_STRICT` - optional (set to true to fail startup if migrations fail)
+3. Set environment variables
+4. Click "Manual Deploy" to apply changes
 
-### Option 2: Manual Setup
-1. Create a **Web Service** on Render
-2. **Build Command**: `npm install --prefix server && npm install --prefix client && npm run build --prefix client && npm run build --prefix server`
-3. **Start Command**: `npm run start:server`
-4. Set environment variables (see `.env.example`)
+### Database Migrations (Critical!)
 
-### Required Environment Variables for Production
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `SUPABASE_URL` | Supabase project URL | `https://your-project.supabase.co` |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key | `your-service-role-key` |
-| `DATABASE_URL` / `SUPABASE_DB_URL` | Postgres connection string (migrations) | `postgresql://...` |
-| `BASE_URL` | Your Render app URL | `https://your-app.onrender.com` |
-| `KEEP_ALIVE` | Enable keep-alive pings | `true` |
-| `KEEP_ALIVE_URL` | Ping endpoint URL | `https://your-app.onrender.com/ping` |
+**Run before first deployment**:
+```bash
+npm run db:migrate
+npm run db:check  # Verify applied
+```
 
-### Recommended Security (Basic Auth)
-If you deploy this publicly, set:
-- `BASIC_AUTH_USER`
-- `BASIC_AUTH_PASS`
+**If migrations fail**, see `docs/migration-checklist.md` for manual SQL commands.
 
-This protects both the UI and API with browser Basic Auth (health endpoints remain open).
+## Monitoring & Debugging
 
-### Recommended Hardening
-- `CORS_ORIGINS` - comma-separated UI origins allowed to call the API (use this if the UI is on a different domain)
-- `ALLOW_PRIVATE_URLS` - set to `true` only if you intentionally need internal/private feeds or image URLs (SSRF risk)
+**Health Checks**:
+```bash
+# Service health
+curl https://your-app.onrender.com/health
 
-## API Endpoints
-- `GET /health` - Health check
-- `GET /ping` - Keep-alive endpoint
-- `GET /ready` - Readiness (DB + WhatsApp)
-- `GET /api/openapi.json` - OpenAPI spec
-- `GET /api/docs` - Swagger UI
-- `GET /api/whatsapp/status` - Connection status
-- `GET /api/whatsapp/qr` - QR code for auth
-- `GET /api/whatsapp/groups` - List WhatsApp groups
-- `GET /api/whatsapp/channels` - List WhatsApp channels
-- Full CRUD for `/api/feeds`, `/api/templates`, `/api/targets`, `/api/schedules`, `/api/settings`, `/api/logs`
+# WhatsApp status  
+curl https://your-app.onrender.com/api/whatsapp/status
 
-## Notes
-- WhatsApp auth uses QR displayed in the UI (not terminal)
-- All settings are stored in Supabase and editable via UI
-- Free tier Render instances spin down after inactivity. Use an external uptime ping against `/ping` to keep it alive.
-- Session data is stored in Supabase when configured; otherwise it resets on restart
-- Render single-service deploy serves the Vite UI built from `client/` at `/`
-- WhatsApp only allows one active web session per account. If you see a `conflict/replaced` error, log out of other linked devices and/or wait for an old deployment to stop before scanning a new QR.
+# Queue status
+curl https://your-app.onrender.com/api/debug/queue
+```
+
+**Common Issues**:
+- **Instance conflicts**: Run `npm run db:migrate` to apply lease system
+- **WhatsApp disconnected**: Clear auth_state and reconnect via UI  
+- **Messages not sending**: Check targets, templates, schedules are configured
+- **Feeds erroring**: Verify URLs are public and have valid SSL
+
+## Documentation
+
+- **Architecture**: `docs/architecture.md` - System design and components
+- **Operations**: `docs/ops-runbook.md` - Production troubleshooting guide  
+- **Migrations**: `docs/migration-checklist.md` - Database update instructions
+
+## API Documentation
+
+Production app serves OpenAPI/Swagger at:
+- **Spec**: `/api/openapi.json`
+- **UI**: `/api-docs` 
+
+Key endpoints:
+- `/api/feeds` - RSS feed management
+- `/api/templates` - Message templates  
+- `/api/targets` - WhatsApp destinations
+- `/api/schedules` - Automation rules
+- `/api/logs` - Message history
+- `/api/whatsapp/*` - WhatsApp connection & auth
+
+## Security Features
+
+- **Rate Limiting**: API (100/min) and feed fetch (10/min)
+- **CORS Protection**: Origin allowlist via `CORS_ORIGINS`
+- **Basic Auth**: Optional password protection
+- **SSRF Protection**: Blocks private IP requests
+- **Input Validation**: Zod schemas for all endpoints
+- **Multi-Instance Safety**: Database-backed lease system prevents conflicts
+
+## Development Workflow
+
+```bash
+# Feature development
+npm run dev          # Start dev servers
+npm run typecheck    # TypeScript checking
+npm run db:check     # Verify migrations
+npm run build:all    # Production build
+
+# Deployment
+./scripts/quick-deploy.sh  # Pre-deploy checks
+# Then deploy via Render dashboard
+```

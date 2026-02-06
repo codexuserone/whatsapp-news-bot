@@ -18,7 +18,7 @@ const env = {
   SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
   BASE_URL: baseUrl,
-  KEEP_ALIVE: process.env.KEEP_ALIVE === 'true',
+  KEEP_ALIVE: process.env.KEEP_ALIVE !== 'false', // Default to true unless explicitly disabled
   KEEP_ALIVE_URL: process.env.KEEP_ALIVE_URL,
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
   RETENTION_DAYS: Number(process.env.RETENTION_DAYS || 14),
@@ -32,4 +32,4 @@ if (isProd && (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY)) {
 }
 
 module.exports = env;
-export {};
+export { };

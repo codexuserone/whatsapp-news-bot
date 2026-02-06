@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 const { getSupabaseClient } = require('../db/supabase');
-const { fetchAndProcessFeed, queueFeedItemsForSchedules } = require('./feedProcessor');
+const { fetchAndProcessFeed } = require('./feedProcessor');
 const settingsService = require('./settingsService');
 const { isCurrentlyShabbos } = require('./shabbosService');
 const axios = require('axios');
@@ -56,26 +56,64 @@ type WhatsAppClient = {
   ) => Promise<{ announce: boolean; me: { isAdmin: boolean } } | null>;
 };
 
-const DEFAULT_SEND_TIMEOUT_MS = 15000;
-const AUTH_ERROR_HINT =
-  'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
+const DEFAULT_SEND_TIMEOUT_MS = 45000;
+const AUTH_ERROR_HINT = 'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
 
-let globalSendChain: Promise<void> = Promise.resolve();
+// Simple Mutex with Timeout to replace the fragile Promise chain
+class SendMutex {
+  private queue: Array<{ resolve: (release: () => void) => void; timer: NodeJS.Timeout }> = [];
+  private locked = false;
+
+  async run<T>(fn: () => Promise<T>, timeoutMs = 60000): Promise<T> {
+    const acquire = new Promise<() => void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        // Remove from queue if timed out
+        this.queue = this.queue.filter(item => item.timer !== timer);
+        reject(new Error('Acquire send lock timeout'));
+      }, timeoutMs);
+
+      if (!this.locked) {
+        this.locked = true;
+        clearTimeout(timer);
+        resolve(() => this.release());
+      } else {
+        this.queue.push({ resolve: (release) => { clearTimeout(timer); resolve(release); }, timer });
+      }
+    });
+
+    let release: () => void;
+    try {
+      release = await acquire;
+    } catch (e) {
+      logger.warn({ error: e }, 'Failed to acquire send lock, skipping item');
+      throw e;
+    }
+
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
+  private release() {
+    if (this.queue.length > 0) {
+      const next = this.queue.shift();
+      if (next) next.resolve(() => this.release());
+    } else {
+      this.locked = false;
+    }
+  }
+}
+
+const sendMutex = new SendMutex();
 let globalLastSentAtMs = 0;
+let globalLastTargetId: string | null = null;
 const globalLastSentByTargetId = new Map<string, number>();
 
+// Replaces withGlobalSendLock
 const withGlobalSendLock = async <T>(fn: () => Promise<T>): Promise<T> => {
-  const previous = globalSendChain;
-  let release!: () => void;
-  globalSendChain = new Promise<void>((resolve) => {
-    release = () => resolve(undefined);
-  });
-  await previous;
-  try {
-    return await fn();
-  } finally {
-    release();
-  }
+  return sendMutex.run(fn, 120000); // 2 minute max wait to acquire lock
 };
 
 const waitForDelays = async (
@@ -86,17 +124,27 @@ const waitForDelays = async (
   const interTargetDelayMs = Number(settings.defaultInterTargetDelaySec || 0) * 1000;
   const intraTargetDelayMs = Number(settings.defaultIntraTargetDelaySec || 0) * 1000;
 
-  const minBetweenAnyMs = Math.max(messageDelayMs, interTargetDelayMs, 0);
+  const minBetweenAnyMs = Math.max(messageDelayMs, 0);
   const minBetweenSameTargetMs = Math.max(messageDelayMs, intraTargetDelayMs, 0);
 
   const now = Date.now();
+  // Safety: If globalLastSentAtMs is in the future (bad clock?), reset it
+  if (globalLastSentAtMs > now + 30000) globalLastSentAtMs = now;
+
   const sinceGlobal = globalLastSentAtMs ? now - globalLastSentAtMs : Number.POSITIVE_INFINITY;
   const lastTargetSent = globalLastSentByTargetId.get(targetId) || 0;
   const sinceTarget = lastTargetSent ? now - lastTargetSent : Number.POSITIVE_INFINITY;
 
   const waitGlobal = Number.isFinite(sinceGlobal) ? Math.max(minBetweenAnyMs - sinceGlobal, 0) : 0;
-  const waitTarget = Number.isFinite(sinceTarget) ? Math.max(minBetweenSameTargetMs - sinceTarget, 0) : 0;
-  const waitMs = Math.max(waitGlobal, waitTarget);
+  const waitSameTarget = Number.isFinite(sinceTarget) ? Math.max(minBetweenSameTargetMs - sinceTarget, 0) : 0;
+
+  const switchedTargets = Boolean(globalLastTargetId && globalLastTargetId !== targetId);
+  const waitSwitchTarget = switchedTargets && Number.isFinite(sinceGlobal)
+    ? Math.max(interTargetDelayMs - sinceGlobal, 0)
+    : 0;
+
+  const waitMs = Math.min(Math.max(waitGlobal, waitSameTarget, waitSwitchTarget), 30000); // Cap wait at 30s
+
   if (waitMs > 0) {
     await sleep(waitMs);
   }
@@ -140,11 +188,11 @@ const isImageUrl = (url: string): boolean => {
   const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp', '.svg'];
   const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v'];
   const audioExtensions = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.wma'];
-  
+
   // Explicitly exclude videos and audio
   if (videoExtensions.some(ext => lower.includes(ext))) return false;
   if (audioExtensions.some(ext => lower.includes(ext))) return false;
-  
+
   // Check if it's a known image extension
   return imageExtensions.some(ext => lower.includes(ext));
 };
@@ -228,15 +276,19 @@ const scrapeImageFromPage = async (pageUrl: string) => {
 const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null) => {
   await assertSafeOutboundUrl(imageUrl);
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+  const validUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
   const response = await axios.get(imageUrl, {
-    timeout: 15000,
+    timeout: 20000,
     responseType: 'arraybuffer',
     maxContentLength: MAX_IMAGE_BYTES,
     maxBodyLength: MAX_IMAGE_BYTES,
     headers: {
-      'User-Agent': DEFAULT_USER_AGENT,
-      Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-      ...(refererUrl ? { Referer: refererUrl } : {})
+      'User-Agent': validUserAgent,
+      'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      'Referer': refererUrl ? new URL(refererUrl).origin : undefined,
+      'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120"',
+      'Sec-Ch-Ua-Mobile': '?0',
+      'Sec-Ch-Ua-Platform': '"Windows"'
     }
   });
 
@@ -274,30 +326,35 @@ const resolveImageUrlForFeedItem = async (
     return { url: null, source: null, scraped: false, error: null };
   }
 
+  let existingUrlIssue: string | null = null;
   const existing = typeof feedItem.image_url === 'string' ? feedItem.image_url : null;
   if (existing && isHttpUrl(existing)) {
-    // Skip video URLs - they can't be sent as images
-    if (!isImageUrl(existing)) {
-      return { url: null, source: null, scraped: false, error: 'URL is not an image (possibly video)' };
-    }
-    try {
-      await assertSafeOutboundUrl(existing);
-      return { url: existing, source: feedItem.image_source || 'feed', scraped: false, error: null };
-    } catch (error) {
-      const message = getErrorMessage(error);
-      return { url: null, source: null, scraped: false, error: message };
+    if (isImageUrl(existing)) {
+      try {
+        await assertSafeOutboundUrl(existing);
+        return { url: existing, source: feedItem.image_source || 'feed', scraped: false, error: null };
+      } catch (error) {
+        existingUrlIssue = getErrorMessage(error);
+      }
+    } else {
+      existingUrlIssue = 'Feed media URL is not an image';
     }
   }
 
   const link = typeof feedItem.link === 'string' ? feedItem.link : null;
   if (!link || !isHttpUrl(link)) {
-    return { url: null, source: null, scraped: false, error: null };
+    return { url: null, source: null, scraped: false, error: existingUrlIssue };
   }
 
   const scrapedAt = feedItem.image_scraped_at ? new Date(feedItem.image_scraped_at).getTime() : 0;
   const recentlyScraped = scrapedAt && !Number.isNaN(scrapedAt) && Date.now() - scrapedAt < 24 * 60 * 60 * 1000;
   if (recentlyScraped) {
-    return { url: null, source: null, scraped: false, error: feedItem.image_scrape_error || null };
+    return {
+      url: null,
+      source: null,
+      scraped: false,
+      error: feedItem.image_scrape_error || existingUrlIssue || null
+    };
   }
 
   try {
@@ -409,20 +466,20 @@ const buildMessageData = (feedItem: FeedItem) => ({
   publishedAt: feedItem.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
   categories: Array.isArray(feedItem.categories) ? feedItem.categories.join(', ') : '',
   ...(typeof (feedItem as unknown as { raw_data?: unknown }).raw_data === 'object' &&
-  (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
+    (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
     ? Object.fromEntries(
-        Object.entries((feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data || {}).map(
-          ([key, value]) => {
-            if (value == null) return [key, ''];
-            if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return [key, value];
-            try {
-              return [key, JSON.stringify(value)];
-            } catch {
-              return [key, String(value)];
-            }
+      Object.entries((feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data || {}).map(
+        ([key, value]) => {
+          if (value == null) return [key, ''];
+          if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return [key, value];
+          try {
+            return [key, JSON.stringify(value)];
+          } catch {
+            return [key, String(value)];
           }
-        )
+        }
       )
+    )
     : {})
 });
 
@@ -442,7 +499,7 @@ const sendMessageWithTemplate = async (
   target: Target,
   template: Template,
   feedItem: FeedItem,
-  options?: { sendImages?: boolean; supabase?: SupabaseClient }
+  options?: { sendImages?: boolean; supabase?: SupabaseClient; sendTimeoutMs?: number }
 ): Promise<SendWithMediaResult> => {
   const payload = buildMessageData(feedItem);
   const text = applyTemplate(template.content, payload).trim();
@@ -460,18 +517,19 @@ const sendMessageWithTemplate = async (
 
   const jid = normalizeTargetJid(target);
   const allowImages = options?.sendImages !== false;
+  const sendTimeoutMs = Math.max(Number(options?.sendTimeoutMs || DEFAULT_SEND_TIMEOUT_MS), 10000);
 
   const sendText = async () => {
     if (target.type === 'status') {
       return withTimeout(
         whatsappClient.sendStatusBroadcast({ text }),
-        DEFAULT_SEND_TIMEOUT_MS,
+        sendTimeoutMs,
         'Timed out sending status message'
       );
     }
     return withTimeout(
       whatsappClient.sendMessage(jid, { text }),
-      DEFAULT_SEND_TIMEOUT_MS,
+      sendTimeoutMs,
       'Timed out sending message'
     );
   };
@@ -505,15 +563,15 @@ const sendMessageWithTemplate = async (
       const response =
         target.type === 'status'
           ? await withTimeout(
-              whatsappClient.sendStatusBroadcast(content),
-              DEFAULT_SEND_TIMEOUT_MS,
-              'Timed out sending image status message'
-            )
+            whatsappClient.sendStatusBroadcast(content),
+            sendTimeoutMs,
+            'Timed out sending image status message'
+          )
           : await withTimeout(
-              whatsappClient.sendMessage(jid, content),
-              DEFAULT_SEND_TIMEOUT_MS,
-              'Timed out sending image message'
-            );
+            whatsappClient.sendMessage(jid, content),
+            sendTimeoutMs,
+            'Timed out sending image message'
+          );
 
       return {
         response,
@@ -535,15 +593,15 @@ const sendMessageWithTemplate = async (
         const response =
           target.type === 'status'
             ? await withTimeout(
-                whatsappClient.sendStatusBroadcast(content),
-                DEFAULT_SEND_TIMEOUT_MS,
-                'Timed out sending image status message'
-              )
+              whatsappClient.sendStatusBroadcast(content),
+              sendTimeoutMs,
+              'Timed out sending image status message'
+            )
             : await withTimeout(
-                whatsappClient.sendMessage(jid, content),
-                DEFAULT_SEND_TIMEOUT_MS,
-                'Timed out sending image message'
-              );
+              whatsappClient.sendMessage(jid, content),
+              sendTimeoutMs,
+              'Timed out sending image message'
+            );
 
         return {
           response,
@@ -584,11 +642,48 @@ type Schedule = {
   feed_id?: string | null;
   template_id?: string | null;
   target_ids?: string[];
+  delivery_mode?: 'immediate' | 'batched' | 'batch' | null;
+  batch_times?: string[] | null;
   cron_expression?: string | null;
   timezone?: string | null;
   last_run_at?: string | null;
   last_queued_at?: string | null;
+  last_dispatched_at?: string | null;
+  created_at?: string | null;
   active?: boolean;
+};
+
+type SendQueuedOptions = {
+  skipFeedRefresh?: boolean;
+};
+
+const parseBatchTimes = (value: unknown): string[] => {
+  const seen = new Set<string>();
+  const times = Array.isArray(value) ? value : [];
+  for (const time of times) {
+    const normalized = String(time || '').trim();
+    if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(normalized)) continue;
+    seen.add(normalized);
+  }
+  return Array.from(seen).sort();
+};
+
+const toDailyCronExpression = (time: string) => {
+  const [hour, minute] = time.split(':').map((part) => Number(part));
+  return `${minute} ${hour} * * *`;
+};
+
+const computeNextBatchRunAt = (times: string[], timezone?: string | null) => {
+  let nextValue: string | null = null;
+  for (const time of times) {
+    const expression = toDailyCronExpression(time);
+    const candidate = computeNextRunAt(expression, timezone || 'UTC');
+    if (!candidate) continue;
+    if (!nextValue || new Date(candidate).getTime() < new Date(nextValue).getTime()) {
+      nextValue = candidate;
+    }
+  }
+  return nextValue;
 };
 
 const queueSinceLastRunForSchedule = async (
@@ -685,6 +780,71 @@ const queueSinceLastRunForSchedule = async (
   }
 
   return { queued: totalQueued, feedItemCount: totalFeedItems, cursorAt: cursorAt || null };
+};
+
+const queueRecentMissingForSchedule = async (
+  supabase: SupabaseClient,
+  schedule: Schedule,
+  targets: Target[],
+  lookbackHours: number
+): Promise<number> => {
+  if (!schedule.feed_id) return 0;
+  if (!Array.isArray(targets) || !targets.length) return 0;
+  if (!schedule.last_run_at && !schedule.last_queued_at) return 0;
+
+  const lookback = Math.min(Math.max(Number(lookbackHours) || 0, 1), 72);
+  const sinceIso = new Date(Date.now() - lookback * 60 * 60 * 1000).toISOString();
+
+  const { data: recentItems, error: itemsError } = await supabase
+    .from('feed_items')
+    .select('id')
+    .eq('feed_id', schedule.feed_id)
+    .gte('created_at', sinceIso)
+    .order('created_at', { ascending: true })
+    .limit(400);
+
+  if (itemsError || !recentItems?.length) {
+    if (itemsError) {
+      logger.warn({ scheduleId: schedule.id, error: itemsError }, 'Failed loading recent feed items for reconciliation');
+    }
+    return 0;
+  }
+
+  const targetIds = targets.map((target) => target.id).filter(Boolean) as string[];
+  if (!targetIds.length) return 0;
+
+  const pendingRows: Array<Record<string, unknown>> = [];
+  for (const item of recentItems as Array<{ id?: string }>) {
+    const feedItemId = item?.id ? String(item.id) : null;
+    if (!feedItemId) continue;
+    for (const targetId of targetIds) {
+      pendingRows.push({
+        feed_item_id: feedItemId,
+        target_id: targetId,
+        schedule_id: schedule.id,
+        template_id: schedule.template_id,
+        status: 'pending'
+      });
+    }
+  }
+
+  if (!pendingRows.length) return 0;
+
+  const { data: insertedRows, error: insertError } = await supabase
+    .from('message_logs')
+    .upsert(pendingRows, { onConflict: 'schedule_id,feed_item_id,target_id', ignoreDuplicates: true })
+    .select('id');
+
+  if (insertError) {
+    logger.warn({ scheduleId: schedule.id, error: insertError }, 'Failed reconciling recent queue items');
+    return 0;
+  }
+
+  const inserted = insertedRows?.length || 0;
+  if (inserted > 0) {
+    logger.info({ scheduleId: schedule.id, inserted, lookbackHours: lookback }, 'Reconciled missing recent queue items');
+  }
+  return inserted;
 };
 
 type QueueLatestResult = {
@@ -832,13 +992,17 @@ const queueLatestForSchedule = async (
   };
 };
 
-const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsAppClient | null) => {
+const sendQueuedForSchedule = async (
+  scheduleId: string,
+  whatsappClient?: WhatsAppClient | null,
+  options?: SendQueuedOptions
+) => {
   const supabase = getSupabaseClient();
   if (!supabase) {
     logger.error({ scheduleId }, 'Database not available - cannot send messages');
     return { sent: 0, error: 'Database not available' };
   }
-  
+
   try {
     logger.info({ scheduleId }, 'Starting dispatch for schedule');
     // Get schedule
@@ -849,23 +1013,25 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
       .single();
 
     if (scheduleError || !schedule || !schedule.active) {
-      logger.warn({ scheduleId, error: scheduleError?.message, schedule, active: schedule?.active }, 
+      logger.warn({ scheduleId, error: scheduleError?.message, schedule, active: schedule?.active },
         'Schedule not found or inactive');
       return { sent: 0, queued: 0 };
     }
+
+    const deliveryMode = schedule.delivery_mode === 'batch' || schedule.delivery_mode === 'batched' ? 'batched' : 'immediate';
 
     // Check if schedule has feed_id - if not, it's a manual dispatch only
     if (!schedule.feed_id) {
       const shabbosStatus = await isCurrentlyShabbos();
       if (shabbosStatus.isShabbos) {
-        logger.info({ scheduleId, reason: shabbosStatus.reason, endsAt: shabbosStatus.endsAt }, 
+        logger.info({ scheduleId, reason: shabbosStatus.reason, endsAt: shabbosStatus.endsAt },
           'Skipping message send - Shabbos/Yom Tov active');
-        return { 
-          sent: 0, 
+        return {
+          sent: 0,
           queued: 0,
-          skipped: true, 
+          skipped: true,
           reason: shabbosStatus.reason,
-          resumeAt: shabbosStatus.endsAt 
+          resumeAt: shabbosStatus.endsAt
         };
       }
 
@@ -876,7 +1042,7 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
 
       const whatsappStatus = whatsappClient.getStatus();
       if (!whatsappStatus || whatsappStatus.status !== 'connected') {
-        logger.warn({ scheduleId, whatsappStatus: whatsappStatus?.status || 'unknown' }, 
+        logger.warn({ scheduleId, whatsappStatus: whatsappStatus?.status || 'unknown' },
           'Skipping send - WhatsApp not connected');
         return { sent: 0, queued: 0, skipped: true, reason: 'WhatsApp not connected' };
       }
@@ -891,14 +1057,14 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
         .is('feed_item_id', null);
 
       if (manualLogsError) throw manualLogsError;
-      
+
       if (!manualLogs || manualLogs.length === 0) {
         logger.info({ scheduleId }, 'No pending manual messages to send');
         return { sent: 0, queued: 0 };
       }
 
       // For manual dispatch, we can't proceed without feed items
-      logger.warn({ scheduleId, count: manualLogs.length }, 
+      logger.warn({ scheduleId, count: manualLogs.length },
         'Pending manual logs found but no feed items - cannot send');
       return { sent: 0, queued: 0, error: 'Manual dispatch requires feed items' };
     }
@@ -918,21 +1084,38 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
     }
     logger.info({ scheduleId, targetCount: targets?.length || 0 }, 'Found targets for schedule');
 
-    try {
-      const { data: feed } = await supabase.from('feeds').select('*').eq('id', schedule.feed_id).single();
-      if (feed) {
-        const refreshResult = await fetchAndProcessFeed(feed);
-        if (refreshResult.items.length) {
-          await queueFeedItemsForSchedules(feed.id, refreshResult.items);
+    const settings = await settingsService.getSettings();
+
+    if (!options?.skipFeedRefresh) {
+      try {
+        const { data: feed } = await supabase.from('feeds').select('*').eq('id', schedule.feed_id).single();
+        if (feed) {
+          await fetchAndProcessFeed(feed);
         }
+      } catch (error) {
+        logger.warn({ scheduleId, feedId: schedule.feed_id, error }, 'Failed to refresh feed during dispatch');
       }
-    } catch (error) {
-      logger.warn({ scheduleId, feedId: schedule.feed_id, error }, 'Failed to refresh feed during dispatch');
     }
 
     let queuedCount = 0;
     let queueCursorAt: string | null = null;
-    if (schedule.last_queued_at || schedule.last_run_at) {
+
+    if (deliveryMode === 'batched') {
+      const initialCursor =
+        schedule.last_queued_at ||
+        schedule.last_run_at ||
+        schedule.created_at ||
+        new Date().toISOString();
+
+      const scheduleForQueue: Schedule =
+        schedule.last_queued_at || schedule.last_run_at
+          ? schedule
+          : { ...schedule, last_queued_at: initialCursor };
+
+      const sinceResult = await queueSinceLastRunForSchedule(supabase, scheduleForQueue, targets);
+      queuedCount += sinceResult.queued;
+      queueCursorAt = sinceResult.cursorAt || initialCursor;
+    } else if (schedule.last_queued_at || schedule.last_run_at) {
       const sinceResult = await queueSinceLastRunForSchedule(supabase, schedule, targets);
       queuedCount += sinceResult.queued;
       queueCursorAt = sinceResult.cursorAt;
@@ -940,6 +1123,11 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
       const latestResult = await queueLatestForSchedule(scheduleId, { schedule, targets });
       queuedCount += latestResult.queued;
       queueCursorAt = latestResult.cursorAt || null;
+    }
+
+    if (deliveryMode !== 'batched') {
+      const lookbackHours = Math.max(Number(settings.reconcile_queue_lookback_hours || 12), 1);
+      queuedCount += await queueRecentMissingForSchedule(supabase, schedule, targets, lookbackHours);
     }
 
     // Persist the queue cursor even if we skip sending (e.g. WhatsApp disconnected or Shabbos).
@@ -966,14 +1154,14 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
 
     const shabbosStatus = await isCurrentlyShabbos();
     if (shabbosStatus.isShabbos) {
-      logger.info({ scheduleId, reason: shabbosStatus.reason, endsAt: shabbosStatus.endsAt }, 
+      logger.info({ scheduleId, reason: shabbosStatus.reason, endsAt: shabbosStatus.endsAt },
         'Skipping message send - Shabbos/Yom Tov active');
-      return { 
-        sent: 0, 
+      return {
+        sent: 0,
         queued: queuedCount,
-        skipped: true, 
+        skipped: true,
         reason: shabbosStatus.reason,
-        resumeAt: shabbosStatus.endsAt 
+        resumeAt: shabbosStatus.endsAt
       };
     }
 
@@ -984,12 +1172,13 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
 
     const whatsappStatus = whatsappClient.getStatus();
     if (!whatsappStatus || whatsappStatus.status !== 'connected') {
-      logger.warn({ scheduleId, whatsappStatus: whatsappStatus?.status || 'unknown' }, 
+      logger.warn({ scheduleId, whatsappStatus: whatsappStatus?.status || 'unknown' },
         'Skipping send - WhatsApp not connected');
       return { sent: 0, queued: queuedCount, skipped: true, reason: 'WhatsApp not connected' };
     }
 
-    const settings = await settingsService.getSettings();
+    const maxPendingAgeHours = Math.max(Number(settings.max_pending_age_hours || 48), 1);
+    const staleCutoffMs = Date.now() - maxPendingAgeHours * 60 * 60 * 1000;
 
     // Get template
     const { data: template, error: templateError } = await supabase
@@ -999,7 +1188,7 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
       .single();
 
     if (templateError || !template) {
-      logger.error({ scheduleId, templateId: schedule.template_id, error: templateError }, 
+      logger.error({ scheduleId, templateId: schedule.template_id, error: templateError },
         'Template not found for schedule');
       throw new Error('Template not found for schedule');
     }
@@ -1015,11 +1204,43 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
         .eq('schedule_id', scheduleId)
         .eq('target_id', target.id)
         .eq('status', 'pending')
-        .order('created_at', { ascending: true });
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true });
 
       if (logsError) continue;
 
       if (!logs || logs.length === 0) {
+        continue;
+      }
+
+      const staleLogIds = (logs || [])
+        .filter((entry: { id?: string; created_at?: string | null }) => {
+          const createdAt = entry?.created_at ? new Date(entry.created_at).getTime() : 0;
+          return Boolean(entry?.id) && Number.isFinite(createdAt) && createdAt > 0 && createdAt < staleCutoffMs;
+        })
+        .map((entry: { id?: string }) => entry.id)
+        .filter(Boolean) as string[];
+
+      if (staleLogIds.length) {
+        await supabase
+          .from('message_logs')
+          .update({
+            status: 'skipped',
+            processing_started_at: null,
+            error_message: `Skipped stale queued item (> ${maxPendingAgeHours}h old)`,
+            media_url: null,
+            media_type: null,
+            media_sent: false,
+            media_error: null
+          })
+          .in('id', staleLogIds);
+      }
+
+      const runnableLogs = (logs || []).filter(
+        (entry: { id?: string }) => Boolean(entry?.id) && !staleLogIds.includes(String(entry.id))
+      );
+
+      if (!runnableLogs.length) {
         continue;
       }
 
@@ -1029,7 +1250,7 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
           const info = await whatsappClient.getGroupInfo(jid);
           if (info?.announce && !info?.me?.isAdmin) {
             const reason = 'Group is admin-only (announce mode) and this WhatsApp account is not an admin';
-            const ids = (logs || []).map((l: { id?: string }) => l.id).filter(Boolean) as string[];
+            const ids = (runnableLogs || []).map((l: { id?: string }) => l.id).filter(Boolean) as string[];
             if (ids.length) {
               await supabase
                 .from('message_logs')
@@ -1051,7 +1272,7 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
         }
       }
 
-      for (const log of logs || []) {
+      for (const log of runnableLogs || []) {
         const { data: claimedRows, error: claimError } = await supabase
           .from('message_logs')
           .update({ status: 'processing', processing_started_at: new Date().toISOString() })
@@ -1095,10 +1316,12 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
             await waitForDelays(String(target.id), settings);
             const result = await sendMessageWithTemplate(whatsappClient, target, template, feedItem, {
               sendImages: template?.send_images !== false,
-              supabase
+              supabase,
+              sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS)
             });
             const nowMs = Date.now();
             globalLastSentAtMs = nowMs;
+            globalLastTargetId = String(target.id);
             globalLastSentByTargetId.set(String(target.id), nowMs);
             if (globalLastSentByTargetId.size > 1000) {
               globalLastSentByTargetId.clear();
@@ -1127,12 +1350,12 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
               }
             }
           }
-           
+
           await supabase
             .from('message_logs')
-            .update({ 
-              status: 'sent', 
-              sent_at: new Date().toISOString(), 
+            .update({
+              status: 'sent',
+              sent_at: new Date().toISOString(),
               processing_started_at: null,
               error_message: null,
               message_content: sendResult?.text || null,
@@ -1152,7 +1375,7 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
           if (markSentError) {
             logger.warn({ scheduleId, feedItemId: feedItem.id, error: markSentError }, 'Failed to mark feed item as sent');
           }
-          
+
           sentCount += 1;
         } catch (error) {
           logger.error({ error, scheduleId, feedItemId: feedItem.id, targetId: target.id }, 'Failed to send message');
@@ -1162,6 +1385,7 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
           const errorMessage = authError
             ? `${AUTH_ERROR_HINT} (${rawErrorMessage || 'unknown auth error'})`
             : rawErrorMessage;
+          const timeoutUnknownDelivery = /timed out sending/i.test(rawErrorMessage);
           const nonRetryable = [
             'Template rendered empty message',
             'Target phone number missing',
@@ -1170,13 +1394,18 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
             'Phone number invalid'
           ].some((needle) => rawErrorMessage.includes(needle));
 
-          if (nonRetryable) {
+          const shouldNotRetry = nonRetryable || timeoutUnknownDelivery;
+
+          if (shouldNotRetry) {
+            const finalErrorMessage = timeoutUnknownDelivery
+              ? `Timed out while sending (delivery may have succeeded). Not auto-retrying to avoid duplicates. ${errorMessage}`
+              : errorMessage;
             await supabase
               .from('message_logs')
               .update({
                 status: 'failed',
                 processing_started_at: null,
-                error_message: errorMessage,
+                error_message: finalErrorMessage,
                 media_url: null,
                 media_type: null,
                 media_sent: false,
@@ -1185,24 +1414,24 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
               .eq('id', log.id);
             continue;
           }
-          
+
           // Check if we should retry
           const maxRetries = Number(settings.max_retries || 3);
           const currentRetry = log.retry_count || 0;
-          
+
           if (currentRetry < maxRetries) {
-            logger.info({ 
-              scheduleId, 
-              feedItemId: feedItem.id, 
-              targetId: target.id, 
-              retry: currentRetry + 1, 
+            logger.info({
+              scheduleId,
+              feedItemId: feedItem.id,
+              targetId: target.id,
+              retry: currentRetry + 1,
               maxRetries
             }, 'Retrying failed message');
-            
+
             // Update retry count and keep as pending
             await supabase
               .from('message_logs')
-              .update({ 
+              .update({
                 status: 'pending',
                 processing_started_at: null,
                 error_message: `Retry ${currentRetry + 1}/${maxRetries}: ${errorMessage}`,
@@ -1213,14 +1442,14 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
                 media_error: null
               })
               .eq('id', log.id);
-            
+
             continue;
           }
-          
+
           // Max retries reached, mark as failed
           await supabase
             .from('message_logs')
-            .update({ 
+            .update({
               status: 'failed',
               processing_started_at: null,
               error_message: `Max retries (${maxRetries}) exceeded: ${errorMessage}`,
@@ -1237,10 +1466,19 @@ const sendQueuedForSchedule = async (scheduleId: string, whatsappClient?: WhatsA
     }
 
     const lastRunAt = new Date().toISOString();
-    const nextRunAt = schedule.cron_expression ? computeNextRunAt(schedule.cron_expression, schedule.timezone) : null;
+    let nextRunAt: string | null = null;
+    if (deliveryMode === 'batched') {
+      const batchTimes = parseBatchTimes(schedule.batch_times);
+      nextRunAt = computeNextBatchRunAt(batchTimes, schedule.timezone || 'UTC');
+    } else if (schedule.cron_expression) {
+      nextRunAt = computeNextRunAt(schedule.cron_expression, schedule.timezone);
+    }
     const scheduleUpdates: Record<string, unknown> = { last_run_at: lastRunAt, next_run_at: nextRunAt };
     if (queueCursorAt) {
       scheduleUpdates.last_queued_at = queueCursorAt;
+    }
+    if (deliveryMode === 'batched') {
+      scheduleUpdates.last_dispatched_at = lastRunAt;
     }
     const { error: scheduleUpdateError } = await supabase.from('schedules').update(scheduleUpdates).eq('id', scheduleId);
     if (scheduleUpdateError) {
@@ -1274,6 +1512,28 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
   }
 
   try {
+    const { data: orphanPendingRows, error: orphanPendingError } = await supabase
+      .from('message_logs')
+      .select('id')
+      .is('schedule_id', null)
+      .eq('status', 'pending');
+    if (orphanPendingError) throw orphanPendingError;
+
+    const orphanPendingIds = (orphanPendingRows || [])
+      .map((row: { id?: string }) => row.id)
+      .filter(Boolean) as string[];
+    if (orphanPendingIds.length) {
+      const { error: cleanupError } = await supabase
+        .from('message_logs')
+        .delete()
+        .in('id', orphanPendingIds);
+      if (cleanupError) {
+        logger.warn({ error: cleanupError, orphanPendingCount: orphanPendingIds.length }, 'Failed cleaning orphan pending logs');
+      } else {
+        logger.info({ orphanPendingCount: orphanPendingIds.length }, 'Cleaned orphan pending logs');
+      }
+    }
+
     const { data: pendingLogs, error: pendingLogsError } = await supabase
       .from('message_logs')
       .select('schedule_id')
@@ -1284,10 +1544,27 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
     }
 
     const scheduleIds = [...new Set((pendingLogs || []).map((log: { schedule_id?: string }) => log.schedule_id).filter(Boolean))] as string[];
+    const { data: scheduleRows } = await supabase
+      .from('schedules')
+      .select('id,delivery_mode')
+      .in('id', scheduleIds);
+
+    const batchScheduleIds = new Set(
+      (scheduleRows || [])
+        .filter((row: { id?: string; delivery_mode?: string | null }) => row?.delivery_mode === 'batched' || row?.delivery_mode === 'batch')
+        .map((row: { id?: string }) => String(row.id || ''))
+        .filter(Boolean)
+    );
+
     let totalSent = 0;
     let totalQueued = 0;
+    let skippedBatch = 0;
 
     for (const scheduleId of scheduleIds) {
+      if (batchScheduleIds.has(scheduleId)) {
+        skippedBatch += 1;
+        continue;
+      }
       const result = await sendQueuedForSchedule(scheduleId, whatsappClient);
       if (result?.sent) {
         totalSent += result.sent;
@@ -1297,13 +1574,16 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
       }
     }
 
-    logger.info({ scheduleCount: scheduleIds.length, totalSent, totalQueued }, 'Processed pending schedules after reconnect');
+    logger.info(
+      { scheduleCount: scheduleIds.length, skippedBatch, totalSent, totalQueued },
+      'Processed pending schedules after reconnect'
+    );
     return { sent: totalSent, queued: totalQueued, schedules: scheduleIds.length };
   } catch (error) {
-      logger.error({ error }, 'Failed to send pending schedules after reconnect');
-      return { sent: 0, queued: 0, schedules: 0, error: getErrorMessage(error) };
-    }
-  };
+    logger.error({ error }, 'Failed to send pending schedules after reconnect');
+    return { sent: 0, queued: 0, schedules: 0, error: getErrorMessage(error) };
+  }
+};
 
 module.exports = {
   sendQueuedForSchedule,

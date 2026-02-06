@@ -153,10 +153,21 @@ const scheduleRoutes = () => {
 
   router.delete('/:id', async (req: Request, res: Response) => {
     try {
+      const scheduleId = req.params.id;
+
+      // Prevent orphaned unsent queue items when a schedule is removed.
+      // Sent logs can remain for audit history (they will become schedule_id = null via FK).
+      const { error: unsentCleanupError } = await getDb()
+        .from('message_logs')
+        .delete()
+        .eq('schedule_id', scheduleId)
+        .in('status', ['pending', 'processing', 'failed', 'skipped']);
+      if (unsentCleanupError) throw unsentCleanupError;
+
       const { error } = await getDb()
         .from('schedules')
         .delete()
-        .eq('id', req.params.id);
+        .eq('id', scheduleId);
       
       if (error) throw error;
       refreshSchedulers(req.app.locals.whatsapp);

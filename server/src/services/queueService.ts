@@ -1085,7 +1085,8 @@ const sendQueuedForSchedule = async (
         .eq('schedule_id', scheduleId)
         .eq('target_id', target.id)
         .eq('status', 'pending')
-        .order('created_at', { ascending: true });
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true });
 
       if (logsError) continue;
 
@@ -1385,6 +1386,28 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
   }
 
   try {
+    const { data: orphanPendingRows, error: orphanPendingError } = await supabase
+      .from('message_logs')
+      .select('id')
+      .is('schedule_id', null)
+      .eq('status', 'pending');
+    if (orphanPendingError) throw orphanPendingError;
+
+    const orphanPendingIds = (orphanPendingRows || [])
+      .map((row: { id?: string }) => row.id)
+      .filter(Boolean) as string[];
+    if (orphanPendingIds.length) {
+      const { error: cleanupError } = await supabase
+        .from('message_logs')
+        .delete()
+        .in('id', orphanPendingIds);
+      if (cleanupError) {
+        logger.warn({ error: cleanupError, orphanPendingCount: orphanPendingIds.length }, 'Failed cleaning orphan pending logs');
+      } else {
+        logger.info({ orphanPendingCount: orphanPendingIds.length }, 'Cleaned orphan pending logs');
+      }
+    }
+
     const { data: pendingLogs, error: pendingLogsError } = await supabase
       .from('message_logs')
       .select('schedule_id')

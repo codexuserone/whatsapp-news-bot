@@ -80,7 +80,43 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
     });
 
     const isFirstFetch = !feed.last_fetched_at;
-    const sourceItems = isFirstFetch ? byMostRecent.slice(0, bootstrapLimit) : byMostRecent;
+
+    const { data: existingMarkers } = await supabase
+      .from('feed_items')
+      .select('guid, normalized_url')
+      .eq('feed_id', feed.id)
+      .order('created_at', { ascending: false })
+      .limit(500);
+
+    const knownGuids = new Set(
+      (existingMarkers || [])
+        .map((row: { guid?: string | null }) => (row?.guid ? String(row.guid) : ''))
+        .filter(Boolean)
+    );
+    const knownUrls = new Set(
+      (existingMarkers || [])
+        .map((row: { normalized_url?: string | null }) =>
+          row?.normalized_url ? String(row.normalized_url) : ''
+        )
+        .filter(Boolean)
+    );
+
+    const sourceItems = isFirstFetch
+      ? byMostRecent.slice(0, bootstrapLimit)
+      : (() => {
+          const fresh: FeedItemInput[] = [];
+          for (const candidate of byMostRecent) {
+            const guid = candidate?.guid ? String(candidate.guid) : '';
+            const normalizedCandidateUrl = normalizeUrl(candidate?.url || '');
+            const seenByGuid = guid ? knownGuids.has(guid) : false;
+            const seenByUrl = normalizedCandidateUrl ? knownUrls.has(normalizedCandidateUrl) : false;
+            if (seenByGuid || seenByUrl) {
+              break;
+            }
+            fresh.push(candidate);
+          }
+          return fresh;
+        })();
 
     if (isFirstFetch && items.length > sourceItems.length) {
       console.info(

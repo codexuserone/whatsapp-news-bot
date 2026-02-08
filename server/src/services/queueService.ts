@@ -896,16 +896,51 @@ const queueSinceLastRunForSchedule = async (
   let totalQueued = 0;
   let totalFeedItems = 0;
 
+  // Pre-fetch existing combinations to avoid duplicates in batch
+  const existingCombos = new Set<string>();
+  const refreshExistingCombos = async () => {
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(); // Last 7 days
+    const { data: existing } = await supabase
+      .from('message_logs')
+      .select('schedule_id,feed_item_id,target_id')
+      .eq('schedule_id', schedule.id)
+      .gte('created_at', since);
+    
+    existingCombos.clear();
+    for (const row of (existing || [])) {
+      const key = `${row.schedule_id}:${row.feed_item_id}:${row.target_id}`;
+      existingCombos.add(key);
+    }
+  };
+  
+  await refreshExistingCombos();
+
   const flushBatch = async (batch: Array<Record<string, unknown>>) => {
     if (!batch.length) return 0;
+    
+    // Filter out any that we know already exist
+    const filtered = batch.filter(item => {
+      const key = `${item.schedule_id}:${item.feed_item_id}:${item.target_id}`;
+      return !existingCombos.has(key);
+    });
+    
+    if (!filtered.length) return 0;
+    
     const { data: insertedRows, error: upsertError } = await supabase
       .from('message_logs')
-      .upsert(batch, { onConflict: 'schedule_id,feed_item_id,target_id', ignoreDuplicates: true })
+      .upsert(filtered, { onConflict: 'schedule_id,feed_item_id,target_id', ignoreDuplicates: true })
       .select('id');
     if (upsertError) {
       logger.warn({ scheduleId: schedule.id, error: upsertError }, 'Failed to queue items since last run');
       return 0;
     }
+    
+    // Add newly inserted to our tracking set
+    for (const item of filtered) {
+      const key = `${item.schedule_id}:${item.feed_item_id}:${item.target_id}`;
+      existingCombos.add(key);
+    }
+    
     return insertedRows?.length || 0;
   };
 

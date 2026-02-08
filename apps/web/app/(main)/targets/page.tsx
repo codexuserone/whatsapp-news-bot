@@ -106,27 +106,38 @@ const TargetsPage = () => {
     }
   });
 
+  // Auto-sync: runs immediately when connected, then every 60 seconds
   useEffect(() => {
     if (!isConnected) return;
-    let cancelled = false;
+    
+    // Use a ref to track if component is mounted
+    const mounted = { current: true };
+    
     const runAutoSync = async () => {
-      if (cancelled || syncInFlightRef.current) return;
+      if (!mounted.current || syncInFlightRef.current) return;
       syncInFlightRef.current = true;
       try {
         await syncTargets.mutateAsync();
+      } catch (e) {
+        // Silently fail - will retry on next interval
       } finally {
         syncInFlightRef.current = false;
       }
     };
+    
+    // Run immediately
     void runAutoSync();
+    
+    // Then every 60 seconds
     const timer = setInterval(() => {
       void runAutoSync();
     }, 60_000);
+    
     return () => {
-      cancelled = true;
+      mounted.current = false;
       clearInterval(timer);
     };
-  }, [isConnected, syncTargets]);
+  }, [isConnected]); // Only depend on isConnected, not syncTargets
 
   const updateTarget = useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: TargetPayload }) => api.put(`/api/targets/${id}`, payload),

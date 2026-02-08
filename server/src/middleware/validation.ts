@@ -99,7 +99,8 @@ const schemas = {
     content: z.string().min(1).max(5000),
     description: z.string().max(1000).optional().nullable().transform(normalizeOptional),
     active: z.boolean().default(true),
-    send_images: z.boolean().default(true)
+    send_images: z.boolean().default(true),
+    send_mode: z.enum(['image', 'link_preview', 'text_only']).optional().default('image')
   }),
 
   testMessage: z

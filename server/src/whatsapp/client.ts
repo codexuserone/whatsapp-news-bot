@@ -1004,6 +1004,16 @@ class WhatsAppClient {
               }
             }
           }
+
+          const remoteJid = message?.key?.remoteJid ? String(message.key.remoteJid) : '';
+          if (remoteJid.endsWith('@newsletter')) {
+            this.cacheNewsletterChat({
+              id: remoteJid,
+              jid: remoteJid,
+              name: remoteJid,
+              subscribers: 0
+            });
+          }
         }
 
         const toSave =

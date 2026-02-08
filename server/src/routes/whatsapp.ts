@@ -377,6 +377,111 @@ const loadSavedChannelTargets = async (): Promise<Array<{
   );
 };
 
+const loadKnownChannelsFromMessages = async (): Promise<Array<{
+  id: string;
+  jid: string;
+  name: string;
+  subscribers: number;
+  viewerRole: string | null;
+  canSend: boolean | null;
+}>> => {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('chat_messages')
+    .select('remote_jid')
+    .like('remote_jid', '%@newsletter')
+    .order('timestamp', { ascending: false })
+    .limit(1000);
+
+  if (error) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const channels: Array<{
+    id: string;
+    jid: string;
+    name: string;
+    subscribers: number;
+    viewerRole: string | null;
+    canSend: boolean | null;
+  }> = [];
+
+  for (const row of (data || []) as Array<Record<string, unknown>>) {
+    const jid = normalizeChannelJid(row.remote_jid);
+    if (!jid || seen.has(jid)) continue;
+    seen.add(jid);
+    channels.push({
+      id: jid,
+      jid,
+      name: jid,
+      subscribers: 0,
+      viewerRole: null,
+      canSend: null
+    });
+  }
+
+  return channels;
+};
+
+const enrichChannelsWithMetadata = async (
+  whatsapp: unknown,
+  channels: Array<{
+    id: string;
+    jid: string;
+    name: string;
+    subscribers: number;
+    viewerRole: string | null;
+    canSend: boolean | null;
+  }>
+) => {
+  const resolver =
+    whatsapp && typeof (whatsapp as { getChannelInfo?: unknown }).getChannelInfo === 'function'
+      ? (whatsapp as { getChannelInfo: (jid: string) => Promise<Record<string, unknown> | null> }).getChannelInfo
+      : null;
+  if (!resolver || !channels.length) {
+    return channels;
+  }
+
+  const capped = channels.slice(0, 80);
+  const out = [...channels];
+  for (let index = 0; index < capped.length; index += 1) {
+    const candidate = capped[index];
+    if (!candidate?.jid) continue;
+    try {
+      const enriched = await resolver(candidate.jid);
+      if (!enriched) continue;
+      const normalizedJid = normalizeChannelJid(enriched.jid || candidate.jid);
+      if (!normalizedJid) continue;
+      const existingIndex = out.findIndex((item) => item.jid === normalizedJid);
+      if (existingIndex < 0) continue;
+      const existing = out[existingIndex];
+      if (!existing) continue;
+      out[existingIndex] = {
+        id: normalizedJid,
+        jid: normalizedJid,
+        name: String(enriched.name || existing.name || normalizedJid),
+        subscribers: Math.max(0, Math.round(Number(enriched.subscribers || existing.subscribers || 0))),
+        viewerRole: String(enriched.viewerRole || existing.viewerRole || '') || null,
+        canSend:
+          typeof enriched.canSend === 'boolean'
+            ? enriched.canSend
+            : typeof existing.canSend === 'boolean'
+              ? existing.canSend
+              : null
+      };
+    } catch {
+      // best effort
+    }
+  }
+
+  return out;
+};
+
 const toTimestampIso = (value: unknown) => {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
     return new Date(value * 1000).toISOString();
@@ -473,22 +578,28 @@ const whatsappRoutes = () => {
         : null;
     const discovered = enriched?.channels || await whatsapp?.getChannels() || [];
     const savedTargets = await loadSavedChannelTargets();
-    res.json(mergeChannels(discovered, savedTargets));
+    const knownFromMessages = await loadKnownChannelsFromMessages();
+    const merged = mergeChannels(mergeChannels(discovered, savedTargets), knownFromMessages);
+    res.json(await enrichChannelsWithMetadata(whatsapp, merged));
   }));
 
   router.get('/channels/diagnostics', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
     const savedTargets = await loadSavedChannelTargets();
+    const knownFromMessages = await loadKnownChannelsFromMessages();
     if (!whatsapp) {
-      const channels = mergeChannels([], savedTargets);
+      const channels = mergeChannels(savedTargets, knownFromMessages);
       return res.json({
         channels,
         diagnostics: {
-          methodsTried: savedTargets.length ? [`targets:${savedTargets.length}`] : [],
+          methodsTried: [
+            ...(savedTargets.length ? [`targets:${savedTargets.length}`] : []),
+            ...(knownFromMessages.length ? [`chat_messages:${knownFromMessages.length}`] : [])
+          ],
           methodErrors: [],
           sourceCounts: { api: 0, cache: channels.length, metadata: 0 },
           limitation: channels.length
-            ? 'WhatsApp is not connected. Showing saved channel targets only.'
+            ? 'WhatsApp is not connected. Showing channels from saved targets and local message history.'
             : 'WhatsApp is not connected.'
         }
       });
@@ -496,17 +607,22 @@ const whatsappRoutes = () => {
 
     if (typeof whatsapp.getChannelsWithDiagnostics === 'function') {
       const result = await whatsapp.getChannelsWithDiagnostics();
-      const channels = mergeChannels(result.channels || [], savedTargets);
+      const channels = await enrichChannelsWithMetadata(
+        whatsapp,
+        mergeChannels(mergeChannels(result.channels || [], savedTargets), knownFromMessages)
+      );
       return res.json({
         channels,
         diagnostics: {
-          methodsTried: savedTargets.length
-            ? [...(result?.diagnostics?.methodsTried || []), `targets:${savedTargets.length}`]
-            : result?.diagnostics?.methodsTried || [],
+          methodsTried: [
+            ...(result?.diagnostics?.methodsTried || []),
+            ...(savedTargets.length ? [`targets:${savedTargets.length}`] : []),
+            ...(knownFromMessages.length ? [`chat_messages:${knownFromMessages.length}`] : [])
+          ],
           methodErrors: result?.diagnostics?.methodErrors || [],
           sourceCounts: {
             api: Number(result?.diagnostics?.sourceCounts?.api || 0),
-            cache: Number(result?.diagnostics?.sourceCounts?.cache || 0) + savedTargets.length,
+            cache: Number(result?.diagnostics?.sourceCounts?.cache || 0) + savedTargets.length + knownFromMessages.length,
             metadata: Number(result?.diagnostics?.sourceCounts?.metadata || 0)
           },
           limitation:
@@ -518,13 +634,19 @@ const whatsappRoutes = () => {
     }
 
     const channels = await whatsapp.getChannels?.() || [];
-    const merged = mergeChannels(channels, savedTargets);
+    const merged = await enrichChannelsWithMetadata(
+      whatsapp,
+      mergeChannels(mergeChannels(channels, savedTargets), knownFromMessages)
+    );
     return res.json({
       channels: merged,
       diagnostics: {
-        methodsTried: savedTargets.length ? [`targets:${savedTargets.length}`] : [],
+        methodsTried: [
+          ...(savedTargets.length ? [`targets:${savedTargets.length}`] : []),
+          ...(knownFromMessages.length ? [`chat_messages:${knownFromMessages.length}`] : [])
+        ],
         methodErrors: [],
-        sourceCounts: { api: channels.length, cache: savedTargets.length, metadata: 0 },
+        sourceCounts: { api: channels.length, cache: savedTargets.length + knownFromMessages.length, metadata: 0 },
         limitation: merged.length ? null : 'Channel diagnostics are unavailable in this server build.'
       }
     });
@@ -566,6 +688,11 @@ const whatsappRoutes = () => {
     if (!channel && reference.jid) {
       const savedTargets = await loadSavedChannelTargets();
       channel = savedTargets.find((entry) => entry.jid === reference.jid) || null;
+    }
+
+    if (!channel && reference.jid) {
+      const knownFromMessages = await loadKnownChannelsFromMessages();
+      channel = knownFromMessages.find((entry) => entry.jid === reference.jid) || null;
     }
 
     if (!channel && reference.inviteCode) {

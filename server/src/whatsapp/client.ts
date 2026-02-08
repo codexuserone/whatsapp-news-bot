@@ -499,6 +499,15 @@ class WhatsAppClient {
       handleArgs(args);
     };
     baileysLogger.warn = (...args: unknown[]) => {
+      const message = this.extractLogMessage(args);
+      const errorMessage = this.extractErrorMessage(args);
+      if (isBenignMediaTrace(errorMessage) || isBenignMediaTrace(message)) {
+        baseLogger.info(
+          { reason: 'unsupported_image_format' },
+          'Baileys skipped thumbnail generation for one media payload'
+        );
+        return;
+      }
       baseLogger.warn(...args);
       handleArgs(args);
     };

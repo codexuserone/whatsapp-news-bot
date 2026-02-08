@@ -1,0 +1,13 @@
+{
+  "items": [
+    {
+      "id": "e2e-image-item-001",
+      "title": "E2E Image Item",
+      "description": "Image payload validation item for schedule dispatch",
+      "link": "https://example.com/e2e-image-item",
+      "author": "codex",
+      "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/React-icon.svg/256px-React-icon.svg.png",
+      "publishedAt": "2026-02-08T00:00:00Z"
+    }
+  ]
+}

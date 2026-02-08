@@ -820,14 +820,19 @@ class WhatsAppClient {
 
       const browser =
         Browsers?.windows?.('Chrome') || ['Windows', 'Chrome', '120.0.0'];
+      const syncFullHistory = process.env.WHATSAPP_SYNC_FULL_HISTORY !== 'false';
+      const browserForSync =
+        syncFullHistory && Browsers?.macOS
+          ? Browsers.macOS('Desktop')
+          : browser;
 
       const socketConfig: Record<string, unknown> = {
         auth: state,
         printQRInTerminal: false,
-        syncFullHistory: false,
+        syncFullHistory,
         markOnlineOnConnect: false,
         emitOwnEvents: true,
-        browser,
+        browser: browserForSync,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: undefined,
         keepAliveIntervalMs: 30000,

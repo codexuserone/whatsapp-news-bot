@@ -133,6 +133,8 @@ This protects both the UI and API with browser Basic Auth (health endpoints rema
 - `GET /api/whatsapp/qr` - QR code for auth
 - `GET /api/whatsapp/groups` - List WhatsApp groups
 - `GET /api/whatsapp/channels` - List WhatsApp channels
+- `GET /api/whatsapp/channels/diagnostics` - Channel discovery diagnostics (methods tried + limitations)
+- `POST /api/whatsapp/channels/resolve` - Resolve channel from URL/invite/JID to canonical `@newsletter` JID
 - `GET /api/analytics/report` - Full analytics report (windows, recommendations, risks, timeline)
 - `GET /api/analytics/overview` - Analytics summary cards
 - `GET /api/analytics/windows` - 7x24 slot scores and confidence
@@ -144,6 +146,8 @@ This protects both the UI and API with browser Basic Auth (health endpoints rema
 
 ## Notes
 - WhatsApp auth uses QR displayed in the UI (not terminal)
+- Channel auto-discovery is constrained by WhatsApp Web/Baileys APIs; set `WHATSAPP_SYNC_FULL_HISTORY=true` to maximize discovered chats/channels.
+- Video media sends support optional `thumbnailUrl` (manual API/UI sends) to avoid gray video tiles on some clients.
 - All settings are stored in Supabase and editable via UI
 - Free tier Render instances spin down after inactivity. Use an external uptime ping against `/ping` to keep it alive.
 - Session data is stored in Supabase when configured; otherwise it resets on restart

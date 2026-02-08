@@ -8,7 +8,8 @@ import {
   ClipboardList,
   Activity,
   Settings,
-  ListOrdered
+  ListOrdered,
+  BarChart3
 } from 'lucide-react';
 
 export type NavItem = {
@@ -44,6 +45,7 @@ export const navSections: NavSection[] = [
   {
     title: 'Monitoring',
     items: [
+      { label: 'Analytics', to: '/analytics', icon: BarChart3 },
       { label: 'Feed Items', to: '/feed-items', icon: ClipboardList },
       { label: 'Logs', to: '/logs', icon: Activity }
     ]

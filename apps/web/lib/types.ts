@@ -158,3 +158,136 @@ export type ShabbosSettings = {
   havdalahMins?: number | null;
   queueMessages?: boolean | null;
 };
+
+export type AnalyticsWindow = {
+  slot: number;
+  day: number;
+  dayLabel: string;
+  hour: number;
+  label: string;
+  sentCount: number;
+  failedCount: number;
+  weightedSamples: number;
+  posteriorMean: number;
+  objective: number;
+  confidence: number;
+  expectedObservedRate: number;
+  expectedResponses24h: number;
+  fatiguePenalty: number;
+  pressureRatio: number;
+  avgLatencySec?: number | null;
+  primaryContentType: string;
+};
+
+export type AnalyticsRecommendation = {
+  label: string;
+  day: number;
+  dayLabel: string;
+  hour: number;
+  time: string;
+  objective: number;
+  confidence: number;
+  expectedObservedRate: number;
+  expectedResponses24h: number;
+  reason: string;
+};
+
+export type AnalyticsTimelinePoint = {
+  date: string;
+  sent: number;
+  failed: number;
+  observed: number;
+  responses24h: number;
+  avgLatencySec?: number | null;
+  avgScore: number;
+  observedRate: number;
+  failureRate: number;
+};
+
+export type AnalyticsTargetRisk = {
+  target_id: string;
+  target_name: string;
+  target_type: string;
+  sent: number;
+  failed: number;
+  observedRate: number;
+  failureRate: number;
+  avgResponses24h: number;
+  inactivityDays: number;
+  trendDrop: number;
+  fatigueSignal: number;
+  riskScore: number;
+};
+
+export type AnalyticsAudienceSnapshot = {
+  id: string;
+  target_id: string;
+  target_name: string;
+  target_type: string;
+  source: string;
+  audience_size: number;
+  captured_at: string;
+};
+
+export type AnalyticsReport = {
+  generatedAt: string;
+  lookbackDays: number;
+  filters: {
+    target_id?: string | null;
+    content_type?: string | null;
+    tz_offset_min: number;
+  };
+  totals: {
+    messages: number;
+    attempted: number;
+    sent: number;
+    failed: number;
+    skipped: number;
+    pending: number;
+    processing: number;
+    observed: number;
+    responses24h: number;
+  };
+  rates: {
+    observedRate: number;
+    failureRate: number;
+    responseRate24h: number;
+    avgLatencySec?: number | null;
+    avgEngagementScore: number;
+  };
+  model: {
+    halfLifeDays: number;
+    priorAlpha: number;
+    priorBeta: number;
+    confidenceTarget: number;
+    objectiveScore: number;
+    confidence: number;
+  };
+  windows: AnalyticsWindow[];
+  recommendations: {
+    windows: AnalyticsRecommendation[];
+    suggestedBatchTimes: string[];
+    suggestedCron?: string | null;
+  };
+  timeline: AnalyticsTimelinePoint[];
+  contentTypeStats: Array<{
+    contentType: string;
+    sent: number;
+    observedRate: number;
+    responseRate24h: number;
+    avgScore: number;
+  }>;
+  targetRisks: AnalyticsTargetRisk[];
+  audience: {
+    snapshots: AnalyticsAudienceSnapshot[];
+    latestByTarget: Array<{
+      target_id: string;
+      target_name: string;
+      target_type: string;
+      audience_size: number;
+      growth7d?: number | null;
+      captured_at: string;
+    }>;
+    totalAudienceLatest: number;
+  };
+};

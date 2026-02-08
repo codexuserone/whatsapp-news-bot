@@ -15,7 +15,8 @@ const spec = {
     { name: 'queue' },
     { name: 'logs' },
     { name: 'settings' },
-    { name: 'shabbos' }
+    { name: 'shabbos' },
+    { name: 'analytics' }
   ],
   components: {
     schemas: {
@@ -302,6 +303,30 @@ const spec = {
     '/api/settings': {
       get: { tags: ['settings'], summary: 'Get settings', responses: { 200: { description: 'OK' } } },
       put: { tags: ['settings'], summary: 'Update settings', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/analytics/report': {
+      get: { tags: ['analytics'], summary: 'Get full analytics report', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/analytics/overview': {
+      get: { tags: ['analytics'], summary: 'Get analytics overview', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/analytics/windows': {
+      get: { tags: ['analytics'], summary: 'Get timing window analytics', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/analytics/recommendation': {
+      get: { tags: ['analytics'], summary: 'Get posting window recommendations', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/analytics/timeline': {
+      get: { tags: ['analytics'], summary: 'Get analytics timeline', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/analytics/targets': {
+      get: { tags: ['analytics'], summary: 'Get target risk analytics', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/analytics/audience': {
+      get: { tags: ['analytics'], summary: 'Get audience snapshot analytics', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/analytics/audience/snapshot': {
+      post: { tags: ['analytics'], summary: 'Capture live audience snapshots from WhatsApp', responses: { 200: { description: 'OK' } } }
     },
     '/api/shabbos/status': {
       get: { tags: ['shabbos'], summary: 'Get Shabbos status', responses: { 200: { description: 'OK' } } }

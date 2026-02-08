@@ -19,6 +19,10 @@ const DEFAULTS = {
   reconcile_queue_lookback_hours: Number(process.env.RECONCILE_QUEUE_LOOKBACK_HOURS || 12),
   dispatch_pending_read_retries: Number(process.env.DISPATCH_PENDING_READ_RETRIES || 8),
   dispatch_pending_read_delay_ms: Number(process.env.DISPATCH_PENDING_READ_DELAY_MS || 500),
+  analytics_half_life_days: Number(process.env.ANALYTICS_HALF_LIFE_DAYS || 21),
+  analytics_prior_alpha: Number(process.env.ANALYTICS_PRIOR_ALPHA || 2),
+  analytics_prior_beta: Number(process.env.ANALYTICS_PRIOR_BETA || 2),
+  analytics_confidence_sample_target: Number(process.env.ANALYTICS_CONFIDENCE_SAMPLE_TARGET || 12),
   dedupeThreshold: 0.88,
   processingTimeoutMinutes: Number(process.env.PROCESSING_TIMEOUT_MINUTES || 30)
 };

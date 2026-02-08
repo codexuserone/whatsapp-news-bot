@@ -11,6 +11,7 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
 - **Deduplication** - Fuzzy title/URL matching + chat history check
 - **Throttling** - Configurable inter/intra target delays
 - **Retention** - Auto-cleanup of old logs and auth states
+- **Analytics** - Bayesian posting windows, fatigue/risk scoring, timeline trends, and audience snapshots
 
 ## Tech Stack
 - **Backend**: Express, Baileys (@whiskeysockets/baileys), Supabase (Postgres), node-cron, TypeScript
@@ -77,7 +78,7 @@ Automated WhatsApp news distribution system for Anash.org. Fetches content from 
    npm run db:migrate
    ```
    The migration runner tracks applied files in the `schema_migrations` table.
-3. Alternatively, run the SQL files in `scripts/` (001-012) using the Supabase SQL editor.
+3. Alternatively, run the SQL files in `scripts/` (001-019) using the Supabase SQL editor.
 
 ## Render Deployment
 
@@ -132,6 +133,11 @@ This protects both the UI and API with browser Basic Auth (health endpoints rema
 - `GET /api/whatsapp/qr` - QR code for auth
 - `GET /api/whatsapp/groups` - List WhatsApp groups
 - `GET /api/whatsapp/channels` - List WhatsApp channels
+- `GET /api/analytics/report` - Full analytics report (windows, recommendations, risks, timeline)
+- `GET /api/analytics/overview` - Analytics summary cards
+- `GET /api/analytics/windows` - 7x24 slot scores and confidence
+- `GET /api/analytics/recommendation` - Best posting windows + cron/batch suggestions
+- `POST /api/analytics/audience/snapshot` - Capture live audience sizes from WhatsApp groups/channels
 - Full CRUD for `/api/feeds`, `/api/templates`, `/api/targets`, `/api/schedules`, `/api/settings`, `/api/logs`
 
 ## Notes

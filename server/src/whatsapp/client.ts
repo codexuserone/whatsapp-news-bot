@@ -26,6 +26,13 @@ type ChannelSummary = {
   subscribers: number;
 };
 
+type GroupSummary = {
+  id: string;
+  jid: string;
+  name: string;
+  size: number;
+};
+
 type ChannelDiagnostics = {
   methodsTried: string[];
   methodErrors: string[];
@@ -209,6 +216,9 @@ class WhatsAppClient {
   lastSenderKeyResetAt: number | null;
   lastKeyCacheResetAt: number | null;
   groupMetadataCache: Map<string, unknown>;
+  groupsListCache: GroupSummary[];
+  groupsListFetchedAtMs: number;
+  groupsListFetchInFlight: Promise<GroupSummary[]> | null;
   processErrorHandlersBound: boolean;
   waVersion: number[] | null;
   waVersionFetchedAtMs: number | null;
@@ -242,6 +252,9 @@ class WhatsAppClient {
     this.lastSenderKeyResetAt = null;
     this.lastKeyCacheResetAt = null;
     this.groupMetadataCache = new Map();
+    this.groupsListCache = [];
+    this.groupsListFetchedAtMs = 0;
+    this.groupsListFetchInFlight = null;
     this.processErrorHandlersBound = false;
     this.waVersion = null;
     this.waVersionFetchedAtMs = null;
@@ -307,6 +320,44 @@ class WhatsAppClient {
       'not valid json'
     ];
     return checks.some((check) => normalized.includes(check.toLowerCase()));
+  }
+
+  isRateOverLimitError(error: unknown): boolean {
+    const message = getErrorMessage(error).toLowerCase();
+    if (message.includes('rate-overlimit') || message.includes('too many requests')) {
+      return true;
+    }
+
+    const record = error as {
+      data?: unknown;
+      statusCode?: unknown;
+      output?: { statusCode?: unknown; payload?: { statusCode?: unknown } };
+    };
+    const statusCandidates = [
+      Number(record?.data),
+      Number(record?.statusCode),
+      Number(record?.output?.statusCode),
+      Number(record?.output?.payload?.statusCode)
+    ];
+
+    return statusCandidates.some((status) => Number.isFinite(status) && status === 429);
+  }
+
+  getGroupsFromMetadataCache(): GroupSummary[] {
+    const groups: GroupSummary[] = [];
+    for (const [jid, raw] of this.groupMetadataCache.entries()) {
+      const metadata = raw as { subject?: unknown; name?: unknown; size?: unknown; participants?: unknown };
+      const participants = Array.isArray(metadata?.participants) ? metadata.participants : [];
+      const sizeCandidate = Number(metadata?.size);
+      const size = Number.isFinite(sizeCandidate) ? sizeCandidate : participants.length;
+      groups.push({
+        id: jid,
+        jid,
+        name: String(metadata?.subject || metadata?.name || jid),
+        size
+      });
+    }
+    return groups.sort((a, b) => a.name.localeCompare(b.name));
   }
 
   async handleCorruptedAuthState(err: unknown): Promise<void> {
@@ -1150,32 +1201,65 @@ class WhatsAppClient {
     return this.qrCode;
   }
 
-  async getGroups(): Promise<Array<{ id: string; jid: string; name: string; size: number }>> {
+  async getGroups(): Promise<GroupSummary[]> {
     const socket = this.socket;
-    if (!socket) return [];
-    try {
-      const groups = await socket.groupFetchAllParticipating();
-      Object.values(groups || {}).forEach((group: { id?: string }) => {
-        if (group?.id) {
-          this.groupMetadataCache.set(group.id, group);
-          if (this.groupMetadataCache.size > 500) {
-            const oldest = this.groupMetadataCache.keys().next().value;
-            if (oldest) {
-              this.groupMetadataCache.delete(oldest);
+    const now = Date.now();
+    const GROUP_CACHE_TTL_MS = 120000;
+
+    if (this.groupsListCache.length && now - this.groupsListFetchedAtMs < GROUP_CACHE_TTL_MS) {
+      return this.groupsListCache;
+    }
+
+    if (!socket) {
+      return this.groupsListCache.length ? this.groupsListCache : this.getGroupsFromMetadataCache();
+    }
+
+    if (this.groupsListFetchInFlight) {
+      return this.groupsListFetchInFlight;
+    }
+
+    this.groupsListFetchInFlight = (async () => {
+      try {
+        const groups = await socket.groupFetchAllParticipating();
+        Object.values(groups || {}).forEach((group: { id?: string }) => {
+          if (group?.id) {
+            this.groupMetadataCache.set(group.id, group);
+            if (this.groupMetadataCache.size > 500) {
+              const oldest = this.groupMetadataCache.keys().next().value;
+              if (oldest) {
+                this.groupMetadataCache.delete(oldest);
+              }
             }
           }
+        });
+
+        const normalized = Object.values(groups || {})
+          .map((group) => ({
+            id: group.id,
+            jid: group.id,
+            name: group.subject || group.id,
+            size: group.size || 0
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+
+        this.groupsListCache = normalized;
+        this.groupsListFetchedAtMs = Date.now();
+        return normalized;
+      } catch (err) {
+        const fallback = this.groupsListCache.length ? this.groupsListCache : this.getGroupsFromMetadataCache();
+        if (this.isRateOverLimitError(err)) {
+          logger.warn({ err, cachedCount: fallback.length }, 'WhatsApp group fetch rate-limited; using cached groups');
+          return fallback;
         }
-      });
-      return Object.values(groups || {}).map((group) => ({
-        id: group.id,
-        jid: group.id,
-        name: group.subject || group.id,
-        size: group.size || 0
-      }));
-    } catch (err) {
-      logger.error({ err }, 'Failed to fetch groups');
-      return [];
-    }
+
+        logger.error({ err, cachedCount: fallback.length }, 'Failed to fetch groups');
+        return fallback;
+      } finally {
+        this.groupsListFetchInFlight = null;
+      }
+    })();
+
+    return this.groupsListFetchInFlight;
   }
 
   cacheNewsletterChat(chatLike: unknown): void {

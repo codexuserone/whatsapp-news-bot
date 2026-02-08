@@ -2,7 +2,12 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
 const { fetchAndProcessFeed } = require('../services/feedProcessor');
-const { initSchedulers, triggerImmediateSchedules, queueBatchSchedulesForFeed } = require('../services/schedulerService');
+const {
+  initSchedulers,
+  triggerImmediateSchedules,
+  queueBatchSchedulesForFeed,
+  waitForFeedIdle
+} = require('../services/schedulerService');
 const { fetchFeedItemsWithMeta } = require('../services/feedFetcher');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { validate, schemas } = require('../middleware/validation');
@@ -139,14 +144,39 @@ const feedsRoutes = () => {
 
   router.delete('/:id', async (req: Request, res: Response) => {
     try {
+      const feedId = String(req.params.id || '').trim();
+      if (!feedId) {
+        return res.status(400).json({ error: 'Feed id is required' });
+      }
+
+      // Mark feed inactive first so scheduler refresh can stop polling it.
+      const { error: deactivateError } = await getDb()
+        .from('feeds')
+        .update({ active: false })
+        .eq('id', feedId);
+
+      if (deactivateError) throw deactivateError;
+
+      // Refresh schedulers synchronously to minimize delete-vs-refresh races.
+      await initSchedulers(req.app.locals.whatsapp);
+
+      // Wait briefly for any in-flight feed refresh to finish.
+      const idle = await waitForFeedIdle(feedId);
+      if (!idle) {
+        console.warn('Feed remained in-flight during delete timeout; proceeding with delete', { feedId });
+      }
+
       const { error } = await getDb()
         .from('feeds')
         .delete()
-        .eq('id', req.params.id);
+        .eq('id', feedId);
       
       if (error) throw error;
-      refreshSchedulers(req.app.locals.whatsapp);
-      res.json({ ok: true });
+
+      // Keep scheduler state in sync after deletion.
+      await initSchedulers(req.app.locals.whatsapp);
+
+      res.json({ ok: true, waitedForIdle: idle });
     } catch (error) {
       console.error('Error deleting feed:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });

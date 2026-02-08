@@ -238,9 +238,9 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
         if (error.code === '23503' && String(error.message || '').includes('feed_items_feed_id_fkey')) {
           feedMissing = true;
           errorCount += 1;
-          console.warn('Feed no longer exists while inserting items, aborting current feed run:', {
+          console.info('Feed deleted during processing, aborting current feed run', {
             feedId: feed.id,
-            error: error.message
+            reason: 'feed_missing_fk'
           });
           break;
         }

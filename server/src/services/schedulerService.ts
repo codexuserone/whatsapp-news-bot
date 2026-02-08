@@ -30,6 +30,23 @@ const scheduleInFlight = new Map<string, boolean>();
 
 const schedulersDisabled = () => process.env.DISABLE_SCHEDULERS === 'true';
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const waitForFeedIdle = async (
+  feedId: string,
+  timeoutMs = 12000,
+  pollIntervalMs = 200
+): Promise<boolean> => {
+  const startedAt = Date.now();
+  while (feedInFlight.get(feedId)) {
+    if (Date.now() - startedAt >= timeoutMs) {
+      return false;
+    }
+    await sleep(pollIntervalMs);
+  }
+  return true;
+};
+
 const clearAll = () => {
   feedIntervals.forEach((interval) => clearInterval(interval));
   feedIntervals.clear();
@@ -380,5 +397,6 @@ module.exports = {
   initSchedulers,
   clearAll,
   triggerImmediateSchedules,
-  queueBatchSchedulesForFeed
+  queueBatchSchedulesForFeed,
+  waitForFeedIdle
 };

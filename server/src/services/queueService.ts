@@ -380,6 +380,7 @@ const scrapeImageFromPage = async (pageUrl: string) => {
 const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null) => {
   await assertSafeOutboundUrl(imageUrl);
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+  const SUPPORTED_WHATSAPP_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
   const validUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
   const response = await axios.get(imageUrl, {
     timeout: 20000,
@@ -402,10 +403,14 @@ const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null)
   if (!contentType.startsWith('image/')) {
     throw new Error(`URL did not return an image (content-type: ${contentType || 'unknown'})`);
   }
+  const normalizedMimeType = contentType.split(';')[0]?.trim() || '';
+  if (!SUPPORTED_WHATSAPP_IMAGE_MIME.has(normalizedMimeType)) {
+    throw new Error(`Unsupported image MIME type for WhatsApp upload (${normalizedMimeType || 'unknown'})`);
+  }
   if (buffer.length > MAX_IMAGE_BYTES) {
     throw new Error(`Image too large (${buffer.length} bytes)`);
   }
-  return { buffer, mimetype: contentType };
+  return { buffer, mimetype: normalizedMimeType };
 };
 
 const maybeUpdateFeedItemImage = async (
@@ -726,9 +731,22 @@ const sendMessageWithTemplate = async (
       };
     } catch (error) {
       const bufferErrorMessage = getErrorMessage(error);
+      if (/Unsupported image MIME type for WhatsApp upload/i.test(bufferErrorMessage)) {
+        logger.info(
+          { jid, imageUrl: safeUrl, reason: bufferErrorMessage },
+          'Skipping unsupported image type and falling back to text'
+        );
+        const response = await sendText(textWithPreview);
+        return {
+          response,
+          text: textWithPreview,
+          media: { type: 'image', url: safeUrl, sent: false, error: bufferErrorMessage }
+        };
+      }
+
       logger.warn(
         { error, jid, imageUrl: safeUrl },
-        'Failed to download/send image buffer; trying URL-based send'
+        'Image buffer send unavailable; trying URL-based send'
       );
 
       try {
@@ -756,9 +774,9 @@ const sendMessageWithTemplate = async (
         };
       } catch (urlError) {
         const urlErrorMessage = getErrorMessage(urlError);
-        logger.warn(
+        logger.info(
           { error: urlError, jid, imageUrl: safeUrl, bufferError: bufferErrorMessage },
-          'Failed to send image by URL, falling back to text'
+          'Image URL send rejected; using text fallback'
         );
         const response = await sendText(textWithPreview);
         return {

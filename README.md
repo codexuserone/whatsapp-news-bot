@@ -147,7 +147,6 @@ This protects both the UI and API with browser Basic Auth (health endpoints rema
 ## Notes
 - WhatsApp auth uses QR displayed in the UI (not terminal)
 - Channel auto-discovery is constrained by WhatsApp Web/Baileys APIs; set `WHATSAPP_SYNC_FULL_HISTORY=true` to maximize discovered chats/channels.
-- Video media sends now auto-generate a thumbnail from the video buffer when possible to avoid gray video tiles on some clients.
 - All settings are stored in Supabase and editable via UI
 - Free tier Render instances spin down after inactivity. Use an external uptime ping against `/ping` to keep it alive.
 - Session data is stored in Supabase when configured; otherwise it resets on restart

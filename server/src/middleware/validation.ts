@@ -130,7 +130,6 @@ const schemas = {
       imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       videoUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       mediaUrl: z.string().url().optional().nullable().transform(normalizeOptional),
-      thumbnailUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       mediaType: z.enum(['image', 'video']).optional().nullable(),
       confirm: z.boolean().optional()
     })
@@ -169,7 +168,6 @@ const schemas = {
       imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       videoUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       mediaUrl: z.string().url().optional().nullable().transform(normalizeOptional),
-      thumbnailUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       mediaType: z.enum(['image', 'video']).optional().nullable()
     })
     .superRefine(

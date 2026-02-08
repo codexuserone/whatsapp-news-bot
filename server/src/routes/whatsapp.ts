@@ -9,7 +9,6 @@ const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { getErrorMessage } = require('../utils/errorUtils');
 const { getSupabaseClient } = require('../db/supabase');
 const { normalizeMessageText } = require('../utils/messageText');
-const { generateVideoThumbnailFromBuffer } = require('../utils/videoThumbnail');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -100,7 +99,6 @@ const buildOutgoingContent = async (params: {
   message: string;
   mediaUrl: string | null;
   mediaType: OutgoingMediaType | null;
-  thumbnailUrl?: string | null;
 }) => {
   const normalizedMessage = normalizeMessageText(String(params.message || ''));
   if (!params.mediaUrl) {
@@ -125,42 +123,14 @@ const buildOutgoingContent = async (params: {
 
   const effectiveType: OutgoingMediaType = params.mediaType || inferMediaTypeFromUrl(mediaUrl);
   if (effectiveType === 'video') {
-    let jpegThumbnail: Buffer | undefined;
-    const rawThumbnailUrl = String(params.thumbnailUrl || '').trim();
-    if (rawThumbnailUrl) {
-      if (!isHttpUrl(rawThumbnailUrl)) {
-        throw badRequest('thumbnailUrl must be an http(s) URL');
-      }
-      try {
-        await assertSafeOutboundUrl(rawThumbnailUrl);
-      } catch (error) {
-        throw badRequest(getErrorMessage(error, 'thumbnailUrl is not allowed'));
-      }
-      try {
-        const downloadedThumbnail = await downloadImageBuffer(rawThumbnailUrl);
-        jpegThumbnail = downloadedThumbnail.buffer;
-      } catch (error) {
-        throw badRequest(getErrorMessage(error, 'thumbnailUrl could not be downloaded as an image'));
-      }
-    }
-
     try {
       const { buffer, mimetype } = await downloadVideoBuffer(mediaUrl);
-      if (!jpegThumbnail) {
-        jpegThumbnail = await generateVideoThumbnailFromBuffer(buffer);
-      }
       const content: Record<string, unknown> = mimetype
         ? { video: buffer, mimetype, caption: normalizedMessage || '' }
         : { video: buffer, caption: normalizedMessage || '' };
-      if (jpegThumbnail) {
-        content.jpegThumbnail = jpegThumbnail;
-      }
       return { content, mediaUrl, mediaType: 'video' as const, text: normalizedMessage };
     } catch {
       const content: Record<string, unknown> = { video: { url: mediaUrl }, caption: normalizedMessage || '' };
-      if (jpegThumbnail) {
-        content.jpegThumbnail = jpegThumbnail;
-      }
       return {
         content,
         mediaUrl,
@@ -826,7 +796,7 @@ const whatsappRoutes = () => {
   // Send a test message
   router.post('/send-test', validate(schemas.testMessage), asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
-    const { jid, message, imageUrl, videoUrl, mediaUrl, mediaType, thumbnailUrl, confirm } = req.body;
+    const { jid, message, imageUrl, videoUrl, mediaUrl, mediaType, confirm } = req.body;
     const selectedMediaUrl = String(mediaUrl || videoUrl || imageUrl || '').trim() || null;
     const selectedMediaType: OutgoingMediaType | null =
       mediaType || (videoUrl ? 'video' : imageUrl ? 'image' : null);
@@ -844,8 +814,7 @@ const whatsappRoutes = () => {
     const payload = await buildOutgoingContent({
       message: normalizedMessage,
       mediaUrl: selectedMediaUrl,
-      mediaType: selectedMediaType,
-      thumbnailUrl: thumbnailUrl || null
+      mediaType: selectedMediaType
     });
 
     const sendPromise = isStatusBroadcast(normalizedJid)
@@ -916,7 +885,7 @@ const whatsappRoutes = () => {
   // Send to status broadcast
   router.post('/send-status', validate(schemas.statusMessage), asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
-    const { message, imageUrl, videoUrl, mediaUrl, mediaType, thumbnailUrl } = req.body;
+    const { message, imageUrl, videoUrl, mediaUrl, mediaType } = req.body;
     const selectedMediaUrl = String(mediaUrl || videoUrl || imageUrl || '').trim() || null;
     const selectedMediaType: OutgoingMediaType | null =
       mediaType || (videoUrl ? 'video' : imageUrl ? 'image' : null);
@@ -933,8 +902,7 @@ const whatsappRoutes = () => {
     const payload = await buildOutgoingContent({
       message: normalizedMessage,
       mediaUrl: selectedMediaUrl,
-      mediaType: selectedMediaType,
-      thumbnailUrl: thumbnailUrl || null
+      mediaType: selectedMediaType
     });
 
     const result = await whatsapp.sendStatusBroadcast(payload.content);

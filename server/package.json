@@ -19,7 +19,6 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "fast-fuzzy": "^1.12.0",
-    "ffmpeg-static": "^5.3.0",
     "he": "^1.2.0",
     "link-preview-js": "^3.2.0",
     "nanoid": "^5.0.7",

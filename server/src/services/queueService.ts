@@ -12,7 +12,6 @@ const { getErrorMessage } = require('../utils/errorUtils');
 const { computeNextRunAt } = require('../utils/cron');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { normalizeMessageText } = require('../utils/messageText');
-const { generateVideoThumbnailFromBuffer } = require('../utils/videoThumbnail');
 
 type Target = {
   id?: string;
@@ -424,13 +423,12 @@ const resolveMediaForFeedItem = async (
 ): Promise<{
   url: string | null;
   mediaType: 'image' | 'video' | null;
-  thumbnailUrl: string | null;
   source: string | null;
   scraped: boolean;
   error: string | null;
 }> => {
   if (!allowRichMedia) {
-    return { url: null, mediaType: null, thumbnailUrl: null, source: null, scraped: false, error: null };
+    return { url: null, mediaType: null, source: null, scraped: false, error: null };
   }
 
   const rawData =
@@ -456,42 +454,6 @@ const resolveMediaForFeedItem = async (
     'enclosureUrl',
     'video'
   ]);
-  const thumbnailCandidates = collectRawCandidates([
-    'thumbnail_url',
-    'thumbnailUrl',
-    'poster',
-    'preview_image',
-    'previewImage',
-    'image_url',
-    'imageUrl'
-  ]).filter((candidate) => isImageUrl(candidate));
-
-  const pickSafeThumbnail = async (link?: string | null) => {
-    for (const candidate of thumbnailCandidates) {
-      try {
-        await assertSafeOutboundUrl(candidate);
-        return candidate;
-      } catch {
-        // try next candidate
-      }
-    }
-
-    const pageUrl = String(link || '').trim();
-    if (pageUrl && isHttpUrl(pageUrl)) {
-      try {
-        const scrapedThumb = await scrapeImageFromPage(pageUrl);
-        if (scrapedThumb) {
-          await assertSafeOutboundUrl(scrapedThumb);
-          return scrapedThumb;
-        }
-      } catch {
-        // best effort only
-      }
-    }
-
-    return null;
-  };
-
   let existingUrlIssue: string | null = null;
   const existing = typeof feedItem.image_url === 'string' ? feedItem.image_url : null;
   const mediaCandidates = [...videoCandidates, existing].filter((candidate): candidate is string => Boolean(candidate));
@@ -501,11 +463,9 @@ const resolveMediaForFeedItem = async (
     if (existingType) {
       try {
         await assertSafeOutboundUrl(candidate);
-        const thumbnailUrl = existingType === 'video' ? await pickSafeThumbnail(feedItem.link) : null;
         return {
           url: candidate,
           mediaType: existingType,
-          thumbnailUrl,
           source: candidate === existing ? feedItem.image_source || 'feed' : 'raw',
           scraped: false,
           error: null
@@ -520,7 +480,7 @@ const resolveMediaForFeedItem = async (
 
   const link = typeof feedItem.link === 'string' ? feedItem.link : null;
   if (!link || !isHttpUrl(link)) {
-    return { url: null, mediaType: null, thumbnailUrl: null, source: null, scraped: false, error: existingUrlIssue };
+    return { url: null, mediaType: null, source: null, scraped: false, error: existingUrlIssue };
   }
 
   const scrapedAt = feedItem.image_scraped_at ? new Date(feedItem.image_scraped_at).getTime() : 0;
@@ -529,7 +489,6 @@ const resolveMediaForFeedItem = async (
     return {
       url: null,
       mediaType: null,
-      thumbnailUrl: null,
       source: null,
       scraped: false,
       error: feedItem.image_scrape_error || existingUrlIssue || null
@@ -550,7 +509,7 @@ const resolveMediaForFeedItem = async (
           image_scraped_at: nowIso,
           image_scrape_error: message
         });
-        return { url: null, mediaType: null, thumbnailUrl: null, source: null, scraped: true, error: message };
+        return { url: null, mediaType: null, source: null, scraped: true, error: message };
       }
 
       feedItem.image_url = scraped;
@@ -563,7 +522,7 @@ const resolveMediaForFeedItem = async (
         image_scraped_at: nowIso,
         image_scrape_error: null
       });
-      return { url: scraped, mediaType: 'image', thumbnailUrl: null, source: 'page', scraped: true, error: null };
+      return { url: scraped, mediaType: 'image', source: 'page', scraped: true, error: null };
     }
 
     feedItem.image_scraped_at = nowIso;
@@ -572,7 +531,7 @@ const resolveMediaForFeedItem = async (
       image_scraped_at: nowIso,
       image_scrape_error: 'No image found on page'
     });
-    return { url: null, mediaType: null, thumbnailUrl: null, source: null, scraped: true, error: 'No image found on page' };
+    return { url: null, mediaType: null, source: null, scraped: true, error: 'No image found on page' };
   } catch (error) {
     const message = getErrorMessage(error);
     const nowIso = new Date().toISOString();
@@ -582,7 +541,7 @@ const resolveMediaForFeedItem = async (
       image_scraped_at: nowIso,
       image_scrape_error: message
     });
-    return { url: null, mediaType: null, thumbnailUrl: null, source: null, scraped: true, error: message };
+    return { url: null, mediaType: null, source: null, scraped: true, error: message };
   }
 };
 
@@ -831,20 +790,6 @@ const sendMessageWithTemplate = async (
       };
     }
 
-    let videoThumbnailBuffer: Buffer | null = null;
-    if (mediaType === 'video' && resolved.thumbnailUrl) {
-      try {
-        const safeThumbnailUrl = (await assertSafeOutboundUrl(resolved.thumbnailUrl)).toString();
-        const downloadedThumbnail = await downloadImageBuffer(safeThumbnailUrl, feedItem.link);
-        videoThumbnailBuffer = downloadedThumbnail.buffer;
-      } catch (thumbError) {
-        logger.warn(
-          { thumbError, jid, mediaUrl: safeUrl, thumbnailUrl: resolved.thumbnailUrl },
-          'Failed to fetch video thumbnail; sending without custom thumbnail'
-        );
-      }
-    }
-
     const sendMediaContent = async (content: Record<string, unknown>, kind: 'buffer' | 'url') => {
       const timeoutLabel = kind === 'buffer'
         ? `Timed out sending ${mediaType} message`
@@ -859,18 +804,11 @@ const sendMessageWithTemplate = async (
         ? await downloadVideoBuffer(safeUrl, feedItem.link)
         : await downloadImageBuffer(safeUrl, feedItem.link);
 
-      if (mediaType === 'video' && !videoThumbnailBuffer) {
-        videoThumbnailBuffer = await generateVideoThumbnailFromBuffer(downloaded.buffer);
-      }
-
       const content: Record<string, unknown> = mediaType === 'video'
         ? { video: downloaded.buffer, caption: renderedText }
         : { image: downloaded.buffer, caption: renderedText };
       if (downloaded.mimetype) {
         content.mimetype = downloaded.mimetype;
-      }
-      if (mediaType === 'video' && videoThumbnailBuffer) {
-        content.jpegThumbnail = videoThumbnailBuffer;
       }
 
       const response = await sendMediaContent(content, 'buffer');
@@ -891,9 +829,6 @@ const sendMessageWithTemplate = async (
         const content: Record<string, unknown> = mediaType === 'video'
           ? { video: { url: safeUrl }, caption: renderedText }
           : { image: { url: safeUrl }, caption: renderedText };
-        if (mediaType === 'video' && videoThumbnailBuffer) {
-          content.jpegThumbnail = videoThumbnailBuffer;
-        }
         const response = await sendMediaContent(content, 'url');
 
         return {

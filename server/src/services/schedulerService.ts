@@ -80,7 +80,7 @@ const runScheduleOnce = async (
   } catch (error) {
     logger.error({ scheduleId, error }, 'Error running schedule');
   } finally {
-    scheduleInFlight.set(scheduleId, false);
+    scheduleInFlight.delete(scheduleId);
   }
 };
 
@@ -297,7 +297,7 @@ const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
           ok = false;
           logger.error({ error, feedId: feed.id }, 'Failed to fetch feed');
         } finally {
-          feedInFlight.set(feed.id, false);
+          feedInFlight.delete(feed.id);
         }
 
         // If a feed fails, retry sooner (but never faster than 60s)

@@ -474,6 +474,8 @@ class WhatsAppClient {
   createBaileysLogger() {
     const baseLogger = logger.child({ class: 'baileys' });
     const baileysLogger = Object.create(baseLogger);
+    const isBenignMediaTrace = (value: string | null) =>
+      Boolean(value && /Input file contains unsupported image format/i.test(value));
     const handleArgs = (args: unknown[]) => {
       const message = this.extractLogMessage(args);
       const errorMessage = this.extractErrorMessage(args);
@@ -484,6 +486,15 @@ class WhatsAppClient {
       }
     };
     baileysLogger.error = (...args: unknown[]) => {
+      const message = this.extractLogMessage(args);
+      const errorMessage = this.extractErrorMessage(args);
+      if (isBenignMediaTrace(errorMessage) || isBenignMediaTrace(message)) {
+        baseLogger.info(
+          { reason: 'unsupported_image_format' },
+          'Baileys skipped thumbnail generation for one media payload'
+        );
+        return;
+      }
       baseLogger.error(...args);
       handleArgs(args);
     };

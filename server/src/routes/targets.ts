@@ -4,6 +4,7 @@ const { getSupabaseClient } = require('../db/supabase');
 const { validate, schemas, sanitizePhoneNumber } = require('../middleware/validation');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
+const { syncWhatsAppTargets } = require('../services/targetSyncService');
 
 const targetRoutes = () => {
   const router = express.Router();
@@ -16,6 +17,8 @@ const targetRoutes = () => {
 
   router.get('/', async (_req: Request, res: Response) => {
     try {
+      await syncWhatsAppTargets(_req.app?.locals?.whatsapp, { reason: 'targets_get' });
+
       const { data: targets, error } = await getDb()
         .from('targets')
         .select('*')

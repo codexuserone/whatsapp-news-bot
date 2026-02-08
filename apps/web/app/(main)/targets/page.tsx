@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Target, WhatsAppChannel, WhatsAppGroup, WhatsAppStatus } from '@/lib/types';
+import type { Target, WhatsAppStatus } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -21,7 +21,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from '@/components/ui/alert-dialog';
-import { Target as TargetIcon, Users, Radio, MessageSquare, Download, Trash2, AlertTriangle, Loader2 } from 'lucide-react';
+import { Target as TargetIcon, Users, Radio, MessageSquare, Trash2, AlertTriangle, Loader2 } from 'lucide-react';
 
 const TYPE_BADGES: Record<
   Target['type'],
@@ -46,7 +46,6 @@ const TargetsPage = () => {
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | Target['type']>('all');
   const [deleteTarget, setDeleteTarget] = useState<Target | null>(null);
-  const [importing, setImporting] = useState(false);
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
     queryKey: ['targets'],
@@ -57,18 +56,6 @@ const TargetsPage = () => {
     queryKey: ['whatsapp-status'],
     queryFn: () => api.get('/api/whatsapp/status'),
     refetchInterval: 5000
-  });
-
-  const { data: waGroups = [] } = useQuery<WhatsAppGroup[]>({
-    queryKey: ['whatsapp-groups'],
-    queryFn: () => api.get('/api/whatsapp/groups'),
-    enabled: waStatus?.status === 'connected'
-  });
-
-  const { data: waChannels = [] } = useQuery<WhatsAppChannel[]>({
-    queryKey: ['whatsapp-channels'],
-    queryFn: () => api.get('/api/whatsapp/channels'),
-    enabled: waStatus?.status === 'connected'
   });
 
   const isConnected = waStatus?.status === 'connected';
@@ -91,42 +78,6 @@ const TargetsPage = () => {
       setDeleteTarget(null);
     }
   });
-
-  const importAllGroups = async () => {
-    setImporting(true);
-    try {
-      const newGroups = waGroups.filter((g) => !existingJids.has(g.jid));
-      for (const group of newGroups) {
-        await addTarget.mutateAsync({
-          name: group.name,
-          phone_number: group.jid,
-          type: 'group',
-          active: true,
-          notes: `${group.size} members`
-        });
-      }
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const importAllChannels = async () => {
-    setImporting(true);
-    try {
-      const newChannels = waChannels.filter((c) => !existingJids.has(c.jid));
-      for (const channel of newChannels) {
-        await addTarget.mutateAsync({
-          name: channel.name,
-          phone_number: channel.jid,
-          type: 'channel',
-          active: true,
-          notes: `${channel.subscribers} subscribers`
-        });
-      }
-    } finally {
-      setImporting(false);
-    }
-  };
 
   const addStatusBroadcast = () => {
     if (!existingJids.has('status@broadcast')) {
@@ -156,9 +107,6 @@ const TargetsPage = () => {
     status: targets.filter((t) => t.type === 'status').length,
     individual: targets.filter((t) => t.type === 'individual').length
   };
-
-  const availableGroups = waGroups.filter((g) => !existingJids.has(g.jid));
-  const availableChannels = waChannels.filter((c) => !existingJids.has(c.jid));
 
   return (
     <div className="space-y-6">
@@ -190,38 +138,32 @@ const TargetsPage = () => {
         <div className="grid gap-4 sm:grid-cols-3">
           <Card>
             <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
                 <div className="flex items-center gap-3">
                   <div className="rounded-full bg-primary/10 p-2">
                     <Users className="h-5 w-5 text-primary" />
                   </div>
                   <div>
                     <p className="font-medium">Groups</p>
-                    <p className="text-sm text-muted-foreground">{availableGroups.length} to import</p>
+                    <p className="text-sm text-muted-foreground">{counts.group} synced automatically</p>
                   </div>
                 </div>
-                <Button size="sm" onClick={importAllGroups} disabled={importing || availableGroups.length === 0}>
-                  {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                </Button>
               </div>
             </CardContent>
           </Card>
 
           <Card>
             <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
                 <div className="flex items-center gap-3">
                   <div className="rounded-full bg-primary/10 p-2">
                     <Radio className="h-5 w-5 text-primary" />
                   </div>
                   <div>
                     <p className="font-medium">Channels</p>
-                    <p className="text-sm text-muted-foreground">{availableChannels.length} to import</p>
+                    <p className="text-sm text-muted-foreground">{counts.channel} synced automatically</p>
                   </div>
                 </div>
-                <Button size="sm" onClick={importAllChannels} disabled={importing || availableChannels.length === 0}>
-                  {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                </Button>
               </div>
             </CardContent>
           </Card>
@@ -296,7 +238,7 @@ const TargetsPage = () => {
             <div className="text-center py-8">
               <p className="text-muted-foreground">
                 {targets.length === 0
-                  ? 'No targets yet. Import groups from WhatsApp above.'
+                  ? 'No targets yet. Targets sync automatically from connected WhatsApp.'
                   : 'No targets match your search.'}
               </p>
             </div>

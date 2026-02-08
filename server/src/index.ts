@@ -10,6 +10,7 @@ const { keepAlive, stopKeepAlive } = require('./services/keepAlive');
 const registerRoutes = require('./routes');
 const settingsService = require('./services/settingsService');
 const { initSchedulers, clearAll } = require('./services/schedulerService');
+const { startTargetAutoSync, stopTargetAutoSync } = require('./services/targetSyncService');
 const {
   scheduleRetentionCleanup,
   scheduleProcessingWatchdog,
@@ -37,6 +38,7 @@ const gracefulShutdown = async (
     // Clear all intervals and timeouts
     clearAll();
     stopKeepAlive();
+    stopTargetAutoSync();
     
     // Disconnect WhatsApp
     if (whatsappClient) {
@@ -222,6 +224,10 @@ const start = async () => {
     }
     whatsappClientRef = whatsappClient;
     app.locals.whatsapp = whatsappClient;
+
+    if (whatsappClient) {
+      startTargetAutoSync(whatsappClient);
+    }
 
     keepAlive();
     // Reset any logs left in processing state by a crash/restart.

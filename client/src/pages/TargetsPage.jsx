@@ -18,7 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from '../components/ui/alert-dialog';
-import { Target, Users, Radio, MessageSquare, Download, Trash2, AlertTriangle, Loader2 } from 'lucide-react';
+import { Target, Users, Radio, MessageSquare, Trash2, AlertTriangle, Loader2 } from 'lucide-react';
 
 const TYPE_BADGES = {
   individual: { label: 'Individual', variant: 'secondary', icon: MessageSquare },
@@ -32,7 +32,6 @@ const TargetsPage = () => {
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('all');
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const [importing, setImporting] = useState(false);
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery({
     queryKey: ['targets'],
@@ -45,21 +44,7 @@ const TargetsPage = () => {
     refetchInterval: 15000
   });
 
-  const { data: waGroups = [] } = useQuery({
-    queryKey: ['whatsapp-groups'],
-    queryFn: () => api.get('/api/whatsapp/groups'),
-    enabled: waStatus?.status === 'connected'
-  });
-
-  const { data: waChannelsResponse } = useQuery({
-    queryKey: ['whatsapp-channels-diagnostics'],
-    queryFn: () => api.get('/api/whatsapp/channels/diagnostics'),
-    enabled: waStatus?.status === 'connected'
-  });
-
   const isConnected = waStatus?.status === 'connected';
-  const waChannels = waChannelsResponse?.channels || [];
-  const channelsLimitation = waChannelsResponse?.diagnostics?.limitation || null;
   const existingJids = new Set(targets.map((t) => t.phone_number));
 
   const addTarget = useMutation({
@@ -79,42 +64,6 @@ const TargetsPage = () => {
       setDeleteTarget(null);
     }
   });
-
-  const importAllGroups = async () => {
-    setImporting(true);
-    try {
-      const newGroups = waGroups.filter((g) => !existingJids.has(g.jid));
-      for (const group of newGroups) {
-        await addTarget.mutateAsync({
-          name: group.name,
-          phone_number: group.jid,
-          type: 'group',
-          active: true,
-          notes: `${group.size} members`
-        });
-      }
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const importAllChannels = async () => {
-    setImporting(true);
-    try {
-      const newChannels = waChannels.filter((c) => !existingJids.has(c.jid));
-      for (const channel of newChannels) {
-        await addTarget.mutateAsync({
-          name: channel.name,
-          phone_number: channel.jid,
-          type: 'channel',
-          active: true,
-          notes: `${channel.subscribers} subscribers`
-        });
-      }
-    } finally {
-      setImporting(false);
-    }
-  };
 
   const addStatusBroadcast = () => {
     if (!existingJids.has('status@broadcast')) {
@@ -145,9 +94,6 @@ const TargetsPage = () => {
     individual: targets.filter((t) => t.type === 'individual').length
   };
 
-  const availableGroups = waGroups.filter((g) => !existingJids.has(g.jid));
-  const availableChannels = waChannels.filter((c) => !existingJids.has(c.jid));
-
   return (
     <div className="space-y-6">
       <div>
@@ -177,15 +123,10 @@ const TargetsPage = () => {
 
       {/* Quick Import */}
       {isConnected && (
-        <div className="space-y-3">
-          <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
-            Channels are fully supported. If auto-discovery is empty, add by channel ID/JID in the WhatsApp Console.
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-3">
             <Card>
             <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
                 <div className="flex items-center gap-3">
                   <div className="rounded-full bg-primary/10 p-2">
                     <Users className="h-5 w-5 text-primary" />
@@ -193,25 +134,17 @@ const TargetsPage = () => {
                   <div>
                     <p className="font-medium">Groups</p>
                     <p className="text-sm text-muted-foreground">
-                      {availableGroups.length} available to import
+                      {counts.group} synced automatically
                     </p>
-                    <p className="text-xs text-muted-foreground">{counts.group} already saved</p>
                   </div>
                 </div>
-                <Button
-                  size="sm"
-                  onClick={importAllGroups}
-                  disabled={importing || availableGroups.length === 0}
-                >
-                  {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                </Button>
               </div>
             </CardContent>
           </Card>
 
             <Card>
             <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
                 <div className="flex items-center gap-3">
                   <div className="rounded-full bg-primary/10 p-2">
                     <Radio className="h-5 w-5 text-primary" />
@@ -219,23 +152,10 @@ const TargetsPage = () => {
                   <div>
                     <p className="font-medium">Channels</p>
                     <p className="text-sm text-muted-foreground">
-                      {availableChannels.length} available to import
+                      {counts.channel} synced automatically
                     </p>
-                    <p className="text-xs text-muted-foreground">{counts.channel} already saved</p>
-                    {availableChannels.length === 0 && channelsLimitation && (
-                      <p className="text-xs text-muted-foreground max-w-[220px] line-clamp-2">
-                        {channelsLimitation}
-                      </p>
-                    )}
                   </div>
                 </div>
-                <Button
-                  size="sm"
-                  onClick={importAllChannels}
-                  disabled={importing || availableChannels.length === 0}
-                >
-                  {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                </Button>
               </div>
             </CardContent>
           </Card>
@@ -263,7 +183,6 @@ const TargetsPage = () => {
               </div>
             </CardContent>
           </Card>
-          </div>
         </div>
       )}
 
@@ -311,11 +230,7 @@ const TargetsPage = () => {
           ) : filteredTargets.length === 0 ? (
             <div className="text-center py-8">
               <p className="text-muted-foreground">
-                {targets.length === 0
-                  ? 'No targets yet. Import groups from WhatsApp above.'
-                  : filterType === 'channel'
-                    ? 'No saved channels yet. Add one from WhatsApp Console using channel ID/JID.'
-                    : 'No targets match your search.'}
+                {targets.length === 0 ? 'No targets yet. Targets sync automatically from connected WhatsApp.' : 'No targets match your search.'}
               </p>
             </div>
           ) : (

@@ -1,0 +1,15 @@
+{
+  "items": [
+    {
+      "id": "e2e-video-thumb-item-001",
+      "title": "E2E Video Item With Thumbnail",
+      "description": "Video + thumbnail payload validation item for schedule dispatch",
+      "link": "https://example.com/e2e-video-thumb-item",
+      "author": "codex",
+      "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/React-icon.svg/256px-React-icon.svg.png",
+      "video_url": "https://samplelib.com/lib/preview/mp4/sample-5s.mp4",
+      "thumbnail_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/React-icon.svg/256px-React-icon.svg.png",
+      "publishedAt": "2026-02-08T00:00:00Z"
+    }
+  ]
+}

@@ -41,6 +41,8 @@ type MessageLogRow = {
   status: string;
   whatsapp_message_id: string | null;
   sent_at: string | null;
+  delivered_at: string | null;
+  read_at: string | null;
   created_at: string;
   message_content: string | null;
   media_type: string | null;
@@ -68,6 +70,8 @@ type Observation = {
   hour: number;
   slot: number;
   observed: boolean;
+  delivered: boolean;
+  read: boolean;
   latencySec: number | null;
   responseCount24h: number;
   score: number;
@@ -86,7 +90,12 @@ type SlotInsight = {
   posteriorMean: number;
   objective: number;
   confidence: number;
+  exposureShare: number;
+  explorationBonus: number;
+  propensityBoost: number;
   expectedObservedRate: number;
+  expectedDeliveredRate: number;
+  expectedReadRate: number;
   expectedResponses24h: number;
   fatiguePenalty: number;
   pressureRatio: number;
@@ -103,7 +112,10 @@ type Recommendation = {
   objective: number;
   confidence: number;
   expectedObservedRate: number;
+  expectedDeliveredRate: number;
+  expectedReadRate: number;
   expectedResponses24h: number;
+  recommendationType: 'exploit' | 'explore';
   reason: string;
 };
 
@@ -161,10 +173,15 @@ type AnalyticsReport = {
     pending: number;
     processing: number;
     observed: number;
+    delivered: number;
+    read: number;
     responses24h: number;
   };
   rates: {
     observedRate: number;
+    deliveredRate: number;
+    readRate: number;
+    readToDeliveredRate: number;
     failureRate: number;
     responseRate24h: number;
     avgLatencySec: number | null;
@@ -416,6 +433,8 @@ const asMessageLogRow = (value: Record<string, unknown>): MessageLogRow => ({
   status: String(value.status || 'pending').toLowerCase(),
   whatsapp_message_id: normalizeText(value.whatsapp_message_id),
   sent_at: normalizeText(value.sent_at),
+  delivered_at: normalizeText(value.delivered_at),
+  read_at: normalizeText(value.read_at),
   created_at: String(value.created_at || new Date().toISOString()),
   message_content: normalizeText(value.message_content),
   media_type: normalizeText(value.media_type),
@@ -495,6 +514,8 @@ const loadMessageLogs = async (
           status,
           whatsapp_message_id,
           sent_at,
+          delivered_at,
+          read_at,
           created_at,
           message_content,
           media_type,
@@ -736,15 +757,22 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
     failed: 0,
     skipped: 0,
     pending: 0,
-    processing: 0
+    processing: 0,
+    delivered: 0,
+    read: 0
   };
 
   for (const { row } of scopedRows) {
+    const delivered = Boolean(row.delivered_at) || row.status === 'delivered' || row.status === 'read';
+    const read = Boolean(row.read_at) || row.status === 'read';
     if (SUCCESS_STATUSES.has(row.status)) statusCounters.sent += 1;
     else if (row.status === 'failed') statusCounters.failed += 1;
     else if (row.status === 'skipped') statusCounters.skipped += 1;
     else if (row.status === 'processing') statusCounters.processing += 1;
     else statusCounters.pending += 1;
+
+    if (delivered) statusCounters.delivered += 1;
+    if (read) statusCounters.read += 1;
   }
 
   const messageIds = uniqueStrings(
@@ -779,6 +807,8 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
     const messageId = row.whatsapp_message_id || '';
     const seen = messageId ? seenById.get(messageId) : undefined;
     const observed = Boolean(seen);
+    const delivered = Boolean(row.delivered_at) || row.status === 'delivered' || row.status === 'read';
+    const read = Boolean(row.read_at) || row.status === 'read';
     const latencySec = seen ? Math.max(0, Math.round((seen.observedAtMs - eventMs) / 1000)) : null;
 
     const targetJid = normalizeText(row.target?.phone_number) || seen?.remoteJid || null;
@@ -810,6 +840,8 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
       hour,
       slot,
       observed,
+      delivered,
+      read,
       latencySec,
       responseCount24h,
       score,
@@ -835,6 +867,8 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
     weightedSamples: number;
     weightedScore: number;
     weightedObserved: number;
+    weightedDelivered: number;
+    weightedRead: number;
     weightedResponses: number;
     weightedLatencyTotal: number;
     weightedLatencyCount: number;
@@ -847,6 +881,8 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
     weightedSamples: 0,
     weightedScore: 0,
     weightedObserved: 0,
+    weightedDelivered: 0,
+    weightedRead: 0,
     weightedResponses: 0,
     weightedLatencyTotal: 0,
     weightedLatencyCount: 0,
@@ -858,6 +894,8 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
   let weightedLatencyTotal = 0;
   let weightedLatencyWeight = 0;
   let observedCount = 0;
+  let deliveredCount = 0;
+  let readCount = 0;
   let responseTotal = 0;
 
   for (const observation of observations) {
@@ -871,6 +909,8 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
     slotMetric.weightedSamples += observation.weight;
     slotMetric.weightedScore += observation.score * observation.weight;
     slotMetric.weightedObserved += (observation.observed ? 1 : 0) * observation.weight;
+    slotMetric.weightedDelivered += (observation.delivered ? 1 : 0) * observation.weight;
+    slotMetric.weightedRead += (observation.read ? 1 : 0) * observation.weight;
     slotMetric.weightedResponses += observation.responseCount24h * observation.weight;
 
     const currentTypeWeight = slotMetric.contentTypeWeights[observation.contentType] || 0;
@@ -886,6 +926,12 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
     if (observation.observed) {
       observedCount += 1;
     }
+    if (observation.delivered) {
+      deliveredCount += 1;
+    }
+    if (observation.read) {
+      readCount += 1;
+    }
     responseTotal += observation.responseCount24h;
 
     weightedScoreTotal += observation.score * observation.weight;
@@ -895,6 +941,7 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
   const avgPostsPerSlotPerDay = observations.length > 0
     ? observations.length / Math.max(lookbackDays * 24, 1)
     : 0;
+  const uniformExposureShare = 1 / SLOT_COUNT;
 
   const windows: SlotInsight[] = mutableSlots.map((metric, slot) => {
     const day = Math.floor(slot / 24);
@@ -907,6 +954,12 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
 
     const expectedObservedRate = metric.weightedSamples > 0
       ? metric.weightedObserved / metric.weightedSamples
+      : 0;
+    const expectedDeliveredRate = metric.weightedSamples > 0
+      ? metric.weightedDelivered / metric.weightedSamples
+      : 0;
+    const expectedReadRate = metric.weightedSamples > 0
+      ? metric.weightedRead / metric.weightedSamples
       : 0;
     const expectedResponses24h = metric.weightedSamples > 0
       ? metric.weightedResponses / metric.weightedSamples
@@ -921,9 +974,16 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
       : 0;
     const fatiguePenalty = clamp((pressureRatio - 1) * 0.08, 0, 0.3);
     const responseBoost = clamp(expectedResponses24h / 6, 0, 0.2);
-    const objective = clamp(posteriorMean + responseBoost - fatiguePenalty, 0, 1);
-
     const confidenceFromSample = clamp(metric.weightedSamples / modelSettings.confidenceTarget, 0, 1);
+    const exposureShare = observations.length > 0 ? metric.sentCount / observations.length : 0;
+    const inversePropensity = exposureShare > 0
+      ? clamp(uniformExposureShare / exposureShare, 0.6, 2.2)
+      : 1.8;
+    const sampleScarcity = 1 - confidenceFromSample;
+    const explorationBonus = clamp(sampleScarcity * clamp(inversePropensity - 1, 0, 1.2) * 0.08, 0, 0.08);
+    const propensityBoost = clamp((inversePropensity - 1) * 0.05, 0, 0.08);
+    const objective = clamp(posteriorMean + responseBoost - fatiguePenalty + explorationBonus + propensityBoost, 0, 1);
+
     const confidenceFromVariance = 1 - clamp(Math.sqrt(variance) / 0.3, 0, 1);
     const confidence = clamp(confidenceFromSample * 0.7 + confidenceFromVariance * 0.3, 0, 1);
 
@@ -948,7 +1008,12 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
       posteriorMean: Number(posteriorMean.toFixed(4)),
       objective: Number(objective.toFixed(4)),
       confidence: Number(confidence.toFixed(4)),
+      exposureShare: Number(exposureShare.toFixed(4)),
+      explorationBonus: Number(explorationBonus.toFixed(4)),
+      propensityBoost: Number(propensityBoost.toFixed(4)),
       expectedObservedRate: Number(expectedObservedRate.toFixed(4)),
+      expectedDeliveredRate: Number(expectedDeliveredRate.toFixed(4)),
+      expectedReadRate: Number(expectedReadRate.toFixed(4)),
       expectedResponses24h: Number(expectedResponses24h.toFixed(4)),
       fatiguePenalty: Number(fatiguePenalty.toFixed(4)),
       pressureRatio: Number(pressureRatio.toFixed(4)),
@@ -957,22 +1022,31 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
     };
   });
 
-  const sortedWindows = [...windows]
-    .filter((window) => window.sentCount > 0)
-    .sort((left, right) => right.objective - left.objective || right.confidence - left.confidence);
+  const sortedWindows = [...windows].sort(
+    (left, right) => right.objective - left.objective || right.confidence - left.confidence
+  );
+  const exploitCandidates = sortedWindows.filter((window) => window.sentCount > 0);
+  const exploreCandidates = [...windows]
+    .filter((window) => window.explorationBonus >= 0.02 && window.sentCount <= 2)
+    .sort((left, right) => right.explorationBonus - left.explorationBonus || right.objective - left.objective);
 
   const recommendationLimit = 6;
   const recommendations: Recommendation[] = [];
-  for (const candidate of sortedWindows) {
+
+  const pushRecommendation = (candidate: SlotInsight, recommendationType: 'exploit' | 'explore') => {
     if (recommendations.some((existing) => existing.day === candidate.day && Math.abs(existing.hour - candidate.hour) <= 1)) {
-      continue;
+      return false;
     }
 
-    const reason = [
-      `${Math.round(candidate.expectedObservedRate * 100)}% observed delivery`,
+    const reasonParts = [
+      `${Math.round(candidate.expectedDeliveredRate * 100)}% delivered`,
+      `${Math.round(candidate.expectedReadRate * 100)}% read`,
       `${candidate.expectedResponses24h.toFixed(2)} avg responses in 24h`,
       `${Math.round(candidate.confidence * 100)}% confidence`
-    ].join(' · ');
+    ];
+    if (recommendationType === 'explore') {
+      reasonParts.push('exploration window to reduce timing bias from over-used slots');
+    }
 
     recommendations.push({
       label: candidate.label,
@@ -983,11 +1057,25 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
       objective: candidate.objective,
       confidence: candidate.confidence,
       expectedObservedRate: candidate.expectedObservedRate,
+      expectedDeliveredRate: candidate.expectedDeliveredRate,
+      expectedReadRate: candidate.expectedReadRate,
       expectedResponses24h: candidate.expectedResponses24h,
-      reason
+      recommendationType,
+      reason: reasonParts.join(' · ')
     });
+    return true;
+  };
 
+  for (const candidate of exploitCandidates) {
+    if (pushRecommendation(candidate, 'exploit') && recommendations.length >= 4) {
+      break;
+    }
     if (recommendations.length >= recommendationLimit) break;
+  }
+
+  for (const candidate of exploreCandidates) {
+    if (recommendations.length >= recommendationLimit) break;
+    pushRecommendation(candidate, 'explore');
   }
 
   const suggestedBatchTimes = uniqueStrings(
@@ -1160,6 +1248,9 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
   const avgEngagementScore = weightedScoreWeight > 0 ? weightedScoreTotal / weightedScoreWeight : 0;
   const avgLatencySec = weightedLatencyWeight > 0 ? weightedLatencyTotal / weightedLatencyWeight : null;
   const observedRate = statusCounters.sent > 0 ? observedCount / statusCounters.sent : 0;
+  const deliveredRate = statusCounters.sent > 0 ? deliveredCount / statusCounters.sent : 0;
+  const readRate = statusCounters.sent > 0 ? readCount / statusCounters.sent : 0;
+  const readToDeliveredRate = deliveredCount > 0 ? readCount / deliveredCount : 0;
   const failureRate = statusCounters.sent + statusCounters.failed > 0
     ? statusCounters.failed / (statusCounters.sent + statusCounters.failed)
     : 0;
@@ -1178,6 +1269,22 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
   }
   if (contentTypeFilter) {
     dataQualityNotes.push(`Report is filtered to content type: ${contentTypeFilter}.`);
+  }
+  if (observations.length) {
+    const slotVolumes = windows.map((window) => window.sentCount).sort((left, right) => right - left);
+    const top2Share = (slotVolumes[0] || 0) + (slotVolumes[1] || 0);
+    const concentration = top2Share / Math.max(observations.length, 1);
+    if (concentration >= 0.55) {
+      dataQualityNotes.push(
+        `Posting volume is concentrated in a few hours (${Math.round(concentration * 100)}% in top 2 slots); recommendations include exploration windows to reduce timing bias.`
+      );
+    }
+  }
+  const explorationCount = recommendations.filter((item) => item.recommendationType === 'explore').length;
+  if (explorationCount > 0) {
+    dataQualityNotes.push(
+      `${explorationCount} recommendation${explorationCount === 1 ? '' : 's'} marked as exploration due to low historical exposure.`
+    );
   }
 
   const objectiveScore = recommendations.length
@@ -1204,10 +1311,15 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
       pending: statusCounters.pending,
       processing: statusCounters.processing,
       observed: observedCount,
+      delivered: deliveredCount,
+      read: readCount,
       responses24h: responseTotal
     },
     rates: {
       observedRate: Number(observedRate.toFixed(4)),
+      deliveredRate: Number(deliveredRate.toFixed(4)),
+      readRate: Number(readRate.toFixed(4)),
+      readToDeliveredRate: Number(readToDeliveredRate.toFixed(4)),
       failureRate: Number(failureRate.toFixed(4)),
       responseRate24h: Number(responseRate24h.toFixed(4)),
       avgLatencySec: avgLatencySec == null ? null : Number(avgLatencySec.toFixed(2)),

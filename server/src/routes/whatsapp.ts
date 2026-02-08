@@ -50,6 +50,194 @@ const downloadImageBuffer = async (url: string) => {
   return { buffer, mimetype: contentType };
 };
 
+const normalizeChannelJid = (value: unknown) => {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  if (raw.includes('whatsapp.com/channel/')) return '';
+
+  if (raw.endsWith('@newsletter')) {
+    const base = raw.slice(0, -'@newsletter'.length);
+    const digits = base.replace(/[^0-9]/g, '');
+    return digits ? `${digits}@newsletter` : '';
+  }
+
+  if (raw.includes('@')) return '';
+
+  if (/^[a-z0-9]{10,}$/.test(raw) && /[a-z]/.test(raw)) return '';
+
+  const numericLike = raw.replace(/[\s()+-]/g, '');
+  if (!/^\d+$/.test(numericLike)) return '';
+  return `${numericLike}@newsletter`;
+};
+
+const extractChannelInviteCode = (value: unknown) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.toLowerCase().includes('@newsletter')) return '';
+
+  const directMatch = raw.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([A-Za-z0-9]+)/i);
+  if (directMatch?.[1]) return String(directMatch[1] || '').trim();
+
+  if ((raw.startsWith('http://') || raw.startsWith('https://')) && raw.includes('/channel/')) {
+    try {
+      const parsed = new URL(raw);
+      const parts = parsed.pathname.split('/').filter(Boolean);
+      const channelIndex = parts.findIndex((part) => part.toLowerCase() === 'channel');
+      if (channelIndex >= 0) {
+        const candidate = String(parts[channelIndex + 1] || '').trim();
+        if (/^[A-Za-z0-9]{10,}$/.test(candidate)) return candidate;
+      }
+    } catch {
+      // ignore invalid url
+    }
+  }
+
+  if (/^[A-Za-z0-9]{10,}$/.test(raw) && /[A-Za-z]/.test(raw)) {
+    return raw;
+  }
+
+  return '';
+};
+
+const normalizeChannelReference = (value: unknown) => {
+  const jid = normalizeChannelJid(value);
+  const inviteCode = extractChannelInviteCode(value);
+  return {
+    jid: jid || null,
+    inviteCode: inviteCode || null
+  };
+};
+
+const parseSubscribersFromNotes = (notes: unknown) => {
+  const text = String(notes || '').trim();
+  if (!text) return 0;
+  const match = text.match(/([0-9][0-9,]*)\s*subscribers?/i);
+  if (!match || !match[1]) return 0;
+  const parsed = Number(match[1].replace(/,/g, ''));
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0;
+};
+
+const mergeChannels = (
+  primary: Array<{
+    id?: string;
+    jid?: string;
+    name?: string;
+    subscribers?: number;
+    viewerRole?: string | null;
+    canSend?: boolean | null;
+  }>,
+  secondary: Array<{
+    id?: string;
+    jid?: string;
+    name?: string;
+    subscribers?: number;
+    viewerRole?: string | null;
+    canSend?: boolean | null;
+  }>
+) => {
+  const byJid = new Map<
+    string,
+    { id: string; jid: string; name: string; subscribers: number; viewerRole: string | null; canSend: boolean | null }
+  >();
+
+  const upsert = (candidate: {
+    id?: string;
+    jid?: string;
+    name?: string;
+    subscribers?: number;
+    viewerRole?: string | null;
+    canSend?: boolean | null;
+  }) => {
+    const jid = normalizeChannelJid(candidate?.jid || candidate?.id);
+    if (!jid) return;
+
+    const existing = byJid.get(jid);
+    const name = String(candidate?.name || '').trim();
+    const subscribers = Number(candidate?.subscribers || 0);
+    const viewerRole = String(candidate?.viewerRole || '').trim() || existing?.viewerRole || null;
+    const canSend =
+      typeof candidate?.canSend === 'boolean'
+        ? candidate.canSend
+        : typeof existing?.canSend === 'boolean'
+          ? existing.canSend
+          : null;
+
+    byJid.set(jid, {
+      id: jid,
+      jid,
+      name: name || existing?.name || jid,
+      subscribers: Number.isFinite(subscribers)
+        ? Math.max(Math.round(subscribers), existing?.subscribers || 0, 0)
+        : existing?.subscribers || 0,
+      viewerRole,
+      canSend
+    });
+  };
+
+  for (const row of primary || []) upsert(row);
+  for (const row of secondary || []) upsert(row);
+
+  return Array.from(byJid.values()).sort((left, right) => left.name.localeCompare(right.name));
+};
+
+const loadSavedChannelTargets = async (): Promise<Array<{
+  id: string;
+  jid: string;
+  name: string;
+  subscribers: number;
+  viewerRole: string | null;
+  canSend: boolean | null;
+}>> => {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return [] as Array<{
+      id: string;
+      jid: string;
+      name: string;
+      subscribers: number;
+      viewerRole: string | null;
+      canSend: boolean | null;
+    }>;
+  }
+
+  const { data, error } = await supabase
+    .from('targets')
+    .select('id,name,phone_number,notes,active,type')
+    .eq('type', 'channel')
+    .eq('active', true)
+    .order('name', { ascending: true });
+
+  if (error) {
+    return [] as Array<{
+      id: string;
+      jid: string;
+      name: string;
+      subscribers: number;
+      viewerRole: string | null;
+      canSend: boolean | null;
+    }>;
+  }
+
+  const mapped = ((data || []) as Array<Record<string, unknown>>)
+    .map((row) => {
+      const jid = normalizeChannelJid(row.phone_number);
+      if (!jid) return null;
+      return {
+        id: jid,
+        jid,
+        name: String(row.name || jid),
+        subscribers: parseSubscribersFromNotes(row.notes),
+        viewerRole: null,
+        canSend: null
+      };
+    });
+
+  return mapped.filter(
+    (row): row is { id: string; jid: string; name: string; subscribers: number; viewerRole: string | null; canSend: boolean | null } =>
+      Boolean(row)
+  );
+};
+
 const toTimestampIso = (value: unknown) => {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
     return new Date(value * 1000).toISOString();
@@ -144,39 +332,127 @@ const whatsappRoutes = () => {
       whatsapp && typeof whatsapp.getChannelsWithDiagnostics === 'function'
         ? await whatsapp.getChannelsWithDiagnostics()
         : null;
-    const channels = enriched?.channels || await whatsapp?.getChannels() || [];
-    res.json(channels);
+    const discovered = enriched?.channels || await whatsapp?.getChannels() || [];
+    const savedTargets = await loadSavedChannelTargets();
+    res.json(mergeChannels(discovered, savedTargets));
   }));
 
   router.get('/channels/diagnostics', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
+    const savedTargets = await loadSavedChannelTargets();
     if (!whatsapp) {
+      const channels = mergeChannels([], savedTargets);
       return res.json({
-        channels: [],
+        channels,
         diagnostics: {
-          methodsTried: [],
+          methodsTried: savedTargets.length ? [`targets:${savedTargets.length}`] : [],
           methodErrors: [],
-          sourceCounts: { api: 0, cache: 0, metadata: 0 },
-          limitation: 'WhatsApp is not connected.'
+          sourceCounts: { api: 0, cache: channels.length, metadata: 0 },
+          limitation: channels.length
+            ? 'WhatsApp is not connected. Showing saved channel targets only.'
+            : 'WhatsApp is not connected.'
         }
       });
     }
 
     if (typeof whatsapp.getChannelsWithDiagnostics === 'function') {
       const result = await whatsapp.getChannelsWithDiagnostics();
-      return res.json(result);
+      const channels = mergeChannels(result.channels || [], savedTargets);
+      return res.json({
+        channels,
+        diagnostics: {
+          methodsTried: savedTargets.length
+            ? [...(result?.diagnostics?.methodsTried || []), `targets:${savedTargets.length}`]
+            : result?.diagnostics?.methodsTried || [],
+          methodErrors: result?.diagnostics?.methodErrors || [],
+          sourceCounts: {
+            api: Number(result?.diagnostics?.sourceCounts?.api || 0),
+            cache: Number(result?.diagnostics?.sourceCounts?.cache || 0) + savedTargets.length,
+            metadata: Number(result?.diagnostics?.sourceCounts?.metadata || 0)
+          },
+          limitation:
+            channels.length > 0
+              ? null
+              : result?.diagnostics?.limitation || 'No channels discovered for this WhatsApp session yet.'
+        }
+      });
     }
 
     const channels = await whatsapp.getChannels?.() || [];
+    const merged = mergeChannels(channels, savedTargets);
     return res.json({
-      channels,
+      channels: merged,
       diagnostics: {
-        methodsTried: [],
+        methodsTried: savedTargets.length ? [`targets:${savedTargets.length}`] : [],
         methodErrors: [],
-        sourceCounts: { api: 0, cache: 0, metadata: 0 },
-        limitation: channels.length ? null : 'Channel diagnostics are unavailable in this server build.'
+        sourceCounts: { api: channels.length, cache: savedTargets.length, metadata: 0 },
+        limitation: merged.length ? null : 'Channel diagnostics are unavailable in this server build.'
       }
     });
+  }));
+
+  router.post('/channels/resolve', asyncHandler(async (req: Request, res: Response) => {
+    const whatsapp = req.app.locals.whatsapp;
+    const isConnected = Boolean(whatsapp && whatsapp?.getStatus?.()?.status === 'connected');
+
+    const body = (req.body || {}) as Record<string, unknown>;
+    const rawInput = body.channel || body.jid || body.id;
+    const reference = normalizeChannelReference(rawInput);
+    if (!reference.jid && !reference.inviteCode) {
+      throw badRequest('channel id is required (numeric id, @newsletter jid, invite code, or whatsapp.com/channel URL)');
+    }
+
+    let channel: {
+      id?: string;
+      jid?: string;
+      name?: string;
+      subscribers?: number;
+      viewerRole?: string | null;
+      canSend?: boolean | null;
+    } | null = null;
+
+    if (isConnected && typeof whatsapp.getChannelInfo === 'function') {
+      channel = await whatsapp.getChannelInfo(reference.jid || reference.inviteCode);
+    }
+
+    if (!channel && isConnected && typeof whatsapp.resolveChannel === 'function') {
+      channel = await whatsapp.resolveChannel(reference.jid || reference.inviteCode);
+    }
+
+    if (!channel && isConnected && typeof whatsapp.getChannelsWithDiagnostics === 'function') {
+      const discovered = await whatsapp.getChannelsWithDiagnostics();
+      channel = (discovered?.channels || []).find((entry: { jid?: string }) => entry?.jid === reference.jid) || null;
+    }
+
+    if (!channel && reference.jid) {
+      const savedTargets = await loadSavedChannelTargets();
+      channel = savedTargets.find((entry) => entry.jid === reference.jid) || null;
+    }
+
+    if (!channel && reference.inviteCode) {
+      throw badRequest('Could not resolve this channel invite code. Make sure WhatsApp is connected and this account can access the channel.');
+    }
+
+    const fallbackName = String(body.name || '').trim();
+    const output = channel
+      ? {
+          id: channel.jid || reference.jid || '',
+          jid: channel.jid || reference.jid || '',
+          name: String(channel.name || reference.jid || ''),
+          subscribers: Math.max(0, Math.round(Number(channel.subscribers || 0))),
+          viewerRole: channel.viewerRole || null,
+          canSend: typeof channel.canSend === 'boolean' ? channel.canSend : null
+        }
+      : {
+          id: reference.jid || '',
+          jid: reference.jid || '',
+          name: fallbackName || reference.jid || '',
+          subscribers: 0,
+          viewerRole: null,
+          canSend: null
+        };
+
+    res.json({ found: Boolean(channel), channel: output });
   }));
 
   router.post('/disconnect', asyncHandler(async (req: Request, res: Response) => {

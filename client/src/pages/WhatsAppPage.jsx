@@ -14,6 +14,8 @@ const WhatsAppPage = () => {
   const queryClient = useQueryClient();
   const [testTarget, setTestTarget] = React.useState('');
   const [testMessage, setTestMessage] = React.useState('Hello from WhatsApp News Bot!');
+  const [manualChannel, setManualChannel] = React.useState('');
+  const [manualChannelName, setManualChannelName] = React.useState('');
 
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['whatsapp-status'],
@@ -96,7 +98,52 @@ const WhatsAppPage = () => {
 
   const addTarget = useMutation({
     mutationFn: (payload) => api.post('/api/targets', payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] })
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels-diagnostics'] });
+    }
+  });
+
+  const addManualChannel = useMutation({
+    mutationFn: async () => {
+      const rawChannel = String(manualChannel || '').trim();
+      if (!rawChannel) {
+        throw new Error('Channel ID/JID is required');
+      }
+
+      const resolved = await api.post('/api/whatsapp/channels/resolve', {
+        channel: rawChannel,
+        name: String(manualChannelName || '').trim() || undefined
+      });
+
+      const channel = resolved?.channel;
+      if (!channel?.jid) {
+        throw new Error('Could not resolve channel JID');
+      }
+
+      if (channel.canSend === false) {
+        const roleText = channel.viewerRole ? ` (role: ${channel.viewerRole})` : '';
+        throw new Error(`This WhatsApp account cannot post to that channel${roleText}`);
+      }
+
+      if (!existingPhones.has(channel.jid)) {
+        await api.post('/api/targets', {
+          name: String(manualChannelName || '').trim() || channel.name || channel.jid,
+          phone_number: channel.jid,
+          type: 'channel',
+          active: true,
+          notes: Number(channel.subscribers || 0) > 0 ? `${Number(channel.subscribers)} subscribers` : null
+        });
+      }
+
+      return resolved;
+    },
+    onSuccess: () => {
+      setManualChannel('');
+      setManualChannelName('');
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels-diagnostics'] });
+    }
   });
 
   const sendTestMessage = useMutation({
@@ -459,6 +506,44 @@ const WhatsAppPage = () => {
           <CardDescription>WhatsApp channels you administer</CardDescription>
         </CardHeader>
         <CardContent>
+          {isConnected && (
+            <div className="mb-4 rounded-lg border p-4 space-y-3">
+              <p className="text-sm font-medium">Add Channel by ID/JID</p>
+              <p className="text-xs text-muted-foreground">
+                Use a numeric channel ID, invite code, channel URL, or full JID like <span className="font-mono">1203630...@newsletter</span>. The server resolves live metadata when available.
+              </p>
+              <div className="grid gap-2 md:grid-cols-[2fr_2fr_auto]">
+                <Input
+                  value={manualChannel}
+                  onChange={(e) => setManualChannel(e.target.value)}
+                  placeholder="Channel ID, URL, invite code, or JID"
+                />
+                <Input
+                  value={manualChannelName}
+                  onChange={(e) => setManualChannelName(e.target.value)}
+                  placeholder="Optional display name"
+                />
+                <Button
+                  onClick={() => addManualChannel.mutate()}
+                  disabled={addManualChannel.isPending || !String(manualChannel || '').trim()}
+                >
+                  {addManualChannel.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Add Channel
+                </Button>
+              </div>
+              {addManualChannel.isSuccess && (
+                <p className="text-xs text-success">
+                  Channel added{addManualChannel.data?.found ? ' using live metadata.' : ' with canonical JID fallback.'}
+                </p>
+              )}
+              {addManualChannel.isError && (
+                <p className="text-xs text-destructive">
+                  {addManualChannel.error?.message || 'Failed to add channel'}
+                </p>
+              )}
+            </div>
+          )}
+
           {!isConnected ? (
             <p className="text-center text-muted-foreground py-8">Connect WhatsApp to see your channels</p>
           ) : channelsLoading ? (
@@ -466,7 +551,7 @@ const WhatsAppPage = () => {
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : channels.length === 0 ? (
-            <p className="text-center text-muted-foreground py-8">{channelLimitation || 'No channels found (you need to be an admin)'}</p>
+            <p className="text-center text-muted-foreground py-8">{channelLimitation || 'No channels auto-discovered yet. Add one by ID/JID above.'}</p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {channels.map((channel) => (
@@ -477,11 +562,14 @@ const WhatsAppPage = () => {
                   <div className="min-w-0 flex-1">
                     <p className="font-medium truncate">{channel.name}</p>
                     <p className="text-xs text-muted-foreground">{channel.subscribers} subscribers</p>
+                    {channel.canSend === false ? (
+                      <p className="text-xs text-destructive">No post permission for this account</p>
+                    ) : null}
                   </div>
                   <Button
                     size="sm"
                     variant={existingPhones.has(channel.jid) ? 'secondary' : 'outline'}
-                    disabled={existingPhones.has(channel.jid) || addTarget.isPending}
+                    disabled={existingPhones.has(channel.jid) || addTarget.isPending || channel.canSend === false}
                     onClick={() =>
                       addTarget.mutate({
                         name: channel.name,

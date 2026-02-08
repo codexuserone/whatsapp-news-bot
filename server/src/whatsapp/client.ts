@@ -7,7 +7,7 @@ const logger = require('../utils/logger');
 const withTimeout = require('../utils/withTimeout');
 const { getErrorMessage } = require('../utils/errorUtils');
 const useSupabaseAuthState = require('./authStore');
-const { saveIncomingMessages } = require('../services/messageService');
+const { saveIncomingMessages, classifyAckStatus, persistOutgoingStatusByMessageId } = require('../services/messageService');
 const { sendPendingForAllSchedules } = require('../services/queueService');
 const { dispatchImmediateSchedules } = require('../services/schedulerService');
 
@@ -25,6 +25,13 @@ type ChannelSummary = {
   jid: string;
   name: string;
   subscribers: number;
+  viewerRole?: string | null;
+  canSend?: boolean | null;
+};
+
+type ChannelInfo = ChannelSummary & {
+  viewerRole: string | null;
+  canSend: boolean | null;
 };
 
 type ChannelDiagnostics = {
@@ -42,6 +49,8 @@ type CachedNewsletterChat = {
   jid: string;
   name: string;
   subscribers: number;
+  viewerRole?: string | null;
+  canSend?: boolean | null;
   updatedAtMs: number;
 };
 
@@ -57,11 +66,46 @@ const redactSensitiveText = (value?: string | null) => {
 const normalizeNewsletterJid = (value: unknown, options?: { allowNumeric?: boolean }) => {
   const raw = String(value || '').trim();
   if (!raw) return '';
-  if (raw.endsWith('@newsletter')) return raw;
+  const lower = raw.toLowerCase();
+  if (lower.includes('whatsapp.com/channel/')) return '';
+  if (lower.endsWith('@newsletter')) return lower;
   if (raw.includes('@')) return '';
+  if (/^[a-z0-9]{10,}$/i.test(raw) && /[a-z]/i.test(raw)) return '';
   if (!options?.allowNumeric) return '';
-  const digits = raw.replace(/[^0-9]/g, '');
-  return digits ? `${digits}@newsletter` : '';
+  const numericLike = raw.replace(/[\s()+-]/g, '');
+  if (!/^\d+$/.test(numericLike)) return '';
+  return `${numericLike}@newsletter`;
+};
+
+const extractNewsletterInviteCode = (value: unknown) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.toLowerCase().includes('@newsletter')) return '';
+
+  const directUrlMatch = raw.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([A-Za-z0-9]+)/i);
+  if (directUrlMatch?.[1]) {
+    return String(directUrlMatch[1] || '').trim();
+  }
+
+  if ((raw.startsWith('http://') || raw.startsWith('https://')) && raw.includes('/channel/')) {
+    try {
+      const parsed = new URL(raw);
+      const pathParts = parsed.pathname.split('/').filter(Boolean);
+      const channelIndex = pathParts.findIndex((part) => part.toLowerCase() === 'channel');
+      if (channelIndex >= 0) {
+        const candidate = String(pathParts[channelIndex + 1] || '').trim();
+        if (/^[A-Za-z0-9]{10,}$/.test(candidate)) return candidate;
+      }
+    } catch {
+      // ignore invalid URL
+    }
+  }
+
+  if (/^[A-Za-z0-9]{10,}$/.test(raw) && /[A-Za-z]/.test(raw)) {
+    return raw;
+  }
+
+  return '';
 };
 
 const readNumericValue = (value: unknown) => {
@@ -111,11 +155,16 @@ const extractChannelSummary = (input: unknown, options?: { allowNumeric?: boolea
     readNumericValue(record.subscribers_count) ||
     readNumericValue(threadMetadata?.subscribers_count);
 
+  const viewerRole = extractChannelViewerRole(record);
+  const canSend = inferChannelCanSend(viewerRole);
+
   return {
     id: jid,
     jid,
     name,
-    subscribers
+    subscribers,
+    viewerRole,
+    canSend
   };
 };
 
@@ -144,6 +193,62 @@ const extractChannelArray = (input: unknown): unknown[] => {
 
   const maybeSingle = extractChannelSummary(record, { allowNumeric: true });
   return maybeSingle ? [record] : [];
+};
+
+const extractChannelViewerRole = (metadataLike: unknown) => {
+  if (!metadataLike || typeof metadataLike !== 'object') return null;
+
+  const metadata = metadataLike as Record<string, unknown>;
+  const viewerMetadata =
+    (metadata.viewer_metadata && typeof metadata.viewer_metadata === 'object'
+      ? (metadata.viewer_metadata as Record<string, unknown>)
+      : null) ||
+    (metadata.viewerMetadata && typeof metadata.viewerMetadata === 'object'
+      ? (metadata.viewerMetadata as Record<string, unknown>)
+      : null);
+
+  const roleCandidates = [
+    viewerMetadata?.role,
+    viewerMetadata?.type,
+    metadata.viewer_role,
+    metadata.role,
+    metadata.participant_role,
+    metadata.participantRole
+  ];
+
+  for (const candidate of roleCandidates) {
+    const value = String(candidate || '').trim();
+    if (value) return value;
+  }
+
+  return null;
+};
+
+const inferChannelCanSend = (viewerRole: string | null) => {
+  if (!viewerRole) return null;
+
+  const normalized = String(viewerRole).trim().toLowerCase();
+  if (!normalized) return null;
+
+  if (
+    normalized.includes('owner') ||
+    normalized.includes('admin') ||
+    normalized.includes('editor') ||
+    normalized.includes('write')
+  ) {
+    return true;
+  }
+
+  if (
+    normalized.includes('subscriber') ||
+    normalized.includes('viewer') ||
+    normalized.includes('read') ||
+    normalized.includes('follower')
+  ) {
+    return false;
+  }
+
+  return null;
 };
 
 class WhatsAppClient {
@@ -916,11 +1021,12 @@ class WhatsAppClient {
             const status = entry?.update?.status;
             if (typeof status !== 'number') continue;
 
-            const statusLabel = null;
+            const statusLabel = classifyAckStatus(status)?.statusLabel || null;
+            const remoteJid = entry?.key?.remoteJid ? String(entry.key.remoteJid) : null;
             const snapshot: MessageStatusSnapshot = {
               status,
               statusLabel,
-              remoteJid: entry?.key?.remoteJid ? String(entry.key.remoteJid) : null,
+              remoteJid,
               updatedAtMs: Date.now()
             };
 
@@ -931,6 +1037,10 @@ class WhatsAppClient {
                 this.recentMessageStatuses.delete(oldest);
               }
             }
+
+            void persistOutgoingStatusByMessageId(String(id), status, remoteJid).catch((error: unknown) => {
+              logger.warn({ error, messageId: id, status }, 'Failed to persist outgoing message ack status');
+            });
           }
         } catch (e) {
           logger.warn({ e }, 'Failed to process messages.update');
@@ -1081,7 +1191,7 @@ class WhatsAppClient {
           if (typeof status !== 'number') continue;
           if (status < minStatus) continue;
 
-          const statusLabel = null;
+          const statusLabel = classifyAckStatus(status)?.statusLabel || null;
           const snapshot: MessageStatusSnapshot = {
             status,
             statusLabel,
@@ -1187,10 +1297,14 @@ class WhatsAppClient {
     const existing = this.newsletterChatCache.get(channel.jid);
     const subscribers = channel.subscribers || existing?.subscribers || 0;
     const name = channel.name || existing?.name || channel.jid;
+    const viewerRole = channel.viewerRole || existing?.viewerRole || null;
+    const canSend = typeof channel.canSend === 'boolean' ? channel.canSend : existing?.canSend ?? null;
     this.newsletterChatCache.set(channel.jid, {
       jid: channel.jid,
       name,
       subscribers,
+      viewerRole,
+      canSend,
       updatedAtMs: Date.now()
     });
     if (this.newsletterChatCache.size > 1000) {
@@ -1238,7 +1352,14 @@ class WhatsAppClient {
         id: candidate.jid,
         jid: candidate.jid,
         name: candidate.name || existing?.name || candidate.jid,
-        subscribers: candidate.subscribers || existing?.subscribers || 0
+        subscribers: candidate.subscribers || existing?.subscribers || 0,
+        viewerRole: candidate.viewerRole || existing?.viewerRole || null,
+        canSend:
+          typeof candidate.canSend === 'boolean'
+            ? candidate.canSend
+            : typeof existing?.canSend === 'boolean'
+              ? existing.canSend
+              : null
       };
       channelMap.set(candidate.jid, merged);
       diagnostics.sourceCounts[source] += 1;
@@ -1280,7 +1401,9 @@ class WhatsAppClient {
           id: cached.jid,
           jid: cached.jid,
           name: cached.name || cached.jid,
-          subscribers: cached.subscribers || 0
+          subscribers: cached.subscribers || 0,
+          viewerRole: cached.viewerRole || null,
+          canSend: typeof cached.canSend === 'boolean' ? cached.canSend : null
         },
         'cache'
       );
@@ -1296,6 +1419,8 @@ class WhatsAppClient {
           const metadata = await socket.newsletterMetadata('jid', channel.jid);
           const normalized = extractChannelSummary(metadata, { allowNumeric: true });
           if (!normalized) continue;
+          normalized.viewerRole = extractChannelViewerRole(metadata);
+          normalized.canSend = inferChannelCanSend(normalized.viewerRole || null);
           mergeChannel(normalized, 'metadata');
           this.cacheNewsletterChat(normalized);
         } catch {
@@ -1319,6 +1444,91 @@ class WhatsAppClient {
   async getChannels(): Promise<Array<{ id: string; jid: string; name: string; subscribers: number }>> {
     const result = await this.getChannelsWithDiagnostics();
     return result.channels;
+  }
+
+  async resolveChannel(channelLike: unknown): Promise<ChannelSummary | null> {
+    const socket = this.socket as any;
+    if (!socket) return null;
+
+    const jid = normalizeNewsletterJid(channelLike, { allowNumeric: true });
+    const inviteCode = extractNewsletterInviteCode(channelLike);
+    if (!jid && !inviteCode) return null;
+
+    const cached = jid ? this.newsletterChatCache.get(jid) : null;
+    if (cached && jid) {
+      return {
+        id: jid,
+        jid,
+        name: cached.name || jid,
+        subscribers: cached.subscribers || 0,
+        viewerRole: cached.viewerRole || null,
+        canSend: typeof cached.canSend === 'boolean' ? cached.canSend : null
+      };
+    }
+
+    if (typeof socket.newsletterMetadata === 'function') {
+      const metadataLookups: Array<{ type: 'jid' | 'invite'; key: string }> = [];
+      if (jid) metadataLookups.push({ type: 'jid', key: jid });
+      if (inviteCode) metadataLookups.push({ type: 'invite', key: inviteCode });
+
+      for (const lookup of metadataLookups) {
+        try {
+          const metadata = await socket.newsletterMetadata(lookup.type, lookup.key);
+          const normalized = extractChannelSummary(metadata, { allowNumeric: true });
+          if (!normalized) continue;
+          normalized.viewerRole = extractChannelViewerRole(metadata);
+          normalized.canSend = inferChannelCanSend(normalized.viewerRole || null);
+          this.cacheNewsletterChat(normalized);
+          return normalized;
+        } catch (error) {
+          logger.warn(
+            { lookupType: lookup.type, lookupKey: lookup.key, error: getErrorMessage(error) },
+            'Failed to resolve channel metadata'
+          );
+        }
+      }
+    }
+
+    const discovered = await this.getChannelsWithDiagnostics();
+    const match = discovered.channels.find((channel) => (jid ? channel.jid === jid : false));
+    return match || null;
+  }
+
+  async getChannelInfo(channelLike: unknown): Promise<ChannelInfo | null> {
+    const socket = this.socket as any;
+    if (!socket) return null;
+
+    const channel = await this.resolveChannel(channelLike);
+    if (!channel) return null;
+
+    let viewerRole: string | null = null;
+    let canSend: boolean | null = null;
+
+    if (typeof socket.newsletterMetadata === 'function') {
+      try {
+        const metadata = await socket.newsletterMetadata('jid', channel.jid);
+        const normalized = extractChannelSummary(metadata, { allowNumeric: true });
+        if (normalized) {
+          this.cacheNewsletterChat(normalized);
+          channel.name = normalized.name || channel.name;
+          channel.subscribers = Math.max(channel.subscribers || 0, normalized.subscribers || 0);
+        }
+
+        viewerRole = extractChannelViewerRole(metadata);
+        canSend = inferChannelCanSend(viewerRole);
+      } catch (error) {
+        logger.warn({ jid: channel.jid, error: getErrorMessage(error) }, 'Failed to load channel info metadata');
+      }
+    }
+
+    return {
+      id: channel.jid,
+      jid: channel.jid,
+      name: channel.name || channel.jid,
+      subscribers: channel.subscribers || 0,
+      viewerRole,
+      canSend
+    };
   }
 
   async sendMessage(jid: string, content: AnyMessageContent, options: Record<string, unknown> = {}) {

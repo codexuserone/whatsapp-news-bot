@@ -179,7 +179,7 @@ const TargetsPage = () => {
       {isConnected && (
         <div className="space-y-3">
           <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
-            You can send only to groups (like your test group). Channels are optional and never required.
+            Channels are fully supported. If auto-discovery is empty, add by channel ID/JID in the WhatsApp Console.
           </div>
 
           <div className="grid gap-4 sm:grid-cols-3">
@@ -219,7 +219,7 @@ const TargetsPage = () => {
                   <div>
                     <p className="font-medium">Channels</p>
                     <p className="text-sm text-muted-foreground">
-                      {availableChannels.length} available to import (optional)
+                      {availableChannels.length} available to import
                     </p>
                     <p className="text-xs text-muted-foreground">{counts.channel} already saved</p>
                     {availableChannels.length === 0 && channelsLimitation && (
@@ -314,7 +314,7 @@ const TargetsPage = () => {
                 {targets.length === 0
                   ? 'No targets yet. Import groups from WhatsApp above.'
                   : filterType === 'channel'
-                    ? 'No saved channels yet. This is optional - group targets are enough for normal dispatch.'
+                    ? 'No saved channels yet. Add one from WhatsApp Console using channel ID/JID.'
                     : 'No targets match your search.'}
               </p>
             </div>

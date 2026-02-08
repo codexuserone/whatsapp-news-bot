@@ -138,6 +138,9 @@ const spec = {
     '/api/whatsapp/channels/diagnostics': {
       get: { tags: ['whatsapp'], summary: 'List WhatsApp channels with diagnostics', responses: { 200: { description: 'OK' } } }
     },
+    '/api/whatsapp/channels/resolve': {
+      post: { tags: ['whatsapp'], summary: 'Resolve a WhatsApp channel ID/JID', responses: { 200: { description: 'OK' } } }
+    },
     '/api/whatsapp/disconnect': {
       post: { tags: ['whatsapp'], summary: 'Disconnect WhatsApp', responses: { 200: { description: 'OK' } } }
     },

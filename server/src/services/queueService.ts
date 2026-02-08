@@ -57,6 +57,10 @@ type WhatsAppClient = {
     jid: string,
     timeoutMs?: number
   ) => Promise<{ announce: boolean; me: { isAdmin: boolean } } | null>;
+  getChannelInfo?: (
+    jid: string,
+    timeoutMs?: number
+  ) => Promise<{ jid: string; name: string; subscribers: number; viewerRole: string | null; canSend: boolean | null } | null>;
 };
 
 const DEFAULT_SEND_TIMEOUT_MS = 45000;
@@ -1487,6 +1491,63 @@ const sendQueuedForSchedule = async (
         }
       }
 
+      if (target.type === 'channel' && whatsappClient.getChannelInfo) {
+        try {
+          const jid = normalizeTargetJid(target);
+          const info = await whatsappClient.getChannelInfo(jid);
+          if (info?.canSend === false) {
+            const reason = info.viewerRole
+              ? `Channel posting is not allowed for this WhatsApp account (role: ${info.viewerRole})`
+              : 'Channel posting is not allowed for this WhatsApp account';
+            const ids = (runnableLogs || []).map((l: { id?: string }) => l.id).filter(Boolean) as string[];
+            if (ids.length) {
+              await supabase
+                .from('message_logs')
+                .update({
+                  status: 'failed',
+                  processing_started_at: null,
+                  error_message: reason,
+                  media_url: null,
+                  media_type: null,
+                  media_sent: false,
+                  media_error: null
+                })
+                .in('id', ids);
+            }
+            continue;
+          }
+        } catch (error) {
+          const message = getErrorMessage(error).toLowerCase();
+          const channelNotFound =
+            message.includes('not found') ||
+            message.includes('404') ||
+            message.includes('newsletter') ||
+            message.includes('invalid jid');
+
+          if (channelNotFound) {
+            const reason = `Channel validation failed: ${getErrorMessage(error)}`;
+            const ids = (runnableLogs || []).map((l: { id?: string }) => l.id).filter(Boolean) as string[];
+            if (ids.length) {
+              await supabase
+                .from('message_logs')
+                .update({
+                  status: 'failed',
+                  processing_started_at: null,
+                  error_message: reason,
+                  media_url: null,
+                  media_type: null,
+                  media_sent: false,
+                  media_error: null
+                })
+                .in('id', ids);
+            }
+            continue;
+          }
+
+          logger.warn({ scheduleId, targetId: target.id, error }, 'Failed to validate channel send policy');
+        }
+      }
+
       const runnableIds = (runnableLogs || [])
         .map((log: { id?: string }) => String(log?.id || ''))
         .filter(Boolean);
@@ -1675,13 +1736,18 @@ const sendQueuedForSchedule = async (
             ? `${AUTH_ERROR_HINT} (${rawErrorMessage || 'unknown auth error'})`
             : rawErrorMessage;
           const timeoutUnknownDelivery = /timed out sending/i.test(rawErrorMessage);
+          const normalizedErrorMessage = rawErrorMessage.toLowerCase();
           const nonRetryable = [
             'Template rendered empty message',
             'Target phone number missing',
             'Group ID invalid',
             'Channel ID invalid',
-            'Phone number invalid'
-          ].some((needle) => rawErrorMessage.includes(needle));
+            'Phone number invalid',
+            'channel posting is not allowed',
+            'cannot post to that channel',
+            'forbidden',
+            'not-authorized'
+          ].some((needle) => normalizedErrorMessage.includes(needle.toLowerCase()));
 
           const shouldNotRetry = nonRetryable || timeoutUnknownDelivery;
 

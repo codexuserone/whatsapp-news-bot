@@ -139,6 +139,27 @@ export type WhatsAppChannel = {
   jid: string;
   name: string;
   subscribers: number;
+  viewerRole?: string | null;
+  canSend?: boolean | null;
+};
+
+export type WhatsAppChannelDiagnosticsResponse = {
+  channels: WhatsAppChannel[];
+  diagnostics: {
+    methodsTried: string[];
+    methodErrors: string[];
+    sourceCounts: {
+      api: number;
+      cache: number;
+      metadata: number;
+    };
+    limitation?: string | null;
+  };
+};
+
+export type WhatsAppResolveChannelResponse = {
+  found: boolean;
+  channel: WhatsAppChannel;
 };
 
 export type ShabbosStatus = {
@@ -171,7 +192,12 @@ export type AnalyticsWindow = {
   posteriorMean: number;
   objective: number;
   confidence: number;
+  exposureShare: number;
+  explorationBonus: number;
+  propensityBoost: number;
   expectedObservedRate: number;
+  expectedDeliveredRate: number;
+  expectedReadRate: number;
   expectedResponses24h: number;
   fatiguePenalty: number;
   pressureRatio: number;
@@ -188,7 +214,10 @@ export type AnalyticsRecommendation = {
   objective: number;
   confidence: number;
   expectedObservedRate: number;
+  expectedDeliveredRate: number;
+  expectedReadRate: number;
   expectedResponses24h: number;
+  recommendationType: 'exploit' | 'explore';
   reason: string;
 };
 
@@ -246,10 +275,15 @@ export type AnalyticsReport = {
     pending: number;
     processing: number;
     observed: number;
+    delivered: number;
+    read: number;
     responses24h: number;
   };
   rates: {
     observedRate: number;
+    deliveredRate: number;
+    readRate: number;
+    readToDeliveredRate: number;
     failureRate: number;
     responseRate24h: number;
     avgLatencySec?: number | null;

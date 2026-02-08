@@ -211,7 +211,25 @@ const AnalyticsPage = () => {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{toPercent(report.rates.observedRate)}</div>
-                <p className="text-xs text-muted-foreground">Based on WhatsApp upsert confirmations</p>
+                <p className="text-xs text-muted-foreground">Based on chat message visibility + status sync</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Delivered Rate</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{toPercent(report.rates.deliveredRate)}</div>
+                <p className="text-xs text-muted-foreground">Derived from persisted WhatsApp ack transitions</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Read Rate</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{toPercent(report.rates.readRate)}</div>
+                <p className="text-xs text-muted-foreground">Read acknowledgements from message logs</p>
               </CardContent>
             </Card>
             <Card>
@@ -320,10 +338,17 @@ const AnalyticsPage = () => {
                         <TableCell>
                           <div className="font-medium">{window.dayLabel}</div>
                           <div className="text-xs text-muted-foreground">{window.time}</div>
+                          <div className="mt-1">
+                            <Badge variant={window.recommendationType === 'explore' ? 'warning' : 'secondary'}>
+                              {window.recommendationType === 'explore' ? 'Explore' : 'Exploit'}
+                            </Badge>
+                          </div>
                         </TableCell>
                         <TableCell>{toPercent(window.objective)}</TableCell>
                         <TableCell>{toPercent(window.confidence)}</TableCell>
-                        <TableCell>{toPercent(window.expectedObservedRate)}</TableCell>
+                        <TableCell>
+                          {toPercent(window.expectedObservedRate)} / {toPercent(window.expectedReadRate)}
+                        </TableCell>
                       </TableRow>
                     ))}
                     {!report.recommendations.windows.length && (
@@ -485,14 +510,14 @@ const AnalyticsPage = () => {
                 Model Notes
               </CardTitle>
               <CardDescription>
-                Objective combines Bayesian delivery expectation, response uplift, and posting pressure penalty.
+                Objective combines Bayesian delivery expectation, response uplift, posting pressure penalty, and exposure-bias correction.
               </CardDescription>
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground space-y-1">
-              <p>Objective = posterior_mean + response_boost - fatigue_penalty</p>
+              <p>Objective = posterior_mean + response_boost - fatigue_penalty + exploration_bonus + propensity_boost</p>
               <p>Posterior uses Beta(alpha,beta) with configurable priors from settings.</p>
               <p>Recency weighting uses exponential half-life ({report.model.halfLifeDays} days).</p>
-              <p>Confidence blends weighted sample depth and posterior variance.</p>
+              <p>Confidence blends weighted sample depth and posterior variance; low-exposure slots can appear as Explore recommendations.</p>
               {report.dataQuality.notes.map((note) => (
                 <p key={note}>- {note}</p>
               ))}

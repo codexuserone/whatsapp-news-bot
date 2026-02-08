@@ -325,6 +325,9 @@ const spec = {
     '/api/analytics/schedule-recommendations': {
       get: { tags: ['analytics'], summary: 'Get per-schedule timing recommendations', responses: { 200: { description: 'OK' } } }
     },
+    '/api/analytics/schedule-recommendations/{id}/apply': {
+      post: { tags: ['analytics'], summary: 'Apply schedule recommendation patch', responses: { 200: { description: 'OK' } } }
+    },
     '/api/analytics/audience': {
       get: { tags: ['analytics'], summary: 'Get audience snapshot analytics', responses: { 200: { description: 'OK' } } }
     },

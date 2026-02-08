@@ -72,6 +72,23 @@ const AnalyticsPage = () => {
     }
   });
 
+  const applyScheduleRecommendation = useMutation({
+    mutationFn: (scheduleId) =>
+      api.post(`/api/analytics/schedule-recommendations/${scheduleId}/apply`, {
+        mode: 'auto',
+        dry_run: false,
+        days: Number(days)
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['analytics-report'] });
+      queryClient.invalidateQueries({ queryKey: ['analytics-schedule-recommendations'] });
+      queryClient.invalidateQueries({ queryKey: ['schedules'] });
+    },
+    onError: (error) => {
+      alert(`Failed to apply recommendation: ${error?.message || 'Unknown error'}`);
+    }
+  });
+
   const heatmapRows = useMemo(() => {
     const windows = report?.windows || [];
     const bySlot = new Map(windows.map((window) => [window.slot, window]));
@@ -481,7 +498,7 @@ const AnalyticsPage = () => {
             <CardHeader>
               <CardTitle>Schedule Tuning Recommendations</CardTitle>
               <CardDescription>
-                Per-schedule recommendation preview based on each schedule's primary target analytics.
+                Per-schedule recommendation preview based on each schedule primary target analytics.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -492,6 +509,7 @@ const AnalyticsPage = () => {
                     <TableHeaderCell>Current</TableHeaderCell>
                     <TableHeaderCell>Recommended</TableHeaderCell>
                     <TableHeaderCell>Confidence</TableHeaderCell>
+                    <TableHeaderCell>Action</TableHeaderCell>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -514,11 +532,21 @@ const AnalyticsPage = () => {
                         </div>
                       </TableCell>
                       <TableCell>{toPercent(item.confidence)}</TableCell>
+                      <TableCell>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => applyScheduleRecommendation.mutate(item.schedule_id)}
+                          disabled={applyScheduleRecommendation.isPending}
+                        >
+                          {applyScheduleRecommendation.isPending ? 'Applying...' : 'Apply'}
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   ))}
                   {!(scheduleRecommendations?.schedules || []).length && (
                     <TableRow>
-                      <TableCell colSpan={4} className="h-16 text-center text-muted-foreground">
+                      <TableCell colSpan={5} className="h-16 text-center text-muted-foreground">
                         No active schedules to evaluate.
                       </TableCell>
                     </TableRow>

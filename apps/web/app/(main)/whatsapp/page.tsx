@@ -69,8 +69,28 @@ const WhatsAppPage = () => {
     }
   });
 
+  const reconnect = useMutation({
+    mutationFn: () => api.post('/api/whatsapp/reconnect'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+    }
+  });
+
   const clearSenderKeys = useMutation({
     mutationFn: () => api.post('/api/whatsapp/clear-sender-keys'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+    }
+  });
+
+  const takeover = useMutation({
+    mutationFn: () => api.post('/api/whatsapp/takeover'),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
       queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
@@ -91,6 +111,7 @@ const WhatsAppPage = () => {
     jid: string;
     message: string;
     imageUrl?: string;
+    confirm?: boolean;
   };
 
   const addTarget = useMutation({
@@ -108,6 +129,7 @@ const WhatsAppPage = () => {
 
   const isConnected = status?.status === 'connected';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
+  const isConflict = status?.status === 'conflict';
   const existingPhones = new Set(existingTargets.map((t) => t.phone_number));
   const activeTargets = existingTargets.filter((t) => t.active);
 
@@ -133,7 +155,16 @@ const WhatsAppPage = () => {
             disabled={disconnect.isPending || !isConnected}
           >
             <Power className="mr-2 h-4 w-4" />
-            {disconnect.isPending ? 'Disconnecting...' : 'Disconnect'}
+              {disconnect.isPending ? 'Disconnecting...' : 'Disconnect'}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => reconnect.mutate()}
+            disabled={reconnect.isPending || isConnected}
+            title="Reconnect using existing session"
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${reconnect.isPending ? 'animate-spin' : ''}`} />
+            {reconnect.isPending ? 'Reconnecting...' : 'Reconnect'}
           </Button>
           <Button
             variant="outline"
@@ -147,6 +178,16 @@ const WhatsAppPage = () => {
             <RefreshCw className={`mr-2 h-4 w-4 ${hardRefresh.isPending ? 'animate-spin' : ''}`} />
             {hardRefresh.isPending ? 'Refreshing...' : 'Hard Refresh'}
           </Button>
+          {isConflict ? (
+            <Button
+              variant="outline"
+              onClick={() => takeover.mutate()}
+              disabled={takeover.isPending}
+            >
+              <Power className="mr-2 h-4 w-4" />
+              {takeover.isPending ? 'Taking over...' : 'Take Over Session'}
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -179,9 +220,21 @@ const WhatsAppPage = () => {
               </div>
             )}
 
+            {reconnect.isSuccess && !isConnected && (
+              <div className="rounded-lg bg-secondary/60 p-3 text-sm">
+                Reconnect requested. Waiting for WhatsApp session...
+              </div>
+            )}
+
+            {takeover.isSuccess && (
+              <div className="rounded-lg bg-secondary/60 p-3 text-sm">
+                Lease takeover requested. Reconnecting...
+              </div>
+            )}
+
             {!isConnected && !isQrReady && (
               <div className="rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
-                Click <strong>Hard Refresh</strong> to generate a new QR code.
+                Try <strong>Reconnect</strong> first. If login still fails, use <strong>Hard Refresh</strong>.
               </div>
             )}
 
@@ -302,6 +355,7 @@ const WhatsAppPage = () => {
                   if (testImageUrl) {
                     payload.imageUrl = testImageUrl;
                   }
+                  payload.confirm = true;
                   sendTestMessage.mutate(payload);
                 }}
                 disabled={sendTestMessage.isPending || !testTarget || !testMessage}

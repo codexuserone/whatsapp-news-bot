@@ -194,6 +194,65 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
   }
 };
 
+const dispatchImmediateSchedules = async (
+  whatsappClient?: WhatsAppClient,
+  options?: { skipFeedRefresh?: boolean; reason?: string }
+) => {
+  if (schedulersDisabled()) {
+    return { scheduled: 0, ran: 0, skipped: true, reason: 'schedulers_disabled' };
+  }
+
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return { scheduled: 0, ran: 0, skipped: true, reason: 'db_unavailable' };
+  }
+
+  const status = whatsappClient?.getStatus?.();
+  if (!status || status.status !== 'connected') {
+    return {
+      scheduled: 0,
+      ran: 0,
+      skipped: true,
+      reason: `whatsapp_${status?.status || 'unavailable'}`
+    };
+  }
+
+  try {
+    const { data: schedules, error } = await supabase
+      .from('schedules')
+      .select('*')
+      .eq('active', true);
+
+    if (error) throw error;
+
+    const immediateSchedules = (schedules || []).filter(
+      (schedule: ScheduleRow) => getDeliveryMode(schedule) !== 'batched'
+    );
+
+    let ran = 0;
+    for (const schedule of immediateSchedules) {
+      await runScheduleOnce(schedule.id, whatsappClient, {
+        skipFeedRefresh: Boolean(options?.skipFeedRefresh)
+      });
+      ran += 1;
+    }
+
+    logger.info(
+      {
+        scheduled: immediateSchedules.length,
+        ran,
+        reason: options?.reason || 'manual'
+      },
+      'Immediate schedule catch-up completed'
+    );
+
+    return { scheduled: immediateSchedules.length, ran, skipped: false, reason: options?.reason || 'manual' };
+  } catch (error) {
+    logger.error({ error, reason: options?.reason || 'manual' }, 'Failed immediate schedule catch-up');
+    return { scheduled: 0, ran: 0, skipped: true, reason: 'error' };
+  }
+};
+
 const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
   const supabase = getSupabaseClient();
   if (!supabase) {
@@ -356,5 +415,6 @@ module.exports = {
   initSchedulers,
   clearAll,
   triggerImmediateSchedules,
-  queueBatchSchedulesForFeed
+  queueBatchSchedulesForFeed,
+  dispatchImmediateSchedules
 };

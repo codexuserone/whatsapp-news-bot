@@ -18,6 +18,7 @@ export type Template = {
   content: string;
   active: boolean;
   send_images?: boolean | null;
+  send_mode?: 'image' | 'link_preview' | 'text_only' | null;
 };
 
 export type Target = {
@@ -116,6 +117,14 @@ export type WhatsAppStatus = {
   lastError?: string | null;
   lastSeenAt?: string | null;
   hasQr?: boolean;
+  instanceId?: string;
+  me?: { jid?: string | null; name?: string | null };
+  lease?: {
+    supported?: boolean;
+    held?: boolean;
+    ownerId?: string | null;
+    expiresAt?: string | null;
+  };
 };
 
 export type WhatsAppGroup = {
@@ -147,4 +156,5 @@ export type ShabbosSettings = {
   tzid?: string | null;
   candleLightingMins?: number | null;
   havdalahMins?: number | null;
+  queueMessages?: boolean | null;
 };

@@ -4,7 +4,29 @@ const { extractText, extractUrls } = require('../utils/messageParser');
 type BaileysMessage = {
   key?: { remoteJid?: string; id?: string; fromMe?: boolean };
   message?: Record<string, unknown>;
-  messageTimestamp?: number | string;
+  messageTimestamp?: number | string | { low?: number; high?: number; unsigned?: boolean };
+};
+
+const toMessageTimestampIso = (value: BaileysMessage['messageTimestamp']) => {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return new Date(value * 1000).toISOString();
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return new Date(parsed * 1000).toISOString();
+    }
+  }
+
+  if (value && typeof value === 'object') {
+    const low = Number((value as { low?: unknown }).low);
+    if (Number.isFinite(low) && low > 0) {
+      return new Date(low * 1000).toISOString();
+    }
+  }
+
+  return new Date().toISOString();
 };
 
 const saveIncomingMessages = async (messages: BaileysMessage[] = []) => {
@@ -17,9 +39,7 @@ const saveIncomingMessages = async (messages: BaileysMessage[] = []) => {
     const jid = message.key.remoteJid;
     const text = extractText(message.message as Record<string, unknown>);
     const urls = extractUrls(text) as string[];
-    const timestamp = message.messageTimestamp 
-      ? new Date(Number(message.messageTimestamp) * 1000).toISOString() 
-      : new Date().toISOString();
+    const timestamp = toMessageTimestampIso(message.messageTimestamp);
 
     const base = {
       remote_jid: jid,

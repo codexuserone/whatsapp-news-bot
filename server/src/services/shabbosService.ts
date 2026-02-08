@@ -98,24 +98,53 @@ const parseShabbosTimesFromHebcal = (data: { items?: Array<{ category?: string; 
     return aTime - bTime;
   });
 
+  const isShabbosTitle = (title: string) => /shabbos|shabbat/i.test(String(title || ''));
+
+  const holidayWindows = sortedItems
+    .filter((entry) => entry.category === 'holiday' && entry.date)
+    .map((entry) => ({
+      at: new Date(String(entry.date)),
+      title: String(entry.title || '')
+    }))
+    .filter((entry) => Number.isFinite(entry.at.getTime()));
+
+  const detectPeriodType = (start: Date, end: Date): { type: 'shabbos' | 'yomtov'; title?: string } => {
+    const holiday = holidayWindows.find((entry) => {
+      const at = entry.at.getTime();
+      return at >= start.getTime() && at <= end.getTime() && !isShabbosTitle(entry.title);
+    });
+
+    if (holiday) {
+      return { type: 'yomtov', title: holiday.title };
+    }
+
+    // Fallback heuristic: candle-lighting on Friday is usually Shabbos.
+    // Non-Friday windows without a Shabbos holiday marker are treated as Yom Tov.
+    const day = start.getDay();
+    if (day !== 5) {
+      return { type: 'yomtov' };
+    }
+
+    return { type: 'shabbos' };
+  };
+
   for (const item of sortedItems) {
     if (item.category === 'candles') {
       // Start of Shabbos or Yom Tov
       if (!item.date) continue;
-      const title = item.title || '';
       currentStart = new Date(item.date);
-      currentCategory = title.includes('Candle') ? 'shabbos' : 'yomtov';
+      currentCategory = null;
     } else if (item.category === 'havdalah' && currentStart) {
       // End of Shabbos or Yom Tov
       if (!item.date) continue;
-      if (!currentCategory) {
-        currentCategory = 'shabbos';
-      }
+      const periodEnd = new Date(item.date);
+      const detected = detectPeriodType(currentStart, periodEnd);
+      currentCategory = detected.type;
       periods.push({
         start: currentStart,
-        end: new Date(item.date),
+        end: periodEnd,
         type: currentCategory,
-        title: item.title || ''
+        title: detected.title || item.title || ''
       });
       currentStart = null;
       currentCategory = null;

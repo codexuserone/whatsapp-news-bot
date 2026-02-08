@@ -16,6 +16,7 @@ import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Layers, Pencil, Trash2, Eye, Loader2 } from 'lucide-react';
 
 const schema = z.object({
@@ -24,7 +25,8 @@ const schema = z.object({
   content: z.string().min(1),
   description: z.string().optional(),
   active: z.boolean().default(true),
-  send_images: z.boolean().default(true)
+  send_images: z.boolean().default(true),
+  send_mode: z.enum(['image', 'link_preview', 'text_only']).default('image')
 });
 
 type TemplateFormValues = z.infer<typeof schema>;
@@ -102,11 +104,19 @@ const TemplatesPage = () => {
 
   const form = useForm<TemplateFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { id: undefined, name: '', content: '', description: '', active: true, send_images: true }
+    defaultValues: {
+      id: undefined,
+      name: '',
+      content: '',
+      description: '',
+      active: true,
+      send_images: true,
+      send_mode: 'image'
+    }
   });
 
   const watchedContent = useWatch({ control: form.control, name: 'content' });
-  const watchedSendImages = useWatch({ control: form.control, name: 'send_images' });
+  const watchedSendMode = useWatch({ control: form.control, name: 'send_mode' });
 
   const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Unknown error');
 
@@ -118,7 +128,8 @@ const TemplatesPage = () => {
         content: active.content,
         description: active.description || '',
         active: active.active ?? true,
-        send_images: active.send_images ?? true
+        send_images: active.send_images ?? true,
+        send_mode: active.send_mode || (active.send_images === false ? 'link_preview' : 'image')
       });
     }
   }, [active, form]);
@@ -131,7 +142,15 @@ const TemplatesPage = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['templates'] });
       setActive(null);
-      form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_images: true });
+      form.reset({
+        id: undefined,
+        name: '',
+        content: '',
+        description: '',
+        active: true,
+        send_images: true,
+        send_mode: 'image'
+      });
     },
     onError: (error: unknown) => alert(`Failed to save template: ${getErrorMessage(error)}`)
   });
@@ -143,20 +162,30 @@ const TemplatesPage = () => {
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
       if (active?.id === id) {
         setActive(null);
-        form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_images: true });
+        form.reset({
+          id: undefined,
+          name: '',
+          content: '',
+          description: '',
+          active: true,
+          send_images: true,
+          send_mode: 'image'
+        });
       }
     },
     onError: (error: unknown) => alert(`Failed to delete template: ${getErrorMessage(error)}`)
   });
 
   const onSubmit = (values: TemplateFormValues) => {
+    const sendMode = values.send_mode || 'image';
     saveTemplate.mutate({
       id: values.id,
       name: values.name,
       content: values.content,
       description: values.description,
       active: values.active,
-      send_images: values.send_images
+      send_mode: sendMode,
+      send_images: sendMode === 'image'
     });
   };
 
@@ -263,17 +292,23 @@ const TemplatesPage = () => {
 
                 <Controller
                   control={form.control}
-                  name="send_images"
+                  name="send_mode"
                   render={({ field }) => (
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        id="send_images"
-                        checked={field.value}
-                        onCheckedChange={(checked) => field.onChange(checked === true)}
-                      />
-                      <Label htmlFor="send_images" className="cursor-pointer">
-                        Attach image when available
-                      </Label>
+                    <div className="space-y-2">
+                      <Label htmlFor="send_mode">Message format</Label>
+                      <Select value={field.value || 'image'} onValueChange={field.onChange}>
+                        <SelectTrigger id="send_mode">
+                          <SelectValue placeholder="Select message format" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="image">Image + caption</SelectItem>
+                          <SelectItem value="link_preview">Text + link preview</SelectItem>
+                          <SelectItem value="text_only">Text only</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Choose exactly how this template should be sent.
+                      </p>
                     </div>
                   )}
                 />
@@ -289,7 +324,15 @@ const TemplatesPage = () => {
                       variant="outline"
                       onClick={() => {
                         setActive(null);
-                        form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_images: true });
+                        form.reset({
+                          id: undefined,
+                          name: '',
+                          content: '',
+                          description: '',
+                          active: true,
+                          send_images: true,
+                          send_mode: 'image'
+                        });
                       }}
                     >
                       Cancel
@@ -319,7 +362,7 @@ const TemplatesPage = () => {
             <CardContent>
                 <div className="rounded-lg bg-emerald-50/70 p-4 dark:bg-emerald-950/40">
                   <div className="max-w-[85%] rounded-lg bg-white/80 px-3 py-2 shadow-sm ring-1 ring-emerald-200/60 dark:bg-emerald-900/50 dark:ring-emerald-800/60">
-                    {previewWithData && watchedSendImages && sampleData.image_url ? (
+                    {previewWithData && watchedSendMode === 'image' && sampleData.image_url ? (
                       <div className="mb-2 overflow-hidden rounded-md border border-black/5 bg-white">
                         <Image
                           src={sampleData.image_url}
@@ -366,15 +409,23 @@ const TemplatesPage = () => {
             <div className="space-y-3">
               {templates.map((template) => (
                 <div key={template.id} className="rounded-lg border p-3">
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium truncate">{template.name}</p>
-                      {template.description && (
-                        <p className="text-xs text-muted-foreground truncate">{template.description}</p>
-                      )}
-                    </div>
-                    <Badge variant={template.active ? 'success' : 'secondary'}>
-                      {template.active ? 'Active' : 'Inactive'}
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium truncate">{template.name}</p>
+                        {template.description && (
+                          <p className="text-xs text-muted-foreground truncate">{template.description}</p>
+                        )}
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Format:{' '}
+                          {template.send_mode === 'text_only'
+                            ? 'Text only'
+                            : template.send_mode === 'link_preview'
+                              ? 'Text + link preview'
+                              : 'Image + caption'}
+                        </p>
+                      </div>
+                      <Badge variant={template.active ? 'success' : 'secondary'}>
+                        {template.active ? 'Active' : 'Inactive'}
                     </Badge>
                   </div>
                   <div className="flex gap-2">

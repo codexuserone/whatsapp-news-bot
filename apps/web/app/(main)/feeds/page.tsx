@@ -103,6 +103,34 @@ const FeedsPage = () => {
     onError: (error: unknown) => alert(`Failed to refresh feed: ${getErrorMessage(error)}`)
   });
 
+  const refreshAllFeeds = useMutation({
+    mutationFn: () =>
+      api.post<{
+        totals?: {
+          feeds?: number;
+          insertedCount?: number;
+          duplicateCount?: number;
+          errorCount?: number;
+          queuedCount?: number;
+        };
+      }>('/api/feeds/refresh-all'),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['feeds'] });
+      queryClient.invalidateQueries({ queryKey: ['feed-items'] });
+      queryClient.invalidateQueries({ queryKey: ['available-variables'] });
+      const totals = result?.totals || {};
+      const feedsCount = totals.feeds || 0;
+      const inserted = totals.insertedCount || 0;
+      const duplicates = totals.duplicateCount || 0;
+      const errors = totals.errorCount || 0;
+      alert(
+        `Refreshed ${feedsCount} feed${feedsCount !== 1 ? 's' : ''}. ` +
+          `Inserted ${inserted}, duplicates ${duplicates}, errors ${errors}.`
+      );
+    },
+    onError: (error: unknown) => alert(`Failed to refresh all feeds: ${getErrorMessage(error)}`)
+  });
+
 
   const testFeedUrl = async () => {
     const url = form.getValues('url');
@@ -133,6 +161,18 @@ const FeedsPage = () => {
           <h1 className="text-3xl font-bold tracking-tight">Feeds</h1>
           <p className="text-muted-foreground">Add any feed URL. Type and variables are auto-detected.</p>
         </div>
+        <Button
+          variant="outline"
+          onClick={() => refreshAllFeeds.mutate()}
+          disabled={refreshAllFeeds.isPending}
+        >
+          {refreshAllFeeds.isPending ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <RefreshCw className="mr-2 h-4 w-4" />
+          )}
+          Refresh All
+        </Button>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_400px]">
@@ -321,7 +361,12 @@ const FeedsPage = () => {
                     <Button size="sm" variant="outline" onClick={() => selectFeed(feed)}>
                       <Pencil className="mr-1 h-3 w-3" /> Edit
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => refreshFeed.mutate(feed.id)} disabled={refreshFeed.isPending}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => refreshFeed.mutate(feed.id)}
+                      disabled={refreshFeed.isPending || refreshAllFeeds.isPending}
+                    >
                       {refreshFeed.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-1 h-3 w-3" />}
                       Refresh
                     </Button>

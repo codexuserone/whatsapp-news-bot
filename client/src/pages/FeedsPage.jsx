@@ -83,6 +83,26 @@ const FeedsPage = () => {
     onError: (error) => alert(`Failed to refresh feed: ${error?.message || 'Unknown error'}`)
   });
 
+  const refreshAllFeeds = useMutation({
+    mutationFn: () => api.post('/api/feeds/refresh-all'),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['feeds'] });
+      queryClient.invalidateQueries({ queryKey: ['feed-items'] });
+      queryClient.invalidateQueries({ queryKey: ['available-variables'] });
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      const totals = result?.totals || {};
+      const feedsCount = totals.feeds || 0;
+      const inserted = totals.insertedCount || 0;
+      const duplicates = totals.duplicateCount || 0;
+      const errors = totals.errorCount || 0;
+      alert(
+        `Refreshed ${feedsCount} feed${feedsCount !== 1 ? 's' : ''}. ` +
+          `Inserted ${inserted}, duplicates ${duplicates}, errors ${errors}.`
+      );
+    },
+    onError: (error) => alert(`Failed to refresh all feeds: ${error?.message || 'Unknown error'}`)
+  });
+
   const testFeedUrl = async () => {
     const url = form.getValues('url');
     if (!url) return;
@@ -147,6 +167,13 @@ const FeedsPage = () => {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Feeds</h1>
         <p className="text-muted-foreground">Add any feed URL. Type and variables are auto-detected.</p>
+      </div>
+
+      <div className="flex justify-end">
+        <Button variant="outline" onClick={() => refreshAllFeeds.mutate()} disabled={refreshAllFeeds.isPending}>
+          <RefreshCw className={`mr-2 h-4 w-4 ${refreshAllFeeds.isPending ? 'animate-spin' : ''}`} />
+          Refresh All
+        </Button>
       </div>
 
       {unroutedActiveFeeds.length > 0 && (
@@ -398,7 +425,7 @@ const FeedsPage = () => {
                       size="sm" 
                       variant="outline" 
                       onClick={() => refreshFeed.mutate(feed.id)}
-                      disabled={refreshFeed.isPending}
+                      disabled={refreshFeed.isPending || refreshAllFeeds.isPending}
                     >
                       <RefreshCw className={`mr-1 h-3 w-3 ${refreshFeed.isPending ? 'animate-spin' : ''}`} />
                       Fetch

@@ -9,6 +9,7 @@ const { getErrorMessage } = require('../utils/errorUtils');
 const useSupabaseAuthState = require('./authStore');
 const { saveIncomingMessages } = require('../services/messageService');
 const { sendPendingForAllSchedules } = require('../services/queueService');
+const { dispatchImmediateSchedules } = require('../services/schedulerService');
 
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict';
 
@@ -790,6 +791,14 @@ class WhatsAppClient {
             await sendPendingForAllSchedules(this);
           } catch (error) {
             logger.error({ error }, 'Failed to send pending schedules after connect');
+          }
+          try {
+            await dispatchImmediateSchedules(this, {
+              skipFeedRefresh: true,
+              reason: 'whatsapp_reconnect'
+            });
+          } catch (error) {
+            logger.error({ error }, 'Failed to run immediate schedule catch-up after connect');
           }
         }
 

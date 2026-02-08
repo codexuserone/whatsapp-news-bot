@@ -142,6 +142,7 @@ const feedsRoutes = () => {
       });
 
       res.json({
+        discoveredUrl: normalizeFeedUrl(url),
         feedTitle: sampleItem.title ? `Feed from ${new URL(url).hostname}` : 'Unknown Feed',
         detectedType: meta?.detectedType || null,
         contentType: meta?.contentType || null,

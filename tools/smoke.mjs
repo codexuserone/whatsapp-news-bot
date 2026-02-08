@@ -122,13 +122,33 @@ const main = async () => {
 
   try {
     await waitForOkOrExit(api, `http://localhost:${apiPort}/health`);
-    const paths = [
+    const readiness = await fetchText(`http://localhost:${apiPort}/ready`);
+    if (![200, 503].includes(readiness.status)) {
+      throw new Error(`/ready returned unexpected status ${readiness.status}`);
+    }
+
+    let dbReady = false;
+    try {
+      const parsed = JSON.parse(readiness.text);
+      dbReady = Boolean(parsed?.db);
+    } catch {
+      dbReady = false;
+    }
+
+    const basePaths = [
       '/',
       '/health',
       '/ping',
       '/ready',
       '/api/openapi.json',
       '/api/docs',
+      '/api/whatsapp/status',
+      '/api/whatsapp/qr',
+      '/api/whatsapp/groups',
+      '/api/whatsapp/channels'
+    ];
+
+    const dbPaths = [
       '/api/settings',
       '/api/feeds',
       '/api/templates',
@@ -140,14 +160,19 @@ const main = async () => {
       '/api/queue/stats',
       '/api/queue?status=pending',
       '/api/shabbos/status',
-      '/api/shabbos/settings',
-      '/api/whatsapp/status',
-      '/api/whatsapp/qr',
-      '/api/whatsapp/groups',
-      '/api/whatsapp/channels'
+      '/api/shabbos/settings'
     ];
+
+    const paths = dbReady ? [...basePaths, ...dbPaths] : basePaths;
+    if (!dbReady) {
+      console.log('Skipping DB-backed API smoke paths (database not configured in this environment).');
+    }
+
     for (const p of paths) {
       const { status } = await fetchText(`http://localhost:${apiPort}${p}`);
+      if (p === '/ready' && status === 503) {
+        continue;
+      }
       if (status < 200 || status > 399) {
         throw new Error(`API smoke failed: ${p} returned ${status}`);
       }

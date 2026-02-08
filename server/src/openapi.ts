@@ -140,11 +140,20 @@ const spec = {
     '/api/whatsapp/disconnect': {
       post: { tags: ['whatsapp'], summary: 'Disconnect WhatsApp', responses: { 200: { description: 'OK' } } }
     },
+    '/api/whatsapp/reconnect': {
+      post: { tags: ['whatsapp'], summary: 'Reconnect WhatsApp session', responses: { 200: { description: 'OK' } } }
+    },
     '/api/whatsapp/hard-refresh': {
       post: { tags: ['whatsapp'], summary: 'Hard refresh WhatsApp session', responses: { 200: { description: 'OK' } } }
     },
     '/api/whatsapp/takeover': {
       post: { tags: ['whatsapp'], summary: 'Take over WhatsApp session lease', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/whatsapp/clear-sender-keys': {
+      post: { tags: ['whatsapp'], summary: 'Clear sender keys and reconnect', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/whatsapp/outbox': {
+      get: { tags: ['whatsapp'], summary: 'Get local WhatsApp outbox diagnostics', responses: { 200: { description: 'OK' } } }
     },
     '/api/whatsapp/send-test': {
       post: { tags: ['whatsapp'], summary: 'Send test message', responses: { 200: { description: 'OK' } } }
@@ -165,6 +174,9 @@ const spec = {
     },
     '/api/feeds/{id}/refresh': {
       post: { tags: ['feeds'], summary: 'Refresh feed', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/feeds/refresh-all': {
+      post: { tags: ['feeds'], summary: 'Refresh all active feeds', responses: { 200: { description: 'OK' } } }
     },
     '/api/templates': {
       get: { tags: ['templates'], summary: 'List templates', responses: { 200: { description: 'OK' } } },
@@ -251,6 +263,9 @@ const spec = {
     '/api/schedules/{id}/dispatch': {
       post: { tags: ['schedules'], summary: 'Dispatch schedule', responses: { 200: { description: 'OK' } } }
     },
+    '/api/schedules/{id}/queue-latest': {
+      post: { tags: ['schedules'], summary: 'Queue latest feed item for schedule', responses: { 200: { description: 'OK' } } }
+    },
     '/api/schedules/{id}/diagnostics': {
       get: { tags: ['schedules'], summary: 'Schedule diagnostics', responses: { 200: { description: 'OK' } } }
     },
@@ -262,6 +277,9 @@ const spec = {
     },
     '/api/queue/retry-failed': {
       post: { tags: ['queue'], summary: 'Retry failed queue items', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/queue/reset-processing': {
+      post: { tags: ['queue'], summary: 'Reset stuck processing queue items', responses: { 200: { description: 'OK' } } }
     },
     '/api/queue/stats': {
       get: { tags: ['queue'], summary: 'Queue stats', responses: { 200: { description: 'OK' } } }

@@ -1113,7 +1113,7 @@ const queueLatestForSchedule = async (
       continue;
     }
 
-    if (existing.status === 'sent' || existing.status === 'processing') {
+    if (existing.status === 'sent' || existing.status === 'processing' || existing.status === 'pending') {
       skipped += 1;
       continue;
     }

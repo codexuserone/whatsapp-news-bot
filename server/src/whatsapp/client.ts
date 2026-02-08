@@ -1381,6 +1381,7 @@ class WhatsAppClient {
     };
 
     const methodCandidates = [
+      'newsletterSubscribed',
       'newsletterGetSubscribed',
       'newsletterList',
       'newsletterGetAdmin',

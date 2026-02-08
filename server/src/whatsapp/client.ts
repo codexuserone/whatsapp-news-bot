@@ -40,6 +40,7 @@ type ChannelDiagnostics = {
     api: number;
     cache: number;
     metadata: number;
+    store: number;
   };
   limitation: string | null;
 };
@@ -1323,7 +1324,7 @@ class WhatsAppClient {
     const diagnostics: ChannelDiagnostics = {
       methodsTried: [],
       methodErrors: [],
-      sourceCounts: { api: 0, cache: 0, metadata: 0 },
+      sourceCounts: { api: 0, cache: 0, metadata: 0, store: 0 },
       limitation: null
     };
 
@@ -1333,7 +1334,7 @@ class WhatsAppClient {
     }
 
     const channelMap = new Map<string, ChannelSummary>();
-    const mergeChannel = (candidate: ChannelSummary, source: 'api' | 'cache' | 'metadata') => {
+    const mergeChannel = (candidate: ChannelSummary, source: 'api' | 'cache' | 'metadata' | 'store') => {
       const existing = channelMap.get(candidate.jid);
       const merged: ChannelSummary = {
         id: candidate.jid,
@@ -1345,12 +1346,14 @@ class WhatsAppClient {
       diagnostics.sourceCounts[source] += 1;
     };
 
+    // Method 1: Try newsletter-specific API methods
     const methodCandidates = [
       'newsletterGetSubscribed',
-      'newsletterList',
+      'newsletterList', 
       'newsletterGetAdmin',
       'newsletterGetOwned',
-      'newsletterGetAll'
+      'newsletterGetAll',
+      'newsletterQuery'
     ];
 
     for (const methodName of methodCandidates) {
@@ -1375,6 +1378,32 @@ class WhatsAppClient {
       }
     }
 
+    // Method 2: Scan chat store for newsletter JIDs
+    diagnostics.methodsTried.push('store:scan');
+    try {
+      const chats = socket.store?.chats?.all() || socket.store?.chats || [];
+      const chatArray = Array.isArray(chats) ? chats : Object.values(chats);
+      
+      for (const chat of chatArray) {
+        if (!chat || typeof chat !== 'object') continue;
+        
+        const chatId = (chat as any).id || (chat as any).jid || '';
+        if (typeof chatId === 'string' && chatId.endsWith('@newsletter')) {
+          const name = (chat as any).name || (chat as any).subject || chatId;
+          mergeChannel({
+            id: chatId,
+            jid: chatId,
+            name: name,
+            subscribers: 0
+          }, 'store');
+          this.cacheNewsletterChat({ jid: chatId, name, subscribers: 0 });
+        }
+      }
+    } catch (error) {
+      diagnostics.methodErrors.push(`store: ${getErrorMessage(error)}`);
+    }
+
+    // Method 3: Use cached newsletters
     for (const cached of this.newsletterChatCache.values()) {
       mergeChannel(
         {
@@ -1387,6 +1416,7 @@ class WhatsAppClient {
       );
     }
 
+    // Method 4: Enrich with metadata if available
     if (typeof socket.newsletterMetadata === 'function' && channelMap.size > 0) {
       const toEnrich = Array.from(channelMap.values())
         .filter((channel) => channel.name === channel.jid || channel.subscribers <= 0)
@@ -1408,10 +1438,7 @@ class WhatsAppClient {
     const channels = Array.from(channelMap.values()).sort((a, b) => a.name.localeCompare(b.name));
 
     if (!channels.length) {
-      const hasListingMethod = methodCandidates.some((name) => typeof socket?.[name] === 'function');
-      diagnostics.limitation = hasListingMethod
-        ? 'WhatsApp returned no discoverable channels for this session. Open the channel in your phone app, then refresh.'
-        : 'Current Baileys build does not expose a channel list API. This app can only discover channels that appear in chat history.';
+      diagnostics.limitation = 'No channels discovered. To add channels: 1) Open the channel in WhatsApp on your phone, 2) Send a message to it, 3) Refresh this page.';
     }
 
     return { channels, diagnostics };

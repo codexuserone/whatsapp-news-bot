@@ -183,6 +183,7 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
     const fetchedCount = Array.isArray(sourceItems) ? sourceItems.length : 0;
     let duplicateCount = 0;
     let errorCount = 0;
+    let feedMissing = false;
 
     for (const item of sourceItems as FeedItemInput[]) {
       const duplicate = await isDuplicateFeedItem({
@@ -250,6 +251,18 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
           duplicateCount += 1;
           continue;
         }
+
+        // Feed deleted while processing; stop noisy insert retries for this run.
+        if (error.code === '23503' && String(error.message || '').includes('feed_items_feed_id_fkey')) {
+          feedMissing = true;
+          errorCount += 1;
+          console.warn('Feed no longer exists while inserting items, aborting current feed run:', {
+            feedId: feed.id,
+            error: error.message
+          });
+          break;
+        }
+
         errorCount += 1;
         console.error('Error inserting feed item:', error);
         continue;
@@ -258,22 +271,24 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
       newItems.push(feedItem);
     }
 
-    const feedUpdate: Record<string, unknown> = {
-      last_fetched_at: nowIso,
-      last_success_at: nowIso,
-      last_error: null,
-      consecutive_failures: 0
-    };
-    if (meta?.detectedType && meta.detectedType !== feed.type) {
-      feedUpdate.type = meta.detectedType;
+    if (!feedMissing) {
+      const feedUpdate: Record<string, unknown> = {
+        last_fetched_at: nowIso,
+        last_success_at: nowIso,
+        last_error: null,
+        consecutive_failures: 0
+      };
+      if (meta?.detectedType && meta.detectedType !== feed.type) {
+        feedUpdate.type = meta.detectedType;
+      }
+      if (meta?.etag) {
+        feedUpdate.etag = meta.etag;
+      }
+      if (meta?.lastModified) {
+        feedUpdate.last_modified = meta.lastModified;
+      }
+      await supabase.from('feeds').update(feedUpdate).eq('id', feed.id);
     }
-    if (meta?.etag) {
-      feedUpdate.etag = meta.etag;
-    }
-    if (meta?.lastModified) {
-      feedUpdate.last_modified = meta.lastModified;
-    }
-    await supabase.from('feeds').update(feedUpdate).eq('id', feed.id);
 
     return {
       items: newItems,

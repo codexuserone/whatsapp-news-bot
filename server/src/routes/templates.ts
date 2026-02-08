@@ -25,6 +25,25 @@ function extractVariables(content: string) {
   return Array.from(variables);
 }
 
+const normalizeTemplatePayload = (payload: Record<string, unknown>) => {
+  const next = { ...payload } as Record<string, unknown> & {
+    send_mode?: 'image' | 'link_preview' | 'text_only';
+    send_images?: boolean;
+  };
+
+  const explicitMode = next.send_mode;
+  const mode =
+    explicitMode === 'image' || explicitMode === 'link_preview' || explicitMode === 'text_only'
+      ? explicitMode
+      : next.send_images === false
+        ? 'link_preview'
+        : 'image';
+
+  next.send_mode = mode;
+  next.send_images = mode === 'image';
+  return next;
+};
+
 const templateRoutes = () => {
   const router = express.Router();
 
@@ -46,11 +65,12 @@ const templateRoutes = () => {
   router.post('/', validate(schemas.template), async (req: Request, res: Response) => {
     try {
       // Extract variables from template content
-      const variables = extractVariables(String(req.body.content || ''));
+      const payload = normalizeTemplatePayload(req.body);
+      const variables = extractVariables(String(payload.content || ''));
       
       const { data: template, error } = await getDb()
         .from('templates')
-        .insert({ ...req.body, variables })
+        .insert({ ...payload, variables })
         .select()
         .single();
       
@@ -65,11 +85,12 @@ const templateRoutes = () => {
   router.put('/:id', validate(schemas.template), async (req: Request, res: Response) => {
     try {
       // Extract variables from template content
-      const variables = extractVariables(String(req.body.content || ''));
+      const payload = normalizeTemplatePayload(req.body);
+      const variables = extractVariables(String(payload.content || ''));
       
       const { data: template, error } = await getDb()
         .from('templates')
-        .update({ ...req.body, variables })
+        .update({ ...payload, variables })
         .eq('id', req.params.id)
         .select()
         .single();

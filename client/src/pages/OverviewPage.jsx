@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../co
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '../components/ui/table';
-import { Rss, Layers, Target, CalendarClock, ArrowRight, CheckCircle, AlertCircle, Clock } from 'lucide-react';
+import { Rss, Layers, Target, CalendarClock, ArrowRight, CheckCircle, AlertCircle, Clock, BarChart3 } from 'lucide-react';
 
 const OverviewPage = () => {
   const { data: status } = useQuery({
@@ -149,6 +149,12 @@ const OverviewPage = () => {
               <Link to="/schedules">
                 <CalendarClock className="mr-2 h-4 w-4" />
                 Setup Schedule
+              </Link>
+            </Button>
+            <Button asChild variant="outline" className="justify-start">
+              <Link to="/analytics">
+                <BarChart3 className="mr-2 h-4 w-4" />
+                Open Analytics
               </Link>
             </Button>
           </CardContent>

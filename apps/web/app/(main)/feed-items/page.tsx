@@ -29,8 +29,10 @@ const FeedItemsPage = () => {
     const queued = (delivery.pending || 0) + (delivery.processing || 0);
     const sent = delivery.sent || 0;
     const failed = delivery.failed || 0;
+    const total = delivery.total || 0;
+    
     if (queued > 0) {
-      return { label: `Queued (${queued})`, variant: 'warning' as const };
+      return { label: `Sending soon (${queued})`, variant: 'warning' as const };
     }
     if (sent > 0 && failed > 0) {
       return { label: `Partial (${sent} sent, ${failed} failed)`, variant: 'warning' as const };
@@ -41,7 +43,11 @@ const FeedItemsPage = () => {
     if (sent > 0) {
       return { label: `Sent (${sent})`, variant: 'success' as const };
     }
-    return { label: 'Not queued', variant: 'secondary' as const };
+    // Show clearer status when not yet queued
+    if (total === 0) {
+      return { label: 'New - will send soon', variant: 'secondary' as const };
+    }
+    return { label: 'Waiting', variant: 'secondary' as const };
   };
 
   return (

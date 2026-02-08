@@ -161,6 +161,7 @@ const main = async () => {
       '/api/queue?status=pending',
       '/api/analytics/overview',
       '/api/analytics/recommendation',
+      '/api/analytics/schedule-recommendations',
       '/api/analytics/timeline',
       '/api/analytics/windows',
       '/api/shabbos/status',

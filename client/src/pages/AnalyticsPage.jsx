@@ -56,6 +56,12 @@ const AnalyticsPage = () => {
     staleTime: 30000
   });
 
+  const { data: scheduleRecommendations } = useQuery({
+    queryKey: ['analytics-schedule-recommendations', days],
+    queryFn: () => api.get(`/api/analytics/schedule-recommendations?days=${days}`),
+    staleTime: 30000
+  });
+
   const captureAudience = useMutation({
     mutationFn: () => api.post('/api/analytics/audience/snapshot'),
     onSuccess: () => {
@@ -220,6 +226,18 @@ const AnalyticsPage = () => {
               <CardContent>
                 <div className="text-2xl font-bold">{report.audience.totalAudienceLatest}</div>
                 <p className="text-xs text-muted-foreground">Tracked subscribers/members across captured targets</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Data Quality</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{toPercent(report.dataQuality?.observedIdCoverage)}</div>
+                <p className="text-xs text-muted-foreground">Observed message ID coverage</p>
+                <div className="mt-2 text-xs text-muted-foreground">
+                  {report.dataQuality?.inboundRowsScanned || 0} inbound rows scanned
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -453,6 +471,60 @@ const AnalyticsPage = () => {
               <p>Posterior uses Beta(alpha,beta) with configurable priors from settings.</p>
               <p>Recency weighting uses exponential half-life ({report.model.halfLifeDays} days).</p>
               <p>Confidence blends weighted sample depth and posterior variance.</p>
+              {(report.dataQuality?.notes || []).map((note) => (
+                <p key={note}>- {note}</p>
+              ))}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Schedule Tuning Recommendations</CardTitle>
+              <CardDescription>
+                Per-schedule recommendation preview based on each schedule's primary target analytics.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHeaderCell>Schedule</TableHeaderCell>
+                    <TableHeaderCell>Current</TableHeaderCell>
+                    <TableHeaderCell>Recommended</TableHeaderCell>
+                    <TableHeaderCell>Confidence</TableHeaderCell>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(scheduleRecommendations?.schedules || []).map((item) => (
+                    <TableRow key={item.schedule_id}>
+                      <TableCell>
+                        <div className="font-medium">{item.schedule_name}</div>
+                        <div className="text-xs text-muted-foreground">{item.primary_target_name || 'No target'}</div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-xs">Cron: {item.current_cron_expression || 'none'}</div>
+                        <div className="text-xs text-muted-foreground">
+                          Batch: {item.current_batch_times.length ? item.current_batch_times.join(', ') : 'none'}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-xs">Cron: {item.recommended_cron || 'none'}</div>
+                        <div className="text-xs text-muted-foreground">
+                          Batch: {item.recommended_batch_times.length ? item.recommended_batch_times.join(', ') : 'none'}
+                        </div>
+                      </TableCell>
+                      <TableCell>{toPercent(item.confidence)}</TableCell>
+                    </TableRow>
+                  ))}
+                  {!(scheduleRecommendations?.schedules || []).length && (
+                    <TableRow>
+                      <TableCell colSpan={4} className="h-16 text-center text-muted-foreground">
+                        No active schedules to evaluate.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
             </CardContent>
           </Card>
         </>

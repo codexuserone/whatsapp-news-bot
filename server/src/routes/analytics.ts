@@ -44,6 +44,7 @@ const analyticsRoutes = () => {
         filters: report.filters,
         totals: report.totals,
         rates: report.rates,
+        dataQuality: report.dataQuality,
         model: report.model,
         recommendations: report.recommendations,
         audience: {
@@ -93,6 +94,18 @@ const analyticsRoutes = () => {
       res.json(report.targetRisks);
     } catch (error) {
       console.error('Error building analytics target risks:', error);
+      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+    }
+  });
+
+  router.get('/schedule-recommendations', async (req: Request, res: Response) => {
+    try {
+      const result = await analyticsService.buildScheduleRecommendations({
+        lookbackDays: toOptionalNumber(req.query.days)
+      });
+      res.json(result);
+    } catch (error) {
+      console.error('Error building schedule recommendations:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
     }
   });

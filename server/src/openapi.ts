@@ -322,6 +322,9 @@ const spec = {
     '/api/analytics/targets': {
       get: { tags: ['analytics'], summary: 'Get target risk analytics', responses: { 200: { description: 'OK' } } }
     },
+    '/api/analytics/schedule-recommendations': {
+      get: { tags: ['analytics'], summary: 'Get per-schedule timing recommendations', responses: { 200: { description: 'OK' } } }
+    },
     '/api/analytics/audience': {
       get: { tags: ['analytics'], summary: 'Get audience snapshot analytics', responses: { 200: { description: 'OK' } } }
     },

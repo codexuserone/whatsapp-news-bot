@@ -137,6 +137,7 @@ This protects both the UI and API with browser Basic Auth (health endpoints rema
 - `GET /api/analytics/overview` - Analytics summary cards
 - `GET /api/analytics/windows` - 7x24 slot scores and confidence
 - `GET /api/analytics/recommendation` - Best posting windows + cron/batch suggestions
+- `GET /api/analytics/schedule-recommendations` - Per-schedule tuning recommendations (current vs suggested cron/batch)
 - `POST /api/analytics/audience/snapshot` - Capture live audience sizes from WhatsApp groups/channels
 - Full CRUD for `/api/feeds`, `/api/templates`, `/api/targets`, `/api/schedules`, `/api/settings`, `/api/logs`
 

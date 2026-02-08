@@ -170,6 +170,13 @@ type AnalyticsReport = {
     avgLatencySec: number | null;
     avgEngagementScore: number;
   };
+  dataQuality: {
+    observedIdCoverage: number;
+    inboundRowsScanned: number;
+    inboundSignalAvailable: boolean;
+    inboundRowsTruncated: boolean;
+    notes: string[];
+  };
   model: {
     halfLifeDays: number;
     priorAlpha: number;
@@ -205,6 +212,26 @@ type AnalyticsReport = {
     }>;
     totalAudienceLatest: number;
   };
+};
+
+type ScheduleRecommendationReport = {
+  generatedAt: string;
+  lookbackDays: number;
+  schedules: Array<{
+    schedule_id: string;
+    schedule_name: string;
+    timezone: string;
+    delivery_mode: string;
+    current_cron_expression: string | null;
+    current_batch_times: string[];
+    primary_target_id: string | null;
+    primary_target_name: string | null;
+    recommended_cron: string | null;
+    recommended_batch_times: string[];
+    objective_score: number;
+    confidence: number;
+    rationale: string;
+  }>;
 };
 
 type ReportOptions = {
@@ -529,7 +556,13 @@ const loadInboundByJid = async (
   maxSentAtMs: number
 ) => {
   const inboundByJid = new Map<string, number[]>();
-  if (!jids.length) return inboundByJid;
+  if (!jids.length) {
+    return {
+      byJid: inboundByJid,
+      totalFetched: 0,
+      truncated: false
+    };
+  }
 
   const startIso = toIso(minSentAtMs);
   const endIso = toIso(maxSentAtMs + MS_IN_DAY);
@@ -571,11 +604,16 @@ const loadInboundByJid = async (
     inboundByJid.set(jid, list);
   }
 
-  if (totalFetched >= MAX_INBOUND_ROWS) {
+  const truncated = totalFetched >= MAX_INBOUND_ROWS;
+  if (truncated) {
     logger.warn({ totalFetched }, 'Inbound analytics rows were truncated to protect query latency');
   }
 
-  return inboundByJid;
+  return {
+    byJid: inboundByJid,
+    totalFetched,
+    truncated
+  };
 };
 
 const loadAudienceSnapshots = async (
@@ -685,6 +723,13 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
   const modelSettings = await getAnalyticsSettings();
   const logs = await loadMessageLogs(supabase, { targetId, lookbackDays });
 
+  const scopedRows = logs
+    .map((row) => ({
+      row,
+      contentType: inferContentType(row)
+    }))
+    .filter((entry) => !contentTypeFilter || entry.contentType === contentTypeFilter);
+
   const statusCounters = {
     sent: 0,
     failed: 0,
@@ -693,7 +738,7 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
     processing: 0
   };
 
-  for (const row of logs) {
+  for (const { row } of scopedRows) {
     if (SUCCESS_STATUSES.has(row.status)) statusCounters.sent += 1;
     else if (row.status === 'failed') statusCounters.failed += 1;
     else if (row.status === 'skipped') statusCounters.skipped += 1;
@@ -702,35 +747,32 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
   }
 
   const messageIds = uniqueStrings(
-    logs
-      .filter((row) => SUCCESS_STATUSES.has(row.status))
-      .map((row) => row.whatsapp_message_id)
+    scopedRows
+      .filter(({ row }) => SUCCESS_STATUSES.has(row.status))
+      .map(({ row }) => row.whatsapp_message_id)
   );
   const seenById = await loadSeenMessages(supabase, messageIds);
 
-  const sentTimeValues = logs
-    .map((row) => parseDateMs(row.sent_at || row.created_at))
+  const sentTimeValues = scopedRows
+    .map(({ row }) => parseDateMs(row.sent_at || row.created_at))
     .filter((value): value is number => value != null);
   const minSentAtMs = sentTimeValues.length ? Math.min(...sentTimeValues) : Date.now() - lookbackDays * MS_IN_DAY;
   const maxSentAtMs = sentTimeValues.length ? Math.max(...sentTimeValues) : Date.now();
 
   const targetJids = uniqueStrings([
-    ...logs.map((row) => row.target?.phone_number || null),
+    ...scopedRows.map(({ row }) => row.target?.phone_number || null),
     ...Array.from(seenById.values()).map((entry) => entry.remoteJid)
   ]);
-  const inboundByJid = await loadInboundByJid(supabase, targetJids, minSentAtMs, maxSentAtMs);
+  const inboundData = await loadInboundByJid(supabase, targetJids, minSentAtMs, maxSentAtMs);
 
   const observations: Observation[] = [];
   const contentTypeStatsMap = new Map<string, { sent: number; observed: number; responses: number; score: number }>();
 
-  for (const row of logs) {
+  for (const { row, contentType: inferredContentType } of scopedRows) {
     if (!ATTEMPT_STATUSES.has(row.status)) continue;
 
     const eventMs = parseDateMs(row.sent_at || row.created_at);
     if (eventMs == null) continue;
-
-    const inferredContentType = inferContentType(row);
-    if (contentTypeFilter && inferredContentType !== contentTypeFilter) continue;
 
     const { day, hour, slot } = getHourOfWeek(eventMs, tzOffsetMinutes);
     const messageId = row.whatsapp_message_id || '';
@@ -739,7 +781,7 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
     const latencySec = seen ? Math.max(0, Math.round((seen.observedAtMs - eventMs) / 1000)) : null;
 
     const targetJid = normalizeText(row.target?.phone_number) || seen?.remoteJid || null;
-    const inboundSeries = targetJid ? inboundByJid.get(targetJid) || [] : [];
+    const inboundSeries = targetJid ? inboundData.byJid.get(targetJid) || [] : [];
     const responseCount24h = inboundSeries.length
       ? countBetween(inboundSeries, eventMs, eventMs + MS_IN_DAY)
       : 0;
@@ -1122,6 +1164,21 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
     : 0;
   const responseRate24h = statusCounters.sent > 0 ? responseTotal / statusCounters.sent : 0;
 
+  const observedIdCoverage = messageIds.length > 0 ? seenById.size / messageIds.length : 0;
+  const dataQualityNotes: string[] = [];
+  if (!messageIds.length) {
+    dataQualityNotes.push('No sent messages with WhatsApp IDs were available in the selected filter window.');
+  }
+  if (!inboundData.totalFetched) {
+    dataQualityNotes.push('No inbound message rows were found for response-rate calculations.');
+  }
+  if (inboundData.truncated) {
+    dataQualityNotes.push('Inbound message scan hit the safety cap and was truncated for latency protection.');
+  }
+  if (contentTypeFilter) {
+    dataQualityNotes.push(`Report is filtered to content type: ${contentTypeFilter}.`);
+  }
+
   const objectiveScore = recommendations.length
     ? recommendations.reduce((sum, next) => sum + next.objective, 0) / recommendations.length
     : 0;
@@ -1138,7 +1195,7 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
       tz_offset_min: tzOffsetMinutes
     },
     totals: {
-      messages: logs.length,
+      messages: scopedRows.length,
       attempted: observations.length,
       sent: statusCounters.sent,
       failed: statusCounters.failed,
@@ -1154,6 +1211,13 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
       responseRate24h: Number(responseRate24h.toFixed(4)),
       avgLatencySec: avgLatencySec == null ? null : Number(avgLatencySec.toFixed(2)),
       avgEngagementScore: Number(avgEngagementScore.toFixed(4))
+    },
+    dataQuality: {
+      observedIdCoverage: Number(observedIdCoverage.toFixed(4)),
+      inboundRowsScanned: inboundData.totalFetched,
+      inboundSignalAvailable: inboundData.totalFetched > 0,
+      inboundRowsTruncated: inboundData.truncated,
+      notes: dataQualityNotes
     },
     model: {
       halfLifeDays: modelSettings.halfLifeDays,
@@ -1177,6 +1241,87 @@ const buildAnalyticsReport = async (options: ReportOptions = {}): Promise<Analyt
 
   reportCache.set(cacheKey, { expiresAt: Date.now() + CACHE_TTL_MS, report });
   return report;
+};
+
+const buildScheduleRecommendations = async (
+  options: { lookbackDays?: number } = {}
+): Promise<ScheduleRecommendationReport> => {
+  const supabase = getSupabase();
+  const lookbackDays = normalizeLookbackDays(options.lookbackDays);
+
+  const { data: scheduleData, error: scheduleError } = await supabase
+    .from('schedules')
+    .select('id,name,timezone,delivery_mode,cron_expression,batch_times,target_ids,active')
+    .eq('active', true)
+    .order('name', { ascending: true });
+  if (scheduleError) throw scheduleError;
+
+  const schedules = (scheduleData || []) as Array<Record<string, unknown>>;
+  const allTargetIds = uniqueStrings(
+    schedules.flatMap((schedule) => toArray<string>(schedule.target_ids).map((id) => String(id || '').trim()))
+  );
+
+  const targetNameById = new Map<string, string>();
+  if (allTargetIds.length) {
+    const { data: targets, error: targetError } = await supabase
+      .from('targets')
+      .select('id,name')
+      .in('id', allTargetIds);
+    if (targetError) throw targetError;
+
+    for (const target of (targets || []) as Array<Record<string, unknown>>) {
+      const id = normalizeText(target.id);
+      if (!id) continue;
+      targetNameById.set(id, String(target.name || id));
+    }
+  }
+
+  const output: ScheduleRecommendationReport['schedules'] = [];
+  for (const row of schedules) {
+    const scheduleId = normalizeText(row.id);
+    if (!scheduleId) continue;
+
+    const targetIds = uniqueStrings(toArray<string>(row.target_ids).map((id) => String(id || '').trim()));
+    const primaryTargetId = targetIds[0] || null;
+    const primaryTargetName = primaryTargetId ? targetNameById.get(primaryTargetId) || null : null;
+
+    const reportOptions: ReportOptions = {
+      lookbackDays,
+      forceRefresh: false
+    };
+    if (primaryTargetId) {
+      reportOptions.targetId = primaryTargetId;
+    }
+    const report = await buildAnalyticsReport(reportOptions);
+
+    const topWindow = report.recommendations.windows[0] || null;
+    const recommendedCron = topWindow ? `0 ${topWindow.hour} * * ${topWindow.day}` : null;
+    const recommendedBatchTimes = report.recommendations.suggestedBatchTimes;
+
+    output.push({
+      schedule_id: scheduleId,
+      schedule_name: String(row.name || scheduleId),
+      timezone: String(row.timezone || 'UTC'),
+      delivery_mode: String(row.delivery_mode || 'immediate'),
+      current_cron_expression: normalizeText(row.cron_expression),
+      current_batch_times: toArray<string>(row.batch_times).map((time) => String(time || '').trim()).filter(Boolean),
+      primary_target_id: primaryTargetId,
+      primary_target_name: primaryTargetName,
+      recommended_cron: recommendedCron,
+      recommended_batch_times: recommendedBatchTimes,
+      objective_score: report.model.objectiveScore,
+      confidence: report.model.confidence,
+      rationale: topWindow
+        ? `${topWindow.dayLabel} ${topWindow.time} · ${(topWindow.objective * 100).toFixed(1)}% objective · ${(topWindow.confidence * 100).toFixed(1)}% confidence`
+        : 'Not enough historical data for this target yet.'
+    });
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    lookbackDays,
+    schedules: output
+  };
 };
 
 const captureAudienceSnapshots = async (whatsappClient?: WhatsAppClientLike): Promise<CaptureAudienceResult> => {
@@ -1301,5 +1446,6 @@ const captureAudienceSnapshots = async (whatsappClient?: WhatsAppClientLike): Pr
 
 module.exports = {
   buildAnalyticsReport,
+  buildScheduleRecommendations,
   captureAudienceSnapshots
 };

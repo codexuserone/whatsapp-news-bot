@@ -255,6 +255,13 @@ export type AnalyticsReport = {
     avgLatencySec?: number | null;
     avgEngagementScore: number;
   };
+  dataQuality: {
+    observedIdCoverage: number;
+    inboundRowsScanned: number;
+    inboundSignalAvailable: boolean;
+    inboundRowsTruncated: boolean;
+    notes: string[];
+  };
   model: {
     halfLifeDays: number;
     priorAlpha: number;
@@ -290,4 +297,26 @@ export type AnalyticsReport = {
     }>;
     totalAudienceLatest: number;
   };
+};
+
+export type AnalyticsScheduleRecommendation = {
+  schedule_id: string;
+  schedule_name: string;
+  timezone: string;
+  delivery_mode: string;
+  current_cron_expression?: string | null;
+  current_batch_times: string[];
+  primary_target_id?: string | null;
+  primary_target_name?: string | null;
+  recommended_cron?: string | null;
+  recommended_batch_times: string[];
+  objective_score: number;
+  confidence: number;
+  rationale: string;
+};
+
+export type AnalyticsScheduleRecommendationReport = {
+  generatedAt: string;
+  lookbackDays: number;
+  schedules: AnalyticsScheduleRecommendation[];
 };

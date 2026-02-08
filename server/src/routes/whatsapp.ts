@@ -9,6 +9,7 @@ const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { getErrorMessage } = require('../utils/errorUtils');
 const { getSupabaseClient } = require('../db/supabase');
 const { normalizeMessageText } = require('../utils/messageText');
+const { generateVideoThumbnailFromBuffer } = require('../utils/videoThumbnail');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -145,6 +146,9 @@ const buildOutgoingContent = async (params: {
 
     try {
       const { buffer, mimetype } = await downloadVideoBuffer(mediaUrl);
+      if (!jpegThumbnail) {
+        jpegThumbnail = await generateVideoThumbnailFromBuffer(buffer);
+      }
       const content: Record<string, unknown> = mimetype
         ? { video: buffer, mimetype, caption: normalizedMessage || '' }
         : { video: buffer, caption: normalizedMessage || '' };
@@ -247,6 +251,28 @@ const parseSubscribersFromNotes = (notes: unknown) => {
   if (!match || !match[1]) return 0;
   const parsed = Number(match[1].replace(/,/g, ''));
   return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0;
+};
+
+const normalizeChannelRoleFilter = (value: unknown): 'OWNER' | 'ADMIN' | 'SUBSCRIBER' | null => {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (normalized === 'OWNER' || normalized === 'ADMIN' || normalized === 'SUBSCRIBER') {
+    return normalized;
+  }
+  return null;
+};
+
+const applyChannelFilters = <T extends { viewerRole?: string | null; canSend?: boolean | null }>(
+  channels: T[],
+  options: { roleFilter: 'OWNER' | 'ADMIN' | 'SUBSCRIBER' | null; sendableOnly: boolean }
+) => {
+  let out = [...channels];
+  if (options.roleFilter) {
+    out = out.filter((channel) => String(channel.viewerRole || '').toUpperCase() === options.roleFilter);
+  }
+  if (options.sendableOnly) {
+    out = out.filter((channel) => channel.canSend === true);
+  }
+  return out;
 };
 
 const mergeChannels = (
@@ -571,6 +597,8 @@ const whatsappRoutes = () => {
   }));
 
   router.get('/channels', asyncHandler(async (req: Request, res: Response) => {
+    const roleFilter = normalizeChannelRoleFilter((req.query || {}).role);
+    const sendableOnly = String((req.query || {}).sendable || '').toLowerCase() === 'true';
     const whatsapp = req.app.locals.whatsapp;
     const enriched =
       whatsapp && typeof whatsapp.getChannelsWithDiagnostics === 'function'
@@ -580,15 +608,21 @@ const whatsappRoutes = () => {
     const savedTargets = await loadSavedChannelTargets();
     const knownFromMessages = await loadKnownChannelsFromMessages();
     const merged = mergeChannels(mergeChannels(discovered, savedTargets), knownFromMessages);
-    res.json(await enrichChannelsWithMetadata(whatsapp, merged));
+    const enrichedChannels = await enrichChannelsWithMetadata(whatsapp, merged);
+    res.json(applyChannelFilters(enrichedChannels, { roleFilter, sendableOnly }));
   }));
 
   router.get('/channels/diagnostics', asyncHandler(async (req: Request, res: Response) => {
+    const roleFilter = normalizeChannelRoleFilter((req.query || {}).role);
+    const sendableOnly = String((req.query || {}).sendable || '').toLowerCase() === 'true';
     const whatsapp = req.app.locals.whatsapp;
     const savedTargets = await loadSavedChannelTargets();
     const knownFromMessages = await loadKnownChannelsFromMessages();
     if (!whatsapp) {
-      const channels = mergeChannels(savedTargets, knownFromMessages);
+      const channels = applyChannelFilters(mergeChannels(savedTargets, knownFromMessages), {
+        roleFilter,
+        sendableOnly
+      });
       return res.json({
         channels,
         diagnostics: {
@@ -607,9 +641,12 @@ const whatsappRoutes = () => {
 
     if (typeof whatsapp.getChannelsWithDiagnostics === 'function') {
       const result = await whatsapp.getChannelsWithDiagnostics();
-      const channels = await enrichChannelsWithMetadata(
+      const channels = applyChannelFilters(
+        await enrichChannelsWithMetadata(
         whatsapp,
         mergeChannels(mergeChannels(result.channels || [], savedTargets), knownFromMessages)
+        ),
+        { roleFilter, sendableOnly }
       );
       return res.json({
         channels,
@@ -634,9 +671,12 @@ const whatsappRoutes = () => {
     }
 
     const channels = await whatsapp.getChannels?.() || [];
-    const merged = await enrichChannelsWithMetadata(
-      whatsapp,
-      mergeChannels(mergeChannels(channels, savedTargets), knownFromMessages)
+    const merged = applyChannelFilters(
+      await enrichChannelsWithMetadata(
+        whatsapp,
+        mergeChannels(mergeChannels(channels, savedTargets), knownFromMessages)
+      ),
+      { roleFilter, sendableOnly }
     );
     return res.json({
       channels: merged,

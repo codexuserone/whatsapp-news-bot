@@ -12,6 +12,7 @@ const { getErrorMessage } = require('../utils/errorUtils');
 const { computeNextRunAt } = require('../utils/cron');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { normalizeMessageText } = require('../utils/messageText');
+const { generateVideoThumbnailFromBuffer } = require('../utils/videoThumbnail');
 
 type Target = {
   id?: string;
@@ -857,6 +858,11 @@ const sendMessageWithTemplate = async (
       const downloaded = mediaType === 'video'
         ? await downloadVideoBuffer(safeUrl, feedItem.link)
         : await downloadImageBuffer(safeUrl, feedItem.link);
+
+      if (mediaType === 'video' && !videoThumbnailBuffer) {
+        videoThumbnailBuffer = await generateVideoThumbnailFromBuffer(downloaded.buffer);
+      }
+
       const content: Record<string, unknown> = mediaType === 'video'
         ? { video: downloaded.buffer, caption: renderedText }
         : { image: downloaded.buffer, caption: renderedText };

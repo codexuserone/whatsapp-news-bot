@@ -16,7 +16,6 @@ const WhatsAppPage = () => {
   const [testMessage, setTestMessage] = React.useState('Hello from WhatsApp News Bot!');
   const [testMediaUrl, setTestMediaUrl] = React.useState('');
   const [testMediaType, setTestMediaType] = React.useState('image');
-  const [testThumbnailUrl, setTestThumbnailUrl] = React.useState('');
   const [manualChannel, setManualChannel] = React.useState('');
   const [manualChannelName, setManualChannelName] = React.useState('');
 
@@ -155,7 +154,6 @@ const WhatsAppPage = () => {
       setTestMessage('Hello from WhatsApp News Bot!');
       setTestMediaUrl('');
       setTestMediaType('image');
-      setTestThumbnailUrl('');
     }
   });
 
@@ -406,17 +404,6 @@ const WhatsAppPage = () => {
                 </Select>
               </div>
             </div>
-            {testMediaType === 'video' && (
-              <div className="space-y-2">
-                <Label htmlFor="testThumbnailUrl">Video Thumbnail URL (optional)</Label>
-                <Input
-                  id="testThumbnailUrl"
-                  value={testThumbnailUrl}
-                  onChange={(e) => setTestThumbnailUrl(e.target.value)}
-                  placeholder="https://example.com/thumbnail.jpg"
-                />
-              </div>
-            )}
             <div className="flex items-center gap-4">
               <Button
                 onClick={() => {
@@ -424,9 +411,6 @@ const WhatsAppPage = () => {
                   if (testMediaUrl.trim()) {
                     payload.mediaUrl = testMediaUrl.trim();
                     payload.mediaType = testMediaType;
-                    if (testMediaType === 'video' && testThumbnailUrl.trim()) {
-                      payload.thumbnailUrl = testThumbnailUrl.trim();
-                    }
                   }
                   sendTestMessage.mutate(payload);
                 }}

@@ -704,7 +704,7 @@ const SchedulesPage = () => {
                       checked={field.value}
                       onCheckedChange={(checked) => field.onChange(checked === true)}
                     />
-                    <Label htmlFor="schedule_active" className="cursor-pointer">Active</Label>
+                    <Label htmlFor="schedule_active" className="cursor-pointer">Running</Label>
                   </div>
                 )}
               />
@@ -747,7 +747,7 @@ const SchedulesPage = () => {
                       </div>
                     </div>
                     <Badge variant={schedule.active ? 'success' : 'secondary'}>
-                      {schedule.active ? 'Active' : 'Inactive'}
+                      {schedule.active ? 'Running' : 'Paused'}
                     </Badge>
                   </div>
                   <div className="flex flex-wrap gap-2">

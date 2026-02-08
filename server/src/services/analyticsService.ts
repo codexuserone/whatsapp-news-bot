@@ -222,6 +222,7 @@ type ScheduleRecommendationReport = {
     schedule_name: string;
     timezone: string;
     delivery_mode: string;
+    default_apply_mode: 'cron' | 'batch';
     current_cron_expression: string | null;
     current_batch_times: string[];
     primary_target_id: string | null;
@@ -1303,6 +1304,10 @@ const buildScheduleRecommendations = async (
       schedule_name: String(row.name || scheduleId),
       timezone: String(row.timezone || 'UTC'),
       delivery_mode: String(row.delivery_mode || 'immediate'),
+      default_apply_mode:
+        String(row.delivery_mode || 'immediate') === 'batch' || String(row.delivery_mode || 'immediate') === 'batched'
+          ? 'batch'
+          : 'cron',
       current_cron_expression: normalizeText(row.cron_expression),
       current_batch_times: toArray<string>(row.batch_times).map((time) => String(time || '').trim()).filter(Boolean),
       primary_target_id: primaryTargetId,

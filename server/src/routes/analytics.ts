@@ -151,12 +151,27 @@ const analyticsRoutes = () => {
       const recommended = recommendationReport.schedules.find((item: { schedule_id?: string }) => String(item.schedule_id || '') === scheduleId);
       if (!recommended) throw notFound('Schedule recommendation not found');
 
-      const shouldApplyCron = mode === 'cron' || mode === 'both' || (mode === 'auto' && Boolean(recommended.recommended_cron));
-      const shouldApplyBatch = mode === 'batch' || mode === 'both' || (mode === 'auto' && recommended.recommended_batch_times.length > 0);
+      const deliveryMode = String((recommended as { delivery_mode?: unknown }).delivery_mode || 'immediate').toLowerCase();
+      const autoMode: 'cron' | 'batch' =
+        deliveryMode === 'batch' || deliveryMode === 'batched'
+          ? 'batch'
+          : 'cron';
+
+      const shouldApplyCron =
+        mode === 'cron' ||
+        mode === 'both' ||
+        (mode === 'auto' && autoMode === 'cron' && Boolean(recommended.recommended_cron));
+      const shouldApplyBatch =
+        mode === 'batch' ||
+        mode === 'both' ||
+        (mode === 'auto' && autoMode === 'batch' && recommended.recommended_batch_times.length > 0);
+      const shouldClearCron = mode === 'auto' && autoMode === 'batch';
 
       const patch: Record<string, unknown> = {};
       if (shouldApplyCron) {
         patch.cron_expression = recommended.recommended_cron || null;
+      } else if (shouldClearCron) {
+        patch.cron_expression = null;
       }
       if (shouldApplyBatch) {
         patch.batch_times = recommended.recommended_batch_times;

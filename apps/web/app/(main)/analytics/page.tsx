@@ -523,6 +523,7 @@ const AnalyticsPage = () => {
                       <TableCell>
                         <div className="font-medium">{item.schedule_name}</div>
                         <div className="text-xs text-muted-foreground">{item.primary_target_name || 'No target'}</div>
+                        <div className="text-xs text-muted-foreground">Auto apply mode: {item.default_apply_mode}</div>
                       </TableCell>
                       <TableCell>
                         <div className="text-xs">Cron: {item.current_cron_expression || 'none'}</div>

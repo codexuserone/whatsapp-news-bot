@@ -304,6 +304,7 @@ export type AnalyticsScheduleRecommendation = {
   schedule_name: string;
   timezone: string;
   delivery_mode: string;
+  default_apply_mode: 'cron' | 'batch';
   current_cron_expression?: string | null;
   current_batch_times: string[];
   primary_target_id?: string | null;

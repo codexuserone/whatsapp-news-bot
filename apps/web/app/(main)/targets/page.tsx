@@ -56,12 +56,12 @@ type TargetPayload = {
 
 const TargetsPage = () => {
   const queryClient = useQueryClient();
-  const autoSyncTriggered = useRef(false);
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | Target['type']>('all');
   const [deleteTarget, setDeleteTarget] = useState<Target | null>(null);
   const [individualName, setIndividualName] = useState('');
   const [individualPhone, setIndividualPhone] = useState('');
+  const syncInFlightRef = useRef(false);
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
     queryKey: ['targets'],
@@ -107,9 +107,25 @@ const TargetsPage = () => {
   });
 
   useEffect(() => {
-    if (!isConnected || autoSyncTriggered.current) return;
-    autoSyncTriggered.current = true;
-    syncTargets.mutate();
+    if (!isConnected) return;
+    let cancelled = false;
+    const runAutoSync = async () => {
+      if (cancelled || syncInFlightRef.current) return;
+      syncInFlightRef.current = true;
+      try {
+        await syncTargets.mutateAsync();
+      } finally {
+        syncInFlightRef.current = false;
+      }
+    };
+    void runAutoSync();
+    const timer = setInterval(() => {
+      void runAutoSync();
+    }, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [isConnected, syncTargets]);
 
   const updateTarget = useMutation({
@@ -173,7 +189,7 @@ const TargetsPage = () => {
               <RefreshCw className="h-5 w-5" />
               Auto Sync
             </CardTitle>
-            <CardDescription>We discover your groups/channels and keep target names up to date.</CardDescription>
+            <CardDescription>Groups/channels sync in the background every minute.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-3">
@@ -191,19 +207,13 @@ const TargetsPage = () => {
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3">
-              <Button onClick={() => syncTargets.mutate()} disabled={syncTargets.isPending}>
-                {syncTargets.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-                Sync now
-              </Button>
-
-              {syncTargets.isSuccess ? (
-                <p className="text-sm text-muted-foreground">
-                  Added {syncTargets.data?.inserted || 0}, updated {syncTargets.data?.updated || 0}, unchanged{' '}
-                  {syncTargets.data?.unchanged || 0}
-                </p>
-              ) : null}
-            </div>
+            <p className="text-sm text-muted-foreground">
+              {syncTargets.isPending
+                ? 'Sync in progress...'
+                : syncTargets.isSuccess
+                  ? `Last sync: added ${syncTargets.data?.inserted || 0}, updated ${syncTargets.data?.updated || 0}.`
+                  : 'Waiting for initial sync...'}
+            </p>
           </CardContent>
         </Card>
       )}
@@ -285,7 +295,7 @@ const TargetsPage = () => {
             </div>
           ) : filteredTargets.length === 0 ? (
             <div className="py-8 text-center text-muted-foreground">
-              {targets.length === 0 ? 'No targets yet. Connect WhatsApp and run sync.' : 'No targets match your search.'}
+              {targets.length === 0 ? 'No targets yet. Connect WhatsApp and wait for auto sync.' : 'No targets match your search.'}
             </div>
           ) : (
             <Table>

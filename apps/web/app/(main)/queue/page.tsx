@@ -186,9 +186,9 @@ const QueuePage = () => {
 
     switch (item.status) {
       case 'pending':
-        return <Badge variant="secondary">Pending</Badge>;
+        return <Badge variant="secondary">Queued</Badge>;
       case 'processing':
-        return <Badge variant="warning">Processing</Badge>;
+        return <Badge variant="warning">Sending</Badge>;
       case 'sent':
         return <Badge variant="success">Sent</Badge>;
       case 'failed':
@@ -244,10 +244,8 @@ const QueuePage = () => {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Message Queue</h1>
-          <p className="text-muted-foreground">
-            Edit pending items, pause/resume specific messages, or send one immediately out of order.
-          </p>
+          <h1 className="text-3xl font-bold tracking-tight">Outgoing Queue</h1>
+          <p className="text-muted-foreground">Review what is waiting to send, fix items, or send one right away.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -257,7 +255,7 @@ const QueuePage = () => {
             title={(queueStats?.processing ?? 0) > 0 ? 'Reset stuck processing items' : 'No processing items'}
           >
             <RefreshCw className={`mr-2 h-4 w-4 ${resetProcessing.isPending ? 'animate-spin' : ''}`} />
-            Reset Processing
+            Fix stuck sends
           </Button>
           <Button variant="outline" onClick={() => retryFailed.mutate()} disabled={retryFailed.isPending}>
             <RefreshCw className={`mr-2 h-4 w-4 ${retryFailed.isPending ? 'animate-spin' : ''}`} />
@@ -265,7 +263,7 @@ const QueuePage = () => {
           </Button>
           <Button variant="destructive" onClick={() => clearPending.mutate()} disabled={clearPending.isPending}>
             <Trash2 className="mr-2 h-4 w-4" />
-            Clear Pending
+            Clear queued
           </Button>
         </div>
       </div>
@@ -293,8 +291,8 @@ const QueuePage = () => {
             <SelectValue placeholder="Select status" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="pending">Pending ({queueStats?.pending ?? 0})</SelectItem>
-            <SelectItem value="processing">Processing ({queueStats?.processing ?? 0})</SelectItem>
+            <SelectItem value="pending">Queued ({queueStats?.pending ?? 0})</SelectItem>
+            <SelectItem value="processing">Sending ({queueStats?.processing ?? 0})</SelectItem>
             <SelectItem value="sent">Sent ({queueStats?.sent ?? 0})</SelectItem>
             <SelectItem value="failed">Failed ({queueStats?.failed ?? 0})</SelectItem>
             <SelectItem value="skipped">Skipped ({queueStats?.skipped ?? 0})</SelectItem>
@@ -306,7 +304,7 @@ const QueuePage = () => {
 
       {statusFilter === 'pending' && !isLoading && queueItems.length === 0 && (queueStats?.sent || 0) > 0 && (
         <div className="text-sm text-muted-foreground">
-          No pending messages. Switch to <span className="font-medium">Sent</span> to see delivery history.
+          Nothing queued right now. Switch to <span className="font-medium">Sent</span> to see delivery history.
         </div>
       )}
 
@@ -314,7 +312,7 @@ const QueuePage = () => {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <ListOrdered className="h-5 w-5" />
-            Queue Items
+            Queued messages
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -408,7 +406,7 @@ const QueuePage = () => {
                       </div>
                     ) : item.rendered_content ? (
                       <div className="rounded-md bg-muted p-3">
-                        <p className="mb-1 text-xs text-muted-foreground">Preview</p>
+                        <p className="mb-1 text-xs text-muted-foreground">Message</p>
                         <p className="line-clamp-3 whitespace-pre-wrap text-sm">{item.rendered_content}</p>
                       </div>
                     ) : null}
@@ -438,7 +436,7 @@ const QueuePage = () => {
 
                     <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
                       <span>Created: {formatDate(item.created_at)}</span>
-                      {item.batch_times && item.batch_times.length ? <span>Batch windows: {item.batch_times.join(', ')}</span> : null}
+                      {item.batch_times && item.batch_times.length ? <span>Send windows: {item.batch_times.join(', ')}</span> : null}
                       {item.scheduled_for ? <span>Scheduled: {formatDate(item.scheduled_for)}</span> : null}
                       {item.sent_at ? <span>Sent: {formatDate(item.sent_at)}</span> : null}
                       {item.sent_at ? (
@@ -448,7 +446,7 @@ const QueuePage = () => {
                         </span>
                       ) : null}
                       {item.error_message ? <span className="text-destructive">Error: {item.error_message}</span> : null}
-                      {item.media_error && !item.error_message ? <span className="text-destructive">Image: {item.media_error}</span> : null}
+                      {item.media_error && !item.error_message ? <span className="text-destructive">Media: {item.media_error}</span> : null}
                     </div>
                   </div>
                 );

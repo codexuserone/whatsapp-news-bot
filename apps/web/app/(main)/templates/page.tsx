@@ -23,7 +23,7 @@ const schema = z.object({
   content: z.string().min(1),
   description: z.string().optional(),
   active: z.boolean().default(true),
-  send_mode: z.enum(['image', 'link_preview', 'text_only']).default('image')
+  send_mode: z.enum(['image', 'image_only', 'link_preview', 'text_only']).default('image')
 });
 
 type TemplateFormValues = z.infer<typeof schema>;
@@ -72,6 +72,14 @@ const TemplatesPage = () => {
   const [active, setActive] = useState<Template | null>(null);
   const [previewWithData, setPreviewWithData] = useState(true);
 
+  const resolveSendMode = (template?: Template | null): 'image' | 'image_only' | 'link_preview' | 'text_only' => {
+    if (template?.send_mode === 'image_only') return 'image_only';
+    if (template?.send_mode === 'image' && template?.send_images === false) return 'image_only';
+    if (template?.send_mode === 'link_preview') return 'link_preview';
+    if (template?.send_mode === 'text_only') return 'text_only';
+    return 'image';
+  };
+
   const sampleData = feedItems[0]
     ? {
         title: feedItems[0].title || 'Sample Title',
@@ -116,7 +124,7 @@ const TemplatesPage = () => {
         content: active.content,
         description: active.description || '',
         active: active.active ?? true,
-        send_mode: active.send_mode || (active.send_images === false ? 'link_preview' : 'image')
+        send_mode: resolveSendMode(active)
       });
     }
   }, [active, form]);
@@ -192,7 +200,7 @@ const TemplatesPage = () => {
                 <Layers className="h-5 w-5" />
                 {active ? 'Edit Template' : 'Create Template'}
               </CardTitle>
-              <CardDescription>Use *bold*, _italic_, ~strikethrough~. Variables: {'{{variable}}'}</CardDescription>
+              <CardDescription>Write regular WhatsApp text. Insert feed fields with the chips below.</CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -210,7 +218,7 @@ const TemplatesPage = () => {
                       form.register('content').ref(element);
                       textareaRef.current = element;
                     }}
-                    placeholder="Start typing your message. Example: *{{title}}*\n\n{{link}}"
+                    placeholder="Start typing your message"
                     className="min-h-[120px] text-sm"
                   />
                   <p className="text-xs text-muted-foreground">
@@ -236,7 +244,7 @@ const TemplatesPage = () => {
                       ))
                     ) : (
                       <p className="text-sm text-muted-foreground">
-                        No feed items yet. Add a feed and fetch items to see variables.
+                        No feed fields yet. Add a feed and check it once to load fields.
                       </p>
                     )}
                   </div>
@@ -253,13 +261,20 @@ const TemplatesPage = () => {
                   render={({ field }) => (
                     <div className="space-y-2">
                       <Label>Message format</Label>
-                      <div className="grid gap-2 sm:grid-cols-3">
+                      <div className="grid gap-2 sm:grid-cols-2">
                         <Button
                           type="button"
                           variant={field.value === 'image' ? 'default' : 'outline'}
                           onClick={() => field.onChange('image')}
                         >
                           Image + caption
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={field.value === 'image_only' ? 'default' : 'outline'}
+                          onClick={() => field.onChange('image_only')}
+                        >
+                          Image only
                         </Button>
                         <Button
                           type="button"
@@ -277,7 +292,7 @@ const TemplatesPage = () => {
                         </Button>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Choose how this template sends: full image card, plain text with link preview, or text only.
+                        Choose how this template sends: image with caption, image only, link preview, or plain text.
                       </p>
                     </div>
                   )}
@@ -294,7 +309,7 @@ const TemplatesPage = () => {
                         onCheckedChange={(checked) => field.onChange(checked === true)}
                       />
                       <Label htmlFor="active" className="cursor-pointer">
-                        Active template
+                        Use this template
                       </Label>
                     </div>
                   )}
@@ -341,7 +356,7 @@ const TemplatesPage = () => {
             <CardContent>
                 <div className="rounded-lg bg-emerald-50/70 p-4 dark:bg-emerald-950/40">
                   <div className="max-w-[85%] rounded-lg bg-white/80 px-3 py-2 shadow-sm ring-1 ring-emerald-200/60 dark:bg-emerald-900/50 dark:ring-emerald-800/60">
-                    {previewWithData && watchedSendMode === 'image' && sampleData.image_url ? (
+                    {previewWithData && (watchedSendMode === 'image' || watchedSendMode === 'image_only') && sampleData.image_url ? (
                       <div className="mb-2 overflow-hidden rounded-md border border-black/5 bg-white">
                         <Image
                           src={sampleData.image_url}
@@ -361,7 +376,7 @@ const TemplatesPage = () => {
                         previewWithData
                           ? (() => {
                               const base = applyTemplate(watchedContent || '', sampleData);
-                              if (watchedSendMode === 'text_only') return base;
+                              if (watchedSendMode !== 'link_preview') return base;
                               const link = String(sampleData.link || sampleData.url || '').trim();
                               if (!link || /https?:\/\//i.test(base)) return base;
                               return `${base}\n${link}`.trim();

@@ -430,7 +430,7 @@ const SchedulesPage = () => {
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Automations</h1>
-          <p className="text-muted-foreground">Create automated schedules to send feed content to your WhatsApp targets.</p>
+          <p className="text-muted-foreground">Choose what to send, where to send it, and when it should run.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="outline" className="text-sm">
@@ -438,7 +438,7 @@ const SchedulesPage = () => {
           </Badge>
           <Button variant="outline" size="sm" onClick={() => dispatchAll.mutate()} disabled={dispatchAll.isPending}>
             {dispatchAll.isPending && <Loader2 className="mr-2 h-3 w-3 animate-spin" />}
-            Dispatch All
+            Run all now
           </Button>
         </div>
       </div>
@@ -450,7 +450,7 @@ const SchedulesPage = () => {
               <CalendarClock className="h-5 w-5 text-primary" />
               {active ? 'Edit Automation' : 'Create New Automation'}
             </CardTitle>
-            <CardDescription>Set up an automation to send messages on a schedule or immediately</CardDescription>
+            <CardDescription>Set when this automation should send messages.</CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -585,9 +585,7 @@ const SchedulesPage = () => {
                 <p className="text-xs text-muted-foreground">Default timezone comes from Settings and can be overridden here.</p>
               </div>
 
-              <p className="text-xs text-muted-foreground">
-                Dispatch sends all feed items since the last run (up to 100). The first run sends the latest item only.
-              </p>
+              <p className="text-xs text-muted-foreground">First run sends the latest item. Future runs catch up on new items automatically.</p>
 
               <div className="space-y-2">
                 <Label htmlFor="feed_id">Feed</Label>
@@ -729,7 +727,7 @@ const SchedulesPage = () => {
         <Card>
           <CardHeader>
             <CardTitle>Your Automations</CardTitle>
-            <CardDescription>Click &quot;Dispatch&quot; to run immediately, or let scheduled automations run automatically.</CardDescription>
+            <CardDescription>Click &quot;Run now&quot; to send immediately, or let automations run on their own.</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
@@ -757,7 +755,7 @@ const SchedulesPage = () => {
                       <Pencil className="mr-1 h-3 w-3" /> Edit
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => dispatchSchedule.mutate(schedule.id)} disabled={dispatchSchedule.isPending}>
-                      <Play className="mr-1 h-3 w-3" /> Dispatch
+                      <Play className="mr-1 h-3 w-3" /> Run now
                     </Button>
                     <Button
                       size="sm"

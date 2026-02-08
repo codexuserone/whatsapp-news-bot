@@ -25,7 +25,7 @@ type Template = {
   id?: string;
   content: string;
   send_images?: boolean | null;
-  send_mode?: 'image' | 'link_preview' | 'text_only' | null;
+  send_mode?: 'image' | 'image_only' | 'link_preview' | 'text_only' | null;
 };
 
 type FeedItem = {
@@ -604,7 +604,15 @@ const ensurePreviewLink = (value: string, link?: string | null) => {
 };
 
 const getTemplateSendMode = (template: Template) => {
-  if (template?.send_mode === 'image' || template?.send_mode === 'link_preview' || template?.send_mode === 'text_only') {
+  if (template?.send_mode === 'image' && template?.send_images === false) {
+    return 'image_only';
+  }
+  if (
+    template?.send_mode === 'image' ||
+    template?.send_mode === 'image_only' ||
+    template?.send_mode === 'link_preview' ||
+    template?.send_mode === 'text_only'
+  ) {
     return template.send_mode;
   }
   return template?.send_images === false ? 'link_preview' : 'image';
@@ -646,7 +654,9 @@ const sendMessageWithTemplate = async (
   const jid = normalizeTargetJid(target);
   const allowImages = options?.sendImages !== false;
   const sendTimeoutMs = Math.max(Number(options?.sendTimeoutMs || DEFAULT_SEND_TIMEOUT_MS), 10000);
-  const sendMode = getTemplateSendMode(template); // Fix: Define sendMode
+  const sendMode = getTemplateSendMode(template);
+  const includeImageCaption = sendMode !== 'image_only';
+  const allowTextFallback = sendMode !== 'image_only';
 
   const sendText = async (text: string, modeOptions?: { disableLinkPreview?: boolean }) => {
     const content: Record<string, unknown> = modeOptions?.disableLinkPreview
@@ -654,13 +664,13 @@ const sendMessageWithTemplate = async (
       : { text };
     if (target.type === 'status') {
       return withTimeout(
-        whatsappClient.sendStatusBroadcast({ text }),
+        whatsappClient.sendStatusBroadcast(content),
         sendTimeoutMs,
         'Timed out sending status message'
       );
     }
     return withTimeout(
-      whatsappClient.sendMessage(jid, { text }),
+      whatsappClient.sendMessage(jid, content),
       sendTimeoutMs,
       'Timed out sending message'
     );
@@ -686,6 +696,10 @@ const sendMessageWithTemplate = async (
   }
 
   const resolved = await resolveImageUrlForFeedItem(options?.supabase, feedItem, allowImages);
+  if (sendMode === 'image_only' && !resolved.url) {
+    throw new Error('Image-only mode requires an available image for this feed item');
+  }
+
   if (allowImages && resolved.url) {
     let safeUrl: string;
     try {
@@ -693,6 +707,9 @@ const sendMessageWithTemplate = async (
     } catch (error) {
       const message = getErrorMessage(error);
       logger.warn({ error, jid, imageUrl: resolved.url }, 'Blocked unsafe image URL');
+      if (!allowTextFallback) {
+        throw new Error(`Image-only mode blocked unsafe image URL: ${message}`);
+      }
       const response = await sendText(textWithPreview);
       return {
         response,
@@ -703,10 +720,9 @@ const sendMessageWithTemplate = async (
 
     try {
       const { buffer, mimetype } = await downloadImageBuffer(safeUrl, feedItem.link);
-      const content: Record<string, unknown> = {
-        image: buffer,
-        caption: renderedText
-      };
+      const content: Record<string, unknown> = includeImageCaption
+        ? { image: buffer, caption: renderedText }
+        : { image: buffer };
       if (mimetype) {
         content.mimetype = mimetype;
       }
@@ -726,12 +742,15 @@ const sendMessageWithTemplate = async (
 
       return {
         response,
-        text: renderedText,
+        text: includeImageCaption ? renderedText : '',
         media: { type: 'image', url: safeUrl, sent: true, error: null }
       };
     } catch (error) {
       const bufferErrorMessage = getErrorMessage(error);
       if (/Unsupported image MIME type for WhatsApp upload/i.test(bufferErrorMessage)) {
+        if (!allowTextFallback) {
+          throw new Error(bufferErrorMessage);
+        }
         logger.info(
           { jid, imageUrl: safeUrl, reason: bufferErrorMessage },
           'Skipping unsupported image type and falling back to text'
@@ -750,10 +769,9 @@ const sendMessageWithTemplate = async (
       );
 
       try {
-        const content: Record<string, unknown> = {
-          image: { url: safeUrl },
-          caption: renderedText
-        };
+        const content: Record<string, unknown> = includeImageCaption
+          ? { image: { url: safeUrl }, caption: renderedText }
+          : { image: { url: safeUrl } };
         const response =
           target.type === 'status'
             ? await withTimeout(
@@ -769,11 +787,14 @@ const sendMessageWithTemplate = async (
 
         return {
           response,
-          text: renderedText,
+          text: includeImageCaption ? renderedText : '',
           media: { type: 'image', url: safeUrl, sent: true, error: null }
         };
       } catch (urlError) {
         const urlErrorMessage = getErrorMessage(urlError);
+        if (!allowTextFallback) {
+          throw new Error(`${bufferErrorMessage}; url-send: ${urlErrorMessage}`);
+        }
         logger.info(
           { error: urlError, jid, imageUrl: safeUrl, bufferError: bufferErrorMessage },
           'Image URL send rejected; using text fallback'
@@ -791,6 +812,10 @@ const sendMessageWithTemplate = async (
         };
       }
     }
+  }
+
+  if (sendMode === 'image_only') {
+    throw new Error('Image-only mode could not find an image to send');
   }
 
   const response = await sendText(textWithPreview);
@@ -1556,7 +1581,8 @@ const sendQueuedForSchedule = async (
             'Target phone number missing',
             'Group ID invalid',
             'Channel ID invalid',
-            'Phone number invalid'
+            'Phone number invalid',
+            'Image-only mode'
           ].some((needle) => rawErrorMessage.includes(needle));
 
           const shouldNotRetry = nonRetryable || timeoutUnknownDelivery;

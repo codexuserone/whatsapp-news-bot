@@ -160,7 +160,7 @@ const FeedsPage = () => {
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Feeds</h1>
-          <p className="text-muted-foreground">Add feed URLs. Active automations fetch these automatically; use Fetch now only when needed.</p>
+          <p className="text-muted-foreground">Add feed URLs. Running automations check these feeds automatically.</p>
         </div>
       </div>
 
@@ -207,7 +207,7 @@ const FeedsPage = () => {
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="fetch_interval">Auto-check interval</Label>
+                    <Label htmlFor="fetch_interval">Check cadence</Label>
                     <Controller
                       control={form.control}
                       name="fetch_interval"
@@ -228,7 +228,7 @@ const FeedsPage = () => {
                         );
                       }}
                     />
-                    <p className="text-xs text-muted-foreground">Used when this feed is attached to active automations.</p>
+                    <p className="text-xs text-muted-foreground">Applied only when this feed is attached to a running automation.</p>
                   </div>
                   <Controller
                     control={form.control}
@@ -240,7 +240,7 @@ const FeedsPage = () => {
                           checked={field.value}
                           onCheckedChange={(checked) => field.onChange(checked === true)}
                         />
-                        <Label htmlFor="active" className="cursor-pointer">Active</Label>
+                        <Label htmlFor="active" className="cursor-pointer">Run this feed</Label>
                       </div>
                     )}
                   />
@@ -297,11 +297,11 @@ const FeedsPage = () => {
                       </div>
                     </div>
                     <div>
-                      <p className="text-sm font-medium text-muted-foreground mb-2">Detected Variables (use in templates)</p>
+                      <p className="text-sm font-medium text-muted-foreground mb-2">Detected fields (available in templates)</p>
                       <div className="flex flex-wrap gap-2">
                         {(testResult.detectedFields || []).map((field: string) => (
-                          <Badge key={field} variant="secondary" className="font-mono">
-                            {`{{${field}}}`}
+                          <Badge key={field} variant="secondary">
+                            {field.replace(/_/g, ' ')}
                           </Badge>
                         ))}
                       </div>
@@ -367,7 +367,7 @@ const FeedsPage = () => {
                         ) : null}
                       </div>
                     </div>
-                    <Badge variant={feed.active ? 'success' : 'secondary'}>{feed.active ? 'Active' : 'Paused'}</Badge>
+                    <Badge variant={feed.active ? 'success' : 'secondary'}>{feed.active ? 'Running' : 'Paused'}</Badge>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" variant="outline" onClick={() => selectFeed(feed)}>
@@ -384,7 +384,7 @@ const FeedsPage = () => {
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => refreshFeed.mutate(feed.id)} disabled={refreshFeed.isPending}>
                       {refreshFeed.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-1 h-3 w-3" />}
-                      Fetch now
+                      Check now
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => deleteFeed.mutate(feed.id)} className="text-destructive hover:text-destructive">
                       <Trash2 className="h-3 w-3" />

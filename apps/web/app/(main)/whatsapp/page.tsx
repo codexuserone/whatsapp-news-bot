@@ -14,7 +14,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
 
 type SendTestPayload = {
   jid: string;
@@ -22,7 +21,9 @@ type SendTestPayload = {
   linkUrl?: string;
   imageUrl?: string;
   imageDataUrl?: string;
+  videoDataUrl?: string;
   includeCaption?: boolean;
+  disableLinkPreview?: boolean;
 };
 
 type SendTestResponse = {
@@ -60,12 +61,10 @@ const WhatsAppPage = () => {
   const queryClient = useQueryClient();
   const [testTarget, setTestTarget] = React.useState('');
   const [testMessage, setTestMessage] = React.useState('');
-  const [testLinkUrl, setTestLinkUrl] = React.useState('');
-  const [attachmentMode, setAttachmentMode] = React.useState<'none' | 'url' | 'upload'>('none');
-  const [testImageUrl, setTestImageUrl] = React.useState('');
-  const [imageDataUrl, setImageDataUrl] = React.useState('');
-  const [imageName, setImageName] = React.useState('');
-  const [includeCaption, setIncludeCaption] = React.useState(true);
+  const [composeMode, setComposeMode] = React.useState<'text_preview' | 'text_only' | 'image_caption' | 'image_only'>('text_preview');
+  const [attachmentDataUrl, setAttachmentDataUrl] = React.useState('');
+  const [attachmentMimeType, setAttachmentMimeType] = React.useState('');
+  const [attachmentName, setAttachmentName] = React.useState('');
 
   const { data: status, isLoading: statusLoading } = useQuery<WhatsAppStatus>({
     queryKey: ['whatsapp-status'],
@@ -188,16 +187,19 @@ const WhatsAppPage = () => {
     return <Badge variant="destructive">{status?.status || 'Disconnected'}</Badge>;
   };
 
-  const onPickImageFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const onPickAttachmentFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] || null;
     if (!file) {
-      setImageDataUrl('');
-      setImageName('');
+      setAttachmentDataUrl('');
+      setAttachmentMimeType('');
+      setAttachmentName('');
       return;
     }
 
-    if (!file.type.startsWith('image/')) {
-      alert('Please choose an image file.');
+    const isImage = file.type.startsWith('image/');
+    const isVideo = file.type.startsWith('video/');
+    if (!isImage && !isVideo) {
+      alert('Please choose an image or video file.');
       event.target.value = '';
       return;
     }
@@ -210,37 +212,49 @@ const WhatsAppPage = () => {
     }).catch(() => '');
 
     if (!dataUrl) {
-      alert('Could not read image file.');
+      alert('Could not read file.');
       event.target.value = '';
       return;
     }
 
-    setImageDataUrl(dataUrl);
-    setImageName(file.name);
+    setAttachmentDataUrl(dataUrl);
+    setAttachmentMimeType(file.type);
+    setAttachmentName(file.name);
   };
 
-  const canSendTest = Boolean(
-    testTarget &&
-      (testMessage.trim() ||
-        testLinkUrl.trim() ||
-        (attachmentMode === 'url' && testImageUrl.trim()) ||
-        (attachmentMode === 'upload' && imageDataUrl))
-  );
+  const needsAttachment = composeMode === 'image_caption' || composeMode === 'image_only';
+  const hasAttachment = Boolean(attachmentDataUrl);
+  const hasAnyText = Boolean(testMessage.trim());
+
+  const canSendTest = Boolean(testTarget && (needsAttachment ? hasAttachment : hasAnyText));
+
+  const messagePlaceholder =
+    composeMode === 'text_preview'
+      ? 'Write your message (include a link if you want a preview)'
+      : composeMode === 'text_only'
+        ? 'Write plain text'
+        : composeMode === 'image_only'
+          ? 'Optional caption'
+          : 'Write caption for your attachment';
 
   const submitTestMessage = () => {
     if (!canSendTest) return;
 
-    const payload: SendTestPayload = { jid: testTarget, includeCaption };
-    const normalizedMessage = testMessage.trim();
-    const normalizedLink = testLinkUrl.trim();
-    if (normalizedMessage) payload.message = normalizedMessage;
-    if (normalizedLink) payload.linkUrl = normalizedLink;
+    const payload: SendTestPayload = {
+      jid: testTarget,
+      includeCaption: composeMode !== 'image_only',
+      disableLinkPreview: composeMode === 'text_only'
+    };
 
-    if (attachmentMode === 'url' && testImageUrl.trim()) {
-      payload.imageUrl = testImageUrl.trim();
-    }
-    if (attachmentMode === 'upload' && imageDataUrl) {
-      payload.imageDataUrl = imageDataUrl;
+    const normalizedMessage = testMessage.trim();
+    if (normalizedMessage) payload.message = normalizedMessage;
+
+    if (attachmentDataUrl && needsAttachment) {
+      if (attachmentMimeType.startsWith('video/')) {
+        payload.videoDataUrl = attachmentDataUrl;
+      } else {
+        payload.imageDataUrl = attachmentDataUrl;
+      }
     }
 
     sendTestMessage.mutate(payload);
@@ -251,17 +265,19 @@ const WhatsAppPage = () => {
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">WhatsApp Console</h1>
-          <p className="text-muted-foreground">Connect once, then targets sync automatically from your WhatsApp account.</p>
+          <p className="text-muted-foreground">Connect once and send normal messages to saved destinations.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => disconnect.mutate()} disabled={disconnect.isPending || !isConnected}>
             <Power className="mr-2 h-4 w-4" />
             {disconnect.isPending ? 'Disconnecting...' : 'Disconnect'}
           </Button>
-          <Button onClick={() => reconnect.mutate()} disabled={reconnect.isPending}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${reconnect.isPending ? 'animate-spin' : ''}`} />
-            {reconnect.isPending ? 'Reconnecting...' : 'Reconnect'}
-          </Button>
+          {!isConnected ? (
+            <Button onClick={() => reconnect.mutate()} disabled={reconnect.isPending}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${reconnect.isPending ? 'animate-spin' : ''}`} />
+              {reconnect.isPending ? 'Refreshing...' : 'Refresh Connection'}
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -298,13 +314,13 @@ const WhatsAppPage = () => {
 
             {!isConnected && !isQrReady ? (
               <div className="rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
-                Click <strong>Reconnect</strong> to request a fresh QR code.
+                Click <strong>Refresh Connection</strong> to request a fresh QR code.
               </div>
             ) : null}
 
             {isConnected ? (
               <div className="rounded-lg bg-success/10 p-3 text-sm text-success">
-                Connected. Open <Link href="/targets" className="underline">Targets</Link> to sync and review destinations.
+                Connected. Open <Link href="/targets" className="underline">Targets</Link> to review destinations.
               </div>
             ) : null}
           </CardContent>
@@ -355,9 +371,9 @@ const WhatsAppPage = () => {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <MessageSquare className="h-5 w-5" />
-              Send Test Message
+              Send Message
             </CardTitle>
-            <CardDescription>Use normal message fields; no JIDs required.</CardDescription>
+            <CardDescription>Choose destination, write text, and optionally attach an image/video file.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -389,72 +405,64 @@ const WhatsAppPage = () => {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="testMessage">Message (optional if sending image)</Label>
+              <Label>Message style</Label>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Button
+                  type="button"
+                  variant={composeMode === 'text_preview' ? 'default' : 'outline'}
+                  onClick={() => setComposeMode('text_preview')}
+                >
+                  Text + link preview
+                </Button>
+                <Button
+                  type="button"
+                  variant={composeMode === 'text_only' ? 'default' : 'outline'}
+                  onClick={() => setComposeMode('text_only')}
+                >
+                  Text only
+                </Button>
+                <Button
+                  type="button"
+                  variant={composeMode === 'image_caption' ? 'default' : 'outline'}
+                  onClick={() => setComposeMode('image_caption')}
+                >
+                  Image/video + caption
+                </Button>
+                <Button
+                  type="button"
+                  variant={composeMode === 'image_only' ? 'default' : 'outline'}
+                  onClick={() => setComposeMode('image_only')}
+                >
+                  Image/video only
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="testMessage">
+                {composeMode === 'image_only' ? 'Caption (optional)' : 'Message'}
+              </Label>
               <Textarea
                 id="testMessage"
                 value={testMessage}
                 onChange={(event) => setTestMessage(event.target.value)}
                 rows={4}
-                placeholder="Write a normal message"
+                placeholder={messagePlaceholder}
               />
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="testLinkUrl">Link (optional)</Label>
-              <Input
-                id="testLinkUrl"
-                value={testLinkUrl}
-                onChange={(event) => setTestLinkUrl(event.target.value)}
-                placeholder="https://example.com/story"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Image attachment</Label>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" variant={attachmentMode === 'none' ? 'default' : 'outline'} onClick={() => setAttachmentMode('none')}>
-                  No image
-                </Button>
-                <Button type="button" variant={attachmentMode === 'upload' ? 'default' : 'outline'} onClick={() => setAttachmentMode('upload')}>
-                  Upload file
-                </Button>
-                <Button type="button" variant={attachmentMode === 'url' ? 'default' : 'outline'} onClick={() => setAttachmentMode('url')}>
-                  Use image URL
-                </Button>
-              </div>
-            </div>
-
-            {attachmentMode === 'upload' ? (
+            {needsAttachment ? (
               <div className="space-y-2">
-                <Label htmlFor="imageUpload">Choose image file</Label>
-                <Input id="imageUpload" type="file" accept="image/*" onChange={onPickImageFile} />
-                {imageName ? <p className="text-xs text-muted-foreground">Selected: {imageName}</p> : null}
-              </div>
-            ) : null}
-
-            {attachmentMode === 'url' ? (
-              <div className="space-y-2">
-                <Label htmlFor="testImageUrl">Image URL</Label>
-                <Input
-                  id="testImageUrl"
-                  value={testImageUrl}
-                  onChange={(event) => setTestImageUrl(event.target.value)}
-                  placeholder="https://example.com/image.jpg"
-                />
-              </div>
-            ) : null}
-
-            {attachmentMode !== 'none' ? (
-              <div className="flex items-center gap-2">
-                <Switch id="includeCaption" checked={includeCaption} onCheckedChange={(checked) => setIncludeCaption(checked === true)} />
-                <Label htmlFor="includeCaption">Send message/link as image caption</Label>
+                <Label htmlFor="attachmentUpload">Attachment</Label>
+                <Input id="attachmentUpload" type="file" accept="image/*,video/*" onChange={onPickAttachmentFile} />
+                {attachmentName ? <p className="text-xs text-muted-foreground">Selected: {attachmentName}</p> : null}
               </div>
             ) : null}
 
             <div className="flex items-center gap-4">
               <Button onClick={submitTestMessage} disabled={sendTestMessage.isPending || !canSendTest}>
                 {sendTestMessage.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-                Send Test
+                Send
               </Button>
               {sendTestMessage.isSuccess ? (
                 <span className="text-sm text-success">
@@ -519,9 +527,9 @@ const WhatsAppPage = () => {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Users className="h-5 w-5" />
-            Discoverable destinations
+            Available destinations
           </CardTitle>
-          <CardDescription>These come directly from your connected account and sync into Targets.</CardDescription>
+          <CardDescription>Loaded from your connected account.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-3 sm:grid-cols-2">
@@ -559,7 +567,7 @@ const WhatsAppPage = () => {
           </div>
 
           <Button asChild variant="outline">
-            <Link href="/targets">Open Targets and Sync</Link>
+            <Link href="/targets">Open Targets</Link>
           </Button>
         </CardContent>
       </Card>
@@ -568,16 +576,16 @@ const WhatsAppPage = () => {
         <summary className="cursor-pointer list-none font-medium">
           <span className="inline-flex items-center gap-2">
             <Wrench className="h-4 w-4" />
-            Advanced recovery tools
+            Maintenance (rare)
           </span>
         </summary>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => clearSenderKeys.mutate()} disabled={clearSenderKeys.isPending}>
             {clearSenderKeys.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Clear Sender Keys
+            Reset encryption cache
           </Button>
           <Button variant="outline" onClick={() => reconnect.mutate()} disabled={reconnect.isPending}>
-            Force New QR
+            Refresh QR
           </Button>
         </div>
       </details>

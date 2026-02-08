@@ -100,7 +100,7 @@ const schemas = {
     description: z.string().max(1000).optional().nullable().transform(normalizeOptional),
     active: z.boolean().default(true),
     send_images: z.boolean().default(true),
-    send_mode: z.enum(['image', 'link_preview', 'text_only']).optional().default('image')
+    send_mode: z.enum(['image', 'image_only', 'link_preview', 'text_only']).optional().default('image')
   }),
 
   testMessage: z
@@ -110,7 +110,9 @@ const schemas = {
       linkUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       imageDataUrl: z.string().max(12_000_000).optional().nullable().transform(normalizeOptional),
+      videoDataUrl: z.string().max(24_000_000).optional().nullable().transform(normalizeOptional),
       includeCaption: z.boolean().optional().default(true),
+      disableLinkPreview: z.boolean().optional().default(false),
       confirm: z.boolean().optional()
     })
     .refine(
@@ -119,9 +121,10 @@ const schemas = {
         linkUrl?: string | null;
         imageUrl?: string | null;
         imageDataUrl?: string | null;
-      }) => Boolean(value.message || value.linkUrl || value.imageUrl || value.imageDataUrl),
+        videoDataUrl?: string | null;
+      }) => Boolean(value.message || value.linkUrl || value.imageUrl || value.imageDataUrl || value.videoDataUrl),
       {
-        message: 'message, linkUrl, imageUrl, or imageDataUrl is required'
+        message: 'message, linkUrl, imageUrl, imageDataUrl, or videoDataUrl is required'
       }
     ),
 

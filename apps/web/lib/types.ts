@@ -18,7 +18,7 @@ export type Template = {
   content: string;
   active: boolean;
   send_images?: boolean | null;
-  send_mode?: 'image' | 'link_preview' | 'text_only' | null;
+  send_mode?: 'image' | 'image_only' | 'link_preview' | 'text_only' | null;
 };
 
 export type Target = {

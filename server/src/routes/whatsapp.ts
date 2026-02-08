@@ -70,6 +70,26 @@ const parseImageDataUrl = (value: string) => {
   return { buffer, mimetype };
 };
 
+const parseVideoDataUrl = (value: string) => {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^data:(video\/[a-zA-Z0-9.+-]+);base64,([a-zA-Z0-9+/=\s]+)$/);
+  if (!match || !match[1] || !match[2]) {
+    throw badRequest('videoDataUrl must be a valid base64 video data URL');
+  }
+
+  const mimetype = String(match[1]).toLowerCase();
+  const base64 = String(match[2]).replace(/\s+/g, '');
+  const buffer = Buffer.from(base64, 'base64');
+  const MAX_VIDEO_BYTES = 24 * 1024 * 1024;
+  if (!buffer.length) {
+    throw badRequest('videoDataUrl is empty');
+  }
+  if (buffer.length > MAX_VIDEO_BYTES) {
+    throw badRequest(`Video too large (${buffer.length} bytes)`);
+  }
+  return { buffer, mimetype };
+};
+
 const whatsappRoutes = () => {
   const router = express.Router();
 
@@ -177,7 +197,9 @@ const whatsappRoutes = () => {
       linkUrl?: string | null;
       imageUrl?: string | null;
       imageDataUrl?: string | null;
+      videoDataUrl?: string | null;
       includeCaption?: boolean;
+      disableLinkPreview?: boolean;
       confirm?: boolean;
     };
 
@@ -186,6 +208,8 @@ const whatsappRoutes = () => {
     const normalizedLink = String(payload.linkUrl || '').trim();
     const imageUrl = payload.imageUrl ? String(payload.imageUrl).trim() : null;
     const imageDataUrl = payload.imageDataUrl ? String(payload.imageDataUrl).trim() : null;
+    const videoDataUrl = payload.videoDataUrl ? String(payload.videoDataUrl).trim() : null;
+    const disableLinkPreview = payload.disableLinkPreview === true;
     const confirm = payload.confirm;
     const includeCaption = payload.includeCaption !== false;
     const captionText = [normalizedMessage, normalizedLink].filter(Boolean).join('\n').trim();
@@ -194,8 +218,8 @@ const whatsappRoutes = () => {
       throw badRequest('jid is required');
     }
 
-    if (!captionText && !imageUrl && !imageDataUrl) {
-      throw badRequest('message, linkUrl, imageUrl, or imageDataUrl is required');
+    if (!captionText && !imageUrl && !imageDataUrl && !videoDataUrl) {
+      throw badRequest('message, linkUrl, imageUrl, imageDataUrl, or videoDataUrl is required');
     }
 
     if (whatsapp?.getStatus()?.status !== 'connected') {
@@ -204,7 +228,12 @@ const whatsappRoutes = () => {
 
     const normalizedJid = normalizeTestJid(jid);
     let content: Record<string, unknown>;
-    if (imageDataUrl) {
+    if (videoDataUrl) {
+      const { buffer, mimetype } = parseVideoDataUrl(videoDataUrl);
+      content = includeCaption && captionText
+        ? { video: buffer, mimetype, caption: captionText }
+        : { video: buffer, mimetype };
+    } else if (imageDataUrl) {
       const { buffer, mimetype } = parseImageDataUrl(imageDataUrl);
       content = includeCaption && captionText
         ? { image: buffer, mimetype, caption: captionText }
@@ -234,7 +263,7 @@ const whatsappRoutes = () => {
           : { image: { url: imageUrl } };
       }
     } else {
-      content = { text: captionText };
+      content = disableLinkPreview ? { text: captionText, linkPreview: null } : { text: captionText };
     }
 
     const sendPromise = isStatusBroadcast(normalizedJid)
@@ -249,7 +278,7 @@ const whatsappRoutes = () => {
     const messageId = result?.key?.id;
     let confirmation: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null = null;
     if (confirm && messageId && whatsapp?.confirmSend) {
-      const timeouts = (imageUrl || imageDataUrl)
+      const timeouts = (imageUrl || imageDataUrl || videoDataUrl)
         ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
         : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 };
       confirmation = await whatsapp.confirmSend(messageId, timeouts);

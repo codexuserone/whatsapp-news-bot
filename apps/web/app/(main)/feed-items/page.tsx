@@ -27,14 +27,19 @@ const FeedItemsPage = () => {
       total: 0
     };
     const queued = (delivery.pending || 0) + (delivery.processing || 0);
+    const sent = delivery.sent || 0;
+    const failed = delivery.failed || 0;
     if (queued > 0) {
       return { label: `Queued (${queued})`, variant: 'warning' as const };
     }
-    if ((delivery.failed || 0) > 0) {
-      return { label: `Failed (${delivery.failed})`, variant: 'destructive' as const };
+    if (sent > 0 && failed > 0) {
+      return { label: `Partial (${sent} sent, ${failed} failed)`, variant: 'warning' as const };
     }
-    if ((delivery.sent || 0) > 0) {
-      return { label: `Sent (${delivery.sent})`, variant: 'success' as const };
+    if (failed > 0) {
+      return { label: `Failed (${failed})`, variant: 'destructive' as const };
+    }
+    if (sent > 0) {
+      return { label: `Sent (${sent})`, variant: 'success' as const };
     }
     return { label: 'Not queued', variant: 'secondary' as const };
   };

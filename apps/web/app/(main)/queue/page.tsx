@@ -186,13 +186,13 @@ const QueuePage = () => {
 
     switch (item.status) {
       case 'pending':
-        return <Badge variant="secondary">Queued</Badge>;
+        return <Badge variant="secondary">Waiting to send</Badge>;
       case 'processing':
-        return <Badge variant="warning">Sending</Badge>;
+        return <Badge variant="warning">Sending now</Badge>;
       case 'sent':
         return <Badge variant="success">Sent</Badge>;
       case 'failed':
-        return <Badge variant="destructive">Failed</Badge>;
+        return <Badge variant="destructive">Failed - will retry</Badge>;
       case 'skipped':
         return <Badge variant="warning">Skipped</Badge>;
       default:
@@ -203,36 +203,30 @@ const QueuePage = () => {
   const getReceiptBadge = (item: QueueItem) => {
     const messageId = String(item.whatsapp_message_id || '').trim();
     if (!messageId) {
-      if (item.status === 'sent') {
-        return <Badge variant="warning">Receipt unknown</Badge>;
-      }
       return null;
     }
 
     const snapshot = statusByMessageId.get(messageId);
     if (!snapshot) {
-      if (item.status === 'sent') {
-        return <Badge variant="warning">Not observed yet</Badge>;
-      }
       return null;
     }
 
     const label = mapMessageStatusLabel(snapshot.status, snapshot.statusLabel);
     if (!label) {
-      return <Badge variant="secondary">Observed</Badge>;
+      return null;
     }
 
     const lower = label.toLowerCase();
     if (lower === 'error') {
-      return <Badge variant="destructive">{label}</Badge>;
+      return <Badge variant="destructive">Failed</Badge>;
     }
     if (lower === 'delivered' || lower === 'read' || lower === 'played') {
-      return <Badge variant="success">{label}</Badge>;
+      return <Badge variant="success">Delivered</Badge>;
     }
     if (lower === 'pending' || lower === 'server') {
-      return <Badge variant="warning">{label}</Badge>;
+      return <Badge variant="warning">Sending...</Badge>;
     }
-    return <Badge variant="secondary">{label}</Badge>;
+    return null;
   };
 
   const formatDate = (dateStr?: string | null) => {
@@ -337,10 +331,8 @@ const QueuePage = () => {
                         <div className="mb-1 flex flex-wrap items-center gap-2">
                           {getStatusBadge(item)}
                           {item.delivery_mode === 'batch' || item.delivery_mode === 'batched' ? (
-                            <Badge variant="outline">Batch</Badge>
-                          ) : (
-                            <Badge variant="outline">Immediate</Badge>
-                          )}
+                            <Badge variant="outline">Scheduled time</Badge>
+                          ) : null}
                           {item.target_name ? <Badge variant="outline">{item.target_name}</Badge> : null}
                           {item.target_type ? <Badge variant="secondary">{item.target_type}</Badge> : null}
                           <span className="text-xs text-muted-foreground">{item.schedule_name || 'Automation'}</span>

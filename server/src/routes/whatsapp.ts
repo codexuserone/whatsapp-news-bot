@@ -50,6 +50,67 @@ const downloadImageBuffer = async (url: string) => {
   return { buffer, mimetype: contentType };
 };
 
+const toTimestampIso = (value: unknown) => {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return new Date(value * 1000).toISOString();
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return new Date(parsed * 1000).toISOString();
+    }
+  }
+
+  if (value && typeof value === 'object' && 'low' in (value as Record<string, unknown>)) {
+    const low = Number((value as Record<string, unknown>).low);
+    if (Number.isFinite(low) && low > 0) {
+      return new Date(low * 1000).toISOString();
+    }
+  }
+
+  return new Date().toISOString();
+};
+
+const persistOutgoingChatSnapshot = async (params: {
+  messageId: string | null;
+  remoteJid: string;
+  text: string;
+  mediaUrl: string | null;
+  mediaType: string | null;
+  messageTimestamp: unknown;
+  source: 'send-test' | 'send-status';
+}) => {
+  if (!params.messageId) return;
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+
+  try {
+    await supabase
+      .from('chat_messages')
+      .upsert(
+        {
+          whatsapp_id: params.messageId,
+          remote_jid: params.remoteJid,
+          from_me: true,
+          message_type: params.mediaType || 'text',
+          content: params.text,
+          media_url: params.mediaUrl,
+          status: 'sent',
+          timestamp: toTimestampIso(params.messageTimestamp),
+          raw_message: {
+            source: params.source,
+            media_type: params.mediaType,
+            media_url: params.mediaUrl
+          }
+        },
+        { onConflict: 'whatsapp_id' }
+      );
+  } catch {
+    // Best effort only. Delivery verification should not block send endpoints.
+  }
+};
+
 const whatsappRoutes = () => {
   const router = express.Router();
 
@@ -236,6 +297,16 @@ const whatsappRoutes = () => {
       confirmation = await whatsapp.confirmSend(messageId, timeouts);
     }
 
+    await persistOutgoingChatSnapshot({
+      messageId: messageId || null,
+      remoteJid: normalizedJid,
+      text: normalizedMessage,
+      mediaUrl: imageUrl || null,
+      mediaType: imageUrl ? 'image' : 'text',
+      messageTimestamp: result?.messageTimestamp,
+      source: 'send-test'
+    });
+
     try {
       const supabase = getSupabaseClient();
       if (supabase) {
@@ -305,6 +376,17 @@ const whatsappRoutes = () => {
     }
 
     const result = await whatsapp.sendStatusBroadcast(content);
+
+    await persistOutgoingChatSnapshot({
+      messageId: result?.key?.id || null,
+      remoteJid: 'status@broadcast',
+      text: String(message || ''),
+      mediaUrl: imageUrl || null,
+      mediaType: imageUrl ? 'image' : 'text',
+      messageTimestamp: result?.messageTimestamp,
+      source: 'send-status'
+    });
+
     res.json({ ok: true, messageId: result?.key?.id });
   }));
 

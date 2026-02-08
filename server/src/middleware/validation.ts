@@ -102,12 +102,27 @@ const schemas = {
     send_images: z.boolean().default(true)
   }),
 
-  testMessage: z.object({
-    jid: z.string().regex(JID_PATTERN),
-    message: z.string().min(1).max(4096),
-    imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
-    confirm: z.boolean().optional()
-  }),
+  testMessage: z
+    .object({
+      jid: z.string().regex(JID_PATTERN),
+      message: z.string().max(4096).optional().nullable().transform(normalizeOptional),
+      linkUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      imageDataUrl: z.string().max(12_000_000).optional().nullable().transform(normalizeOptional),
+      includeCaption: z.boolean().optional().default(true),
+      confirm: z.boolean().optional()
+    })
+    .refine(
+      (value: {
+        message?: string | null;
+        linkUrl?: string | null;
+        imageUrl?: string | null;
+        imageDataUrl?: string | null;
+      }) => Boolean(value.message || value.linkUrl || value.imageUrl || value.imageDataUrl),
+      {
+        message: 'message, linkUrl, imageUrl, or imageDataUrl is required'
+      }
+    ),
 
   statusMessage: z
     .object({

@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { LogEntry } from '@/lib/types';
+import type { LogEntry, WhatsAppOutbox, WhatsAppOutboxStatus } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
@@ -20,6 +20,26 @@ const STATUS_COLORS: Record<string, 'success' | 'destructive' | 'warning' | 'sec
   failed: 'destructive'
 };
 
+const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | null) => {
+  if (statusLabel) return statusLabel;
+  switch (status) {
+    case 0:
+      return 'error';
+    case 1:
+      return 'pending';
+    case 2:
+      return 'server';
+    case 3:
+      return 'delivered';
+    case 4:
+      return 'read';
+    case 5:
+      return 'played';
+    default:
+      return null;
+  }
+};
+
 const LogsPage = () => {
   const [status, setStatus] = useState('all');
   const { data: logs = [], isLoading } = useQuery<LogEntry[]>({
@@ -28,11 +48,57 @@ const LogsPage = () => {
     refetchInterval: 10000
   });
 
+  const { data: outbox } = useQuery<WhatsAppOutbox>({
+    queryKey: ['whatsapp-outbox'],
+    queryFn: () => api.get('/api/whatsapp/outbox'),
+    refetchInterval: 5000
+  });
+
+  const statusByMessageId = useMemo(() => {
+    const map = new Map<string, WhatsAppOutboxStatus>();
+    for (const snap of outbox?.statuses || []) {
+      if (!snap?.id) continue;
+      map.set(String(snap.id), snap);
+    }
+    return map;
+  }, [outbox?.statuses]);
+
+  const getReceiptBadge = (log: LogEntry) => {
+    const messageId = String(log.whatsapp_message_id || '').trim();
+    if (!messageId) {
+      if (log.status === 'sent') {
+        return <Badge variant="warning">Receipt unknown</Badge>;
+      }
+      return <Badge variant="secondary">—</Badge>;
+    }
+
+    const snap = statusByMessageId.get(messageId);
+    if (!snap) {
+      return <Badge variant="warning">Not observed</Badge>;
+    }
+
+    const label = mapMessageStatusLabel(snap.status, snap.statusLabel);
+    if (!label) {
+      return <Badge variant="secondary">Observed</Badge>;
+    }
+
+    const lower = label.toLowerCase();
+    if (lower === 'error') return <Badge variant="destructive">{label}</Badge>;
+    if (lower === 'delivered' || lower === 'read' || lower === 'played') return <Badge variant="success">{label}</Badge>;
+    if (lower === 'pending' || lower === 'server') return <Badge variant="warning">{label}</Badge>;
+    return <Badge variant="secondary">{label}</Badge>;
+  };
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Logs</h1>
-        <p className="text-muted-foreground">Inspect sent and failed delivery attempts.</p>
+        <p className="text-muted-foreground">
+          Delivery history after sending. Queue shows editable pending messages; logs show what already happened.
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Use the <span className="font-medium">WhatsApp</span> column for real-time receipt evidence (server/delivered/read), not just internal status.
+        </p>
       </div>
 
       <Card>
@@ -74,6 +140,7 @@ const LogsPage = () => {
                   <TableHeaderCell>Status</TableHeaderCell>
                   <TableHeaderCell>Target</TableHeaderCell>
                   <TableHeaderCell className="hidden md:table-cell">Schedule</TableHeaderCell>
+                  <TableHeaderCell className="hidden md:table-cell">WhatsApp</TableHeaderCell>
                   <TableHeaderCell className="hidden lg:table-cell">Media</TableHeaderCell>
                   <TableHeaderCell className="hidden lg:table-cell">Message</TableHeaderCell>
                   <TableHeaderCell>Time</TableHeaderCell>
@@ -93,6 +160,9 @@ const LogsPage = () => {
                     <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>
                     <TableCell className="hidden text-muted-foreground md:table-cell">
                       {log.schedule?.name || log.schedule_id || '—'}
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell">
+                      {getReceiptBadge(log)}
                     </TableCell>
                     <TableCell className="hidden lg:table-cell">
                       {log.media_type ? (
@@ -119,7 +189,7 @@ const LogsPage = () => {
                 ))}
                 {logs.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                       No logs found.
                     </TableCell>
                   </TableRow>

@@ -49,18 +49,9 @@ export const navSections: NavSection[] = [
     ]
   },
   {
-    title: 'Settings Tree',
+    title: 'Settings',
     items: [
-      {
-        label: 'Settings',
-        to: '/settings',
-        icon: Settings,
-        children: [
-          { label: 'Retention', to: '/settings#retention' },
-          { label: 'Delays', to: '/settings#delays' },
-          { label: 'Dedupe', to: '/settings#dedupe' }
-        ]
-      }
+      { label: 'Settings', to: '/settings', icon: Settings }
     ]
   }
 ];

@@ -19,7 +19,6 @@ type MessageStatusSnapshot = {
   updatedAtMs: number;
 };
 
-<<<<<<< HEAD
 type ChannelSummary = {
   id: string;
   jid: string;
@@ -45,8 +44,6 @@ type CachedNewsletterChat = {
   updatedAtMs: number;
 };
 
-=======
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 const redactSensitiveText = (value?: string | null) => {
   const text = String(value || '');
   if (!text) return '';
@@ -56,7 +53,25 @@ const redactSensitiveText = (value?: string | null) => {
     .slice(0, 320);
 };
 
-<<<<<<< HEAD
+const mapMessageStatusLabel = (status: number | null) => {
+  switch (status) {
+    case 0:
+      return 'error';
+    case 1:
+      return 'pending';
+    case 2:
+      return 'server';
+    case 3:
+      return 'delivered';
+    case 4:
+      return 'read';
+    case 5:
+      return 'played';
+    default:
+      return null;
+  }
+};
+
 const normalizeNewsletterJid = (value: unknown, options?: { allowNumeric?: boolean }) => {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -149,8 +164,6 @@ const extractChannelArray = (input: unknown): unknown[] => {
   return maybeSingle ? [record] : [];
 };
 
-=======
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 class WhatsAppClient {
   socket: WASocket | null;
   status: WhatsAppStatus;
@@ -202,7 +215,6 @@ class WhatsAppClient {
   recentSentMessages: Map<string, proto.IWebMessageInfo>;
   recentMessageStatuses: Map<string, MessageStatusSnapshot>;
   newsletterChatCache: Map<string, CachedNewsletterChat>;
-  meJid: string | null;
   meJid: string | null;
   meName: string | null;
   hasConnectedOnce: boolean;
@@ -616,11 +628,6 @@ class WhatsAppClient {
           this.leaseExpiresAt = lease.expiresAt;
 
           if (lease.supported && !lease.ok) {
-<<<<<<< HEAD
-            if (allowAutoTakeover && authStore.forceAcquireLease) {
-              logger.warn({ holder: lease.ownerId }, 'Lease held; attempting auto-takeover');
-              try {
-=======
             // Auto-takeover: force acquire the lease immediately
             // This prevents users from having to manually click "Take Over"
             logger.warn({ holder: lease.ownerId }, 'Lease held, attempting auto-takeover...');
@@ -628,8 +635,7 @@ class WhatsAppClient {
             this.lastError = null; // Don't show confusing messages to users
 
             try {
-              if (authStore.forceAcquireLease) {
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
+              if (allowAutoTakeover && authStore.forceAcquireLease) {
                 const takeover = await authStore.forceAcquireLease(this.instanceId, 90_000);
                 if (takeover.ok) {
                   logger.info('Auto-takeover successful');
@@ -646,18 +652,18 @@ class WhatsAppClient {
                   this.scheduleReconnect(15000 + Math.random() * 5000);
                   return;
                 }
-              } catch (error) {
-                logger.warn({ error }, 'Auto-takeover failed; skipping connect until lease is available');
+              } else {
+                logger.warn({ holder: lease.ownerId }, 'Lease held by another instance; skipping connect');
                 this.status = 'conflict';
-                this.lastError = 'Failed to acquire WhatsApp lease.';
+                this.lastError = 'Another instance currently holds the WhatsApp lease.';
                 await authStore.updateStatus('conflict');
                 this.scheduleReconnect(15000 + Math.random() * 5000);
                 return;
               }
-            } else {
-              logger.warn({ holder: lease.ownerId }, 'Lease held by another instance; skipping connect');
+            } catch (error) {
+              logger.warn({ error }, 'Auto-takeover failed; skipping connect until lease is available');
               this.status = 'conflict';
-              this.lastError = 'Another instance currently holds the WhatsApp lease.';
+              this.lastError = 'Failed to acquire WhatsApp lease.';
               await authStore.updateStatus('conflict');
               this.scheduleReconnect(15000 + Math.random() * 5000);
               return;
@@ -927,7 +933,7 @@ class WhatsAppClient {
             const status = entry?.update?.status;
             if (typeof status !== 'number') continue;
 
-            const statusLabel = null;
+            const statusLabel = mapMessageStatusLabel(status);
             const snapshot: MessageStatusSnapshot = {
               status,
               statusLabel,
@@ -1092,7 +1098,7 @@ class WhatsAppClient {
           if (typeof status !== 'number') continue;
           if (status < minStatus) continue;
 
-          const statusLabel = null;
+          const statusLabel = mapMessageStatusLabel(status);
           const snapshot: MessageStatusSnapshot = {
             status,
             statusLabel,

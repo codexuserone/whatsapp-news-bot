@@ -49,15 +49,15 @@ const runScheduleOnce = async (
     logger.info({ scheduleId }, 'Skipping schedule run - already in progress locally');
     return;
   }
-  
+
   const supabase = getSupabaseClient();
   if (!supabase) {
     logger.warn({ scheduleId }, 'Supabase not available, skipping schedule run');
     return;
   }
-  
+
   scheduleInFlight.set(scheduleId, true);
-  
+
   try {
     // Use distributed lock to prevent multiple instances from running the same schedule
     const lockResult = await withScheduleLock(
@@ -71,7 +71,7 @@ const runScheduleOnce = async (
       },
       { timeoutMs: 300000, skipIfLocked: true } // 5 minute lock timeout
     );
-    
+
     if (lockResult.skipped) {
       logger.info({ scheduleId, reason: lockResult.reason }, 'Skipping schedule run - distributed lock held');
     } else if (lockResult.result) {
@@ -98,7 +98,6 @@ const parseBatchTimes = (value: unknown): string[] => {
   return Array.from(seen).sort();
 };
 
-<<<<<<< HEAD
 const normalizeCronExpression = (value: unknown): string | null => {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -106,8 +105,6 @@ const normalizeCronExpression = (value: unknown): string | null => {
   return normalized || null;
 };
 
-=======
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 const toDailyCronExpression = (time: string) => {
   const [hour, minute] = time.split(':').map((part) => Number(part));
   return `${minute} ${hour} * * *`;
@@ -166,15 +163,15 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
   }
   const supabase = getSupabaseClient();
   if (!supabase) return;
-  
+
   // Check WhatsApp connection before triggering
   const status = whatsappClient?.getStatus?.();
   if (!status || status.status !== 'connected') {
-    logger.warn({ feedId, whatsappStatus: status?.status || 'unknown' }, 
+    logger.warn({ feedId, whatsappStatus: status?.status || 'unknown' },
       'Skipping immediate schedules - WhatsApp not connected');
     return;
   }
-  
+
   try {
     const { data: schedules, error } = await supabase
       .from('schedules')
@@ -185,14 +182,10 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
     if (error) throw error;
 
     const immediateSchedules = (schedules || []).filter(
-<<<<<<< HEAD
-      (schedule: ScheduleRow) => getDeliveryMode(schedule) !== 'batched'
-=======
       (schedule: ScheduleRow) => getDeliveryMode(schedule) !== 'batched' && !schedule.cron_expression
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
     );
     logger.info({ feedId, count: immediateSchedules.length }, 'Triggering immediate schedules');
-    
+
     for (const schedule of immediateSchedules) {
       await runScheduleOnce(schedule.id, whatsappClient, { skipFeedRefresh: true });
     }
@@ -207,8 +200,22 @@ const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
     logger.warn('Supabase not available, skipping feed polling');
     return;
   }
-  
+
   try {
+    const { data: activeSchedules, error: schedulesError } = await supabase
+      .from('schedules')
+      .select('feed_id')
+      .eq('active', true)
+      .not('feed_id', 'is', null);
+
+    if (schedulesError) throw schedulesError;
+
+    const activeFeedIds = new Set(
+      (activeSchedules || [])
+        .map((schedule: { feed_id?: string | null }) => schedule.feed_id)
+        .filter(Boolean) as string[]
+    );
+
     const { data: feeds, error } = await supabase
       .from('feeds')
       .select('*')
@@ -216,14 +223,24 @@ const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
 
     if (error) throw error;
 
-    for (const feed of feeds || []) {
+    const feedsInUse = (feeds || []).filter((feed: { id?: string }) => {
+      const id = String(feed.id || '');
+      return Boolean(id && activeFeedIds.has(id));
+    });
+
+    if (!feedsInUse.length) {
+      logger.info('No active feeds linked to active automations; skipping feed polling setup');
+      return;
+    }
+
+    for (const feed of feedsInUse) {
       const intervalMs = Math.max(feed.fetch_interval || 300, 60) * 1000;
 
       const scheduleNext = (delayMs: number) => {
         const timeout = setTimeout(() => {
           void handler();
         }, Math.max(delayMs, 1000));
-        feedIntervals.set(feed.id, timeout);
+        feedIntervals.set(feed.id, timeout as unknown as NodeJS.Timeout);
       };
 
       const handler = async () => {
@@ -266,7 +283,7 @@ const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
     logger.warn('Supabase not available, skipping scheduled senders');
     return;
   }
-  
+
   try {
     const { data: schedules, error } = await supabase
       .from('schedules')
@@ -307,7 +324,6 @@ const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
         continue;
       }
 
-<<<<<<< HEAD
       const cronExpression = normalizeCronExpression(schedule.cron_expression);
       if (cronExpression) {
         if (!cron.validate(cronExpression)) {
@@ -315,9 +331,6 @@ const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
           await supabase.from('schedules').update({ next_run_at: null }).eq('id', schedule.id);
           continue;
         }
-=======
-      if (schedule.cron_expression) {
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
         try {
           const job = cron.schedule(
             cronExpression,
@@ -326,11 +339,7 @@ const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
           );
           scheduleJobs.set(`${schedule.id}:cron`, job);
 
-<<<<<<< HEAD
           const nextRunAt = computeNextRunAt(cronExpression, timezone);
-=======
-          const nextRunAt = computeNextRunAt(schedule.cron_expression, timezone);
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
           if (nextRunAt) {
             await supabase
               .from('schedules')
@@ -353,7 +362,7 @@ const initSchedulers = async (whatsappClient?: WhatsAppClient) => {
     logger.warn('Schedulers are disabled via DISABLE_SCHEDULERS');
     return;
   }
-  
+
   // Cleanup stale locks on startup
   const supabase = getSupabaseClient();
   if (supabase) {
@@ -362,7 +371,7 @@ const initSchedulers = async (whatsappClient?: WhatsAppClient) => {
       logger.info({ cleanedCount }, 'Cleaned up stale schedule locks');
     }
   }
-  
+
   await scheduleFeedPolling(whatsappClient);
   await scheduleSenders(whatsappClient);
 };

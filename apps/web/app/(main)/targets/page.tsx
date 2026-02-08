@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
@@ -21,7 +21,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from '@/components/ui/alert-dialog';
-import { Target as TargetIcon, Users, Radio, MessageSquare, Download, Trash2, AlertTriangle, Loader2 } from 'lucide-react';
+import { Target as TargetIcon, Users, Radio, MessageSquare, Trash2, AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
 
 const TYPE_BADGES: Record<
   Target['type'],
@@ -31,6 +31,19 @@ const TYPE_BADGES: Record<
   group: { label: 'Group', variant: 'success', icon: Users },
   channel: { label: 'Channel', variant: 'default', icon: Radio },
   status: { label: 'Status', variant: 'warning', icon: Radio }
+};
+
+type SyncTargetsResult = {
+  ok: boolean;
+  discovered: {
+    groups: number;
+    channels: number;
+    status: number;
+  };
+  candidates: number;
+  inserted: number;
+  updated: number;
+  unchanged: number;
 };
 
 type TargetPayload = {
@@ -43,10 +56,12 @@ type TargetPayload = {
 
 const TargetsPage = () => {
   const queryClient = useQueryClient();
+  const autoSyncTriggered = useRef(false);
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | Target['type']>('all');
   const [deleteTarget, setDeleteTarget] = useState<Target | null>(null);
-  const [importing, setImporting] = useState(false);
+  const [individualName, setIndividualName] = useState('');
+  const [individualPhone, setIndividualPhone] = useState('');
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
     queryKey: ['targets'],
@@ -72,15 +87,33 @@ const TargetsPage = () => {
   });
 
   const isConnected = waStatus?.status === 'connected';
-  const existingJids = new Set(targets.map((t) => t.phone_number));
+
+  const syncTargets = useMutation({
+    mutationFn: () => api.post<SyncTargetsResult>('/api/targets/sync', { includeStatus: true }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+    }
+  });
 
   const addTarget = useMutation({
     mutationFn: (payload: TargetPayload) => api.post('/api/targets', payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] })
+    onSuccess: () => {
+      setIndividualName('');
+      setIndividualPhone('');
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+    }
   });
 
+  useEffect(() => {
+    if (!isConnected || autoSyncTriggered.current) return;
+    autoSyncTriggered.current = true;
+    syncTargets.mutate();
+  }, [isConnected, syncTargets]);
+
   const updateTarget = useMutation({
-    mutationFn: ({ id, ...payload }: { id: string } & Partial<TargetPayload>) => api.put(`/api/targets/${id}`, payload),
+    mutationFn: ({ id, payload }: { id: string; payload: TargetPayload }) => api.put(`/api/targets/${id}`, payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] })
   });
 
@@ -92,165 +125,124 @@ const TargetsPage = () => {
     }
   });
 
-  const importAllGroups = async () => {
-    setImporting(true);
-    try {
-      const newGroups = waGroups.filter((g) => !existingJids.has(g.jid));
-      for (const group of newGroups) {
-        await addTarget.mutateAsync({
-          name: group.name,
-          phone_number: group.jid,
-          type: 'group',
-          active: true,
-          notes: `${group.size} members`
-        });
-      }
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const importAllChannels = async () => {
-    setImporting(true);
-    try {
-      const newChannels = waChannels.filter((c) => !existingJids.has(c.jid));
-      for (const channel of newChannels) {
-        await addTarget.mutateAsync({
-          name: channel.name,
-          phone_number: channel.jid,
-          type: 'channel',
-          active: true,
-          notes: `${channel.subscribers} subscribers`
-        });
-      }
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const addStatusBroadcast = () => {
-    if (!existingJids.has('status@broadcast')) {
-      addTarget.mutate({
-        name: 'My Status',
-        phone_number: 'status@broadcast',
-        type: 'status',
-        active: true,
-        notes: 'Posts to your WhatsApp Status'
-      });
-    }
-  };
-
-  const filteredTargets = targets.filter((t) => {
+  const filteredTargets = targets.filter((target) => {
     const matchesSearch =
       !search ||
-      t.name.toLowerCase().includes(search.toLowerCase()) ||
-      t.phone_number.toLowerCase().includes(search.toLowerCase());
-    const matchesType = filterType === 'all' || t.type === filterType;
+      target.name.toLowerCase().includes(search.toLowerCase()) ||
+      target.phone_number.toLowerCase().includes(search.toLowerCase());
+    const matchesType = filterType === 'all' || target.type === filterType;
     return matchesSearch && matchesType;
   });
 
   const counts: Record<'all' | Target['type'], number> = {
     all: targets.length,
-    group: targets.filter((t) => t.type === 'group').length,
-    channel: targets.filter((t) => t.type === 'channel').length,
-    status: targets.filter((t) => t.type === 'status').length,
-    individual: targets.filter((t) => t.type === 'individual').length
+    group: targets.filter((target) => target.type === 'group').length,
+    channel: targets.filter((target) => target.type === 'channel').length,
+    status: targets.filter((target) => target.type === 'status').length,
+    individual: targets.filter((target) => target.type === 'individual').length
   };
-
-  const availableGroups = waGroups.filter((g) => !existingJids.has(g.jid));
-  const availableChannels = waChannels.filter((c) => !existingJids.has(c.jid));
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Targets</h1>
-        <p className="text-muted-foreground">Import WhatsApp groups and channels as message destinations.</p>
+        <p className="text-muted-foreground">Destinations are synced automatically from your connected WhatsApp account.</p>
       </div>
 
-      {!isConnected && (
+      {!isConnected ? (
         <Card className="border-warning/50 bg-warning/5">
           <CardContent className="flex items-start gap-4 pt-6">
             <div className="rounded-full bg-warning/20 p-2">
               <AlertTriangle className="h-5 w-5 text-warning-foreground" />
             </div>
             <div className="flex-1">
-              <h3 className="font-medium">WhatsApp Not Connected</h3>
-              <p className="text-sm text-muted-foreground mt-1">
-                Connect WhatsApp first to import groups and channels automatically.
+              <h3 className="font-medium">WhatsApp not connected</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Connect WhatsApp once. Groups/channels/status will sync here automatically.
               </p>
               <Button variant="outline" size="sm" className="mt-3" asChild>
-                <Link href="/whatsapp">Go to WhatsApp Console</Link>
+                <Link href="/whatsapp">Open WhatsApp Console</Link>
               </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <RefreshCw className="h-5 w-5" />
+              Auto Sync
+            </CardTitle>
+            <CardDescription>We discover your groups/channels and keep target names up to date.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Groups found</p>
+                <p className="text-xl font-semibold">{waGroups.length}</p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Channels found</p>
+                <p className="text-xl font-semibold">{waChannels.length}</p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Targets saved</p>
+                <p className="text-xl font-semibold">{targets.length}</p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={() => syncTargets.mutate()} disabled={syncTargets.isPending}>
+                {syncTargets.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Sync now
+              </Button>
+
+              {syncTargets.isSuccess ? (
+                <p className="text-sm text-muted-foreground">
+                  Added {syncTargets.data?.inserted || 0}, updated {syncTargets.data?.updated || 0}, unchanged{' '}
+                  {syncTargets.data?.unchanged || 0}
+                </p>
+              ) : null}
             </div>
           </CardContent>
         </Card>
       )}
 
-      {isConnected && (
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="rounded-full bg-primary/10 p-2">
-                    <Users className="h-5 w-5 text-primary" />
-                  </div>
-                  <div>
-                    <p className="font-medium">Groups</p>
-                    <p className="text-sm text-muted-foreground">{availableGroups.length} to import</p>
-                  </div>
-                </div>
-                <Button size="sm" onClick={importAllGroups} disabled={importing || availableGroups.length === 0}>
-                  {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="rounded-full bg-primary/10 p-2">
-                    <Radio className="h-5 w-5 text-primary" />
-                  </div>
-                  <div>
-                    <p className="font-medium">Channels</p>
-                    <p className="text-sm text-muted-foreground">{availableChannels.length} to import</p>
-                  </div>
-                </div>
-                <Button size="sm" onClick={importAllChannels} disabled={importing || availableChannels.length === 0}>
-                  {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="rounded-full bg-primary/10 p-2">
-                    <Radio className="h-5 w-5 text-primary" />
-                  </div>
-                  <div>
-                    <p className="font-medium">Status</p>
-                    <p className="text-sm text-muted-foreground">Broadcast to contacts</p>
-                  </div>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={addStatusBroadcast}
-                  disabled={existingJids.has('status@broadcast')}
-                >
-                  {existingJids.has('status@broadcast') ? 'Added' : 'Add'}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+      <Card>
+        <CardHeader>
+          <CardTitle>Add individual contact</CardTitle>
+          <CardDescription>Optional: add a direct number target for one-to-one testing or alerts.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Input
+              value={individualName}
+              onChange={(event) => setIndividualName(event.target.value)}
+              placeholder="Contact name"
+            />
+            <Input
+              value={individualPhone}
+              onChange={(event) => setIndividualPhone(event.target.value)}
+              placeholder="Phone number (e.g. +1 555 123 4567)"
+            />
+          </div>
+          <Button
+            onClick={() =>
+              addTarget.mutate({
+                name: individualName.trim(),
+                phone_number: individualPhone.trim(),
+                type: 'individual',
+                active: true,
+                notes: null
+              })
+            }
+            disabled={addTarget.isPending || !individualName.trim() || !individualPhone.trim()}
+          >
+            {addTarget.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Add contact
+          </Button>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -262,15 +254,14 @@ const TargetsPage = () => {
               </CardTitle>
               <CardDescription>{targets.length} target{targets.length !== 1 ? 's' : ''} configured</CardDescription>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Input
-                placeholder="Search targets..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-48"
-              />
-            </div>
+            <Input
+              placeholder="Search targets..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              className="w-full sm:w-56"
+            />
           </div>
+
           <div className="flex flex-wrap gap-1 pt-2">
             {(['all', 'group', 'channel', 'status', 'individual'] as const).map((type) => (
               <Button
@@ -293,12 +284,8 @@ const TargetsPage = () => {
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : filteredTargets.length === 0 ? (
-            <div className="text-center py-8">
-              <p className="text-muted-foreground">
-                {targets.length === 0
-                  ? 'No targets yet. Import groups from WhatsApp above.'
-                  : 'No targets match your search.'}
-              </p>
+            <div className="py-8 text-center text-muted-foreground">
+              {targets.length === 0 ? 'No targets yet. Connect WhatsApp and run sync.' : 'No targets match your search.'}
             </div>
           ) : (
             <Table>
@@ -307,8 +294,7 @@ const TargetsPage = () => {
                   <TableHeaderCell className="w-12">Active</TableHeaderCell>
                   <TableHeaderCell>Name</TableHeaderCell>
                   <TableHeaderCell>Type</TableHeaderCell>
-                  <TableHeaderCell className="hidden md:table-cell">JID / Phone</TableHeaderCell>
-                  <TableHeaderCell className="hidden lg:table-cell">Notes</TableHeaderCell>
+                  <TableHeaderCell className="hidden md:table-cell">Address</TableHeaderCell>
                   <TableHeaderCell className="w-20">Actions</TableHeaderCell>
                 </TableRow>
               </TableHeader>
@@ -318,7 +304,18 @@ const TargetsPage = () => {
                     <TableCell>
                       <Checkbox
                         checked={target.active}
-                        onCheckedChange={(checked) => updateTarget.mutate({ id: target.id, active: checked === true })}
+                        onCheckedChange={(checked) =>
+                          updateTarget.mutate({
+                            id: target.id,
+                            payload: {
+                              name: target.name,
+                              phone_number: target.phone_number,
+                              type: target.type,
+                              active: checked === true,
+                              notes: target.notes || null
+                            }
+                          })
+                        }
                       />
                     </TableCell>
                     <TableCell className="font-medium">{target.name}</TableCell>
@@ -327,11 +324,8 @@ const TargetsPage = () => {
                         {TYPE_BADGES[target.type]?.label || target.type}
                       </Badge>
                     </TableCell>
-                    <TableCell className="hidden font-mono text-xs text-muted-foreground max-w-[200px] truncate md:table-cell">
+                    <TableCell className="hidden max-w-[280px] truncate text-xs text-muted-foreground md:table-cell">
                       {target.phone_number}
-                    </TableCell>
-                    <TableCell className="hidden text-sm text-muted-foreground max-w-[150px] truncate lg:table-cell">
-                      {target.notes || '-'}
                     </TableCell>
                     <TableCell>
                       <Button
@@ -356,8 +350,7 @@ const TargetsPage = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Target</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete &quot;{deleteTarget?.name}&quot;? This only removes the target from this app and will not
-              delete the WhatsApp group or chat.
+              Delete &quot;{deleteTarget?.name}&quot; from this app? This does not remove the real WhatsApp chat/group/channel.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

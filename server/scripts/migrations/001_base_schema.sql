@@ -203,23 +203,31 @@ END;
 $$ language 'plpgsql';
 
 -- Create triggers for updated_at
+-- Create triggers for updated_at
+DROP TRIGGER IF EXISTS update_feeds_updated_at ON feeds;
 CREATE TRIGGER update_feeds_updated_at BEFORE UPDATE ON feeds
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_templates_updated_at ON templates;
 CREATE TRIGGER update_templates_updated_at BEFORE UPDATE ON templates
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_targets_updated_at ON targets;
 CREATE TRIGGER update_targets_updated_at BEFORE UPDATE ON targets
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_schedules_updated_at ON schedules;
 CREATE TRIGGER update_schedules_updated_at BEFORE UPDATE ON schedules
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_message_logs_updated_at ON message_logs;
 CREATE TRIGGER update_message_logs_updated_at BEFORE UPDATE ON message_logs
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_settings_updated_at ON settings;
 CREATE TRIGGER update_settings_updated_at BEFORE UPDATE ON settings
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_auth_state_updated_at ON auth_state;
 CREATE TRIGGER update_auth_state_updated_at BEFORE UPDATE ON auth_state
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

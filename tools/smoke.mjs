@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import net from 'net';
+import { promises as fs } from 'fs';
 
 import { once } from 'events';
 
@@ -101,9 +102,8 @@ const main = async () => {
   // Build + typecheck
   await run('npm', ['run', 'typecheck', '--prefix', 'server']);
   await run('npm', ['run', 'build', '--prefix', 'server']);
-  await run('npm', ['run', 'build', '--prefix', 'client']);
   await run('npm', ['run', 'lint', '--prefix', 'apps/web']);
-  await run('npm', ['run', 'build', '--prefix', 'apps/web']);
+  await run('npm', ['run', 'build:web:static']);
 
   // API smoke
   const apiPort = await findFreePort(10001);
@@ -161,28 +161,11 @@ const main = async () => {
     await stopProcess(api);
   }
 
-  // Web smoke (start)
-  const webPort = await findFreePort(3001);
-  const nextBin = path.join(process.cwd(), 'apps', 'web', 'node_modules', 'next', 'dist', 'bin', 'next');
-  const web = spawn('node', [nextBin, 'start', '-p', webPort], {
-    cwd: path.join(process.cwd(), 'apps', 'web'),
-    env: { ...process.env, NODE_ENV: 'production' },
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-  web.stdout.on('data', (d) => process.stdout.write(d));
-  web.stderr.on('data', (d) => process.stderr.write(d));
-
-  try {
-    await waitForOkOrExit(web, `http://localhost:${webPort}/`);
-    const { status, text } = await fetchText(`http://localhost:${webPort}/`);
-    if (status !== 200) {
-      throw new Error(`Web smoke failed: / returned ${status}`);
-    }
-    if (!text.includes('WhatsApp News Bot')) {
-      throw new Error('Web smoke failed: expected app title not found');
-    }
-  } finally {
-    await stopProcess(web);
+  // Static export smoke
+  const staticIndexPath = path.join(process.cwd(), 'server', 'public', 'index.html');
+  const staticHtml = await fs.readFile(staticIndexPath, 'utf8');
+  if (!staticHtml.includes('WhatsApp News Bot')) {
+    throw new Error('Static export smoke failed: expected app title not found in server/public/index.html');
   }
 
   console.log('SMOKE OK');

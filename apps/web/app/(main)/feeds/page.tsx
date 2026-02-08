@@ -6,14 +6,15 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Feed } from '@/lib/types';
+import type { Feed, Schedule } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
-import { Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2, RefreshCw } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2, RefreshCw, PauseCircle, PlayCircle } from 'lucide-react';
 
 const schema = z.object({
   name: z.string().min(1),
@@ -37,6 +38,7 @@ type FeedTestResult = {
 const FeedsPage = () => {
   const queryClient = useQueryClient();
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
+  const { data: schedules = [] } = useQuery<Schedule[]>({ queryKey: ['schedules'], queryFn: () => api.get('/api/schedules') });
   const [active, setActive] = useState<Feed | null>(null);
   const [testResult, setTestResult] = useState<FeedTestResult | null>(null);
   const [testLoading, setTestLoading] = useState(false);
@@ -103,6 +105,23 @@ const FeedsPage = () => {
     onError: (error: unknown) => alert(`Failed to refresh feed: ${getErrorMessage(error)}`)
   });
 
+  const toggleFeedActive = useMutation({
+    mutationFn: (feed: Feed) =>
+      api.put(`/api/feeds/${feed.id}`, {
+        name: feed.name,
+        url: feed.url,
+        type: feed.type,
+        active: !feed.active,
+        fetch_interval: feed.fetch_interval || 900
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['feeds'] });
+      queryClient.invalidateQueries({ queryKey: ['schedules'] });
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+    },
+    onError: (error: unknown) => alert(`Failed to update feed state: ${getErrorMessage(error)}`)
+  });
+
 
   const testFeedUrl = async () => {
     const url = form.getValues('url');
@@ -126,12 +145,22 @@ const FeedsPage = () => {
     saveFeed.mutate(values);
   };
 
+  const activeAutomationCountByFeedId = React.useMemo(() => {
+    const map = new Map<string, number>();
+    for (const schedule of schedules) {
+      if (!schedule?.active || !schedule?.feed_id) continue;
+      const feedId = String(schedule.feed_id);
+      map.set(feedId, (map.get(feedId) || 0) + 1);
+    }
+    return map;
+  }, [schedules]);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Feeds</h1>
-          <p className="text-muted-foreground">Add any feed URL. Type and variables are auto-detected.</p>
+          <p className="text-muted-foreground">Add feed URLs. Active automations fetch these automatically; use Fetch now only when needed.</p>
         </div>
       </div>
 
@@ -178,8 +207,28 @@ const FeedsPage = () => {
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="fetch_interval">Check every (seconds)</Label>
-                    <Input id="fetch_interval" type="number" {...form.register('fetch_interval', { valueAsNumber: true })} min={300} step={60} />
+                    <Label htmlFor="fetch_interval">Auto-check interval</Label>
+                    <Controller
+                      control={form.control}
+                      name="fetch_interval"
+                      render={({ field }) => {
+                        const value = String(field.value || 900);
+                        return (
+                          <Select value={value} onValueChange={(next) => field.onChange(Number(next))}>
+                            <SelectTrigger id="fetch_interval">
+                              <SelectValue placeholder="Select interval" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="300">Every 5 minutes</SelectItem>
+                              <SelectItem value="900">Every 15 minutes</SelectItem>
+                              <SelectItem value="1800">Every 30 minutes</SelectItem>
+                              <SelectItem value="3600">Every 60 minutes</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        );
+                      }}
+                    />
+                    <p className="text-xs text-muted-foreground">Used when this feed is attached to active automations.</p>
                   </div>
                   <Controller
                     control={form.control}
@@ -295,6 +344,9 @@ const FeedsPage = () => {
                       <p className="text-xs text-muted-foreground truncate">{feed.url}</p>
                       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                         <span>
+                          Active automations: {activeAutomationCountByFeedId.get(feed.id) || 0}
+                        </span>
+                        <span>
                           Last fetched:{' '}
                           {feed.last_fetched_at ? new Date(feed.last_fetched_at).toLocaleString() : '—'}
                         </span>
@@ -321,9 +373,18 @@ const FeedsPage = () => {
                     <Button size="sm" variant="outline" onClick={() => selectFeed(feed)}>
                       <Pencil className="mr-1 h-3 w-3" /> Edit
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => toggleFeedActive.mutate(feed)}
+                      disabled={toggleFeedActive.isPending}
+                    >
+                      {feed.active ? <PauseCircle className="mr-1 h-3 w-3" /> : <PlayCircle className="mr-1 h-3 w-3" />}
+                      {feed.active ? 'Pause feed' : 'Resume feed'}
+                    </Button>
                     <Button size="sm" variant="outline" onClick={() => refreshFeed.mutate(feed.id)} disabled={refreshFeed.isPending}>
                       {refreshFeed.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-1 h-3 w-3" />}
-                      Refresh
+                      Fetch now
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => deleteFeed.mutate(feed.id)} className="text-destructive hover:text-destructive">
                       <Trash2 className="h-3 w-3" />

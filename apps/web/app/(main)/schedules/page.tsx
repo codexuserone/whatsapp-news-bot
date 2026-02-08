@@ -18,6 +18,19 @@ import { CalendarClock, Play, Pencil, Trash2, Loader2 } from 'lucide-react';
 
 const pad2 = (value: number) => String(value).padStart(2, '0');
 
+const COMMON_TIMEZONES = [
+  'UTC',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Toronto',
+  'Europe/London',
+  'Europe/Paris',
+  'Asia/Jerusalem',
+  'Asia/Dubai'
+];
+
 const schema = z.object({
   name: z.string().min(1),
   timing_mode: z.enum(['on_new', 'scheduled']).default('on_new'),
@@ -74,6 +87,10 @@ const SchedulesPage = () => {
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
+  const { data: settings } = useQuery<{ default_timezone?: string }>({
+    queryKey: ['settings'],
+    queryFn: () => api.get('/api/settings')
+  });
   const [active, setActive] = useState<Schedule | null>(null);
   const activeTargets = targets.filter((target) => target.active);
 
@@ -90,6 +107,8 @@ const SchedulesPage = () => {
       return 'UTC';
     }
   }, []);
+
+  const defaultTimezone = settings?.default_timezone || localTimezone;
 
   const deriveTimingFromCron = React.useCallback((cronExpression?: string | null) => {
     const cron = String(cronExpression || '').trim();
@@ -165,11 +184,14 @@ const SchedulesPage = () => {
   }, []);
 
   const describeSchedule = (schedule: Schedule) => {
+    const mode = schedule.delivery_mode === 'batch' || schedule.delivery_mode === 'batched' ? 'batch' : 'immediate';
+    const batchTimes = Array.isArray(schedule.batch_times) ? schedule.batch_times.filter(Boolean) : [];
     const cron = String(schedule.cron_expression || '').trim();
-    if (!cron) return 'On new items';
-    if (cron === '*/15 * * * *') return 'Every 15 minutes';
-    if (cron === '*/30 * * * *') return 'Every 30 minutes';
-    if (cron === '0 * * * *') return 'Hourly';
+    const modeSuffix = mode === 'batch' ? (batchTimes.length ? ` (batch: ${batchTimes.join(', ')})` : ' (batch)') : '';
+    if (!cron) return `On new items${modeSuffix}`;
+    if (cron === '*/15 * * * *') return `Every 15 minutes${modeSuffix}`;
+    if (cron === '*/30 * * * *') return `Every 30 minutes${modeSuffix}`;
+    if (cron === '0 * * * *') return `Hourly${modeSuffix}`;
 
     const parts = cron.split(/\s+/);
     if (parts.length === 5) {
@@ -180,7 +202,7 @@ const SchedulesPage = () => {
       const dow = parts[4] || '';
       if (Number.isFinite(minute) && Number.isFinite(hour) && dom === '*' && month === '*') {
         const timeLabel = `${pad2(hour)}:${pad2(minute)}`;
-        if (dow === '*') return `Daily at ${timeLabel}`;
+        if (dow === '*') return `Daily at ${timeLabel}${modeSuffix}`;
         const days: Record<string, string> = {
           '0': 'Sunday',
           '1': 'Monday',
@@ -191,10 +213,10 @@ const SchedulesPage = () => {
           '6': 'Saturday'
         };
         const dayLabel = days[dow];
-        if (dayLabel) return `Weekly on ${dayLabel} at ${timeLabel}`;
+        if (dayLabel) return `Weekly on ${dayLabel} at ${timeLabel}${modeSuffix}`;
       }
     }
-    return 'Scheduled';
+    return `Scheduled${modeSuffix}`;
   };
 
   const form = useForm<ScheduleFormValues>({
@@ -205,7 +227,7 @@ const SchedulesPage = () => {
       schedule_preset: 'daily',
       time_of_day: '09:00',
       day_of_week: '1',
-      timezone: localTimezone,
+      timezone: defaultTimezone,
       feed_id: '',
       target_ids: [],
       template_id: '',
@@ -233,6 +255,14 @@ const SchedulesPage = () => {
     }
   }, [active, form, localTimezone, deriveTimingFromCron]);
 
+  useEffect(() => {
+    if (active) return;
+    const current = String(form.getValues('timezone') || '').trim();
+    if (!current || current === localTimezone) {
+      form.setValue('timezone', defaultTimezone);
+    }
+  }, [active, defaultTimezone, form, localTimezone]);
+
   const saveSchedule = useMutation({
     mutationFn: (payload: ScheduleApiPayload) =>
       active ? api.put(`/api/schedules/${active.id}`, payload) : api.post('/api/schedules', payload),
@@ -248,6 +278,37 @@ const SchedulesPage = () => {
     mutationFn: (id: string) => api.delete(`/api/schedules/${id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['schedules'] }),
     onError: (error: unknown) => alert(`Failed to delete schedule: ${getErrorMessage(error)}`)
+  });
+
+  const toSchedulePayload = (schedule: Schedule): ScheduleApiPayload | null => {
+    if (!schedule.feed_id || !schedule.template_id || !Array.isArray(schedule.target_ids) || !schedule.target_ids.length) {
+      return null;
+    }
+
+    return {
+      name: schedule.name,
+      cron_expression: schedule.cron_expression || null,
+      timezone: schedule.timezone || defaultTimezone,
+      feed_id: schedule.feed_id,
+      target_ids: schedule.target_ids,
+      template_id: schedule.template_id,
+      active: schedule.active
+    };
+  };
+
+  const toggleScheduleActive = useMutation({
+    mutationFn: (schedule: Schedule) => {
+      const payload = toSchedulePayload(schedule);
+      if (!payload) {
+        throw new Error('Schedule is missing feed, template, or targets; open Edit and save once to normalize it.');
+      }
+      return api.put(`/api/schedules/${schedule.id}`, { ...payload, active: !schedule.active });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['schedules'] });
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+    },
+    onError: (error: unknown) => alert(`Failed to toggle automation: ${getErrorMessage(error)}`)
   });
 
   const dispatchSchedule = useMutation({
@@ -359,6 +420,10 @@ const SchedulesPage = () => {
 
   const timingMode = form.watch('timing_mode');
   const schedulePreset = form.watch('schedule_preset');
+  const timezoneOptions = React.useMemo(
+    () => Array.from(new Set([defaultTimezone, ...COMMON_TIMEZONES])),
+    [defaultTimezone]
+  );
 
   return (
     <div className="space-y-6">
@@ -496,6 +561,29 @@ const SchedulesPage = () => {
                   )}
                 </div>
               )}
+
+              <div className="space-y-2">
+                <Label htmlFor="timezone">Timezone</Label>
+                <Controller
+                  control={form.control}
+                  name="timezone"
+                  render={({ field }) => (
+                    <Select value={field.value || defaultTimezone} onValueChange={field.onChange}>
+                      <SelectTrigger id="timezone">
+                        <SelectValue placeholder="Select timezone" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {timezoneOptions.map((timezone) => (
+                          <SelectItem key={timezone} value={timezone}>
+                            {timezone}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+                <p className="text-xs text-muted-foreground">Default timezone comes from Settings and can be overridden here.</p>
+              </div>
 
               <p className="text-xs text-muted-foreground">
                 Dispatch sends all feed items since the last run (up to 100). The first run sends the latest item only.
@@ -670,6 +758,14 @@ const SchedulesPage = () => {
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => dispatchSchedule.mutate(schedule.id)} disabled={dispatchSchedule.isPending}>
                       <Play className="mr-1 h-3 w-3" /> Dispatch
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => toggleScheduleActive.mutate(schedule)}
+                      disabled={toggleScheduleActive.isPending || !toSchedulePayload(schedule)}
+                    >
+                      {schedule.active ? 'Pause' : 'Resume'}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => deleteSchedule.mutate(schedule.id)} className="text-destructive hover:text-destructive">
                       <Trash2 className="h-3 w-3" />

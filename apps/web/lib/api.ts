@@ -53,6 +53,17 @@ export const api = {
       }
       return fetchWithTimeout(`${getApiUrl()}${path}`, init).then((res) => handleResponse<T>(res));
     })(),
+  patch: <T = unknown>(path: string, body?: unknown) =>
+    (() => {
+      const init: RequestInit = {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' }
+      };
+      if (body !== undefined) {
+        init.body = JSON.stringify(body);
+      }
+      return fetchWithTimeout(`${getApiUrl()}${path}`, init).then((res) => handleResponse<T>(res));
+    })(),
   delete: <T = unknown>(path: string) =>
     fetchWithTimeout(`${getApiUrl()}${path}`, {
       method: 'DELETE'

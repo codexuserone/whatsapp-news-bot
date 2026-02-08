@@ -82,3 +82,5 @@ async function setupTestSchedule() {
 }
 
 setupTestSchedule().catch(console.error);
+
+export {};

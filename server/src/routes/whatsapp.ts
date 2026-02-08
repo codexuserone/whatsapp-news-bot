@@ -7,10 +7,14 @@ const withTimeout = require('../utils/withTimeout');
 const axios = require('axios');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { getErrorMessage } = require('../utils/errorUtils');
+const { getSupabaseClient } = require('../db/supabase');
+const { normalizeMessageText } = require('../utils/messageText');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const DEFAULT_USER_AGENT =
-  'Mozilla/5.0 (compatible; WhatsAppNewsBot/0.2; +https://example.invalid)';
+  process.env.MEDIA_FETCH_USER_AGENT ||
+  process.env.FEED_USER_AGENT ||
+  'Mozilla/5.0 (compatible; AnashNewsBot/1.0; +https://whatsapp-news-bot-3-69qh.onrender.com)';
 
 const isHttpUrl = (value: string) => {
   try {
@@ -46,6 +50,26 @@ const downloadImageBuffer = async (url: string) => {
   return { buffer, mimetype: contentType };
 };
 
+const parseImageDataUrl = (value: string) => {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([a-zA-Z0-9+/=\s]+)$/);
+  if (!match || !match[1] || !match[2]) {
+    throw badRequest('imageDataUrl must be a valid base64 image data URL');
+  }
+
+  const mimetype = String(match[1]).toLowerCase();
+  const base64 = String(match[2]).replace(/\s+/g, '');
+  const buffer = Buffer.from(base64, 'base64');
+  const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+  if (!buffer.length) {
+    throw badRequest('imageDataUrl is empty');
+  }
+  if (buffer.length > MAX_IMAGE_BYTES) {
+    throw badRequest(`Image too large (${buffer.length} bytes)`);
+  }
+  return { buffer, mimetype };
+};
+
 const whatsappRoutes = () => {
   const router = express.Router();
 
@@ -67,8 +91,43 @@ const whatsappRoutes = () => {
 
   router.get('/channels', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
-    const channels = await whatsapp?.getChannels() || [];
+    const enriched =
+      whatsapp && typeof whatsapp.getChannelsWithDiagnostics === 'function'
+        ? await whatsapp.getChannelsWithDiagnostics()
+        : null;
+    const channels = enriched?.channels || await whatsapp?.getChannels() || [];
     res.json(channels);
+  }));
+
+  router.get('/channels/diagnostics', asyncHandler(async (req: Request, res: Response) => {
+    const whatsapp = req.app.locals.whatsapp;
+    if (!whatsapp) {
+      return res.json({
+        channels: [],
+        diagnostics: {
+          methodsTried: [],
+          methodErrors: [],
+          sourceCounts: { api: 0, cache: 0, metadata: 0 },
+          limitation: 'WhatsApp is not connected.'
+        }
+      });
+    }
+
+    if (typeof whatsapp.getChannelsWithDiagnostics === 'function') {
+      const result = await whatsapp.getChannelsWithDiagnostics();
+      return res.json(result);
+    }
+
+    const channels = await whatsapp.getChannels?.() || [];
+    return res.json({
+      channels,
+      diagnostics: {
+        methodsTried: [],
+        methodErrors: [],
+        sourceCounts: { api: 0, cache: 0, metadata: 0 },
+        limitation: channels.length ? null : 'Channel diagnostics are unavailable in this server build.'
+      }
+    });
   }));
 
   router.post('/disconnect', asyncHandler(async (req: Request, res: Response) => {
@@ -112,10 +171,31 @@ const whatsappRoutes = () => {
   // Send a test message
   router.post('/send-test', validate(schemas.testMessage), asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
-    const { jid, message, imageUrl, confirm } = req.body;
+    const payload = req.body as {
+      jid: string;
+      message?: string | null;
+      linkUrl?: string | null;
+      imageUrl?: string | null;
+      imageDataUrl?: string | null;
+      includeCaption?: boolean;
+      confirm?: boolean;
+    };
 
-    if (!jid || !message) {
-      throw badRequest('jid and message are required');
+    const jid = String(payload.jid || '').trim();
+    const normalizedMessage = normalizeMessageText(String(payload.message || ''));
+    const normalizedLink = String(payload.linkUrl || '').trim();
+    const imageUrl = payload.imageUrl ? String(payload.imageUrl).trim() : null;
+    const imageDataUrl = payload.imageDataUrl ? String(payload.imageDataUrl).trim() : null;
+    const confirm = payload.confirm;
+    const includeCaption = payload.includeCaption !== false;
+    const captionText = [normalizedMessage, normalizedLink].filter(Boolean).join('\n').trim();
+
+    if (!jid) {
+      throw badRequest('jid is required');
+    }
+
+    if (!captionText && !imageUrl && !imageDataUrl) {
+      throw badRequest('message, linkUrl, imageUrl, or imageDataUrl is required');
     }
 
     if (whatsapp?.getStatus()?.status !== 'connected') {
@@ -124,7 +204,12 @@ const whatsappRoutes = () => {
 
     const normalizedJid = normalizeTestJid(jid);
     let content: Record<string, unknown>;
-    if (imageUrl) {
+    if (imageDataUrl) {
+      const { buffer, mimetype } = parseImageDataUrl(imageDataUrl);
+      content = includeCaption && captionText
+        ? { image: buffer, mimetype, caption: captionText }
+        : { image: buffer, mimetype };
+    } else if (imageUrl) {
       if (!isHttpUrl(imageUrl)) {
         throw badRequest('imageUrl must be an http(s) URL');
       }
@@ -135,15 +220,21 @@ const whatsappRoutes = () => {
       }
       try {
         const { buffer, mimetype } = await downloadImageBuffer(imageUrl);
-        content = mimetype
-          ? { image: buffer, mimetype, caption: message || '' }
-          : { image: buffer, caption: message || '' };
+        content = includeCaption && captionText
+          ? (mimetype
+            ? { image: buffer, mimetype, caption: captionText }
+            : { image: buffer, caption: captionText })
+          : (mimetype
+            ? { image: buffer, mimetype }
+            : { image: buffer });
       } catch (error) {
         // Fall back to URL sending (Baileys will attempt to download)
-        content = { image: { url: imageUrl }, caption: message || '' };
+        content = includeCaption && captionText
+          ? { image: { url: imageUrl }, caption: captionText }
+          : { image: { url: imageUrl } };
       }
     } else {
-      content = { text: message };
+      content = { text: captionText };
     }
 
     const sendPromise = isStatusBroadcast(normalizedJid)
@@ -158,10 +249,40 @@ const whatsappRoutes = () => {
     const messageId = result?.key?.id;
     let confirmation: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null = null;
     if (confirm && messageId && whatsapp?.confirmSend) {
-      const timeouts = imageUrl
+      const timeouts = (imageUrl || imageDataUrl)
         ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
         : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 };
       confirmation = await whatsapp.confirmSend(messageId, timeouts);
+    }
+
+    try {
+      const supabase = getSupabaseClient();
+      if (supabase) {
+        let targetId: string | null = null;
+        const { data: target } = await supabase
+          .from('targets')
+          .select('id')
+          .eq('phone_number', normalizedJid)
+          .limit(1)
+          .maybeSingle();
+        if (target?.id) {
+          targetId = String(target.id);
+        }
+
+        await supabase.from('message_logs').insert({
+          schedule_id: null,
+          feed_item_id: null,
+          target_id: targetId,
+          template_id: null,
+          message_content: captionText || null,
+          status: 'sent',
+          error_message: null,
+          whatsapp_message_id: messageId || null,
+          sent_at: new Date().toISOString()
+        });
+      }
+    } catch {
+      // Best effort only: test-message logging should not fail the send endpoint.
     }
 
     res.json({ ok: true, messageId, confirmation });
@@ -204,6 +325,41 @@ const whatsappRoutes = () => {
 
     const result = await whatsapp.sendStatusBroadcast(content);
     res.json({ ok: true, messageId: result?.key?.id });
+  }));
+
+  // Get recent outbox: messages the client believes it sent (for debugging ordering/media)
+  router.get('/outbox', asyncHandler(async (req: Request, res: Response) => {
+    const whatsapp = req.app.locals.whatsapp;
+    if (!whatsapp) {
+      return res.json({ messages: [], statuses: [] });
+    }
+    const recentSent: Map<string, unknown> = whatsapp.recentSentMessages || new Map();
+    const recentStatuses: Map<string, unknown> = whatsapp.recentMessageStatuses || new Map();
+    const messages = Array.from(recentSent.entries()).map(([id, msg]) => {
+      const m = msg as Record<string, unknown>;
+      const key = m.key as Record<string, unknown> | undefined;
+      const message = m.message as Record<string, unknown> | undefined;
+      return {
+        id,
+        remoteJid: key?.remoteJid ?? null,
+        fromMe: key?.fromMe ?? null,
+        timestamp: m.messageTimestamp ?? null,
+        hasImage: Boolean(message?.imageMessage),
+        hasText: Boolean(message?.conversation || message?.extendedTextMessage),
+        hasCaption: Boolean((message?.imageMessage as Record<string,unknown>)?.caption)
+      };
+    });
+    const statuses = Array.from(recentStatuses.entries()).map(([id, snap]) => {
+      const s = snap as Record<string, unknown>;
+      return {
+        id,
+        status: s.status ?? null,
+        statusLabel: s.statusLabel ?? null,
+        remoteJid: s.remoteJid ?? null,
+        updatedAtMs: s.updatedAtMs ?? null
+      };
+    });
+    res.json({ messages, statuses });
   }));
 
   return router;

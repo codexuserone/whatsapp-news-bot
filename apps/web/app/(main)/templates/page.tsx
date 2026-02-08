@@ -11,7 +11,6 @@ import type { FeedItem, Template } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -24,7 +23,7 @@ const schema = z.object({
   content: z.string().min(1),
   description: z.string().optional(),
   active: z.boolean().default(true),
-  send_images: z.boolean().default(true)
+  send_mode: z.enum(['image', 'link_preview', 'text_only']).default('image')
 });
 
 type TemplateFormValues = z.infer<typeof schema>;
@@ -101,11 +100,11 @@ const TemplatesPage = () => {
 
   const form = useForm<TemplateFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { id: undefined, name: '', content: '', description: '', active: true, send_images: true }
+    defaultValues: { id: undefined, name: '', content: '', description: '', active: true, send_mode: 'image' }
   });
 
   const watchedContent = useWatch({ control: form.control, name: 'content' });
-  const watchedSendImages = useWatch({ control: form.control, name: 'send_images' });
+  const watchedSendMode = useWatch({ control: form.control, name: 'send_mode' });
 
   const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Unknown error');
 
@@ -117,7 +116,7 @@ const TemplatesPage = () => {
         content: active.content,
         description: active.description || '',
         active: active.active ?? true,
-        send_images: active.send_images ?? true
+        send_mode: active.send_mode || (active.send_images === false ? 'link_preview' : 'image')
       });
     }
   }, [active, form]);
@@ -130,7 +129,7 @@ const TemplatesPage = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['templates'] });
       setActive(null);
-      form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_images: true });
+      form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_mode: 'image' });
     },
     onError: (error: unknown) => alert(`Failed to save template: ${getErrorMessage(error)}`)
   });
@@ -142,7 +141,7 @@ const TemplatesPage = () => {
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
       if (active?.id === id) {
         setActive(null);
-        form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_images: true });
+        form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_mode: 'image' });
       }
     },
     onError: (error: unknown) => alert(`Failed to delete template: ${getErrorMessage(error)}`)
@@ -155,7 +154,7 @@ const TemplatesPage = () => {
       content: values.content,
       description: values.description,
       active: values.active,
-      send_images: values.send_images
+      send_mode: values.send_mode
     });
   };
 
@@ -211,9 +210,12 @@ const TemplatesPage = () => {
                       form.register('content').ref(element);
                       textareaRef.current = element;
                     }}
-                    placeholder="*{{title}}*&#10;&#10;{{link}}"
-                    className="min-h-[120px] font-mono text-sm"
+                    placeholder="Start typing your message. Example: *{{title}}*\n\n{{link}}"
+                    className="min-h-[120px] text-sm"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Put your cursor anywhere, then tap a variable chip to insert it.
+                  </p>
                 </div>
 
                 <div className="space-y-2">
@@ -227,9 +229,9 @@ const TemplatesPage = () => {
                           variant="secondary"
                           size="sm"
                           onClick={() => insertVariable(variable.name)}
-                          className="font-mono text-xs"
+                          className="text-xs"
                         >
-                          {`{{${variable.name}}}`}
+                          {variable.name.replace(/_/g, ' ')}
                         </Button>
                       ))
                     ) : (
@@ -247,31 +249,52 @@ const TemplatesPage = () => {
 
                 <Controller
                   control={form.control}
-                  name="active"
+                  name="send_mode"
                   render={({ field }) => (
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        id="active"
-                        checked={field.value}
-                        onCheckedChange={(checked) => field.onChange(checked === true)}
-                      />
-                      <Label htmlFor="active" className="cursor-pointer">Active</Label>
+                    <div className="space-y-2">
+                      <Label>Message format</Label>
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        <Button
+                          type="button"
+                          variant={field.value === 'image' ? 'default' : 'outline'}
+                          onClick={() => field.onChange('image')}
+                        >
+                          Image + caption
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={field.value === 'link_preview' ? 'default' : 'outline'}
+                          onClick={() => field.onChange('link_preview')}
+                        >
+                          Link preview
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={field.value === 'text_only' ? 'default' : 'outline'}
+                          onClick={() => field.onChange('text_only')}
+                        >
+                          Text only
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Choose how this template sends: full image card, plain text with link preview, or text only.
+                      </p>
                     </div>
                   )}
                 />
 
                 <Controller
                   control={form.control}
-                  name="send_images"
+                  name="active"
                   render={({ field }) => (
                     <div className="flex items-center gap-2">
-                      <Checkbox
-                        id="send_images"
+                      <Switch
+                        id="active"
                         checked={field.value}
                         onCheckedChange={(checked) => field.onChange(checked === true)}
                       />
-                      <Label htmlFor="send_images" className="cursor-pointer">
-                        Attach image when available
+                      <Label htmlFor="active" className="cursor-pointer">
+                        Active template
                       </Label>
                     </div>
                   )}
@@ -288,7 +311,7 @@ const TemplatesPage = () => {
                       variant="outline"
                       onClick={() => {
                         setActive(null);
-                        form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_images: true });
+                        form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_mode: 'image' });
                       }}
                     >
                       Cancel
@@ -318,7 +341,7 @@ const TemplatesPage = () => {
             <CardContent>
                 <div className="rounded-lg bg-emerald-50/70 p-4 dark:bg-emerald-950/40">
                   <div className="max-w-[85%] rounded-lg bg-white/80 px-3 py-2 shadow-sm ring-1 ring-emerald-200/60 dark:bg-emerald-900/50 dark:ring-emerald-800/60">
-                    {previewWithData && watchedSendImages && sampleData.image_url ? (
+                    {previewWithData && watchedSendMode === 'image' && sampleData.image_url ? (
                       <div className="mb-2 overflow-hidden rounded-md border border-black/5 bg-white">
                         <Image
                           src={sampleData.image_url}
@@ -331,12 +354,18 @@ const TemplatesPage = () => {
                         />
                       </div>
                     ) : null}
-                    <div
-                      className="text-sm text-foreground/90 whitespace-pre-wrap"
-                      dangerouslySetInnerHTML={{
-                        __html: formatWhatsAppMarkdown(
+                      <div
+                        className="text-sm text-foreground/90 whitespace-pre-wrap"
+                        dangerouslySetInnerHTML={{
+                          __html: formatWhatsAppMarkdown(
                         previewWithData
-                          ? applyTemplate(watchedContent || '', sampleData)
+                          ? (() => {
+                              const base = applyTemplate(watchedContent || '', sampleData);
+                              if (watchedSendMode === 'text_only') return base;
+                              const link = String(sampleData.link || sampleData.url || '').trim();
+                              if (!link || /https?:\/\//i.test(base)) return base;
+                              return `${base}\n${link}`.trim();
+                            })()
                           : watchedContent || 'Start typing to preview...'
                       )
                     }}

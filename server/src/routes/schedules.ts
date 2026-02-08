@@ -33,31 +33,22 @@ const scheduleRoutes = () => {
     return Array.from(seen).sort();
   };
 
-<<<<<<< HEAD
   const normalizeCronExpression = (value: unknown): string | null => {
     const raw = String(value || '').trim();
     if (!raw) return null;
     return raw.replace(/\s+/g, ' ');
   };
 
-=======
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
   const normalizeSchedulePayload = (payload: Record<string, unknown>, options?: { forInsert?: boolean }) => {
     const next = { ...payload } as Record<string, unknown>;
     const mode = next.delivery_mode === 'batch' || next.delivery_mode === 'batched' ? 'batched' : 'immediate';
     const defaultBatchTimes = ['07:00', '15:00', '22:00'];
     const batchTimes = normalizeBatchTimes(next.batch_times);
-<<<<<<< HEAD
     const cronExpression = normalizeCronExpression(next.cron_expression);
 
     next.delivery_mode = mode;
     next.batch_times = batchTimes.length ? batchTimes : defaultBatchTimes;
     next.cron_expression = cronExpression;
-=======
-
-    next.delivery_mode = mode;
-    next.batch_times = batchTimes.length ? batchTimes : defaultBatchTimes;
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 
     if (options?.forInsert && mode === 'batched') {
       next.last_queued_at = new Date().toISOString();
@@ -70,7 +61,7 @@ const scheduleRoutes = () => {
     runAsync(`Dispatch schedule ${scheduleId}`, async () => {
       await sendQueuedForSchedule(scheduleId, whatsappClient as never);
     });
-  
+
   const getDb = () => {
     const supabase = getSupabaseClient();
     if (!supabase) throw serviceUnavailable('Database not available');
@@ -88,9 +79,9 @@ const scheduleRoutes = () => {
           template:templates(id, name, content)
         `)
         .order('created_at', { ascending: false });
-      
+
       if (error) throw error;
-      
+
       // Fetch targets for each schedule
       const schedulesWithTargets = await Promise.all(
         schedules.map(async (schedule: Record<string, unknown>) => {
@@ -104,7 +95,7 @@ const scheduleRoutes = () => {
           return { ...schedule, targets: [] };
         })
       );
-      
+
       res.json(schedulesWithTargets);
     } catch (error) {
       console.error('Error fetching schedules:', error);
@@ -120,7 +111,7 @@ const scheduleRoutes = () => {
         .insert(payload)
         .select()
         .single();
-      
+
       if (error) throw error;
       refreshSchedulers(req.app.locals.whatsapp);
 
@@ -149,7 +140,7 @@ const scheduleRoutes = () => {
         .eq('id', req.params.id)
         .select()
         .single();
-      
+
       if (error) throw error;
       refreshSchedulers(req.app.locals.whatsapp);
 
@@ -185,7 +176,7 @@ const scheduleRoutes = () => {
         .from('schedules')
         .delete()
         .eq('id', scheduleId);
-      
+
       if (error) throw error;
       refreshSchedulers(req.app.locals.whatsapp);
       res.json({ ok: true });

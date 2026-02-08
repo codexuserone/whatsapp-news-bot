@@ -18,6 +18,7 @@ export type Template = {
   content: string;
   active: boolean;
   send_images?: boolean | null;
+  send_mode?: 'image' | 'link_preview' | 'text_only' | null;
 };
 
 export type Target = {
@@ -37,6 +38,8 @@ export type Schedule = {
   feed_id?: string | null;
   target_ids?: string[];
   template_id?: string | null;
+  delivery_mode?: 'immediate' | 'batch' | 'batched' | null;
+  batch_times?: string[] | null;
   active: boolean;
   last_run_at?: string | null;
   next_run_at?: string | null;
@@ -47,6 +50,7 @@ export type LogEntry = {
   status: string;
   target_id?: string | null;
   schedule_id?: string | null;
+  whatsapp_message_id?: string | null;
   message_content?: string | null;
   error_message?: string | null;
   media_url?: string | null;
@@ -87,6 +91,13 @@ export type QueueItem = {
   status: string;
   schedule_id?: string | null;
   target_id?: string | null;
+  feed_item_id?: string | null;
+  whatsapp_message_id?: string | null;
+  schedule_name?: string | null;
+  target_name?: string | null;
+  target_type?: 'individual' | 'group' | 'channel' | 'status' | null;
+  delivery_mode?: 'immediate' | 'batch' | 'batched' | null;
+  batch_times?: string[] | null;
   title?: string | null;
   url?: string | null;
   image_url?: string | null;
@@ -115,6 +126,33 @@ export type WhatsAppStatus = {
   lastError?: string | null;
   lastSeenAt?: string | null;
   hasQr?: boolean;
+  me?: {
+    jid?: string | null;
+    name?: string | null;
+  };
+};
+
+export type WhatsAppOutboxMessage = {
+  id: string;
+  remoteJid?: string | null;
+  fromMe?: boolean | null;
+  timestamp?: number | string | null;
+  hasImage?: boolean;
+  hasText?: boolean;
+  hasCaption?: boolean;
+};
+
+export type WhatsAppOutboxStatus = {
+  id: string;
+  status?: number | null;
+  statusLabel?: string | null;
+  remoteJid?: string | null;
+  updatedAtMs?: number | null;
+};
+
+export type WhatsAppOutbox = {
+  messages: WhatsAppOutboxMessage[];
+  statuses: WhatsAppOutboxStatus[];
 };
 
 export type WhatsAppGroup = {

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, Controller } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Settings, Clock, MapPin, Loader2, Copy } from 'lucide-react';
 
 const schema = z.object({
@@ -38,6 +39,19 @@ const PRESET_LOCATIONS = [
   { name: 'London', latitude: 51.5074, longitude: -0.1278, tzid: 'Europe/London' },
   { name: 'Montreal', latitude: 45.5017, longitude: -73.5673, tzid: 'America/Montreal' },
   { name: 'Toronto', latitude: 43.6532, longitude: -79.3832, tzid: 'America/Toronto' }
+];
+
+const COMMON_TIMEZONES = [
+  'UTC',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Toronto',
+  'Europe/London',
+  'Europe/Paris',
+  'Asia/Jerusalem',
+  'Asia/Dubai'
 ];
 
 const SettingsPage = () => {
@@ -142,7 +156,28 @@ const SettingsPage = () => {
             </div>
             <div className="space-y-2">
               <Label htmlFor="default_timezone">Default Timezone</Label>
-              <Input id="default_timezone" {...form.register('default_timezone')} placeholder="UTC" />
+              <Controller
+                control={form.control}
+                name="default_timezone"
+                render={({ field }) => {
+                  const value = String(field.value || 'UTC');
+                  const options = Array.from(new Set([value, ...COMMON_TIMEZONES]));
+                  return (
+                    <Select value={value} onValueChange={field.onChange}>
+                      <SelectTrigger id="default_timezone">
+                        <SelectValue placeholder="Select timezone" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {options.map((timezone) => (
+                          <SelectItem key={timezone} value={timezone}>
+                            {timezone}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  );
+                }}
+              />
             </div>
           </CardContent>
         </Card>

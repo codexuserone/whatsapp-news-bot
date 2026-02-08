@@ -129,60 +129,6 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
     const sourceItems = isFirstFetch
       ? [...byMostRecent.slice(0, bootstrapLimit)].reverse()
       : (() => {
-<<<<<<< HEAD
-          const freshNewestFirst: FeedItemInput[] = [];
-          const maxKnownNumericGuid = Array.from(knownGuids)
-            .map((guid) => extractWordpressNumericId(String(guid)))
-            .filter((value): value is number => value != null)
-            .reduce<number | null>((max, value) => (max == null || value > max ? value : max), null);
-          const lookaheadLimit = 8;
-
-          let stopIndex: number | null = null;
-          for (let i = 0; i < byMostRecent.length; i += 1) {
-            const candidate = byMostRecent[i];
-            const guid = candidate?.guid ? String(candidate.guid) : '';
-            const normalizedCandidateUrl = normalizeUrl(candidate?.url || '');
-            const seenByGuid = guid ? knownGuids.has(guid) : false;
-            const seenByUrl = normalizedCandidateUrl ? knownUrls.has(normalizedCandidateUrl) : false;
-            if (seenByGuid || seenByUrl) {
-              stopIndex = i;
-              break;
-            }
-            freshNewestFirst.push(candidate);
-          }
-
-          if (stopIndex != null && maxKnownNumericGuid != null) {
-            const upperBound = Math.min(stopIndex + 1 + lookaheadLimit, byMostRecent.length);
-            for (let i = stopIndex + 1; i < upperBound; i += 1) {
-              const candidate = byMostRecent[i];
-              const guid = candidate?.guid ? String(candidate.guid) : '';
-              const normalizedCandidateUrl = normalizeUrl(candidate?.url || '');
-              const seenByGuid = guid ? knownGuids.has(guid) : false;
-              const seenByUrl = normalizedCandidateUrl ? knownUrls.has(normalizedCandidateUrl) : false;
-              if (seenByGuid || seenByUrl) continue;
-
-              const numericGuid = extractWordpressNumericId(guid) || extractWordpressNumericId(candidate?.url || '');
-              if (numericGuid != null && numericGuid > maxKnownNumericGuid) {
-                freshNewestFirst.push(candidate);
-              }
-            }
-          }
-
-          const dedupedNewestFirst: FeedItemInput[] = [];
-          const seenKeys = new Set<string>();
-          for (const candidate of freshNewestFirst) {
-            const key =
-              (candidate?.guid ? `g:${String(candidate.guid)}` : '') ||
-              (candidate?.url ? `u:${normalizeUrl(candidate.url)}` : '') ||
-              '';
-            if (!key || seenKeys.has(key)) continue;
-            seenKeys.add(key);
-            dedupedNewestFirst.push(candidate);
-          }
-
-          return dedupedNewestFirst.reverse();
-        })();
-=======
         // CRITICAL FIX: Do not stop on the first seen item. Sticky posts or out-of-order 
         // updates can cause "new" items to appear AFTER "seen" items in the feed.
         // Instead, check the top 50 items and filter out anything we already know.
@@ -203,7 +149,6 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
 
         return freshItems.reverse();
       })();
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 
     if (isFirstFetch && items.length > sourceItems.length) {
       console.info(
@@ -248,14 +193,11 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
         hash: contentHash
       };
 
-<<<<<<< HEAD
       const normalizedDescription = collapseWhitespace(String(item.description || ''));
       const normalizedContent = collapseWhitespace(String(item.content || ''));
       const fallbackSnippet = makeSnippet(normalizedContent, 280);
       const descriptionForStorage = normalizedDescription || fallbackSnippet;
 
-=======
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
       for (const [key, value] of Object.entries(rawInput)) {
         if (value == null) continue;
         if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
@@ -277,11 +219,7 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
           normalized_url: normalizedUrlValue || null,
           content_hash: contentHash || null,
           raw_data: rawData,
-<<<<<<< HEAD
-          content: normalizedContent || item.content,
-=======
           content: item.content,
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
           author: item.author,
           categories: item.categories || []
         })

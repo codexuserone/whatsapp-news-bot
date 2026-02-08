@@ -59,12 +59,13 @@ type WhatsAppClient = {
 };
 
 const DEFAULT_SEND_TIMEOUT_MS = 45000;
-<<<<<<< HEAD
-const AUTH_ERROR_HINT =
-  'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
-=======
 const AUTH_ERROR_HINT = 'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
+
+let globalLastTargetId: string | null = null;
+let globalLastSentAtMs = 0;
+const globalLastSentByTargetId = new Map<string, number>();
+
+
 
 // Simple Mutex with Timeout to replace the fragile Promise chain
 class SendMutex {
@@ -114,9 +115,7 @@ class SendMutex {
 }
 
 const sendMutex = new SendMutex();
-let globalLastSentAtMs = 0;
-let globalLastTargetId: string | null = null;
-const globalLastSentByTargetId = new Map<string, number>();
+
 
 // Replaces withGlobalSendLock
 const withGlobalSendLock = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -144,21 +143,13 @@ const waitForDelays = async (
 
   const waitGlobal = Number.isFinite(sinceGlobal) ? Math.max(minBetweenAnyMs - sinceGlobal, 0) : 0;
   const waitSameTarget = Number.isFinite(sinceTarget) ? Math.max(minBetweenSameTargetMs - sinceTarget, 0) : 0;
-<<<<<<< HEAD
-=======
 
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
   const switchedTargets = Boolean(globalLastTargetId && globalLastTargetId !== targetId);
   const waitSwitchTarget = switchedTargets && Number.isFinite(sinceGlobal)
     ? Math.max(interTargetDelayMs - sinceGlobal, 0)
     : 0;
-<<<<<<< HEAD
-  const waitMs = Math.max(waitGlobal, waitSameTarget, waitSwitchTarget);
-=======
 
   const waitMs = Math.min(Math.max(waitGlobal, waitSameTarget, waitSwitchTarget), 30000); // Cap wait at 30s
-
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
   if (waitMs > 0) {
     await sleep(waitMs);
   }
@@ -204,20 +195,6 @@ const isImageUrl = (url: string): boolean => {
   const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp', '.svg'];
   const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v'];
   const audioExtensions = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.wma'];
-<<<<<<< HEAD
-  const otherNonImageExtensions = ['.pdf', '.zip', '.rar', '.7z', '.gz', '.tar'];
-  
-  // Explicitly exclude videos and audio
-  if (videoExtensions.some((ext) => hasExt(ext))) return false;
-  if (audioExtensions.some((ext) => hasExt(ext))) return false;
-  if (otherNonImageExtensions.some((ext) => hasExt(ext))) return false;
-  
-  // If extension is clearly an image, accept immediately.
-  if (imageExtensions.some((ext) => hasExt(ext))) return true;
-
-  // Many image CDNs use extension-less URLs. Allow and verify content-type during download.
-  return true;
-=======
 
   // Explicitly exclude videos and audio
   if (videoExtensions.some(ext => lower.includes(ext))) return false;
@@ -225,7 +202,6 @@ const isImageUrl = (url: string): boolean => {
 
   // Check if it's a known image extension
   return imageExtensions.some(ext => lower.includes(ext));
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 };
 
 const DEFAULT_USER_AGENT =
@@ -575,67 +551,6 @@ const normalizeTargetJid = (target: Target) => {
   return `${phoneDigits}@s.whatsapp.net`;
 };
 
-<<<<<<< HEAD
-const buildMessageData = (feedItem: FeedItem) => {
-  const normalizedDescription = String(feedItem.description || '').trim();
-  const normalizedContent = String(feedItem.content || '').trim();
-  const fallbackDescription = normalizedDescription || normalizedContent.slice(0, 280);
-
-  return {
-    id: feedItem.id,
-    guid: (feedItem as unknown as { guid?: string }).guid,
-    title: feedItem.title,
-    url: feedItem.link,
-    link: feedItem.link,
-    description: fallbackDescription,
-    content: feedItem.content,
-    author: feedItem.author,
-    image_url: feedItem.image_url,
-    imageUrl: feedItem.image_url,
-    normalized_url: (feedItem as unknown as { normalized_url?: string }).normalized_url,
-    normalizedUrl: (feedItem as unknown as { normalized_url?: string }).normalized_url,
-    content_hash: (feedItem as unknown as { content_hash?: string }).content_hash,
-    contentHash: (feedItem as unknown as { content_hash?: string }).content_hash,
-    pub_date: feedItem.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
-    publishedAt: feedItem.pub_date ? new Date(feedItem.pub_date).toISOString() : '',
-    categories: Array.isArray(feedItem.categories) ? feedItem.categories.join(', ') : '',
-    ...(typeof (feedItem as unknown as { raw_data?: unknown }).raw_data === 'object' &&
-    (feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data
-      ? Object.fromEntries(
-          Object.entries((feedItem as unknown as { raw_data?: Record<string, unknown> }).raw_data || {}).map(
-            ([key, value]) => {
-              if (value == null) return [key, ''];
-              if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return [key, value];
-              try {
-                return [key, JSON.stringify(value)];
-              } catch {
-                return [key, String(value)];
-              }
-            }
-          )
-        )
-      : {})
-  };
-};
-
-const hasHttpUrl = (value: string) => /https?:\/\/[^\s]+/i.test(String(value || ''));
-
-const ensurePreviewLink = (value: string, link?: string | null) => {
-  const text = String(value || '').trim();
-  const normalizedLink = String(link || '').trim();
-  if (!normalizedLink) return text;
-  if (hasHttpUrl(text)) return text;
-  if (!text) return normalizedLink;
-  return `${text}\n${normalizedLink}`;
-};
-
-const getTemplateSendMode = (template: Template) => {
-  if (template?.send_mode === 'image' || template?.send_mode === 'link_preview' || template?.send_mode === 'text_only') {
-    return template.send_mode;
-  }
-  return template?.send_images === false ? 'link_preview' : 'image';
-};
-=======
 const buildMessageData = (feedItem: FeedItem) => ({
   id: feedItem.id,
   guid: (feedItem as unknown as { guid?: string }).guid,
@@ -671,7 +586,24 @@ const buildMessageData = (feedItem: FeedItem) => ({
     )
     : {})
 });
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
+
+const hasHttpUrl = (value: string) => /https?:\/\/[^\s]+/i.test(String(value || ''));
+
+const ensurePreviewLink = (value: string, link?: string | null) => {
+  const text = String(value || '').trim();
+  const normalizedLink = String(link || '').trim();
+  if (!normalizedLink) return text;
+  if (hasHttpUrl(text)) return text;
+  if (!text) return normalizedLink;
+  return `${text}\n${normalizedLink}`;
+};
+
+const getTemplateSendMode = (template: Template) => {
+  if (template?.send_mode === 'image' || template?.send_mode === 'link_preview' || template?.send_mode === 'text_only') {
+    return template.send_mode;
+  }
+  return template?.send_images === false ? 'link_preview' : 'image';
+};
 
 type SendWithMediaResult = {
   response: any;
@@ -689,10 +621,11 @@ const sendMessageWithTemplate = async (
   target: Target,
   template: Template,
   feedItem: FeedItem,
-  options?: { sendImages?: boolean; supabase?: SupabaseClient; sendTimeoutMs?: number }
+  options?: { sendImages?: boolean; supabase?: SupabaseClient; sendTimeoutMs?: number; overrideText?: string | null }
 ): Promise<SendWithMediaResult> => {
   const payload = buildMessageData(feedItem);
-  const renderedText = applyTemplate(template.content, payload).trim();
+  const manualOverrideText = normalizeMessageText(String(options?.overrideText || '')).trim();
+  const renderedText = (manualOverrideText || applyTemplate(template.content, payload)).trim();
   if (!renderedText) {
     throw new Error('Template rendered empty message');
   }
@@ -706,13 +639,9 @@ const sendMessageWithTemplate = async (
   }
 
   const jid = normalizeTargetJid(target);
-<<<<<<< HEAD
-  const sendMode = getTemplateSendMode(template);
-  const allowImages = options?.sendImages !== false && sendMode === 'image';
-=======
   const allowImages = options?.sendImages !== false;
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
   const sendTimeoutMs = Math.max(Number(options?.sendTimeoutMs || DEFAULT_SEND_TIMEOUT_MS), 10000);
+  const sendMode = getTemplateSendMode(template); // Fix: Define sendMode
 
   const sendText = async (text: string, modeOptions?: { disableLinkPreview?: boolean }) => {
     const content: Record<string, unknown> = modeOptions?.disableLinkPreview
@@ -720,21 +649,13 @@ const sendMessageWithTemplate = async (
       : { text };
     if (target.type === 'status') {
       return withTimeout(
-<<<<<<< HEAD
-        whatsappClient.sendStatusBroadcast(content),
-=======
         whatsappClient.sendStatusBroadcast({ text }),
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
         sendTimeoutMs,
         'Timed out sending status message'
       );
     }
     return withTimeout(
-<<<<<<< HEAD
-      whatsappClient.sendMessage(jid, content),
-=======
       whatsappClient.sendMessage(jid, { text }),
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
       sendTimeoutMs,
       'Timed out sending message'
     );
@@ -788,17 +709,6 @@ const sendMessageWithTemplate = async (
       const response =
         target.type === 'status'
           ? await withTimeout(
-<<<<<<< HEAD
-              whatsappClient.sendStatusBroadcast(content),
-              sendTimeoutMs,
-              'Timed out sending image status message'
-            )
-          : await withTimeout(
-              whatsappClient.sendMessage(jid, content),
-              sendTimeoutMs,
-              'Timed out sending image message'
-            );
-=======
             whatsappClient.sendStatusBroadcast(content),
             sendTimeoutMs,
             'Timed out sending image status message'
@@ -808,7 +718,6 @@ const sendMessageWithTemplate = async (
             sendTimeoutMs,
             'Timed out sending image message'
           );
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 
       return {
         response,
@@ -830,17 +739,6 @@ const sendMessageWithTemplate = async (
         const response =
           target.type === 'status'
             ? await withTimeout(
-<<<<<<< HEAD
-                whatsappClient.sendStatusBroadcast(content),
-                sendTimeoutMs,
-                'Timed out sending image status message'
-              )
-            : await withTimeout(
-                whatsappClient.sendMessage(jid, content),
-                sendTimeoutMs,
-                'Timed out sending image message'
-              );
-=======
               whatsappClient.sendStatusBroadcast(content),
               sendTimeoutMs,
               'Timed out sending image status message'
@@ -850,7 +748,6 @@ const sendMessageWithTemplate = async (
               sendTimeoutMs,
               'Timed out sending image message'
             );
->>>>>>> a89c5c6 (CRITICAL FIX: Feed processing, encoding, and queue deadlocks)
 
         return {
           response,
@@ -1566,7 +1463,8 @@ const sendQueuedForSchedule = async (
             const result = await sendMessageWithTemplate(whatsappClient, target, template, feedItem, {
               sendImages: template?.send_images !== false,
               supabase,
-              sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS)
+              sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+              overrideText: typeof log.message_content === 'string' ? log.message_content : null
             });
             const nowMs = Date.now();
             globalLastSentAtMs = nowMs;
@@ -1753,6 +1651,235 @@ const sendQueuedForSchedule = async (
   }
 };
 
+const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | null) => {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return { ok: false, error: 'Database not available' };
+  }
+
+  if (!whatsappClient || whatsappClient.getStatus().status !== 'connected') {
+    return { ok: false, error: 'WhatsApp not connected' };
+  }
+
+  try {
+    const { data: logRow, error: logError } = await supabase
+      .from('message_logs')
+      .select('*')
+      .eq('id', logId)
+      .single();
+
+    if (logError || !logRow) {
+      return { ok: false, error: 'Queue item not found' };
+    }
+
+    const log = logRow as {
+      id: string;
+      status: string;
+      schedule_id?: string | null;
+      target_id?: string | null;
+      feed_item_id?: string | null;
+      template_id?: string | null;
+      message_content?: string | null;
+    };
+
+    if (log.status === 'sent') {
+      return { ok: false, error: 'Queue item is already sent' };
+    }
+
+    if (!log.schedule_id || !log.target_id || !log.feed_item_id) {
+      return { ok: false, error: 'Queue item is missing schedule, target, or feed item' };
+    }
+
+    const { data: claimRows, error: claimError } = await supabase
+      .from('message_logs')
+      .update({ status: 'processing', processing_started_at: new Date().toISOString() })
+      .eq('id', log.id)
+      .in('status', ['pending', 'failed', 'skipped'])
+      .select('id');
+
+    if (claimError) {
+      return { ok: false, error: getErrorMessage(claimError) };
+    }
+
+    if (!claimRows || claimRows.length === 0) {
+      return { ok: false, error: 'Queue item is currently being processed by another worker' };
+    }
+
+    const [scheduleRes, targetRes, feedItemRes] = await Promise.all([
+      supabase.from('schedules').select('*').eq('id', log.schedule_id).single(),
+      supabase.from('targets').select('*').eq('id', log.target_id).single(),
+      supabase.from('feed_items').select('*').eq('id', log.feed_item_id).single()
+    ]);
+
+    if (targetRes.error || !targetRes.data) {
+      await supabase
+        .from('message_logs')
+        .update({
+          status: 'failed',
+          processing_started_at: null,
+          error_message: 'Target not found',
+          media_url: null,
+          media_type: null,
+          media_sent: false,
+          media_error: null
+        })
+        .eq('id', log.id);
+      return { ok: false, error: 'Target not found' };
+    }
+
+    if (feedItemRes.error || !feedItemRes.data) {
+      await supabase
+        .from('message_logs')
+        .update({
+          status: 'failed',
+          processing_started_at: null,
+          error_message: 'Feed item not found',
+          media_url: null,
+          media_type: null,
+          media_sent: false,
+          media_error: null
+        })
+        .eq('id', log.id);
+      return { ok: false, error: 'Feed item not found' };
+    }
+
+    const templateId = (log.template_id || scheduleRes.data?.template_id) as string | null;
+    if (!templateId) {
+      await supabase
+        .from('message_logs')
+        .update({
+          status: 'failed',
+          processing_started_at: null,
+          error_message: 'Template not found',
+          media_url: null,
+          media_type: null,
+          media_sent: false,
+          media_error: null
+        })
+        .eq('id', log.id);
+      return { ok: false, error: 'Template not found' };
+    }
+
+    const { data: template, error: templateError } = await supabase
+      .from('templates')
+      .select('*')
+      .eq('id', templateId)
+      .single();
+
+    if (templateError || !template) {
+      await supabase
+        .from('message_logs')
+        .update({
+          status: 'failed',
+          processing_started_at: null,
+          error_message: 'Template not found',
+          media_url: null,
+          media_type: null,
+          media_sent: false,
+          media_error: null
+        })
+        .eq('id', log.id);
+      return { ok: false, error: 'Template not found' };
+    }
+
+    const settings = await settingsService.getSettings();
+    try {
+      const sendResult = await withGlobalSendLock(async () => {
+        await waitForDelays(String(targetRes.data.id), settings);
+        const result = await sendMessageWithTemplate(
+          whatsappClient,
+          targetRes.data as Target,
+          template as Template,
+          feedItemRes.data as FeedItem,
+          {
+            sendImages: (template as Template).send_images !== false,
+            supabase,
+            sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+            overrideText: typeof log.message_content === 'string' ? log.message_content : null
+          }
+        );
+        const nowMs = Date.now();
+        globalLastSentAtMs = nowMs;
+        globalLastTargetId = String(targetRes.data.id);
+        globalLastSentByTargetId.set(String(targetRes.data.id), nowMs);
+        if (globalLastSentByTargetId.size > 1000) {
+          globalLastSentByTargetId.clear();
+        }
+        return result;
+      });
+
+      const messageId = sendResult?.response?.key?.id;
+      if (messageId) {
+        if (whatsappClient.confirmSend) {
+          const isImage = sendResult?.media?.type === 'image' && Boolean(sendResult?.media?.sent);
+          const confirmation = await whatsappClient.confirmSend(
+            messageId,
+            isImage
+              ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
+              : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 }
+          );
+          if (!confirmation?.ok) {
+            throw new Error('Message send not confirmed (no upsert/ack)');
+          }
+        } else if (whatsappClient.waitForMessage) {
+          const observed = await whatsappClient.waitForMessage(messageId, 15000);
+          if (!observed) {
+            throw new Error('Message send not confirmed (no local upsert)');
+          }
+        }
+      }
+
+      await supabase
+        .from('message_logs')
+        .update({
+          status: 'sent',
+          sent_at: new Date().toISOString(),
+          processing_started_at: null,
+          error_message: null,
+          message_content: sendResult?.text || null,
+          whatsapp_message_id: messageId || null,
+          media_url: sendResult?.media?.url || null,
+          media_type: sendResult?.media?.type || null,
+          media_sent: Boolean(sendResult?.media?.sent),
+          media_error: sendResult?.media?.error || null
+        })
+        .eq('id', log.id);
+
+      await supabase
+        .from('feed_items')
+        .update({ sent: true, sent_at: new Date().toISOString() })
+        .eq('id', String(feedItemRes.data.id || ''))
+        .eq('sent', false);
+
+      return { ok: true, messageId: messageId || null, mediaSent: Boolean(sendResult?.media?.sent) };
+    } catch (error) {
+      const rawErrorMessage = getErrorMessage(error);
+      const authError = isAuthStateError(rawErrorMessage);
+      const errorMessage = authError
+        ? `${AUTH_ERROR_HINT} (${rawErrorMessage || 'unknown auth error'})`
+        : rawErrorMessage;
+
+      await supabase
+        .from('message_logs')
+        .update({
+          status: 'failed',
+          processing_started_at: null,
+          error_message: errorMessage,
+          media_url: null,
+          media_type: null,
+          media_sent: false,
+          media_error: null
+        })
+        .eq('id', log.id);
+
+      return { ok: false, error: errorMessage };
+    }
+  } catch (error) {
+    logger.error({ error, logId }, 'Failed to send queue item now');
+    return { ok: false, error: getErrorMessage(error) };
+  }
+};
+
 const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
   const supabase = getSupabaseClient();
   if (!supabase) {
@@ -1837,5 +1964,6 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
 module.exports = {
   sendQueuedForSchedule,
   sendPendingForAllSchedules,
-  queueLatestForSchedule
+  queueLatestForSchedule,
+  sendQueueLogNow
 };

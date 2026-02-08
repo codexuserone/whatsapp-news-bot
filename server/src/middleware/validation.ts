@@ -123,22 +123,79 @@ const schemas = {
       };
     }),
 
-  testMessage: z.object({
-    jid: z.string().regex(JID_PATTERN),
-    message: z.string().min(1).max(4096),
-    imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
-    confirm: z.boolean().optional()
-  }),
+  testMessage: z
+    .object({
+      jid: z.string().regex(JID_PATTERN),
+      message: z.string().max(4096).optional().nullable().transform(normalizeOptional),
+      imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      videoUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      mediaUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      mediaType: z.enum(['image', 'video']).optional().nullable(),
+      confirm: z.boolean().optional()
+    })
+    .superRefine(
+      (
+        value: {
+          message?: string | null;
+          imageUrl?: string | null;
+          videoUrl?: string | null;
+          mediaUrl?: string | null;
+          mediaType?: 'image' | 'video' | null;
+        },
+        ctx: { addIssue: (issue: { code: string; path: string[]; message: string }) => void }
+      ) => {
+        const mediaCandidates = [value.imageUrl, value.videoUrl, value.mediaUrl].filter(Boolean);
+        if (!value.message && mediaCandidates.length === 0) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['message'],
+            message: 'message or media URL is required'
+          });
+        }
+        if (mediaCandidates.length > 1) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['mediaUrl'],
+            message: 'Use only one of imageUrl, videoUrl, or mediaUrl'
+          });
+        }
+      }
+    ),
 
   statusMessage: z
     .object({
       message: z.string().max(4096).optional().nullable().transform(normalizeOptional),
-      imageUrl: z.string().url().optional().nullable().transform(normalizeOptional)
+      imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      videoUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      mediaUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      mediaType: z.enum(['image', 'video']).optional().nullable()
     })
-    .refine(
-      (value: { message?: string | null; imageUrl?: string | null }) => Boolean(value.message || value.imageUrl),
-      {
-        message: 'message or imageUrl is required'
+    .superRefine(
+      (
+        value: {
+          message?: string | null;
+          imageUrl?: string | null;
+          videoUrl?: string | null;
+          mediaUrl?: string | null;
+          mediaType?: 'image' | 'video' | null;
+        },
+        ctx: { addIssue: (issue: { code: string; path: string[]; message: string }) => void }
+      ) => {
+        const mediaCandidates = [value.imageUrl, value.videoUrl, value.mediaUrl].filter(Boolean);
+        if (!value.message && mediaCandidates.length === 0) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['message'],
+            message: 'message or media URL is required'
+          });
+        }
+        if (mediaCandidates.length > 1) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['mediaUrl'],
+            message: 'Use only one of imageUrl, videoUrl, or mediaUrl'
+          });
+        }
       }
     ),
 

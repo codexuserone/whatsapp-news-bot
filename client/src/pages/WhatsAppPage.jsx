@@ -14,6 +14,8 @@ const WhatsAppPage = () => {
   const queryClient = useQueryClient();
   const [testTarget, setTestTarget] = React.useState('');
   const [testMessage, setTestMessage] = React.useState('Hello from WhatsApp News Bot!');
+  const [testMediaUrl, setTestMediaUrl] = React.useState('');
+  const [testMediaType, setTestMediaType] = React.useState('image');
   const [manualChannel, setManualChannel] = React.useState('');
   const [manualChannelName, setManualChannelName] = React.useState('');
 
@@ -150,6 +152,8 @@ const WhatsAppPage = () => {
     mutationFn: (payload) => api.post('/api/whatsapp/send-test', payload),
     onSuccess: () => {
       setTestMessage('Hello from WhatsApp News Bot!');
+      setTestMediaUrl('');
+      setTestMediaType('image');
     }
   });
 
@@ -377,10 +381,40 @@ const WhatsAppPage = () => {
                 />
               </div>
             </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="testMediaUrl">Media URL (optional)</Label>
+                <Input
+                  id="testMediaUrl"
+                  value={testMediaUrl}
+                  onChange={(e) => setTestMediaUrl(e.target.value)}
+                  placeholder="https://example.com/media.mp4"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="testMediaType">Media Type</Label>
+                <Select value={testMediaType} onValueChange={setTestMediaType}>
+                  <SelectTrigger id="testMediaType">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="image">Image</SelectItem>
+                    <SelectItem value="video">Video</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
             <div className="flex items-center gap-4">
               <Button
-                onClick={() => sendTestMessage.mutate({ jid: testTarget, message: testMessage, confirm: true })}
-                disabled={sendTestMessage.isPending || !testTarget || !testMessage}
+                onClick={() => {
+                  const payload = { jid: testTarget, message: testMessage, confirm: true };
+                  if (testMediaUrl.trim()) {
+                    payload.mediaUrl = testMediaUrl.trim();
+                    payload.mediaType = testMediaType;
+                  }
+                  sendTestMessage.mutate(payload);
+                }}
+                disabled={sendTestMessage.isPending || !testTarget || (!testMessage.trim() && !testMediaUrl.trim())}
               >
                 {sendTestMessage.isPending ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

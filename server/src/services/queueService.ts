@@ -146,13 +146,20 @@ const isHttpUrl = (value?: string | null) => {
   }
 };
 
+const isVideoUrl = (url: string): boolean => {
+  const lower = String(url || '').toLowerCase();
+  const hasExt = (ext: string) => new RegExp(`${ext.replace('.', '\\.')}([?#]|$)`).test(lower);
+  const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v', '.3gp'];
+  return videoExtensions.some((ext) => hasExt(ext));
+};
+
 // Check if URL points to an image (not video/audio)
 const isImageUrl = (url: string): boolean => {
   const lower = String(url || '').toLowerCase();
   const hasExt = (ext: string) => new RegExp(`${ext.replace('.', '\\.')}([?#]|$)`).test(lower);
 
   const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp', '.svg'];
-  const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v'];
+  const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v', '.3gp'];
   const audioExtensions = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.wma'];
   const otherNonImageExtensions = ['.pdf', '.zip', '.rar', '.7z', '.gz', '.tar'];
   
@@ -368,6 +375,33 @@ const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null)
   return { buffer, mimetype: contentType };
 };
 
+const downloadVideoBuffer = async (videoUrl: string, refererUrl?: string | null) => {
+  await assertSafeOutboundUrl(videoUrl);
+  const MAX_VIDEO_BYTES = 24 * 1024 * 1024;
+  const response = await axios.get(videoUrl, {
+    timeout: 20000,
+    responseType: 'arraybuffer',
+    maxContentLength: MAX_VIDEO_BYTES,
+    maxBodyLength: MAX_VIDEO_BYTES,
+    headers: {
+      'User-Agent': DEFAULT_USER_AGENT,
+      Accept: 'video/*,*/*;q=0.8',
+      ...(refererUrl ? { Referer: refererUrl } : {})
+    }
+  });
+
+  const contentType = String(response.headers?.['content-type'] || '').toLowerCase();
+  const data = response.data;
+  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  if (!contentType.startsWith('video/')) {
+    throw new Error(`URL did not return a video (content-type: ${contentType || 'unknown'})`);
+  }
+  if (buffer.length > MAX_VIDEO_BYTES) {
+    throw new Error(`Video too large (${buffer.length} bytes)`);
+  }
+  return { buffer, mimetype: contentType };
+};
+
 const maybeUpdateFeedItemImage = async (
   supabase: SupabaseClient | undefined,
   feedItemId: string | undefined,
@@ -381,33 +415,40 @@ const maybeUpdateFeedItemImage = async (
   }
 };
 
-const resolveImageUrlForFeedItem = async (
+const resolveMediaForFeedItem = async (
   supabase: SupabaseClient | undefined,
   feedItem: FeedItem,
-  allowImages: boolean
-): Promise<{ url: string | null; source: string | null; scraped: boolean; error: string | null }> => {
-  if (!allowImages) {
-    return { url: null, source: null, scraped: false, error: null };
+  allowRichMedia: boolean
+): Promise<{ url: string | null; mediaType: 'image' | 'video' | null; source: string | null; scraped: boolean; error: string | null }> => {
+  if (!allowRichMedia) {
+    return { url: null, mediaType: null, source: null, scraped: false, error: null };
   }
 
   let existingUrlIssue: string | null = null;
   const existing = typeof feedItem.image_url === 'string' ? feedItem.image_url : null;
   if (existing && isHttpUrl(existing)) {
-    if (isImageUrl(existing)) {
+    const existingType = isVideoUrl(existing) ? 'video' : isImageUrl(existing) ? 'image' : null;
+    if (existingType) {
       try {
         await assertSafeOutboundUrl(existing);
-        return { url: existing, source: feedItem.image_source || 'feed', scraped: false, error: null };
+        return {
+          url: existing,
+          mediaType: existingType,
+          source: feedItem.image_source || 'feed',
+          scraped: false,
+          error: null
+        };
       } catch (error) {
         existingUrlIssue = getErrorMessage(error);
       }
     } else {
-      existingUrlIssue = 'Feed media URL is not an image';
+      existingUrlIssue = 'Feed media URL is unsupported for WhatsApp send';
     }
   }
 
   const link = typeof feedItem.link === 'string' ? feedItem.link : null;
   if (!link || !isHttpUrl(link)) {
-    return { url: null, source: null, scraped: false, error: existingUrlIssue };
+    return { url: null, mediaType: null, source: null, scraped: false, error: existingUrlIssue };
   }
 
   const scrapedAt = feedItem.image_scraped_at ? new Date(feedItem.image_scraped_at).getTime() : 0;
@@ -415,6 +456,7 @@ const resolveImageUrlForFeedItem = async (
   if (recentlyScraped) {
     return {
       url: null,
+      mediaType: null,
       source: null,
       scraped: false,
       error: feedItem.image_scrape_error || existingUrlIssue || null
@@ -435,7 +477,7 @@ const resolveImageUrlForFeedItem = async (
           image_scraped_at: nowIso,
           image_scrape_error: message
         });
-        return { url: null, source: null, scraped: true, error: message };
+        return { url: null, mediaType: null, source: null, scraped: true, error: message };
       }
 
       feedItem.image_url = scraped;
@@ -448,7 +490,7 @@ const resolveImageUrlForFeedItem = async (
         image_scraped_at: nowIso,
         image_scrape_error: null
       });
-      return { url: scraped, source: 'page', scraped: true, error: null };
+      return { url: scraped, mediaType: 'image', source: 'page', scraped: true, error: null };
     }
 
     feedItem.image_scraped_at = nowIso;
@@ -457,7 +499,7 @@ const resolveImageUrlForFeedItem = async (
       image_scraped_at: nowIso,
       image_scrape_error: 'No image found on page'
     });
-    return { url: null, source: null, scraped: true, error: 'No image found on page' };
+    return { url: null, mediaType: null, source: null, scraped: true, error: 'No image found on page' };
   } catch (error) {
     const message = getErrorMessage(error);
     const nowIso = new Date().toISOString();
@@ -467,7 +509,7 @@ const resolveImageUrlForFeedItem = async (
       image_scraped_at: nowIso,
       image_scrape_error: message
     });
-    return { url: null, source: null, scraped: true, error: message };
+    return { url: null, mediaType: null, source: null, scraped: true, error: message };
   }
 };
 
@@ -659,7 +701,7 @@ const sendMessageWithTemplate = async (
 
   const jid = normalizeTargetJid(target);
   const sendMode = getTemplateSendMode(template);
-  const allowImages = options?.sendImages !== false && sendMode === 'image';
+  const allowRichMedia = options?.sendImages !== false && sendMode === 'image';
   const sendTimeoutMs = Math.max(Number(options?.sendTimeoutMs || DEFAULT_SEND_TIMEOUT_MS), 10000);
 
   const sendText = async (text: string, modeOptions?: { disableLinkPreview?: boolean }) => {
@@ -699,92 +741,80 @@ const sendMessageWithTemplate = async (
     };
   }
 
-  const resolved = await resolveImageUrlForFeedItem(options?.supabase, feedItem, allowImages);
-  if (allowImages && resolved.url) {
+  const resolved = await resolveMediaForFeedItem(options?.supabase, feedItem, allowRichMedia);
+  if (allowRichMedia && resolved.url && resolved.mediaType) {
+    const mediaType = resolved.mediaType;
     let safeUrl: string;
     try {
       safeUrl = (await assertSafeOutboundUrl(resolved.url)).toString();
     } catch (error) {
       const message = getErrorMessage(error);
-      logger.warn({ error, jid, imageUrl: resolved.url }, 'Blocked unsafe image URL');
+      logger.warn({ error, jid, mediaUrl: resolved.url, mediaType }, 'Blocked unsafe media URL');
       const response = await sendText(textWithPreview);
       return {
         response,
         text: textWithPreview,
-        media: { type: 'image', url: resolved.url, sent: false, error: message }
+        media: { type: mediaType, url: resolved.url, sent: false, error: message }
       };
     }
 
+    const sendMediaContent = async (content: Record<string, unknown>, kind: 'buffer' | 'url') => {
+      const timeoutLabel = kind === 'buffer'
+        ? `Timed out sending ${mediaType} message`
+        : `Timed out sending ${mediaType} message`;
+      return target.type === 'status'
+        ? withTimeout(whatsappClient.sendStatusBroadcast(content), sendTimeoutMs, timeoutLabel)
+        : withTimeout(whatsappClient.sendMessage(jid, content), sendTimeoutMs, timeoutLabel);
+    };
+
     try {
-      const { buffer, mimetype } = await downloadImageBuffer(safeUrl, feedItem.link);
-      const content: Record<string, unknown> = {
-        image: buffer,
-        caption: renderedText
-      };
-      if (mimetype) {
-        content.mimetype = mimetype;
+      const downloaded = mediaType === 'video'
+        ? await downloadVideoBuffer(safeUrl, feedItem.link)
+        : await downloadImageBuffer(safeUrl, feedItem.link);
+      const content: Record<string, unknown> = mediaType === 'video'
+        ? { video: downloaded.buffer, caption: renderedText }
+        : { image: downloaded.buffer, caption: renderedText };
+      if (downloaded.mimetype) {
+        content.mimetype = downloaded.mimetype;
       }
 
-      const response =
-        target.type === 'status'
-          ? await withTimeout(
-              whatsappClient.sendStatusBroadcast(content),
-              sendTimeoutMs,
-              'Timed out sending image status message'
-            )
-          : await withTimeout(
-              whatsappClient.sendMessage(jid, content),
-              sendTimeoutMs,
-              'Timed out sending image message'
-            );
+      const response = await sendMediaContent(content, 'buffer');
 
       return {
         response,
         text: renderedText,
-        media: { type: 'image', url: safeUrl, sent: true, error: null }
+        media: { type: mediaType, url: safeUrl, sent: true, error: null }
       };
     } catch (error) {
       const bufferErrorMessage = getErrorMessage(error);
       logger.warn(
-        { error, jid, imageUrl: safeUrl },
-        'Failed to download/send image buffer; trying URL-based send'
+        { error, jid, mediaUrl: safeUrl, mediaType },
+        'Failed to download/send media buffer; trying URL-based send'
       );
 
       try {
-        const content: Record<string, unknown> = {
-          image: { url: safeUrl },
-          caption: renderedText
-        };
-        const response =
-          target.type === 'status'
-            ? await withTimeout(
-                whatsappClient.sendStatusBroadcast(content),
-                sendTimeoutMs,
-                'Timed out sending image status message'
-              )
-            : await withTimeout(
-                whatsappClient.sendMessage(jid, content),
-                sendTimeoutMs,
-                'Timed out sending image message'
-              );
+        const content: Record<string, unknown> = mediaType === 'video'
+          ? { video: { url: safeUrl }, caption: renderedText }
+          : { image: { url: safeUrl }, caption: renderedText };
+        const response = await sendMediaContent(content, 'url');
 
         return {
           response,
           text: renderedText,
-          media: { type: 'image', url: safeUrl, sent: true, error: null }
+          media: { type: mediaType, url: safeUrl, sent: true, error: null }
         };
       } catch (urlError) {
         const urlErrorMessage = getErrorMessage(urlError);
         logger.warn(
-          { error: urlError, jid, imageUrl: safeUrl, bufferError: bufferErrorMessage },
-          'Failed to send image by URL, falling back to text'
+          { error: urlError, jid, mediaUrl: safeUrl, mediaType, bufferError: bufferErrorMessage },
+          'Failed to send media by URL, falling back to text'
         );
         const response = await sendText(textWithPreview);
         return {
           response,
           text: textWithPreview,
           media: {
-            type: 'image',
+            type: mediaType,
             url: safeUrl,
             sent: false,
             error: `${bufferErrorMessage}; url-send: ${urlErrorMessage}`
@@ -799,10 +829,10 @@ const sendMessageWithTemplate = async (
     response,
     text: textWithPreview,
     media: {
-      type: 'image',
+      type: null,
       url: resolved.url || feedItem.image_url || null,
       sent: false,
-      error: resolved.error || 'No usable image found for feed item; sent text with preview fallback'
+      error: resolved.error || 'No usable media found for feed item; sent text with preview fallback'
     }
   };
 };

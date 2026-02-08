@@ -11,6 +11,10 @@ const { getSupabaseClient } = require('../db/supabase');
 const { normalizeMessageText } = require('../utils/messageText');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 24 * 1024 * 1024;
+const VIDEO_URL_EXTENSIONS = ['.mp4', '.mov', '.webm', '.m4v', '.3gp'];
+const IMAGE_URL_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp'];
 const DEFAULT_USER_AGENT =
   process.env.MEDIA_FETCH_USER_AGENT ||
   process.env.FEED_USER_AGENT ||
@@ -27,7 +31,6 @@ const isHttpUrl = (value: string) => {
 
 const downloadImageBuffer = async (url: string) => {
   await assertSafeOutboundUrl(url);
-  const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
   const response = await axios.get(url, {
     timeout: DEFAULT_SEND_TIMEOUT_MS,
     responseType: 'arraybuffer',
@@ -48,6 +51,108 @@ const downloadImageBuffer = async (url: string) => {
     throw new Error(`Image too large (${buffer.length} bytes)`);
   }
   return { buffer, mimetype: contentType };
+};
+
+const downloadVideoBuffer = async (url: string) => {
+  await assertSafeOutboundUrl(url);
+  const response = await axios.get(url, {
+    timeout: DEFAULT_SEND_TIMEOUT_MS,
+    responseType: 'arraybuffer',
+    maxContentLength: MAX_VIDEO_BYTES,
+    maxBodyLength: MAX_VIDEO_BYTES,
+    headers: {
+      'User-Agent': DEFAULT_USER_AGENT,
+      Accept: 'video/*,*/*;q=0.8'
+    }
+  });
+  const contentType = String(response.headers?.['content-type'] || '').toLowerCase();
+  const data = response.data;
+  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  if (!contentType.startsWith('video/')) {
+    throw new Error(`URL did not return a video (content-type: ${contentType || 'unknown'})`);
+  }
+  if (buffer.length > MAX_VIDEO_BYTES) {
+    throw new Error(`Video too large (${buffer.length} bytes)`);
+  }
+  return { buffer, mimetype: contentType };
+};
+
+const extensionFromUrl = (value: string) => {
+  const lower = String(value || '').toLowerCase();
+  return lower.split(/[?#]/)[0] || lower;
+};
+
+const inferMediaTypeFromUrl = (value: string): 'image' | 'video' => {
+  const normalized = extensionFromUrl(value);
+  if (VIDEO_URL_EXTENSIONS.some((ext) => normalized.endsWith(ext))) {
+    return 'video';
+  }
+  if (IMAGE_URL_EXTENSIONS.some((ext) => normalized.endsWith(ext))) {
+    return 'image';
+  }
+  return 'image';
+};
+
+type OutgoingMediaType = 'image' | 'video';
+
+const buildOutgoingContent = async (params: {
+  message: string;
+  mediaUrl: string | null;
+  mediaType: OutgoingMediaType | null;
+}) => {
+  const normalizedMessage = normalizeMessageText(String(params.message || ''));
+  if (!params.mediaUrl) {
+    return {
+      content: { text: normalizedMessage },
+      mediaUrl: null,
+      mediaType: 'text' as const,
+      text: normalizedMessage
+    };
+  }
+
+  const mediaUrl = String(params.mediaUrl || '').trim();
+  if (!isHttpUrl(mediaUrl)) {
+    throw badRequest('mediaUrl must be an http(s) URL');
+  }
+
+  try {
+    await assertSafeOutboundUrl(mediaUrl);
+  } catch (error) {
+    throw badRequest(getErrorMessage(error, 'mediaUrl is not allowed'));
+  }
+
+  const effectiveType: OutgoingMediaType = params.mediaType || inferMediaTypeFromUrl(mediaUrl);
+  if (effectiveType === 'video') {
+    try {
+      const { buffer, mimetype } = await downloadVideoBuffer(mediaUrl);
+      const content = mimetype
+        ? { video: buffer, mimetype, caption: normalizedMessage || '' }
+        : { video: buffer, caption: normalizedMessage || '' };
+      return { content, mediaUrl, mediaType: 'video' as const, text: normalizedMessage };
+    } catch {
+      return {
+        content: { video: { url: mediaUrl }, caption: normalizedMessage || '' },
+        mediaUrl,
+        mediaType: 'video' as const,
+        text: normalizedMessage
+      };
+    }
+  }
+
+  try {
+    const { buffer, mimetype } = await downloadImageBuffer(mediaUrl);
+    const content = mimetype
+      ? { image: buffer, mimetype, caption: normalizedMessage || '' }
+      : { image: buffer, caption: normalizedMessage || '' };
+    return { content, mediaUrl, mediaType: 'image' as const, text: normalizedMessage };
+  } catch {
+    return {
+      content: { image: { url: mediaUrl }, caption: normalizedMessage || '' },
+      mediaUrl,
+      mediaType: 'image' as const,
+      text: normalizedMessage
+    };
+  }
 };
 
 const normalizeChannelJid = (value: unknown) => {
@@ -527,11 +632,14 @@ const whatsappRoutes = () => {
   // Send a test message
   router.post('/send-test', validate(schemas.testMessage), asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
-    const { jid, message, imageUrl, confirm } = req.body;
-    const normalizedMessage = normalizeMessageText(message);
+    const { jid, message, imageUrl, videoUrl, mediaUrl, mediaType, confirm } = req.body;
+    const selectedMediaUrl = String(mediaUrl || videoUrl || imageUrl || '').trim() || null;
+    const selectedMediaType: OutgoingMediaType | null =
+      mediaType || (videoUrl ? 'video' : imageUrl ? 'image' : null);
+    const normalizedMessage = normalizeMessageText(String(message || ''));
 
-    if (!jid || !normalizedMessage) {
-      throw badRequest('jid and message are required');
+    if (!jid) {
+      throw badRequest('jid is required');
     }
 
     if (whatsapp?.getStatus()?.status !== 'connected') {
@@ -539,32 +647,15 @@ const whatsappRoutes = () => {
     }
 
     const normalizedJid = normalizeTestJid(jid);
-    let content: Record<string, unknown>;
-    if (imageUrl) {
-      if (!isHttpUrl(imageUrl)) {
-        throw badRequest('imageUrl must be an http(s) URL');
-      }
-      try {
-        await assertSafeOutboundUrl(imageUrl);
-      } catch (error) {
-        throw badRequest(getErrorMessage(error, 'imageUrl is not allowed'));
-      }
-      try {
-        const { buffer, mimetype } = await downloadImageBuffer(imageUrl);
-        content = mimetype
-          ? { image: buffer, mimetype, caption: normalizedMessage || '' }
-          : { image: buffer, caption: normalizedMessage || '' };
-      } catch (error) {
-        // Fall back to URL sending (Baileys will attempt to download)
-        content = { image: { url: imageUrl }, caption: normalizedMessage || '' };
-      }
-    } else {
-      content = { text: normalizedMessage };
-    }
+    const payload = await buildOutgoingContent({
+      message: normalizedMessage,
+      mediaUrl: selectedMediaUrl,
+      mediaType: selectedMediaType
+    });
 
     const sendPromise = isStatusBroadcast(normalizedJid)
-      ? whatsapp.sendStatusBroadcast(content)
-      : whatsapp.sendMessage(normalizedJid, content);
+      ? whatsapp.sendStatusBroadcast(payload.content)
+      : whatsapp.sendMessage(normalizedJid, payload.content);
     const result = await withTimeout(
       sendPromise,
       DEFAULT_SEND_TIMEOUT_MS,
@@ -574,7 +665,7 @@ const whatsappRoutes = () => {
     const messageId = result?.key?.id;
     let confirmation: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null = null;
     if (confirm && messageId && whatsapp?.confirmSend) {
-      const timeouts = imageUrl
+      const timeouts = payload.mediaType !== 'text'
         ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
         : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 };
       confirmation = await whatsapp.confirmSend(messageId, timeouts);
@@ -583,9 +674,9 @@ const whatsappRoutes = () => {
     await persistOutgoingChatSnapshot({
       messageId: messageId || null,
       remoteJid: normalizedJid,
-      text: normalizedMessage,
-      mediaUrl: imageUrl || null,
-      mediaType: imageUrl ? 'image' : 'text',
+      text: payload.text,
+      mediaUrl: payload.mediaUrl,
+      mediaType: payload.mediaType,
       messageTimestamp: result?.messageTimestamp,
       source: 'send-test'
     });
@@ -613,6 +704,10 @@ const whatsappRoutes = () => {
           status: 'sent',
           error_message: null,
           whatsapp_message_id: messageId || null,
+          media_url: payload.mediaUrl,
+          media_type: payload.mediaType === 'text' ? null : payload.mediaType,
+          media_sent: payload.mediaType !== 'text',
+          media_error: null,
           sent_at: new Date().toISOString()
         });
       }
@@ -620,57 +715,45 @@ const whatsappRoutes = () => {
       // Best effort only: test-message logging should not fail the send endpoint.
     }
 
-    res.json({ ok: true, messageId, confirmation });
+    res.json({ ok: true, messageId, mediaType: payload.mediaType, confirmation });
   }));
 
   // Send to status broadcast
   router.post('/send-status', validate(schemas.statusMessage), asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
-    const { message, imageUrl } = req.body;
+    const { message, imageUrl, videoUrl, mediaUrl, mediaType } = req.body;
+    const selectedMediaUrl = String(mediaUrl || videoUrl || imageUrl || '').trim() || null;
+    const selectedMediaType: OutgoingMediaType | null =
+      mediaType || (videoUrl ? 'video' : imageUrl ? 'image' : null);
+    const normalizedMessage = normalizeMessageText(String(message || ''));
 
-    if (!message && !imageUrl) {
-      throw badRequest('message or imageUrl is required');
+    if (!normalizedMessage && !selectedMediaUrl) {
+      throw badRequest('message or media URL is required');
     }
 
     if (whatsapp?.getStatus()?.status !== 'connected') {
       throw badRequest('WhatsApp is not connected');
     }
 
-    let content: Record<string, unknown>;
-    if (imageUrl) {
-      if (!isHttpUrl(imageUrl)) {
-        throw badRequest('imageUrl must be an http(s) URL');
-      }
-      try {
-        await assertSafeOutboundUrl(imageUrl);
-      } catch (error) {
-        throw badRequest(getErrorMessage(error, 'imageUrl is not allowed'));
-      }
-      try {
-        const { buffer, mimetype } = await downloadImageBuffer(imageUrl);
-        content = mimetype
-          ? { image: buffer, mimetype, caption: message || '' }
-          : { image: buffer, caption: message || '' };
-      } catch {
-        content = { image: { url: imageUrl }, caption: message || '' };
-      }
-    } else {
-      content = { text: message };
-    }
+    const payload = await buildOutgoingContent({
+      message: normalizedMessage,
+      mediaUrl: selectedMediaUrl,
+      mediaType: selectedMediaType
+    });
 
-    const result = await whatsapp.sendStatusBroadcast(content);
+    const result = await whatsapp.sendStatusBroadcast(payload.content);
 
     await persistOutgoingChatSnapshot({
       messageId: result?.key?.id || null,
       remoteJid: 'status@broadcast',
-      text: String(message || ''),
-      mediaUrl: imageUrl || null,
-      mediaType: imageUrl ? 'image' : 'text',
+      text: payload.text,
+      mediaUrl: payload.mediaUrl,
+      mediaType: payload.mediaType,
       messageTimestamp: result?.messageTimestamp,
       source: 'send-status'
     });
 
-    res.json({ ok: true, messageId: result?.key?.id });
+    res.json({ ok: true, messageId: result?.key?.id, mediaType: payload.mediaType });
   }));
 
   // Get recent outbox: messages the client believes it sent (for debugging ordering/media)
@@ -691,8 +774,12 @@ const whatsappRoutes = () => {
         fromMe: key?.fromMe ?? null,
         timestamp: m.messageTimestamp ?? null,
         hasImage: Boolean(message?.imageMessage),
+        hasVideo: Boolean(message?.videoMessage),
         hasText: Boolean(message?.conversation || message?.extendedTextMessage),
-        hasCaption: Boolean((message?.imageMessage as Record<string,unknown>)?.caption)
+        hasCaption: Boolean(
+          (message?.imageMessage as Record<string, unknown>)?.caption ||
+          (message?.videoMessage as Record<string, unknown>)?.caption
+        )
       };
     });
     const statuses = Array.from(recentStatuses.entries()).map(([id, snap]) => {

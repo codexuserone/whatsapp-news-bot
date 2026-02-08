@@ -24,7 +24,8 @@ const WhatsAppPage = () => {
   const queryClient = useQueryClient();
   const [testTarget, setTestTarget] = React.useState('');
   const [testMessage, setTestMessage] = React.useState('Hello from WhatsApp News Bot!');
-  const [testImageUrl, setTestImageUrl] = React.useState('');
+  const [testMediaUrl, setTestMediaUrl] = React.useState('');
+  const [testMediaType, setTestMediaType] = React.useState<'image' | 'video'>('image');
   const [manualChannel, setManualChannel] = React.useState('');
   const [manualChannelName, setManualChannelName] = React.useState('');
 
@@ -119,8 +120,9 @@ const WhatsAppPage = () => {
 
   type SendTestPayload = {
     jid: string;
-    message: string;
-    imageUrl?: string;
+    message?: string;
+    mediaUrl?: string;
+    mediaType?: 'image' | 'video';
     confirm?: boolean;
   };
 
@@ -178,7 +180,8 @@ const WhatsAppPage = () => {
     mutationFn: (payload: SendTestPayload) => api.post('/api/whatsapp/send-test', payload),
     onSuccess: () => {
       setTestMessage('Hello from WhatsApp News Bot!');
-      setTestImageUrl('');
+      setTestMediaUrl('');
+      setTestMediaType('image');
     }
   });
 
@@ -394,26 +397,41 @@ const WhatsAppPage = () => {
                 />
               </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="testImageUrl">Image URL (optional)</Label>
-              <Input
-                id="testImageUrl"
-                value={testImageUrl}
-                onChange={(e) => setTestImageUrl(e.target.value)}
-                placeholder="https://example.com/image.jpg"
-              />
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="testMediaUrl">Media URL (optional)</Label>
+                <Input
+                  id="testMediaUrl"
+                  value={testMediaUrl}
+                  onChange={(e) => setTestMediaUrl(e.target.value)}
+                  placeholder="https://example.com/media.mp4"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="testMediaType">Media Type</Label>
+                <Select value={testMediaType} onValueChange={(value: 'image' | 'video') => setTestMediaType(value)}>
+                  <SelectTrigger id="testMediaType">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="image">Image</SelectItem>
+                    <SelectItem value="video">Video</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="flex items-center gap-4">
               <Button
                 onClick={() => {
                   const payload: SendTestPayload = { jid: testTarget, message: testMessage };
-                  if (testImageUrl) {
-                    payload.imageUrl = testImageUrl;
+                  if (testMediaUrl) {
+                    payload.mediaUrl = testMediaUrl;
+                    payload.mediaType = testMediaType;
                   }
                   payload.confirm = true;
                   sendTestMessage.mutate(payload);
                 }}
-                disabled={sendTestMessage.isPending || !testTarget || !testMessage}
+                disabled={sendTestMessage.isPending || !testTarget || (!testMessage.trim() && !testMediaUrl.trim())}
               >
                 {sendTestMessage.isPending ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

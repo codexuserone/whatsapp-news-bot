@@ -66,38 +66,35 @@ const LogsPage = () => {
   const getReceiptBadge = (log: LogEntry) => {
     const messageId = String(log.whatsapp_message_id || '').trim();
     if (!messageId) {
-      if (log.status === 'sent') {
-        return <Badge variant="warning">Receipt unknown</Badge>;
-      }
-      return <Badge variant="secondary">—</Badge>;
+      return null;
     }
 
     const snap = statusByMessageId.get(messageId);
     if (!snap) {
-      return <Badge variant="warning">Not observed</Badge>;
+      return null;
     }
 
     const label = mapMessageStatusLabel(snap.status, snap.statusLabel);
     if (!label) {
-      return <Badge variant="secondary">Observed</Badge>;
+      return null;
     }
 
     const lower = label.toLowerCase();
-    if (lower === 'error') return <Badge variant="destructive">{label}</Badge>;
-    if (lower === 'delivered' || lower === 'read' || lower === 'played') return <Badge variant="success">{label}</Badge>;
-    if (lower === 'pending' || lower === 'server') return <Badge variant="warning">{label}</Badge>;
-    return <Badge variant="secondary">{label}</Badge>;
+    if (lower === 'delivered' || lower === 'read' || lower === 'played') {
+      return <Badge variant="success">Delivered</Badge>;
+    }
+    if (lower === 'error') {
+      return <Badge variant="destructive">Failed</Badge>;
+    }
+    return null;
   };
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Logs</h1>
+        <h1 className="text-3xl font-bold tracking-tight">History</h1>
         <p className="text-muted-foreground">
-          Delivery history after sending. Queue shows editable pending messages; logs show what already happened.
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Use the <span className="font-medium">WhatsApp</span> column for real-time receipt evidence (server/delivered/read), not just internal status.
+          Messages that have been sent.
         </p>
       </div>
 
@@ -107,23 +104,18 @@ const LogsPage = () => {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <Activity className="h-5 w-5" />
-                Delivery Logs
+                Sent Messages
               </CardTitle>
-              <CardDescription>{logs.length} log{logs.length !== 1 ? 's' : ''}</CardDescription>
+              <CardDescription>{logs.length} message{logs.length !== 1 ? 's' : ''}</CardDescription>
             </div>
             <Select value={status} onValueChange={setStatus}>
               <SelectTrigger className="w-40">
-                <SelectValue placeholder="All statuses" />
+                <SelectValue placeholder="All" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="pending">Pending</SelectItem>
-                <SelectItem value="processing">Processing</SelectItem>
+                <SelectItem value="all">All</SelectItem>
                 <SelectItem value="sent">Sent</SelectItem>
-                <SelectItem value="delivered">Delivered</SelectItem>
-                <SelectItem value="read">Read</SelectItem>
                 <SelectItem value="failed">Failed</SelectItem>
-                <SelectItem value="skipped">Skipped</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -138,12 +130,9 @@ const LogsPage = () => {
               <TableHeader>
                 <TableRow>
                   <TableHeaderCell>Status</TableHeaderCell>
-                  <TableHeaderCell>Target</TableHeaderCell>
-                  <TableHeaderCell className="hidden md:table-cell">Schedule</TableHeaderCell>
-                  <TableHeaderCell className="hidden md:table-cell">WhatsApp</TableHeaderCell>
-                  <TableHeaderCell className="hidden lg:table-cell">Media</TableHeaderCell>
-                  <TableHeaderCell className="hidden lg:table-cell">Message</TableHeaderCell>
-                  <TableHeaderCell>Time</TableHeaderCell>
+                  <TableHeaderCell>To</TableHeaderCell>
+                  <TableHeaderCell className="hidden lg:table-cell">Content</TableHeaderCell>
+                  <TableHeaderCell>When</TableHeaderCell>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -154,28 +143,16 @@ const LogsPage = () => {
                         variant={STATUS_COLORS[log.status] || 'secondary'}
                         title={log.error_message || undefined}
                       >
-                        {log.status}
+                        {log.status === 'sent' ? 'Sent' : 
+                         log.status === 'failed' ? 'Failed' :
+                         log.status === 'pending' ? 'Sending' :
+                         log.status === 'delivered' ? 'Delivered' :
+                         log.status === 'read' ? 'Read' :
+                         log.status}
                       </Badge>
-                    </TableCell>
-                    <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>
-                    <TableCell className="hidden text-muted-foreground md:table-cell">
-                      {log.schedule?.name || log.schedule_id || '—'}
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell">
                       {getReceiptBadge(log)}
                     </TableCell>
-                    <TableCell className="hidden lg:table-cell">
-                      {log.media_type ? (
-                        <Badge
-                          variant={log.media_sent ? 'success' : log.media_error ? 'destructive' : 'secondary'}
-                          title={log.media_error || log.media_url || undefined}
-                        >
-                          {log.media_type}
-                        </Badge>
-                      ) : (
-                        '—'
-                      )}
-                    </TableCell>
+                    <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>
                     <TableCell
                       className="hidden max-w-xs truncate text-muted-foreground lg:table-cell"
                       title={log.message_content || undefined}
@@ -189,8 +166,8 @@ const LogsPage = () => {
                 ))}
                 {logs.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
-                      No logs found.
+                    <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                      No messages sent yet.
                     </TableCell>
                   </TableRow>
                 )}

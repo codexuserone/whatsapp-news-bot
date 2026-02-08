@@ -218,7 +218,14 @@ const loadSavedChannelTargets = async (): Promise<Array<{
     }>;
   }
 
-  const mapped = ((data || []) as Array<Record<string, unknown>>)
+  const mapped: Array<{
+    id: string;
+    jid: string;
+    name: string;
+    subscribers: number;
+    viewerRole: string | null;
+    canSend: boolean | null;
+  } | null> = ((data || []) as Array<Record<string, unknown>>)
     .map((row) => {
       const jid = normalizeChannelJid(row.phone_number);
       if (!jid) return null;
@@ -234,7 +241,7 @@ const loadSavedChannelTargets = async (): Promise<Array<{
 
   return mapped.filter(
     (row): row is { id: string; jid: string; name: string; subscribers: number; viewerRole: string | null; canSend: boolean | null } =>
-      Boolean(row)
+      row != null
   );
 };
 

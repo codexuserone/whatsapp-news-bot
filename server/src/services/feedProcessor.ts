@@ -2,6 +2,7 @@ const { getSupabaseClient } = require('../db/supabase');
 const { fetchFeedItemsWithMeta } = require('./feedFetcher');
 const { normalizeText, normalizeUrl, hashContent } = require('../utils/normalize');
 const { isDuplicateFeedItem } = require('./dedupeService');
+const { isScheduleRunning } = require('./scheduleState');
 const settingsService = require('./settingsService');
 const { getErrorMessage } = require('../utils/errorUtils');
 
@@ -318,15 +319,15 @@ const queueFeedItemsForSchedules = async (feedId: string, items: FeedItemRecord[
     const { data: schedules, error: scheduleError } = await supabase
       .from('schedules')
       .select('*')
-      .eq('feed_id', feedId)
-      .eq('active', true);
+      .eq('feed_id', feedId);
 
     if (scheduleError) throw scheduleError;
-    if (!schedules || !schedules.length) return [];
+    const runningSchedules = (schedules || []).filter((schedule: Record<string, unknown>) => isScheduleRunning(schedule));
+    if (!runningSchedules.length) return [];
 
     const logs: Array<Record<string, unknown>> = [];
 
-    for (const schedule of schedules) {
+    for (const schedule of runningSchedules) {
       const targetIds = Array.isArray(schedule.target_ids) ? schedule.target_ids : [];
 
       if (!targetIds.length) continue;

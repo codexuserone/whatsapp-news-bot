@@ -3,7 +3,7 @@ import type { ZodIssue, ZodTypeAny } from 'zod';
 const { z } = require('zod');
 const { badRequest } = require('../core/errors');
 
-const JID_PATTERN = /^([0-9+\s\-\(\)]+|status@broadcast|[0-9\-]+@g\.us|[0-9]+@s\.whatsapp\.net|[0-9]+@newsletter)$/i;
+const JID_PATTERN = /^([0-9+\s\-\(\)]+|status@broadcast|[0-9\-]+@g\.us|[0-9]+@s\.whatsapp\.net|[a-z0-9._-]+@newsletter(?:_[a-z0-9]+)?)$/i;
 
 // Validation schemas
 const normalizeOptional = (value: string | null | undefined) => (value === '' ? null : value);
@@ -20,7 +20,8 @@ const schemas = {
     feed_id: z.string().uuid(),
     target_ids: z.array(z.string().uuid()).min(1),
     template_id: z.string().uuid(),
-    active: z.boolean().default(true),
+    active: z.boolean().optional(),
+    state: z.enum(['active', 'paused', 'stopped', 'draft']).optional(),
     delivery_mode: z.enum(['immediate', 'batch', 'batched']).default('immediate'),
     batch_times: z.array(z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/)).default(['07:00', '15:00', '22:00'])
   }).superRefine((value: {
@@ -64,7 +65,7 @@ const schemas = {
     name: z.string().min(1).max(255),
     url: z.string().url(),
     type: z.enum(['rss', 'atom', 'json']).optional(),
-    active: z.boolean().default(true),
+    active: z.boolean().optional(),
     fetch_interval: z.number().int().min(60).default(300),
     parse_config: z
       .object({

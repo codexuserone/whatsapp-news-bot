@@ -328,6 +328,7 @@ const QueuePage = () => {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Outgoing Queue</h1>
           <p className="text-muted-foreground">Review what is waiting to send, fix items, or send one right away.</p>
+          <p className="text-xs text-muted-foreground mt-1">Feed Items = fetched stories, Queue = editable pending sends, Logs = sent history.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -486,8 +487,7 @@ const QueuePage = () => {
                         href={imagePreview}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="block overflow-hidden rounded-md border bg-muted/30 relative"
-                        style={{ height: '200px' }}
+                        className="relative block h-[180px] max-w-md overflow-hidden rounded-md border bg-muted/30"
                       >
                         <Image
                           src={imagePreview}

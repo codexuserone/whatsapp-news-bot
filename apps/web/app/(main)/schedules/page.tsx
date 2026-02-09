@@ -18,19 +18,6 @@ import { CalendarClock, Play, Pencil, Trash2, Loader2 } from 'lucide-react';
 
 const pad2 = (value: number) => String(value).padStart(2, '0');
 
-const COMMON_TIMEZONES = [
-  'UTC',
-  'America/New_York',
-  'America/Chicago',
-  'America/Denver',
-  'America/Los_Angeles',
-  'America/Toronto',
-  'Europe/London',
-  'Europe/Paris',
-  'Asia/Jerusalem',
-  'Asia/Dubai'
-];
-
 const schema = z.object({
   name: z.string().min(1),
   timing_mode: z.enum(['on_new', 'scheduled']).default('on_new'),
@@ -41,7 +28,7 @@ const schema = z.object({
   feed_id: z.string().min(1, 'Feed is required'),
   target_ids: z.array(z.string()).min(1),
   template_id: z.string().min(1),
-  active: z.boolean().default(true)
+  state: z.enum(['active', 'paused', 'stopped']).default('active')
 });
 
 type ScheduleFormValues = z.infer<typeof schema>;
@@ -53,6 +40,7 @@ type ScheduleApiPayload = {
   feed_id: string;
   target_ids: string[];
   template_id: string;
+  state: 'active' | 'paused' | 'stopped';
   active: boolean;
 };
 
@@ -80,6 +68,15 @@ type DispatchDiagnostics = {
   latestFeedItem?: { id?: string; title?: string; created_at?: string };
   whatsapp?: { status?: string; lastError?: string };
 };
+
+const getScheduleState = (schedule?: Schedule | null): 'active' | 'paused' | 'stopped' => {
+  if (schedule?.state === 'active' || schedule?.state === 'paused' || schedule?.state === 'stopped') {
+    return schedule.state;
+  }
+  return schedule?.active ? 'active' : 'stopped';
+};
+
+const isRunning = (schedule?: Schedule | null) => getScheduleState(schedule) === 'active';
 
 const SchedulesPage = () => {
   const queryClient = useQueryClient();
@@ -231,7 +228,7 @@ const SchedulesPage = () => {
       feed_id: '',
       target_ids: [],
       template_id: '',
-      active: true
+      state: 'active'
     }
   });
 
@@ -250,7 +247,7 @@ const SchedulesPage = () => {
         feed_id: active.feed_id || '',
         target_ids: (active.target_ids || []).map((id: string) => id.toString()),
         template_id: active.template_id || '',
-        active: active.active ?? true
+        state: getScheduleState(active)
       });
     }
   }, [active, form, localTimezone, deriveTimingFromCron]);
@@ -285,6 +282,7 @@ const SchedulesPage = () => {
       return null;
     }
 
+    const state = getScheduleState(schedule);
     return {
       name: schedule.name,
       cron_expression: schedule.cron_expression || null,
@@ -292,23 +290,24 @@ const SchedulesPage = () => {
       feed_id: schedule.feed_id,
       target_ids: schedule.target_ids,
       template_id: schedule.template_id,
-      active: schedule.active
+      state,
+      active: state === 'active'
     };
   };
 
-  const toggleScheduleActive = useMutation({
-    mutationFn: (schedule: Schedule) => {
+  const setScheduleState = useMutation({
+    mutationFn: ({ schedule, state }: { schedule: Schedule; state: 'active' | 'paused' | 'stopped' }) => {
       const payload = toSchedulePayload(schedule);
       if (!payload) {
         throw new Error('Schedule is missing feed, template, or targets; open Edit and save once to normalize it.');
       }
-      return api.put(`/api/schedules/${schedule.id}`, { ...payload, active: !schedule.active });
+      return api.put(`/api/schedules/${schedule.id}`, { ...payload, state, active: state === 'active' });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['schedules'] });
       queryClient.invalidateQueries({ queryKey: ['queue'] });
     },
-    onError: (error: unknown) => alert(`Failed to toggle automation: ${getErrorMessage(error)}`)
+    onError: (error: unknown) => alert(`Failed to update automation state: ${getErrorMessage(error)}`)
   });
 
   const dispatchSchedule = useMutation({
@@ -382,7 +381,7 @@ const SchedulesPage = () => {
   });
 
   const onSubmit = (values: ScheduleFormValues) => {
-    const tz = values.timezone || localTimezone;
+    const tz = defaultTimezone;
 
     let cron_expression: string | null = null;
     if (values.timing_mode === 'scheduled') {
@@ -413,17 +412,14 @@ const SchedulesPage = () => {
       feed_id: values.feed_id,
       target_ids: values.target_ids,
       template_id: values.template_id,
-      active: values.active
+      state: values.state,
+      active: values.state === 'active'
     };
     saveSchedule.mutate(payload);
   };
 
   const timingMode = form.watch('timing_mode');
   const schedulePreset = form.watch('schedule_preset');
-  const timezoneOptions = React.useMemo(
-    () => Array.from(new Set([defaultTimezone, ...COMMON_TIMEZONES])),
-    [defaultTimezone]
-  );
 
   return (
     <div className="space-y-6">
@@ -438,7 +434,7 @@ const SchedulesPage = () => {
           </Badge>
           <Button variant="outline" size="sm" onClick={() => dispatchAll.mutate()} disabled={dispatchAll.isPending}>
             {dispatchAll.isPending && <Loader2 className="mr-2 h-3 w-3 animate-spin" />}
-            Run all now
+            Send once (all)
           </Button>
         </div>
       </div>
@@ -525,7 +521,7 @@ const SchedulesPage = () => {
                   <div className="space-y-2">
                     <Label htmlFor="time_of_day">Time</Label>
                     <Input id="time_of_day" type="time" {...form.register('time_of_day')} />
-                    <p className="text-xs text-muted-foreground">Timezone: {form.getValues('timezone') || localTimezone}</p>
+                    <p className="text-xs text-muted-foreground">Timezone: {defaultTimezone}</p>
                   </div>
                   {schedulePreset === 'weekly' ? (
                     <div className="space-y-2">
@@ -561,29 +557,6 @@ const SchedulesPage = () => {
                   )}
                 </div>
               )}
-
-              <div className="space-y-2">
-                <Label htmlFor="timezone">Timezone</Label>
-                <Controller
-                  control={form.control}
-                  name="timezone"
-                  render={({ field }) => (
-                    <Select value={field.value || defaultTimezone} onValueChange={field.onChange}>
-                      <SelectTrigger id="timezone">
-                        <SelectValue placeholder="Select timezone" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {timezoneOptions.map((timezone) => (
-                          <SelectItem key={timezone} value={timezone}>
-                            {timezone}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-                <p className="text-xs text-muted-foreground">Default timezone comes from Settings and can be overridden here.</p>
-              </div>
 
               <p className="text-xs text-muted-foreground">First run sends the latest item. Future runs catch up on new items automatically.</p>
 
@@ -713,20 +686,25 @@ const SchedulesPage = () => {
                 />
               </div>
 
-              <Controller
-                control={form.control}
-                name="active"
-                render={({ field }) => (
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="schedule_active"
-                      checked={field.value}
-                      onCheckedChange={(checked) => field.onChange(checked === true)}
-                    />
-                    <Label htmlFor="schedule_active" className="cursor-pointer">Running</Label>
-                  </div>
-                )}
-              />
+              <div className="space-y-2">
+                <Label htmlFor="state">Automation state</Label>
+                <Controller
+                  control={form.control}
+                  name="state"
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger id="state">
+                        <SelectValue placeholder="State" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="active">Running</SelectItem>
+                        <SelectItem value="paused">Paused</SelectItem>
+                        <SelectItem value="stopped">Stopped</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </div>
 
               <div className="flex gap-2">
                 <Button type="submit" disabled={saveSchedule.isPending} size="lg">
@@ -746,7 +724,7 @@ const SchedulesPage = () => {
         <Card>
           <CardHeader>
             <CardTitle>Your Automations</CardTitle>
-            <CardDescription>Click &quot;Run now&quot; to send immediately, or let automations run on their own.</CardDescription>
+            <CardDescription>Use &quot;Send once&quot; for an immediate one-time send, or let automations run on their own.</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
@@ -765,8 +743,12 @@ const SchedulesPage = () => {
                         <span>Last: {formatDateTime(schedule.last_run_at)}</span>
                       </div>
                     </div>
-                    <Badge variant={schedule.active ? 'success' : 'secondary'}>
-                      {schedule.active ? 'Running' : 'Paused'}
+                    <Badge variant={isRunning(schedule) ? 'success' : 'secondary'}>
+                      {getScheduleState(schedule) === 'active'
+                        ? 'Running'
+                        : getScheduleState(schedule) === 'paused'
+                          ? 'Paused'
+                          : 'Stopped'}
                     </Badge>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -774,16 +756,38 @@ const SchedulesPage = () => {
                       <Pencil className="mr-1 h-3 w-3" /> Edit
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => dispatchSchedule.mutate(schedule.id)} disabled={dispatchSchedule.isPending}>
-                      <Play className="mr-1 h-3 w-3" /> Run now
+                      <Play className="mr-1 h-3 w-3" /> Send once
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => toggleScheduleActive.mutate(schedule)}
-                      disabled={toggleScheduleActive.isPending || !toSchedulePayload(schedule)}
-                    >
-                      {schedule.active ? 'Pause' : 'Resume'}
-                    </Button>
+                    {getScheduleState(schedule) !== 'active' ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setScheduleState.mutate({ schedule, state: 'active' })}
+                        disabled={setScheduleState.isPending || !toSchedulePayload(schedule)}
+                      >
+                        Start
+                      </Button>
+                    ) : null}
+                    {getScheduleState(schedule) === 'active' ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setScheduleState.mutate({ schedule, state: 'paused' })}
+                        disabled={setScheduleState.isPending || !toSchedulePayload(schedule)}
+                      >
+                        Pause
+                      </Button>
+                    ) : null}
+                    {getScheduleState(schedule) !== 'stopped' ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setScheduleState.mutate({ schedule, state: 'stopped' })}
+                        disabled={setScheduleState.isPending || !toSchedulePayload(schedule)}
+                      >
+                        Stop
+                      </Button>
+                    ) : null}
                     <Button size="sm" variant="ghost" onClick={() => deleteSchedule.mutate(schedule.id)} className="text-destructive hover:text-destructive">
                       <Trash2 className="h-3 w-3" />
                     </Button>

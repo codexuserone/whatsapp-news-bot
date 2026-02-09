@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useForm, Controller, useWatch } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -12,14 +12,12 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
-import { Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2, PauseCircle, PlayCircle } from 'lucide-react';
-import { Switch } from '@/components/ui/switch';
+import { Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 
 const schema = z.object({
   name: z.string().min(1),
   url: z.string().url(),
   type: z.enum(['rss', 'atom', 'json']).optional(),
-  active: z.boolean().default(true),
   fetch_interval: z.coerce.number().min(300)
 });
 
@@ -50,7 +48,6 @@ const FeedsPage = () => {
     defaultValues: {
       name: '',
       url: '',
-      active: true,
       fetch_interval: 900
     }
   });
@@ -63,7 +60,6 @@ const FeedsPage = () => {
         name: active.name,
         url: active.url,
         type: active.type,
-        active: Boolean(active.active),
         fetch_interval: active.fetch_interval || 900
       });
     }
@@ -75,8 +71,13 @@ const FeedsPage = () => {
   };
 
   const saveFeed = useMutation({
-    mutationFn: (payload: FeedFormValues) =>
-      active ? api.put(`/api/feeds/${active.id}`, payload) : api.post('/api/feeds', payload),
+    mutationFn: (payload: FeedFormValues) => {
+      const body = {
+        ...payload,
+        active: active ? Boolean(active.active) : true
+      };
+      return active ? api.put(`/api/feeds/${active.id}`, body) : api.post('/api/feeds', body);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['feeds'] });
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
@@ -94,23 +95,6 @@ const FeedsPage = () => {
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
     },
     onError: (error: unknown) => alert(`Failed to delete feed: ${getErrorMessage(error)}`)
-  });
-
-  const toggleFeedActive = useMutation({
-    mutationFn: (feed: Feed) =>
-      api.put(`/api/feeds/${feed.id}`, {
-        name: feed.name,
-        url: feed.url,
-        type: feed.type,
-        active: !feed.active,
-        fetch_interval: feed.fetch_interval || 900
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['feeds'] });
-      queryClient.invalidateQueries({ queryKey: ['schedules'] });
-      queryClient.invalidateQueries({ queryKey: ['queue'] });
-    },
-    onError: (error: unknown) => alert(`Failed to update feed state: ${getErrorMessage(error)}`)
   });
 
 
@@ -135,14 +119,13 @@ const FeedsPage = () => {
     setTestLoading(false);
   };
 
-  const onSubmit = (values: FeedFormValues) => {
-    saveFeed.mutate(values);
-  };
+  const onSubmit = (values: FeedFormValues) => saveFeed.mutate(values);
 
   const activeAutomationCountByFeedId = React.useMemo(() => {
     const map = new Map<string, number>();
     for (const schedule of schedules) {
-      if (!schedule?.active || !schedule?.feed_id) continue;
+      const isRunning = schedule?.state ? schedule.state === 'active' : Boolean(schedule?.active);
+      if (!isRunning || !schedule?.feed_id) continue;
       const feedId = String(schedule.feed_id);
       map.set(feedId, (map.get(feedId) || 0) + 1);
     }
@@ -202,31 +185,9 @@ const FeedsPage = () => {
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <Controller
-                    control={form.control}
-                    name="active"
-                    render={({ field }) => (
-                      <div className="flex items-center space-x-2 rounded-md border p-4">
-                        <Switch
-                          id="active"
-                          checked={field.value}
-                          onCheckedChange={field.onChange}
-                        />
-                        <div className="flex-1 space-y-1">
-                           <Label htmlFor="active" className="cursor-pointer font-medium leading-none">
-                            Enable Feed
-                          </Label>
-                          <p className="text-sm text-muted-foreground">
-                            {field.value
-                              ? 'Automations using this feed can fetch and send new items.'
-                              : 'Feed is paused and ignored by automations.'}
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  />
-                </div>
+                <p className="text-xs text-muted-foreground">
+                  Feed polling only runs when at least one running automation uses this feed.
+                </p>
 
                 <input type="hidden" {...form.register('fetch_interval')} value={900} />
 
@@ -322,6 +283,13 @@ const FeedsPage = () => {
             <div className="space-y-3">
               {feeds.map((feed) => (
                 <div key={feed.id} className="rounded-lg border p-3">
+                  {(() => {
+                    const runningAutomationCount = activeAutomationCountByFeedId.get(feed.id) || 0;
+                    const pollingEnabled = Boolean(feed.active) && runningAutomationCount > 0;
+                    const badgeLabel = !feed.active ? 'Disabled' : pollingEnabled ? 'Polling' : 'Idle';
+                    const badgeVariant = pollingEnabled ? 'success' : 'secondary';
+                    return (
+                      <>
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <div className="min-w-0 flex-1">
                       <p className="font-medium truncate">{feed.name}</p>
@@ -351,25 +319,19 @@ const FeedsPage = () => {
                         ) : null}
                       </div>
                     </div>
-                    <Badge variant={feed.active ? 'success' : 'secondary'}>{feed.active ? 'Running' : 'Paused'}</Badge>
+                    <Badge variant={badgeVariant}>{badgeLabel}</Badge>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" variant="outline" onClick={() => selectFeed(feed)}>
                       <Pencil className="mr-1 h-3 w-3" /> Edit
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => toggleFeedActive.mutate(feed)}
-                      disabled={toggleFeedActive.isPending}
-                    >
-                      {feed.active ? <PauseCircle className="mr-1 h-3 w-3" /> : <PlayCircle className="mr-1 h-3 w-3" />}
-                      {feed.active ? 'Pause feed' : 'Resume feed'}
-                    </Button>
                     <Button size="sm" variant="ghost" onClick={() => deleteFeed.mutate(feed.id)} className="text-destructive hover:text-destructive">
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
+                      </>
+                    );
+                  })()}
                 </div>
               ))}
               {feeds.length === 0 && (

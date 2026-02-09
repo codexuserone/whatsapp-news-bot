@@ -5,6 +5,7 @@ const { fetchAndProcessFeed } = require('./feedProcessor');
 const { sendQueuedForSchedule } = require('./queueService');
 const { computeNextRunAt } = require('../utils/cron');
 const { withScheduleLock, cleanupStaleLocks } = require('./scheduleLockService');
+const { isScheduleRunning } = require('./scheduleState');
 const logger = require('../utils/logger');
 
 type WhatsAppClient = {
@@ -23,6 +24,7 @@ type WhatsAppClient = {
 type ScheduleRow = {
   id: string;
   feed_id?: string | null;
+  state?: string | null;
   active?: boolean;
   cron_expression?: string | null;
   timezone?: string | null;
@@ -196,14 +198,13 @@ const queueBatchSchedulesForFeed = async (feedId: string) => {
     const { data: schedules, error } = await supabase
       .from('schedules')
       .select('*')
-      .eq('active', true)
       .eq('feed_id', feedId);
 
     if (error) throw error;
 
-    const batchSchedules = (schedules || []).filter(
-      (schedule: ScheduleRow) => getDeliveryMode(schedule) === 'batched'
-    );
+    const batchSchedules = (schedules || []).filter((schedule: ScheduleRow) => {
+      return isScheduleRunning(schedule) && getDeliveryMode(schedule) === 'batched';
+    });
 
     if (!batchSchedules.length) return;
 
@@ -235,14 +236,13 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
     const { data: schedules, error } = await supabase
       .from('schedules')
       .select('*')
-      .eq('active', true)
       .eq('feed_id', feedId);
 
     if (error) throw error;
 
-    const immediateSchedules = (schedules || []).filter(
-      (schedule: ScheduleRow) => getDeliveryMode(schedule) !== 'batched' && !schedule.cron_expression
-    );
+    const immediateSchedules = (schedules || []).filter((schedule: ScheduleRow) => {
+      return isScheduleRunning(schedule) && getDeliveryMode(schedule) !== 'batched' && !schedule.cron_expression;
+    });
     logger.info({ feedId, count: immediateSchedules.length }, 'Triggering immediate schedules');
 
     for (const schedule of immediateSchedules) {
@@ -265,16 +265,16 @@ const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
   }
 
   try {
-    const { data: activeSchedules, error: schedulesError } = await supabase
+    const { data: scheduleRows, error: schedulesError } = await supabase
       .from('schedules')
-      .select('feed_id')
-      .eq('active', true)
+      .select('feed_id,active,state')
       .not('feed_id', 'is', null);
 
     if (schedulesError) throw schedulesError;
 
     const activeFeedIds = new Set(
-      (activeSchedules || [])
+      (scheduleRows || [])
+        .filter((schedule: { state?: string | null; active?: boolean | null }) => isScheduleRunning(schedule))
         .map((schedule: { feed_id?: string | null }) => schedule.feed_id)
         .filter(Boolean) as string[]
     );
@@ -354,12 +354,13 @@ const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
   try {
     const { data: schedules, error } = await supabase
       .from('schedules')
-      .select('*')
-      .eq('active', true);
+      .select('*');
 
     if (error) throw error;
 
-    for (const schedule of schedules || []) {
+    const runningSchedules = (schedules || []).filter((schedule: ScheduleRow) => isScheduleRunning(schedule));
+
+    for (const schedule of runningSchedules) {
       const mode = getDeliveryMode(schedule);
       const timezone = schedule.timezone || 'UTC';
 

@@ -1,5 +1,6 @@
 const { getSupabaseClient } = require('../db/supabase');
 const { isCurrentlyShabbos } = require('./shabbosService');
+const { isScheduleRunning, resolveScheduleState } = require('./scheduleState');
 const logger = require('../utils/logger');
 const { getErrorMessage } = require('../utils/errorUtils');
 
@@ -97,7 +98,8 @@ const getScheduleDiagnostics = async (scheduleId: string, whatsappClient?: Whats
     diagnostics.schedule = {
       id: schedule.id,
       name: schedule.name,
-      active: schedule.active,
+      state: resolveScheduleState(schedule),
+      active: isScheduleRunning(schedule),
       feed_id: schedule.feed_id,
       template_id: schedule.template_id,
       target_ids: Array.isArray(schedule.target_ids) ? schedule.target_ids : [],
@@ -108,8 +110,8 @@ const getScheduleDiagnostics = async (scheduleId: string, whatsappClient?: Whats
       last_run_at: schedule.last_run_at || null
     };
 
-    if (!schedule.active) {
-      diagnostics.blockingReasons.push('Schedule is inactive');
+    if (!isScheduleRunning(schedule)) {
+      diagnostics.blockingReasons.push('Automation is paused/stopped');
     }
 
     if (!schedule.feed_id) {

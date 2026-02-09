@@ -141,9 +141,13 @@ const feedsRoutes = () => {
 
   router.post('/', validate(schemas.feed), async (req: Request, res: Response) => {
     try {
+      const payload = { ...req.body } as Record<string, unknown>;
+      if (typeof payload.active !== 'boolean') {
+        payload.active = true;
+      }
       const { data: feed, error } = await getDb()
         .from('feeds')
-        .insert(req.body)
+        .insert(payload)
         .select()
         .single();
       
@@ -158,9 +162,23 @@ const feedsRoutes = () => {
 
   router.put('/:id', validate(schemas.feed), async (req: Request, res: Response) => {
     try {
+      const supabase = getDb();
+      const payload = { ...req.body } as Record<string, unknown>;
+      if (typeof payload.active !== 'boolean') {
+        const { data: currentFeed, error: currentFeedError } = await supabase
+          .from('feeds')
+          .select('id,active')
+          .eq('id', req.params.id)
+          .single();
+        if (currentFeedError || !currentFeed) {
+          throw currentFeedError || new Error('Feed not found');
+        }
+        payload.active = Boolean((currentFeed as { active?: boolean }).active);
+      }
+
       const { data: feed, error } = await getDb()
         .from('feeds')
-        .update(req.body)
+        .update(payload)
         .eq('id', req.params.id)
         .select()
         .single();
@@ -168,7 +186,7 @@ const feedsRoutes = () => {
       if (error) throw error;
 
       let pausedQueueItems = 0;
-      if (req.body?.active === false) {
+      if (payload?.active === false) {
         pausedQueueItems = await pausePendingLogsForFeed(String(req.params.id));
       }
 

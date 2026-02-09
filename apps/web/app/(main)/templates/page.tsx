@@ -19,7 +19,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Layers, Pencil, Trash2, Eye, Loader2, Send } from 'lucide-react';
 
 const schema = z.object({
-  id: z.string().uuid().optional(),
   name: z.string().min(1),
   content: z.string().min(1),
   description: z.string().optional(),
@@ -64,7 +63,6 @@ const TemplatesPage = () => {
   const [sampleFeedId, setSampleFeedId] = useState<string>('__all');
   const [previewTargetJid, setPreviewTargetJid] = useState<string>('');
   const [previewSendNotice, setPreviewSendNotice] = useState<string>('');
-  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
@@ -123,7 +121,7 @@ const TemplatesPage = () => {
 
   const form = useForm<TemplateFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { id: undefined, name: '', content: '', description: '', active: true, send_mode: 'image' }
+    defaultValues: { name: '', content: '', description: '', active: true, send_mode: 'image' }
   });
 
   const watchedContent = useWatch({ control: form.control, name: 'content' });
@@ -144,7 +142,6 @@ const TemplatesPage = () => {
   useEffect(() => {
     if (active) {
       form.reset({
-        id: active.id,
         name: active.name,
         content: active.content,
         description: active.description || '',
@@ -156,15 +153,13 @@ const TemplatesPage = () => {
 
   const saveTemplate = useMutation({
     mutationFn: (payload: TemplateFormValues) => {
-      const { id, ...body } = payload;
-      const resolvedId = id || editingTemplateId || active?.id;
-      return resolvedId ? api.put(`/api/templates/${resolvedId}`, body) : api.post('/api/templates', body);
+      const templateId = active?.id || null;
+      return templateId ? api.put(`/api/templates/${templateId}`, payload) : api.post('/api/templates', payload);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['templates'] });
       setActive(null);
-      setEditingTemplateId(null);
-      form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_mode: 'image' });
+      form.reset({ name: '', content: '', description: '', active: true, send_mode: 'image' });
     },
     onError: (error: unknown) => alert(`Failed to save template: ${getErrorMessage(error)}`)
   });
@@ -176,8 +171,7 @@ const TemplatesPage = () => {
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
       if (active?.id === id) {
         setActive(null);
-        setEditingTemplateId(null);
-        form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_mode: 'image' });
+        form.reset({ name: '', content: '', description: '', active: true, send_mode: 'image' });
       }
     },
     onError: (error: unknown) => alert(`Failed to delete template: ${getErrorMessage(error)}`)
@@ -201,11 +195,10 @@ const TemplatesPage = () => {
 
   const onSubmit = (values: TemplateFormValues) => {
     saveTemplate.mutate({
-      id: values.id,
       name: values.name,
       content: values.content,
       description: values.description,
-      active: values.active,
+      active: true,
       send_mode: values.send_mode
     });
   };
@@ -419,8 +412,6 @@ const TemplatesPage = () => {
                   <Input id="description" {...form.register('description')} placeholder="Template for daily news updates" />
                 </div>
 
-                <input type="hidden" {...form.register('id')} />
-
                 <div className="space-y-4 rounded-lg border p-4">
                   <Controller
                     control={form.control}
@@ -458,29 +449,9 @@ const TemplatesPage = () => {
                     )}
                   />
 
-                  <div className="flex items-center gap-4 border-t pt-4">
-                    <Controller
-                      control={form.control}
-                      name="active"
-                      render={({ field }) => (
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            id="active"
-                            checked={field.value}
-                            onCheckedChange={(checked) => field.onChange(checked === true)}
-                          />
-                          <div>
-                            <Label htmlFor="active" className="cursor-pointer font-medium">
-                              Enabled
-                            </Label>
-                            <p className="text-[0.7rem] text-muted-foreground">
-                              Keep this template available for automations
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                    />
-                  </div>
+                  <p className="border-t pt-3 text-xs text-muted-foreground">
+                    Templates are always available to automations; pick which one to use on the Automations page.
+                  </p>
                 </div>
 
                 <div className="flex gap-2">
@@ -494,8 +465,7 @@ const TemplatesPage = () => {
                       variant="outline"
                       onClick={() => {
                         setActive(null);
-                        setEditingTemplateId(null);
-                        form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_mode: 'image' });
+                        form.reset({ name: '', content: '', description: '', active: true, send_mode: 'image' });
                       }}
                     >
                       Cancel
@@ -621,8 +591,8 @@ const TemplatesPage = () => {
                         <p className="text-xs text-muted-foreground truncate">{template.description}</p>
                       )}
                     </div>
-                    <Badge variant={template.active ? 'success' : 'secondary'}>
-                      {template.active ? 'Active' : 'Inactive'}
+                    <Badge variant="secondary" className="capitalize">
+                      {template.send_mode ? template.send_mode.replace('_', ' ') : 'image'}
                     </Badge>
                   </div>
                   <div className="flex gap-2">
@@ -630,7 +600,6 @@ const TemplatesPage = () => {
                       size="sm"
                       variant="outline"
                       onClick={() => {
-                        setEditingTemplateId(template.id);
                         setActive(template);
                       }}
                     >

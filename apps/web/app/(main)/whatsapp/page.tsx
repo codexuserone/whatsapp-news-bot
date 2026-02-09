@@ -61,7 +61,7 @@ const WhatsAppPage = () => {
   const queryClient = useQueryClient();
   const [testTarget, setTestTarget] = React.useState('');
   const [testMessage, setTestMessage] = React.useState('');
-  const [composeMode, setComposeMode] = React.useState<'text_preview' | 'text_only' | 'image_caption' | 'image_only'>('text_preview');
+  const [composeMode, setComposeMode] = React.useState<'text_preview' | 'text_only' | 'media_with_text' | 'media_only'>('text_preview');
   const [attachmentDataUrl, setAttachmentDataUrl] = React.useState('');
   const [attachmentMimeType, setAttachmentMimeType] = React.useState('');
   const [attachmentName, setAttachmentName] = React.useState('');
@@ -105,7 +105,7 @@ const WhatsAppPage = () => {
     }
   });
 
-  const reconnect = useMutation({
+  const refreshQr = useMutation({
     mutationFn: () => api.post('/api/whatsapp/hard-refresh'),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
@@ -170,7 +170,7 @@ const WhatsAppPage = () => {
     setAttachmentName(file.name);
   };
 
-  const needsAttachment = composeMode === 'image_caption' || composeMode === 'image_only';
+  const needsAttachment = composeMode === 'media_with_text' || composeMode === 'media_only';
   const hasAttachment = Boolean(attachmentDataUrl);
   const hasAnyText = Boolean(testMessage.trim());
 
@@ -181,16 +181,16 @@ const WhatsAppPage = () => {
       ? 'Write your message (include a link if you want a preview)'
       : composeMode === 'text_only'
         ? 'Write plain text'
-        : composeMode === 'image_only'
-          ? 'Optional caption'
-          : 'Write caption for your attachment';
+        : composeMode === 'media_only'
+          ? 'Optional message text'
+          : 'Write text to send with your attachment';
 
   const submitTestMessage = () => {
     if (!canSendTest) return;
 
     const payload: SendTestPayload = {
       jid: testTarget,
-      includeCaption: composeMode !== 'image_only',
+      includeCaption: composeMode !== 'media_only',
       disableLinkPreview: composeMode === 'text_only'
     };
 
@@ -221,9 +221,9 @@ const WhatsAppPage = () => {
             {disconnect.isPending ? 'Disconnecting...' : 'Disconnect'}
           </Button>
           {!isConnected ? (
-            <Button onClick={() => reconnect.mutate()} disabled={reconnect.isPending}>
-              <RefreshCw className={`mr-2 h-4 w-4 ${reconnect.isPending ? 'animate-spin' : ''}`} />
-              {reconnect.isPending ? 'Refreshing...' : 'Refresh QR Code'}
+            <Button onClick={() => refreshQr.mutate()} disabled={refreshQr.isPending}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${refreshQr.isPending ? 'animate-spin' : ''}`} />
+              {refreshQr.isPending ? 'Refreshing QR...' : 'Get QR code'}
             </Button>
           ) : null}
         </div>
@@ -233,10 +233,10 @@ const WhatsAppPage = () => {
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle>Connection Status</CardTitle>
+              <CardTitle>WhatsApp Session</CardTitle>
               {getStatusBadge()}
             </div>
-            <CardDescription>Current account and connection health</CardDescription>
+            <CardDescription>Current account session</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-3">
@@ -254,7 +254,7 @@ const WhatsAppPage = () => {
 
             {!isConnected && !isQrReady ? (
               <div className="rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
-                Click <strong>Refresh QR Code</strong> to request a fresh QR code.
+                Tap <strong>Get QR code</strong> to request a fresh login QR.
               </div>
             ) : null}
           </CardContent>
@@ -357,24 +357,24 @@ const WhatsAppPage = () => {
                 </Button>
                 <Button
                   type="button"
-                  variant={composeMode === 'image_caption' ? 'default' : 'outline'}
-                  onClick={() => setComposeMode('image_caption')}
+                  variant={composeMode === 'media_with_text' ? 'default' : 'outline'}
+                  onClick={() => setComposeMode('media_with_text')}
                 >
-                  Image/video + caption
+                  Media + text
                 </Button>
                 <Button
                   type="button"
-                  variant={composeMode === 'image_only' ? 'default' : 'outline'}
-                  onClick={() => setComposeMode('image_only')}
+                  variant={composeMode === 'media_only' ? 'default' : 'outline'}
+                  onClick={() => setComposeMode('media_only')}
                 >
-                  Image/video only
+                  Media only
                 </Button>
               </div>
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="testMessage">
-                {composeMode === 'image_only' ? 'Caption (optional)' : 'Message'}
+                {composeMode === 'media_only' ? 'Message (optional)' : 'Message'}
               </Label>
               <Textarea
                 id="testMessage"

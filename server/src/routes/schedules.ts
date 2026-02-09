@@ -4,6 +4,7 @@ const { getSupabaseClient } = require('../db/supabase');
 const { sendQueuedForSchedule, queueLatestForSchedule } = require('../services/queueService');
 const { initSchedulers } = require('../services/schedulerService');
 const { getScheduleDiagnostics } = require('../services/diagnosticsService');
+const { applyScheduleStatePayload, isScheduleRunning, resolveScheduleState } = require('../services/scheduleState');
 const { validate, schemas } = require('../middleware/validation');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
@@ -39,16 +40,23 @@ const scheduleRoutes = () => {
     return raw.replace(/\s+/g, ' ');
   };
 
-  const normalizeSchedulePayload = (payload: Record<string, unknown>, options?: { forInsert?: boolean }) => {
+  const normalizeSchedulePayload = (
+    payload: Record<string, unknown>,
+    options?: { forInsert?: boolean; fallback?: Record<string, unknown> | null }
+  ) => {
     const next = { ...payload } as Record<string, unknown>;
+    delete next.id;
     const mode = next.delivery_mode === 'batch' || next.delivery_mode === 'batched' ? 'batched' : 'immediate';
     const defaultBatchTimes = ['07:00', '15:00', '22:00'];
     const batchTimes = normalizeBatchTimes(next.batch_times);
     const cronExpression = normalizeCronExpression(next.cron_expression);
+    const state = applyScheduleStatePayload(next, options?.fallback || null);
 
     next.delivery_mode = mode;
     next.batch_times = batchTimes.length ? batchTimes : defaultBatchTimes;
     next.cron_expression = cronExpression;
+    next.state = state.state;
+    next.active = state.active;
 
     if (options?.forInsert && mode === 'batched') {
       next.last_queued_at = new Date().toISOString();
@@ -96,7 +104,13 @@ const scheduleRoutes = () => {
         })
       );
 
-      res.json(schedulesWithTargets);
+      const normalized = schedulesWithTargets.map((schedule: Record<string, unknown>) => ({
+        ...schedule,
+        state: resolveScheduleState(schedule),
+        active: isScheduleRunning(schedule)
+      }));
+
+      res.json(normalized);
     } catch (error) {
       console.error('Error fetching schedules:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
@@ -117,14 +131,18 @@ const scheduleRoutes = () => {
 
       // For immediate schedules, queue+send once so the system shows activity
       if (
-        schedule?.active &&
+        isScheduleRunning(schedule) &&
         !schedule?.cron_expression &&
         schedule?.delivery_mode !== 'batched' &&
         schedule?.delivery_mode !== 'batch'
       ) {
         dispatchImmediate(schedule.id, req.app.locals.whatsapp);
       }
-      res.json(schedule);
+      res.json({
+        ...schedule,
+        state: resolveScheduleState(schedule),
+        active: isScheduleRunning(schedule)
+      });
     } catch (error) {
       console.error('Error creating schedule:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
@@ -136,7 +154,7 @@ const scheduleRoutes = () => {
       const supabase = getDb();
       const { data: currentSchedule, error: currentScheduleError } = await supabase
         .from('schedules')
-        .select('id,active')
+        .select('id,active,state')
         .eq('id', req.params.id)
         .single();
 
@@ -144,7 +162,10 @@ const scheduleRoutes = () => {
         throw currentScheduleError || new Error('Schedule not found');
       }
 
-      const payload = normalizeSchedulePayload(req.body);
+      const payload = normalizeSchedulePayload(req.body, {
+        forInsert: false,
+        fallback: currentSchedule as Record<string, unknown>
+      });
       const { data: schedule, error } = await supabase
         .from('schedules')
         .update(payload)
@@ -155,7 +176,7 @@ const scheduleRoutes = () => {
       if (error) throw error;
 
       let pausedQueueItems = 0;
-      const turnedOff = Boolean(currentSchedule.active) && schedule?.active === false;
+      const turnedOff = isScheduleRunning(currentSchedule) && !isScheduleRunning(schedule);
       if (turnedOff) {
         const { data: pausedRows, error: pauseError } = await supabase
           .from('message_logs')
@@ -175,7 +196,7 @@ const scheduleRoutes = () => {
       refreshSchedulers(req.app.locals.whatsapp);
 
       if (
-        schedule?.active &&
+        isScheduleRunning(schedule) &&
         !schedule?.cron_expression &&
         schedule?.delivery_mode !== 'batched' &&
         schedule?.delivery_mode !== 'batch'
@@ -184,6 +205,8 @@ const scheduleRoutes = () => {
       }
       res.json({
         ...schedule,
+        state: resolveScheduleState(schedule),
+        active: isScheduleRunning(schedule),
         paused_queue_items: pausedQueueItems
       });
     } catch (error) {
@@ -250,10 +273,13 @@ const scheduleRoutes = () => {
     try {
       const whatsapp = req.app.locals.whatsapp;
       const supabase = getDb();
-      const { data: schedules, error } = await supabase.from('schedules').select('id').eq('active', true);
+      const { data: schedules, error } = await supabase.from('schedules').select('id,active,state');
       if (error) throw error;
 
-      const ids = (schedules || []).map((s: { id?: string }) => s.id).filter(Boolean) as string[];
+      const ids = (schedules || [])
+        .filter((schedule: Record<string, unknown>) => isScheduleRunning(schedule))
+        .map((s: { id?: string }) => s.id)
+        .filter(Boolean) as string[];
       let sent = 0;
       let queued = 0;
       const results: Array<Record<string, unknown>> = [];

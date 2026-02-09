@@ -33,6 +33,7 @@ export type Target = {
 export type Schedule = {
   id: string;
   name: string;
+  state?: 'active' | 'paused' | 'stopped' | 'draft' | null;
   cron_expression?: string | null;
   timezone?: string | null;
   feed_id?: string | null;
@@ -120,6 +121,9 @@ export type QueueStats = {
   failed: number;
   skipped: number;
   total: number;
+  queued_now?: number;
+  history_window_total?: number;
+  history_all_time_total?: number;
   sent_all_time?: number;
   failed_all_time?: number;
   skipped_all_time?: number;

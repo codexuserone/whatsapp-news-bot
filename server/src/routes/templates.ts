@@ -128,9 +128,12 @@ const templateRoutes = () => {
         .update({ ...payload, variables })
         .eq('id', req.params.id)
         .select()
-        .single();
+        .maybeSingle();
       
       if (error) throw error;
+      if (!template) {
+        return res.status(404).json({ error: 'Template not found' });
+      }
       res.json(normalizeTemplateResponse(template));
     } catch (error) {
       console.error('Error updating template:', error);

@@ -35,8 +35,13 @@ const targetRoutes = () => {
   };
 
   const normalizeChannelJid = (phoneNumber: string) => {
-    const cleaned = phoneNumber.replace(/[^0-9]/g, '');
-    return cleaned ? `${cleaned}@newsletter` : phoneNumber;
+    const trimmed = String(phoneNumber || '').trim();
+    if (!trimmed) return trimmed;
+    if (/^[a-z0-9._-]+@newsletter(?:_[a-z0-9]+)?$/i.test(trimmed)) {
+      return trimmed;
+    }
+    const cleaned = trimmed.replace(/[^0-9]/g, '');
+    return cleaned ? `${cleaned}@newsletter` : trimmed;
   };
 
   const normalizeIndividualJid = (phoneNumber: string) => {

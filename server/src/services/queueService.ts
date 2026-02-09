@@ -13,6 +13,7 @@ const { computeNextRunAt } = require('../utils/cron');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { normalizeMessageText } = require('../utils/messageText');
 const { ensureWhatsAppConnected } = require('./whatsappConnection');
+const { isScheduleRunning } = require('./scheduleState');
 
 type Target = {
   id?: string;
@@ -876,6 +877,7 @@ type Schedule = {
   feed_id?: string | null;
   template_id?: string | null;
   target_ids?: string[];
+  state?: string | null;
   delivery_mode?: 'immediate' | 'batched' | 'batch' | null;
   batch_times?: string[] | null;
   cron_expression?: string | null;
@@ -1142,8 +1144,8 @@ const queueLatestForSchedule = async (
     schedule = (data as Schedule | null) ?? null;
   }
 
-  if (!schedule || !schedule.active) {
-    return { queued: 0, inserted: 0, revived: 0, skipped: 0, reason: 'Schedule not found or inactive' };
+  if (!schedule || !isScheduleRunning(schedule)) {
+    return { queued: 0, inserted: 0, revived: 0, skipped: 0, reason: 'Schedule not found or not running' };
   }
 
   if (!schedule.feed_id) {
@@ -1287,9 +1289,11 @@ const sendQueuedForSchedule = async (
       .eq('id', scheduleId)
       .single();
 
-    if (scheduleError || !schedule || !schedule.active) {
-      logger.warn({ scheduleId, error: scheduleError?.message, schedule, active: schedule?.active },
-        'Schedule not found or inactive');
+    if (scheduleError || !schedule || !isScheduleRunning(schedule)) {
+      logger.warn(
+        { scheduleId, error: scheduleError?.message, schedule, active: schedule?.active, state: schedule?.state },
+        'Schedule not found or not running'
+      );
       return { sent: 0, queued: 0 };
     }
 

@@ -81,9 +81,9 @@ const FeedItemsPage = () => {
     if (sent > 0) {
       return { label: `Sent (${sent})`, variant: 'success' as const };
     }
-    // Show clearer status when not yet queued
+    // Item exists in feed history but no queue rows were created yet.
     if (total === 0) {
-      return { label: 'New - will send soon', variant: 'secondary' as const };
+      return { label: 'Not queued yet', variant: 'secondary' as const };
     }
     return { label: 'Waiting', variant: 'secondary' as const };
   };

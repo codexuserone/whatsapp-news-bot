@@ -9,6 +9,7 @@ const { getErrorMessage } = require('../utils/errorUtils');
 const useSupabaseAuthState = require('./authStore');
 const { saveIncomingMessages } = require('../services/messageService');
 const { sendPendingForAllSchedules } = require('../services/queueService');
+const { runTargetAutoSyncPass } = require('../services/targetSyncService');
 
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict';
 
@@ -900,6 +901,7 @@ class WhatsAppClient {
           } catch (error) {
             logger.error({ error }, 'Failed to send pending schedules after connect');
           }
+          void runTargetAutoSyncPass(this, { silent: true });
         }
 
         if (connection === 'close') {

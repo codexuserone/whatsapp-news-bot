@@ -7,6 +7,7 @@ import type { Feed, LogEntry, QueueStats, Schedule, Target, Template } from '@/l
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '@/components/ui/table';
 import { Rss, Layers, Target as TargetIcon, CalendarClock, ArrowRight, Send } from 'lucide-react';
 
@@ -17,6 +18,10 @@ const OverviewPage = () => {
   const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
   const { data: schedules = [] } = useQuery<Schedule[]>({ queryKey: ['schedules'], queryFn: () => api.get('/api/schedules') });
   const { data: logs = [] } = useQuery<LogEntry[]>({ queryKey: ['logs'], queryFn: () => api.get('/api/logs') });
+  const { data: settings } = useQuery<{ app_paused?: boolean }>({
+    queryKey: ['settings'],
+    queryFn: () => api.get('/api/settings')
+  });
   const { data: queueStats } = useQuery<QueueStats>({
     queryKey: ['queue-stats'],
     queryFn: () => api.get('/api/queue/stats?window_hours=24'),
@@ -28,6 +33,16 @@ const OverviewPage = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['logs'] });
       queryClient.invalidateQueries({ queryKey: ['queue'] });
+    }
+  });
+
+  const toggleAppPause = useMutation({
+    mutationFn: (nextPaused: boolean) => api.put('/api/settings', { app_paused: nextPaused }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      queryClient.invalidateQueries({ queryKey: ['queue-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['schedules'] });
     }
   });
 
@@ -86,6 +101,17 @@ const OverviewPage = () => {
             <CardDescription>Common tasks and shortcuts</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
+            <label className="flex items-center justify-between rounded-lg border p-3 text-sm">
+              <div className="space-y-0.5">
+                <span className="font-medium">Pause entire app</span>
+                <p className="text-xs text-muted-foreground">Stops feed polling and automatic sends.</p>
+              </div>
+              <Switch
+                checked={settings?.app_paused === true}
+                onCheckedChange={(checked) => toggleAppPause.mutate(checked === true)}
+                disabled={toggleAppPause.isPending}
+              />
+            </label>
             <Button asChild variant="outline" className="justify-start">
               <Link href="/feeds">
                 <Rss className="mr-2 h-4 w-4" />

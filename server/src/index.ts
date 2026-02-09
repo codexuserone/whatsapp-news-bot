@@ -10,6 +10,7 @@ const { keepAlive, stopKeepAlive } = require('./services/keepAlive');
 const registerRoutes = require('./routes');
 const settingsService = require('./services/settingsService');
 const { initSchedulers, clearAll } = require('./services/schedulerService');
+const { startTargetAutoSync, stopTargetAutoSync } = require('./services/targetSyncService');
 const {
   scheduleRetentionCleanup,
   scheduleProcessingWatchdog,
@@ -36,6 +37,7 @@ const gracefulShutdown = async (
   try {
     // Clear all intervals and timeouts
     clearAll();
+    stopTargetAutoSync();
     stopKeepAlive();
     
     // Disconnect WhatsApp
@@ -175,6 +177,7 @@ const start = async () => {
   const whatsappClient = disableWhatsApp ? null : createWhatsAppClient();
   if (whatsappClient) {
     await whatsappClient.init();
+    startTargetAutoSync(whatsappClient);
   } else {
     logger.warn('WhatsApp is disabled via DISABLE_WHATSAPP');
   }

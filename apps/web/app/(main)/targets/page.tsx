@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
@@ -33,23 +33,6 @@ const TYPE_BADGES: Record<
   status: { label: 'Status', variant: 'warning', icon: Radio }
 };
 
-type SyncTargetsResult = {
-  ok: boolean;
-  discovered: {
-    groups: number;
-    channels: number;
-    status: number;
-  };
-  candidates: number;
-  inserted: number;
-  updated: number;
-  unchanged: number;
-  diagnostics?: {
-    limitation?: string | null;
-    methodErrors?: string[];
-  } | null;
-};
-
 type TargetPayload = {
   name: string;
   phone_number: string;
@@ -63,7 +46,6 @@ const TargetsPage = () => {
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | Target['type']>('all');
   const [deleteTarget, setDeleteTarget] = useState<Target | null>(null);
-  const syncInFlightRef = useRef(false);
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
     queryKey: ['targets'],
@@ -89,54 +71,6 @@ const TargetsPage = () => {
   });
 
   const isConnected = waStatus?.status === 'connected';
-
-  const syncTargets = useMutation({
-    mutationFn: () => api.post<SyncTargetsResult>('/api/targets/sync', { includeStatus: true }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['targets'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
-    }
-  });
-
-  const syncTargetsMutateRef = useRef(syncTargets.mutateAsync);
-
-  useEffect(() => {
-    syncTargetsMutateRef.current = syncTargets.mutateAsync;
-  }, [syncTargets.mutateAsync]);
-
-  // Auto-sync: runs immediately when connected, then every 60 seconds
-  useEffect(() => {
-    if (!isConnected) return;
-
-    // Use a ref to track if component is mounted
-    const mounted = { current: true };
-
-    const runAutoSync = async () => {
-      if (!mounted.current || syncInFlightRef.current) return;
-      syncInFlightRef.current = true;
-      try {
-        await syncTargetsMutateRef.current();
-      } catch {
-        // Silently fail - will retry on next interval
-      } finally {
-        syncInFlightRef.current = false;
-      }
-    };
-
-    // Run immediately
-    void runAutoSync();
-
-    // Then every 60 seconds
-    const timer = setInterval(() => {
-      void runAutoSync();
-    }, 60_000);
-
-    return () => {
-      mounted.current = false;
-      clearInterval(timer);
-    };
-  }, [isConnected]);
 
   const updateTarget = useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: TargetPayload }) => api.put(`/api/targets/${id}`, payload),
@@ -216,10 +150,9 @@ const TargetsPage = () => {
                 <p className="text-xl font-semibold">{targets.length}</p>
               </div>
             </div>
-
-            {syncTargets.isSuccess && (syncTargets.data?.discovered?.channels || 0) === 0 ? (
+            {isConnected && waChannels.length === 0 ? (
               <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                No channels discovered yet. Open the channel in WhatsApp on your phone, send one message there, and it will auto-sync here.
+                No channels discovered yet. Open the channel in WhatsApp on your phone and send one message there.
               </p>
             ) : null}
           </CardContent>

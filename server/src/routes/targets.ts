@@ -4,6 +4,7 @@ const { getSupabaseClient } = require('../db/supabase');
 const { validate, schemas, sanitizePhoneNumber } = require('../middleware/validation');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
+const { syncTargetsFromWhatsApp } = require('../services/targetSyncService');
 
 const targetRoutes = () => {
   const router = express.Router();
@@ -77,144 +78,20 @@ const targetRoutes = () => {
     return next;
   };
 
-  type SyncCandidate = {
-    name: string;
-    phone_number: string;
-    type: 'group' | 'channel' | 'status';
-    active: boolean;
-    notes?: string | null;
-  };
-
-  type ExistingTarget = {
-    id: string;
-    name: string;
-    phone_number: string;
-    type: 'individual' | 'group' | 'channel' | 'status';
-    active: boolean;
-    notes?: string | null;
-  };
-
   router.post('/sync', async (req: Request, res: Response) => {
     try {
       const whatsapp = req.app.locals.whatsapp as {
         getStatus?: () => { status?: string };
-        getGroups?: () => Promise<Array<{ jid?: string; name?: string; size?: number }>>;
-        getChannels?: () => Promise<Array<{ jid?: string; name?: string; subscribers?: number }>>;
-        getChannelsWithDiagnostics?: () => Promise<{
-          channels: Array<{ jid?: string; name?: string; subscribers?: number }>;
-          diagnostics?: Record<string, unknown>;
-        }>;
       } | null;
-
-      if (!whatsapp || whatsapp.getStatus?.()?.status !== 'connected') {
-        return res.status(400).json({ error: 'WhatsApp is not connected' });
-      }
-
-      const groupsRaw = await (whatsapp.getGroups?.() || []);
-      const channelsWithDiagnostics =
-        typeof whatsapp.getChannelsWithDiagnostics === 'function'
-          ? await whatsapp.getChannelsWithDiagnostics()
-          : null;
-      const channelsRaw = channelsWithDiagnostics?.channels || (await (whatsapp.getChannels?.() || []));
-
       const includeStatus =
         String((req.body as { includeStatus?: unknown })?.includeStatus ?? req.query.includeStatus ?? 'true').toLowerCase() !==
         'false';
 
-      const candidates: SyncCandidate[] = [];
-      const usedJids = new Set<string>();
-
-      for (const group of groupsRaw) {
-        const jid = String(group?.jid || '').trim();
-        if (!jid || usedJids.has(jid)) continue;
-        usedJids.add(jid);
-        candidates.push({
-          name: String(group?.name || jid).trim() || jid,
-          phone_number: jid,
-          type: 'group',
-          active: true,
-          notes: Number.isFinite(group?.size) ? `${Number(group?.size || 0)} members` : null
-        });
+      const result = await syncTargetsFromWhatsApp(whatsapp, { includeStatus });
+      if (!result.ok) {
+        return res.status(400).json({ error: result.reason || 'WhatsApp is not connected' });
       }
-
-      for (const channel of channelsRaw) {
-        const jid = normalizeChannelJid(String(channel?.jid || '').trim());
-        if (!jid || usedJids.has(jid)) continue;
-        usedJids.add(jid);
-        candidates.push({
-          name: String(channel?.name || jid).trim() || jid,
-          phone_number: jid,
-          type: 'channel',
-          active: true,
-          notes: Number.isFinite(channel?.subscribers) ? `${Number(channel?.subscribers || 0)} subscribers` : null
-        });
-      }
-
-      if (includeStatus && !usedJids.has('status@broadcast')) {
-        candidates.push({
-          name: 'My Status',
-          phone_number: 'status@broadcast',
-          type: 'status',
-          active: true,
-          notes: 'Posts to your WhatsApp Status'
-        });
-      }
-
-      const { data: existingRows, error: existingError } = await getDb().from('targets').select('*');
-      if (existingError) throw existingError;
-
-      const existing = (existingRows || []) as ExistingTarget[];
-      const existingByJid = new Map<string, ExistingTarget>();
-      for (const row of existing) {
-        const jid = String(row.phone_number || '').trim();
-        if (!jid) continue;
-        existingByJid.set(jid, row);
-      }
-
-      let inserted = 0;
-      let updated = 0;
-      let unchanged = 0;
-
-      for (const candidate of candidates) {
-        const current = existingByJid.get(candidate.phone_number);
-        if (!current) {
-          const { error: insertError } = await getDb().from('targets').insert(candidate);
-          if (insertError) throw insertError;
-          inserted += 1;
-          continue;
-        }
-
-        const patch: Partial<SyncCandidate> = {};
-        if (current.name !== candidate.name) patch.name = candidate.name;
-        if (current.type !== candidate.type) patch.type = candidate.type;
-        if (String(current.notes || '') !== String(candidate.notes || '')) patch.notes = candidate.notes || null;
-
-        if (!Object.keys(patch).length) {
-          unchanged += 1;
-          continue;
-        }
-
-        const { error: updateError } = await getDb()
-          .from('targets')
-          .update(patch)
-          .eq('id', current.id);
-        if (updateError) throw updateError;
-        updated += 1;
-      }
-
-      return res.json({
-        ok: true,
-        discovered: {
-          groups: groupsRaw.length,
-          channels: channelsRaw.length,
-          status: includeStatus ? 1 : 0
-        },
-        candidates: candidates.length,
-        inserted,
-        updated,
-        unchanged,
-        diagnostics: channelsWithDiagnostics?.diagnostics || null
-      });
+      return res.json(result);
     } catch (error) {
       console.error('Error syncing targets:', error);
       return res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });

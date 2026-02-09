@@ -6,6 +6,7 @@ const { sendQueuedForSchedule } = require('./queueService');
 const { computeNextRunAt } = require('../utils/cron');
 const { withScheduleLock, cleanupStaleLocks } = require('./scheduleLockService');
 const { isScheduleRunning } = require('./scheduleState');
+const settingsService = require('./settingsService');
 const logger = require('../utils/logger');
 
 type WhatsAppClient = {
@@ -91,6 +92,15 @@ const waitForFeedIdle = async (
   return true;
 };
 
+const isAppPaused = async () => {
+  try {
+    const settings = await settingsService.getSettings();
+    return settings?.app_paused === true;
+  } catch {
+    return false;
+  }
+};
+
 const clearAll = () => {
   feedIntervals.forEach((interval) => clearInterval(interval));
   feedIntervals.clear();
@@ -105,6 +115,11 @@ const runScheduleOnce = async (
   whatsappClient?: WhatsAppClient,
   options?: RunScheduleOptions
 ) => {
+  if (await isAppPaused()) {
+    logger.info({ scheduleId }, 'Skipping schedule run - app is paused');
+    return;
+  }
+
   // Check local in-flight first (fast path)
   if (scheduleInFlight.get(scheduleId)) {
     logger.info({ scheduleId }, 'Skipping schedule run - already in progress locally');
@@ -186,6 +201,7 @@ const computeNextBatchRunAt = (times: string[], timezone?: string | null) => {
 
 const queueBatchSchedulesForFeed = async (feedId: string) => {
   if (schedulersDisabled()) return;
+  if (await isAppPaused()) return;
 
   const supabase = getSupabaseClient();
   if (!supabase) return;
@@ -221,6 +237,10 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
   if (schedulersDisabled()) {
     return;
   }
+  if (await isAppPaused()) {
+    logger.info({ feedId }, 'Skipping immediate schedules - app is paused');
+    return;
+  }
   const supabase = getSupabaseClient();
   if (!supabase) return;
 
@@ -254,6 +274,11 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
 };
 
 const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
+  if (await isAppPaused()) {
+    logger.info('Skipping feed polling setup - app is paused');
+    return;
+  }
+
   if (!canRunSchedulers(whatsappClient)) {
     return;
   }
@@ -307,6 +332,12 @@ const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
       };
 
       const handler = async () => {
+        if (await isAppPaused()) {
+          logger.info({ feedId: feed.id }, 'Skipping feed refresh - app is paused');
+          scheduleNext(intervalMs);
+          return;
+        }
+
         if (feedInFlight.get(feed.id)) {
           logger.info({ feedId: feed.id }, 'Skipping feed refresh - already in progress');
           scheduleNext(intervalMs);
@@ -341,6 +372,11 @@ const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
 };
 
 const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
+  if (await isAppPaused()) {
+    logger.info('Skipping schedule sender setup - app is paused');
+    return;
+  }
+
   if (!canRunSchedulers(whatsappClient)) {
     return;
   }
@@ -428,6 +464,11 @@ const initSchedulers = async (whatsappClient?: WhatsAppClient) => {
   clearAll();
   if (schedulersDisabled()) {
     logger.warn('Schedulers are disabled via DISABLE_SCHEDULERS');
+    return;
+  }
+
+  if (await isAppPaused()) {
+    logger.warn('Schedulers are paused via app_paused setting');
     return;
   }
 

@@ -568,7 +568,7 @@ const normalizeTargetJid = (target: Target) => {
   if (lower === 'status@broadcast') {
     return 'status@broadcast';
   }
-  if (lower.includes('@g.us') || lower.includes('@newsletter') || lower.includes('@s.whatsapp.net')) {
+  if (lower.includes('@g.us') || lower.includes('@s.whatsapp.net')) {
     return raw;
   }
   if (target.type === 'status') {
@@ -584,7 +584,17 @@ const normalizeTargetJid = (target: Target) => {
   }
 
   if (target.type === 'channel') {
-    const channelId = raw.replace(/[^0-9]/g, '');
+    const directMatch = raw.match(/(\d{8,})@newsletter(?:_[a-z0-9]+)?$/i);
+    const channelId = directMatch?.[1] || raw.replace(/[^0-9]/g, '');
+    if (!channelId) {
+      throw new Error('Channel ID invalid');
+    }
+    return `${channelId}@newsletter`;
+  }
+
+  if (lower.includes('@newsletter')) {
+    const channelIdMatch = raw.match(/(\d{8,})@newsletter(?:_[a-z0-9]+)?$/i);
+    const channelId = channelIdMatch?.[1] || raw.replace(/[^0-9]/g, '');
     if (!channelId) {
       throw new Error('Channel ID invalid');
     }
@@ -1137,6 +1147,9 @@ const queueLatestForSchedule = async (
   if (!supabase) {
     return { queued: 0, inserted: 0, revived: 0, skipped: 0, reason: 'Database not available' };
   }
+  if (await settingsService.isAppPaused()) {
+    return { queued: 0, inserted: 0, revived: 0, skipped: 0, reason: 'App is paused' };
+  }
 
   let schedule: Schedule | null = options?.schedule ?? null;
   if (!schedule) {
@@ -1278,6 +1291,10 @@ const sendQueuedForSchedule = async (
   if (!supabase) {
     logger.error({ scheduleId }, 'Database not available - cannot send messages');
     return { sent: 0, error: 'Database not available' };
+  }
+  if (await settingsService.isAppPaused()) {
+    logger.info({ scheduleId }, 'Skipping dispatch because app is paused');
+    return { sent: 0, queued: 0, skipped: true, reason: 'App is paused' };
   }
 
   try {
@@ -1873,6 +1890,9 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
   if (!supabase) {
     return { ok: false, error: 'Database not available' };
   }
+  if (await settingsService.isAppPaused()) {
+    return { ok: false, error: 'App is paused' };
+  }
 
   const connected = await ensureWhatsAppConnected(whatsappClient, {
     attempts: 12,
@@ -2115,6 +2135,10 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
   if (!supabase) {
     logger.error('Database not available - cannot send pending messages');
     return { sent: 0, schedules: 0, error: 'Database not available' };
+  }
+  if (await settingsService.isAppPaused()) {
+    logger.info('Skipping pending send pass because app is paused');
+    return { sent: 0, queued: 0, schedules: 0, skipped: true, reason: 'App is paused' };
   }
 
   try {

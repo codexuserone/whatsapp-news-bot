@@ -27,6 +27,8 @@ type FeedTestResult = {
   error?: string;
   feedTitle?: string;
   detectedType?: string | null;
+  sourceUrl?: string | null;
+  discoveredFromUrl?: string | null;
   itemCount?: number;
   detectedFields?: string[];
   sampleItem?: Record<string, unknown>;
@@ -261,6 +263,17 @@ const FeedsPage = () => {
                         <p className="text-sm capitalize">{testResult.detectedType || 'unknown'}</p>
                       </div>
                     </div>
+                    {testResult.sourceUrl ? (
+                      <div className="space-y-1 text-sm">
+                        <p className="font-medium text-muted-foreground">Source URL used</p>
+                        <p className="break-all">{testResult.sourceUrl}</p>
+                        {testResult.discoveredFromUrl ? (
+                          <p className="text-xs text-muted-foreground">
+                            Auto-discovered from: {testResult.discoveredFromUrl}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <div>
                       <p className="text-sm font-medium text-muted-foreground mb-2">Detected fields (available in templates)</p>
                       <div className="flex flex-wrap gap-2">

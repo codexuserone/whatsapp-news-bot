@@ -114,6 +114,8 @@ const feedsRoutes = () => {
         feedTitle: sampleItem.title ? `Feed from ${new URL(url).hostname}` : 'Unknown Feed',
         detectedType: meta?.detectedType || null,
         contentType: meta?.contentType || null,
+        sourceUrl: meta?.sourceUrl || String(url),
+        discoveredFromUrl: meta?.discoveredFromUrl || null,
         itemCount: items.length,
         detectedFields: [...new Set(detectedFields)],
         sampleItem

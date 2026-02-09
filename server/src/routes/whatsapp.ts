@@ -129,6 +129,16 @@ const parseVideoDataUrl = (value: string) => {
   return { buffer, mimetype };
 };
 
+const normalizeChannelJid = (value: string) => {
+  const raw = String(value || '').trim();
+  if (!raw) return raw;
+  const match = raw.match(/(\d{8,})@newsletter(?:_[a-z0-9]+)?$/i);
+  if (match?.[1]) return `${match[1]}@newsletter`;
+  if (raw.endsWith('@newsletter')) return raw;
+  const digits = raw.replace(/[^0-9]/g, '');
+  return digits ? `${digits}@newsletter` : raw;
+};
+
 const whatsappRoutes = () => {
   const router = express.Router();
 
@@ -191,8 +201,8 @@ const whatsappRoutes = () => {
         .eq('active', true);
       
       channels = (dbChannels || []).map((t: { id?: string; name?: string; phone_number?: string; notes?: string }) => ({
-        id: t.phone_number || t.id || '',
-        jid: t.phone_number || '',
+        id: normalizeChannelJid(t.phone_number || t.id || ''),
+        jid: normalizeChannelJid(t.phone_number || ''),
         name: t.name || '',
         subscribers: Number(String(t.notes || '').match(/\d+/)?.[0] || 0)
       }));
@@ -264,8 +274,14 @@ const whatsappRoutes = () => {
   }));
 
   const normalizeTestJid = (jid: string) => {
-    if (jid.includes('@')) return jid;
-    return `${jid.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
+    const raw = String(jid || '').trim();
+    if (!raw) return raw;
+    const channelMatch = raw.match(/(\d{8,})@newsletter(?:_[a-z0-9]+)?$/i);
+    if (channelMatch?.[1]) {
+      return `${channelMatch[1]}@newsletter`;
+    }
+    if (raw.includes('@')) return raw;
+    return `${raw.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
   };
 
   const isStatusBroadcast = (jid: string) => jid === 'status@broadcast';
@@ -304,7 +320,8 @@ const whatsappRoutes = () => {
   router.post('/send-test', validate(schemas.testMessage), asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
     const payload = req.body as {
-      jid: string;
+      jid?: string | null;
+      jids?: string[] | null;
       message?: string | null;
       linkUrl?: string | null;
       imageUrl?: string | null;
@@ -315,7 +332,22 @@ const whatsappRoutes = () => {
       confirm?: boolean;
     };
 
-    const jid = String(payload.jid || '').trim();
+    const requestedJids = Array.from(
+      new Set(
+        [
+          ...(Array.isArray(payload.jids) ? payload.jids : []),
+          String(payload.jid || '')
+        ]
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      )
+    );
+
+    if (!requestedJids.length) {
+      throw badRequest('jid or jids is required');
+    }
+
+    const normalizedJids = Array.from(new Set(requestedJids.map((jid) => normalizeTestJid(jid)).filter(Boolean)));
     const normalizedMessage = normalizeMessageText(String(payload.message || ''));
     const normalizedLink = String(payload.linkUrl || '').trim();
     const imageUrl = payload.imageUrl ? String(payload.imageUrl).trim() : null;
@@ -326,10 +358,6 @@ const whatsappRoutes = () => {
     const includeCaption = payload.includeCaption !== false;
     const captionText = [normalizedMessage, normalizedLink].filter(Boolean).join('\n').trim();
 
-    if (!jid) {
-      throw badRequest('jid is required');
-    }
-
     if (!captionText && !imageUrl && !imageDataUrl && !videoDataUrl) {
       throw badRequest('message, linkUrl, imageUrl, imageDataUrl, or videoDataUrl is required');
     }
@@ -339,7 +367,6 @@ const whatsappRoutes = () => {
       throw badRequest('WhatsApp is not connected');
     }
 
-    const normalizedJid = normalizeTestJid(jid);
     let content: Record<string, unknown>;
     if (videoDataUrl) {
       const { buffer, mimetype } = parseVideoDataUrl(videoDataUrl);
@@ -379,55 +406,100 @@ const whatsappRoutes = () => {
       content = disableLinkPreview ? { text: captionText, linkPreview: null } : { text: captionText };
     }
 
-    const sendPromise = isStatusBroadcast(normalizedJid)
-      ? whatsapp.sendStatusBroadcast(content)
-      : whatsapp.sendMessage(normalizedJid, content);
-    const result = await withTimeout(
-      sendPromise,
-      DEFAULT_SEND_TIMEOUT_MS,
-      'Timed out sending test message'
-    );
+    const results: Array<{
+      jid: string;
+      ok: boolean;
+      messageId?: string | null;
+      confirmation?: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null;
+      error?: string;
+    }> = [];
 
-    const messageId = result?.key?.id;
-    let confirmation: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null = null;
-    if (confirm && messageId && whatsapp?.confirmSend) {
-      const timeouts = (imageUrl || imageDataUrl || videoDataUrl)
-        ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
-        : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 };
-      confirmation = await whatsapp.confirmSend(messageId, timeouts);
+    for (const normalizedJid of normalizedJids) {
+      try {
+        const sendPromise = isStatusBroadcast(normalizedJid)
+          ? whatsapp.sendStatusBroadcast(content)
+          : whatsapp.sendMessage(normalizedJid, content);
+        const result = await withTimeout(
+          sendPromise,
+          DEFAULT_SEND_TIMEOUT_MS,
+          'Timed out sending test message'
+        );
+
+        const messageId = result?.key?.id || null;
+        let confirmation: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null = null;
+        if (confirm && messageId && whatsapp?.confirmSend) {
+          const timeouts = (imageUrl || imageDataUrl || videoDataUrl)
+            ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
+            : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 };
+          confirmation = await whatsapp.confirmSend(messageId, timeouts);
+        }
+
+        results.push({ jid: normalizedJid, ok: true, messageId, confirmation });
+      } catch (error) {
+        results.push({ jid: normalizedJid, ok: false, error: getErrorMessage(error) });
+      }
+    }
+
+    const successful = results.filter((entry) => entry.ok);
+    if (!successful.length) {
+      const firstError = results.find((entry) => !entry.ok)?.error || 'Failed to send test message';
+      throw badRequest(firstError);
     }
 
     try {
       const supabase = getSupabaseClient();
       if (supabase) {
-        let targetId: string | null = null;
-        const { data: target } = await supabase
+        const { data: targetRows } = await supabase
           .from('targets')
-          .select('id')
-          .eq('phone_number', normalizedJid)
-          .limit(1)
-          .maybeSingle();
-        if (target?.id) {
-          targetId = String(target.id);
+          .select('id,phone_number')
+          .in('phone_number', normalizedJids);
+
+        const targetIdByJid = new Map<string, string>();
+        for (const row of targetRows || []) {
+          const jid = String((row as { phone_number?: string }).phone_number || '').trim();
+          const id = String((row as { id?: string }).id || '').trim();
+          if (jid && id) targetIdByJid.set(jid, id);
         }
 
-        await supabase.from('message_logs').insert({
+        const sentAt = new Date().toISOString();
+        const rowsToInsert = successful.map((entry) => ({
           schedule_id: null,
           feed_item_id: null,
-          target_id: targetId,
+          target_id: targetIdByJid.get(entry.jid) || null,
           template_id: null,
           message_content: captionText || null,
           status: 'sent',
           error_message: null,
-          whatsapp_message_id: messageId || null,
-          sent_at: new Date().toISOString()
-        });
+          whatsapp_message_id: entry.messageId || null,
+          sent_at: sentAt
+        }));
+
+        if (rowsToInsert.length) {
+          await supabase.from('message_logs').insert(rowsToInsert);
+        }
       }
     } catch {
       // Best effort only: test-message logging should not fail the send endpoint.
     }
 
-    res.json({ ok: true, messageId, confirmation });
+    if (normalizedJids.length === 1) {
+      const first = successful[0];
+      return res.json({
+        ok: results.every((entry) => entry.ok),
+        sent: successful.length,
+        failed: results.length - successful.length,
+        messageId: first?.messageId || null,
+        confirmation: first?.confirmation || null,
+        results
+      });
+    }
+
+    res.json({
+      ok: results.every((entry) => entry.ok),
+      sent: successful.length,
+      failed: results.length - successful.length,
+      results
+    });
   }));
 
   // Send to status broadcast

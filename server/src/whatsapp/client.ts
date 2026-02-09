@@ -83,8 +83,13 @@ const mapMessageStatusLabel = (status: number | null) => {
 const normalizeNewsletterJid = (value: unknown, options?: { allowNumeric?: boolean }) => {
   const raw = String(value || '').trim();
   if (!raw) return '';
+  const directMatch = raw.match(/(\d{8,})@newsletter(?:_[a-z0-9]+)?$/i);
+  if (directMatch?.[1]) return `${directMatch[1]}@newsletter`;
   if (raw.endsWith('@newsletter')) return raw;
-  if (raw.includes('@')) return '';
+  if (raw.includes('@')) {
+    const numericFromDecorated = raw.replace(/[^0-9]/g, '');
+    return numericFromDecorated ? `${numericFromDecorated}@newsletter` : '';
+  }
   if (!options?.allowNumeric) return '';
   const digits = raw.replace(/[^0-9]/g, '');
   return digits ? `${digits}@newsletter` : '';
@@ -1403,15 +1408,16 @@ class WhatsAppClient {
         if (!chat || typeof chat !== 'object') continue;
 
         const chatId = (chat as any).id || (chat as any).jid || '';
-        if (typeof chatId === 'string' && chatId.endsWith('@newsletter')) {
-          const name = (chat as any).name || (chat as any).subject || chatId;
+        const normalizedChatJid = normalizeNewsletterJid(chatId, { allowNumeric: false });
+        if (normalizedChatJid) {
+          const name = (chat as any).name || (chat as any).subject || normalizedChatJid;
           mergeChannel({
-            id: chatId,
-            jid: chatId,
+            id: normalizedChatJid,
+            jid: normalizedChatJid,
             name: name,
             subscribers: 0
           }, 'store');
-          this.cacheNewsletterChat({ jid: chatId, name, subscribers: 0 });
+          this.cacheNewsletterChat({ jid: normalizedChatJid, name, subscribers: 0 });
         }
       }
     } catch (error) {

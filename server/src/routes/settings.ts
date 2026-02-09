@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 const express = require('express');
 const settingsService = require('../services/settingsService');
+const { initSchedulers } = require('../services/schedulerService');
 const { validate, schemas } = require('../middleware/validation');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 
@@ -20,6 +21,11 @@ const settingsRoutes = () => {
   router.put('/', validate(schemas.settings), async (req: Request, res: Response) => {
     try {
       const settings = await settingsService.updateSettings(req.body);
+      setImmediate(() => {
+        initSchedulers(req.app.locals.whatsapp).catch((error: unknown) => {
+          console.warn('Scheduler refresh after settings update failed:', error);
+        });
+      });
       res.json(settings);
     } catch (error) {
       console.error('Error updating settings:', error);

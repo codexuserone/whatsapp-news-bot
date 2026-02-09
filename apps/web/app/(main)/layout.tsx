@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import AppSidebar from '@/components/layout/AppSidebar';
 import { SidebarProvider, SidebarInset, SidebarTrigger } from '@/components/ui/sidebar';
@@ -7,6 +8,7 @@ import { Separator } from '@/components/ui/separator';
 import Breadcrumbs from '@/components/layout/Breadcrumbs';
 import ThemeToggle from '@/components/layout/ThemeToggle';
 import { navLookup } from '@/lib/navigation';
+import { Home, Rss, ListOrdered, ClipboardList, MessageSquare } from 'lucide-react';
 
 type MainLayoutProps = {
   children: React.ReactNode;
@@ -19,6 +21,19 @@ const getMobileTitle = (pathname: string) => {
   const parts = pathname.split('/').filter(Boolean);
   const last = parts[parts.length - 1] || '';
   return last ? titleCase(last) : 'Overview';
+};
+
+const mobileNavItems = [
+  { to: '/', label: 'Home', icon: Home },
+  { to: '/feeds', label: 'Feeds', icon: Rss },
+  { to: '/queue', label: 'Queue', icon: ListOrdered },
+  { to: '/feed-items', label: 'Items', icon: ClipboardList },
+  { to: '/whatsapp', label: 'WA', icon: MessageSquare }
+];
+
+const isPathActive = (pathname: string, to: string) => {
+  if (to === '/') return pathname === '/';
+  return pathname.startsWith(to);
 };
 
 const MainLayout = ({ children }: MainLayoutProps) => {
@@ -42,13 +57,33 @@ const MainLayout = ({ children }: MainLayoutProps) => {
             </div>
           </div>
         </header>
-        <main className="relative flex-1 overflow-auto px-4 pb-8 pt-6 md:px-8">
+        <main className="relative flex-1 overflow-auto px-4 pb-24 pt-6 md:px-8 md:pb-8">
           <div className="mx-auto w-full max-w-6xl">
             <div key={pathname} className="animate-in fade-in-0 slide-in-from-bottom-2 duration-300">
               {children}
             </div>
           </div>
         </main>
+        <nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 backdrop-blur md:hidden">
+          <div className="mx-auto grid max-w-3xl grid-cols-5">
+            {mobileNavItems.map((item) => {
+              const Icon = item.icon;
+              const active = isPathActive(pathname, item.to);
+              return (
+                <Link
+                  key={item.to}
+                  href={item.to}
+                  className={`flex flex-col items-center gap-1 px-2 py-2 text-[11px] ${
+                    active ? 'text-primary' : 'text-muted-foreground'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span>{item.label}</span>
+                </Link>
+              );
+            })}
+          </div>
+        </nav>
       </SidebarInset>
     </SidebarProvider>
   );

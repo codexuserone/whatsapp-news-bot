@@ -106,7 +106,8 @@ const schemas = {
 
   testMessage: z
     .object({
-      jid: z.string().regex(JID_PATTERN),
+      jid: z.string().regex(JID_PATTERN).optional().nullable().transform(normalizeOptional),
+      jids: z.array(z.string().regex(JID_PATTERN)).max(100).optional(),
       message: z.string().max(4096).optional().nullable().transform(normalizeOptional),
       linkUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
@@ -116,6 +117,15 @@ const schemas = {
       disableLinkPreview: z.boolean().optional().default(false),
       confirm: z.boolean().optional()
     })
+    .refine(
+      (value: {
+        jid?: string | null;
+        jids?: string[];
+      }) => Boolean(value.jid || (Array.isArray(value.jids) && value.jids.length > 0)),
+      {
+        message: 'jid or jids is required'
+      }
+    )
     .refine(
       (value: {
         message?: string | null;

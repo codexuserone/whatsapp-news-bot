@@ -12,11 +12,13 @@ import { Badge } from '@/components/ui/badge';
 import { RefreshCw, Power, CheckCircle, QrCode, Users, Loader2, Send, MessageSquare } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Switch } from '@/components/ui/switch';
 
 type SendTestPayload = {
-  jid: string;
+  jid?: string;
+  jids?: string[];
   message?: string;
   linkUrl?: string;
   imageUrl?: string;
@@ -29,6 +31,9 @@ type SendTestPayload = {
 type SendTestResponse = {
   ok: boolean;
   messageId?: string | null;
+  sent?: number;
+  failed?: number;
+  results?: Array<{ jid: string; ok: boolean; messageId?: string | null; error?: string }>;
   confirmation?: {
     ok: boolean;
     via?: string;
@@ -39,9 +44,11 @@ type SendTestResponse = {
 
 const WhatsAppPage = () => {
   const queryClient = useQueryClient();
-  const [testTarget, setTestTarget] = React.useState('');
+  const [selectedTargets, setSelectedTargets] = React.useState<string[]>([]);
   const [testMessage, setTestMessage] = React.useState('');
-  const [composeMode, setComposeMode] = React.useState<'text_preview' | 'text_only' | 'media_with_text' | 'media_only'>('text_preview');
+  const [attachMedia, setAttachMedia] = React.useState(false);
+  const [includeTextWithMedia, setIncludeTextWithMedia] = React.useState(true);
+  const [disableLinkPreview, setDisableLinkPreview] = React.useState(false);
   const [attachmentDataUrl, setAttachmentDataUrl] = React.useState('');
   const [attachmentMimeType, setAttachmentMimeType] = React.useState('');
   const [attachmentName, setAttachmentName] = React.useState('');
@@ -107,6 +114,22 @@ const WhatsAppPage = () => {
   const isConnected = status?.status === 'connected';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
   const activeTargets = existingTargets.filter((target) => target.active);
+  const groupedTargets = React.useMemo(() => {
+    const groups = activeTargets.filter((target) => target.type === 'group');
+    const channels = activeTargets.filter((target) => target.type === 'channel');
+    const statusTargets = activeTargets.filter((target) => target.type === 'status');
+    const individuals = activeTargets.filter((target) => target.type === 'individual');
+    return { groups, channels, statusTargets, individuals };
+  }, [activeTargets]);
+
+  React.useEffect(() => {
+    setSelectedTargets((current) => {
+      if (!current.length) return current;
+      const allowed = new Set(activeTargets.map((target) => target.phone_number));
+      return current.filter((jid) => allowed.has(jid));
+    });
+  }, [activeTargets]);
+
   const getStatusBadge = () => {
     if (statusLoading) return <Badge variant="secondary">Loading...</Badge>;
     if (isConnected) return <Badge variant="success">Connected</Badge>;
@@ -150,32 +173,37 @@ const WhatsAppPage = () => {
     setAttachmentName(file.name);
   };
 
-  const needsAttachment = composeMode === 'media_with_text' || composeMode === 'media_only';
+  const needsAttachment = attachMedia;
   const hasAttachment = Boolean(attachmentDataUrl);
   const hasAnyText = Boolean(testMessage.trim());
 
-  const canSendTest = Boolean(testTarget && (needsAttachment ? hasAttachment : hasAnyText));
+  const canSendTest = Boolean(
+    selectedTargets.length > 0 &&
+    (needsAttachment ? hasAttachment : hasAnyText)
+  );
 
   const messagePlaceholder =
-    composeMode === 'text_preview'
-      ? 'Write your message (include a link if you want a preview)'
-      : composeMode === 'text_only'
-        ? 'Write plain text'
-        : composeMode === 'media_only'
-          ? 'Optional message text'
-          : 'Write text to send with your attachment';
+    attachMedia
+      ? includeTextWithMedia
+        ? 'Write text to send with your attachment'
+        : 'Optional text'
+      : disableLinkPreview
+        ? 'Write plain text message'
+        : 'Write your message (include a link for preview)';
 
   const submitTestMessage = () => {
     if (!canSendTest) return;
 
     const payload: SendTestPayload = {
-      jid: testTarget,
-      includeCaption: composeMode !== 'media_only',
-      disableLinkPreview: composeMode === 'text_only'
+      jids: selectedTargets,
+      includeCaption: attachMedia ? includeTextWithMedia : true,
+      disableLinkPreview: attachMedia ? false : disableLinkPreview
     };
 
     const normalizedMessage = testMessage.trim();
-    if (normalizedMessage) payload.message = normalizedMessage;
+    if (normalizedMessage && (!attachMedia || includeTextWithMedia)) {
+      payload.message = normalizedMessage;
+    }
 
     if (attachmentDataUrl && needsAttachment) {
       if (attachmentMimeType.startsWith('video/')) {
@@ -291,70 +319,105 @@ const WhatsAppPage = () => {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="testTarget">Target</Label>
-              <Select
-                value={testTarget ? testTarget : '__none'}
-                onValueChange={(value) => setTestTarget(value === '__none' ? '' : value)}
-              >
-                <SelectTrigger id="testTarget" className={!testTarget ? 'text-muted-foreground' : undefined}>
-                  <SelectValue placeholder="Select a target" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none" className="text-muted-foreground">
-                    Select a target
-                  </SelectItem>
-                  {activeTargets.length > 0 ? (
-                    activeTargets.map((target) => (
-                      <SelectItem key={target.id} value={target.phone_number}>
-                        {target.name} ({target.type})
-                      </SelectItem>
-                    ))
-                  ) : (
-                    <SelectItem value="__no_targets" disabled>
-                      No active targets
-                    </SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
+              <div className="flex items-center justify-between">
+                <Label>Targets</Label>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setSelectedTargets(activeTargets.map((target) => target.phone_number))}
+                    disabled={!activeTargets.length}
+                  >
+                    Select all
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setSelectedTargets([])}
+                    disabled={!selectedTargets.length}
+                  >
+                    Clear
+                  </Button>
+                </div>
+              </div>
+              <div className="max-h-60 space-y-3 overflow-y-auto rounded-lg border p-3">
+                {!activeTargets.length ? (
+                  <p className="text-sm text-muted-foreground">No active targets available.</p>
+                ) : (
+                  <>
+                    {[
+                      { label: 'Channels', items: groupedTargets.channels },
+                      { label: 'Groups', items: groupedTargets.groups },
+                      { label: 'Status', items: groupedTargets.statusTargets },
+                      { label: 'Individuals', items: groupedTargets.individuals }
+                    ].map((group) =>
+                      group.items.length ? (
+                        <div key={group.label} className="space-y-1">
+                          <p className="text-xs font-medium text-muted-foreground">{group.label}</p>
+                          {group.items.map((target) => {
+                            const checked = selectedTargets.includes(target.phone_number);
+                            return (
+                              <label key={target.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={(next) => {
+                                    setSelectedTargets((current) => {
+                                      if (next === true) {
+                                        return current.includes(target.phone_number)
+                                          ? current
+                                          : [...current, target.phone_number];
+                                      }
+                                      return current.filter((value) => value !== target.phone_number);
+                                    });
+                                  }}
+                                />
+                                <span>{target.name}</span>
+                                <span className="ml-auto text-xs text-muted-foreground">{target.type}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      ) : null
+                    )}
+                  </>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Selected: {selectedTargets.length}
+              </p>
             </div>
 
             <div className="space-y-2">
-              <Label>Message style</Label>
+              <Label>Send style</Label>
               <div className="grid gap-2 sm:grid-cols-2">
-                <Button
-                  type="button"
-                  variant={composeMode === 'text_preview' ? 'default' : 'outline'}
-                  onClick={() => setComposeMode('text_preview')}
-                >
-                  Text + link preview
+                <Button type="button" variant={!attachMedia ? 'default' : 'outline'} onClick={() => setAttachMedia(false)}>
+                  Text / link message
                 </Button>
-                <Button
-                  type="button"
-                  variant={composeMode === 'text_only' ? 'default' : 'outline'}
-                  onClick={() => setComposeMode('text_only')}
-                >
-                  Text only
-                </Button>
-                <Button
-                  type="button"
-                  variant={composeMode === 'media_with_text' ? 'default' : 'outline'}
-                  onClick={() => setComposeMode('media_with_text')}
-                >
-                  Media + text
-                </Button>
-                <Button
-                  type="button"
-                  variant={composeMode === 'media_only' ? 'default' : 'outline'}
-                  onClick={() => setComposeMode('media_only')}
-                >
-                  Media only
+                <Button type="button" variant={attachMedia ? 'default' : 'outline'} onClick={() => setAttachMedia(true)}>
+                  Attach image/video
                 </Button>
               </div>
+              {!attachMedia ? (
+                <label className="flex items-center justify-between rounded-lg border p-3 text-sm">
+                  <span>Disable link preview</span>
+                  <Switch checked={disableLinkPreview} onCheckedChange={(checked) => setDisableLinkPreview(checked === true)} />
+                </label>
+              ) : (
+                <label className="flex items-center justify-between rounded-lg border p-3 text-sm">
+                  <span>Include message text under media</span>
+                  <Switch
+                    checked={includeTextWithMedia}
+                    onCheckedChange={(checked) => setIncludeTextWithMedia(checked === true)}
+                  />
+                </label>
+              )}
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="testMessage">
-                {composeMode === 'media_only' ? 'Message (optional)' : 'Message'}
+                {attachMedia && !includeTextWithMedia ? 'Message (optional)' : 'Message'}
               </Label>
               <Textarea
                 id="testMessage"
@@ -379,7 +442,10 @@ const WhatsAppPage = () => {
                 Send
               </Button>
               {sendTestMessage.isSuccess ? (
-                <span className="text-sm text-success">Message sent.</span>
+                <span className="text-sm text-success">
+                  Sent {sendTestMessage.data?.sent ?? 1}
+                  {(sendTestMessage.data?.failed ?? 0) > 0 ? `, failed ${sendTestMessage.data?.failed}` : ''}.
+                </span>
               ) : null}
               {sendTestMessage.isError ? (
                 <span className="text-sm text-destructive">Failed: {(sendTestMessage.error as Error)?.message || 'Unknown error'}</span>

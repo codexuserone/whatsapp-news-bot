@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useForm, Controller } from 'react-hook-form';
+import { useForm, Controller, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -11,6 +11,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/com
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -18,6 +19,7 @@ import { Settings, Clock, MapPin, Loader2, Copy } from 'lucide-react';
 
 const schema = z.object({
   app_name: z.string().min(1),
+  app_paused: z.boolean().default(false),
   default_timezone: z.string().min(1),
   log_retention_days: z.coerce.number().min(1),
   message_delay_ms: z.coerce.number().min(100),
@@ -74,6 +76,7 @@ const SettingsPage = () => {
     resolver: zodResolver(schema),
     defaultValues: {
       app_name: 'WhatsApp News Bot',
+      app_paused: false,
       default_timezone: 'UTC',
       log_retention_days: 30,
       message_delay_ms: 2000,
@@ -84,6 +87,7 @@ const SettingsPage = () => {
       dedupeThreshold: 0.88
     }
   });
+  const appPaused = useWatch({ control: form.control, name: 'app_paused' });
 
   useEffect(() => {
     if (settings) {
@@ -150,6 +154,31 @@ const SettingsPage = () => {
             <CardDescription>Basic application settings</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-3 sm:col-span-2 rounded-lg border bg-muted/20 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium">Pause Entire App</p>
+                  <p className="text-xs text-muted-foreground">
+                    Stops automatic feed polling, queueing, and automation sends until resumed.
+                  </p>
+                </div>
+                <Controller
+                  control={form.control}
+                  name="app_paused"
+                  render={({ field }) => (
+                    <Switch
+                      checked={field.value === true}
+                      onCheckedChange={(checked) => field.onChange(checked === true)}
+                    />
+                  )}
+                />
+              </div>
+              {appPaused ? (
+                <Badge variant="warning">App paused</Badge>
+              ) : (
+                <Badge variant="success">App running</Badge>
+              )}
+            </div>
 
             <div className="space-y-2">
               <Label htmlFor="default_timezone">Default Timezone</Label>

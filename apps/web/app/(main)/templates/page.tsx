@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
-import { useForm, Controller, useWatch } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -126,6 +126,21 @@ const TemplatesPage = () => {
 
   const watchedContent = useWatch({ control: form.control, name: 'content' });
   const watchedSendMode = useWatch({ control: form.control, name: 'send_mode' });
+  const attachFeedImage = watchedSendMode === 'image' || watchedSendMode === 'image_only';
+  const imageOnlyMode = watchedSendMode === 'image_only';
+  const textOnlyMode = watchedSendMode === 'text_only';
+
+  const updateSendMode = (changes: { attachImage?: boolean; imageOnly?: boolean; textOnly?: boolean }) => {
+    const nextAttachImage = changes.attachImage ?? attachFeedImage;
+    const nextImageOnly = changes.imageOnly ?? imageOnlyMode;
+    const nextTextOnly = changes.textOnly ?? textOnlyMode;
+
+    if (nextAttachImage) {
+      form.setValue('send_mode', nextImageOnly ? 'image_only' : 'image');
+      return;
+    }
+    form.setValue('send_mode', nextTextOnly ? 'text_only' : 'link_preview');
+  };
 
   const renderedPreviewText = previewWithData
     ? (() => {
@@ -425,41 +440,41 @@ const TemplatesPage = () => {
                 </div>
 
                 <div className="space-y-4 rounded-lg border p-4">
-                  <Controller
-                    control={form.control}
-                    name="send_mode"
-                    render={({ field }) => (
-                      <div className="space-y-3">
-                        <Label>What gets sent</Label>
-                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                          {[
-                            { value: 'image', label: 'Image + text', hint: 'Preferred' },
-                            { value: 'image_only', label: 'Image only', hint: 'No caption' },
-                            { value: 'link_preview', label: 'Text + preview', hint: 'Auto preview' },
-                            { value: 'text_only', label: 'Text only', hint: 'No media' },
-                          ].map((mode) => (
-                            <div
-                              key={mode.value}
-                              onClick={() => field.onChange(mode.value)}
-                              className={`cursor-pointer rounded-lg border p-3 text-center transition-all hover:bg-accent ${field.value === mode.value
-                                ? 'border-primary bg-primary/5 ring-1 ring-primary'
-                                : 'bg-background'
-                                }`}
-                            >
-                              <div className="text-xs font-medium">{mode.label}</div>
-                              <div className="mt-1 text-[11px] text-muted-foreground">{mode.hint}</div>
-                            </div>
-                          ))}
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          {field.value === 'image' && 'Sends an image with your template text under it.'}
-                          {field.value === 'image_only' && 'Sends image only. If image is missing, sending is blocked.'}
-                          {field.value === 'link_preview' && 'Sends text and ensures a link preview is included.'}
-                          {field.value === 'text_only' && 'Sends plain text only (no media, no preview).'}
-                        </p>
-                      </div>
-                    )}
-                  />
+                  <Label>What gets sent</Label>
+                  <label className="flex items-center justify-between rounded-md border p-3 text-sm">
+                    <span>Attach feed image when available</span>
+                    <Switch
+                      checked={attachFeedImage}
+                      onCheckedChange={(checked) => updateSendMode({ attachImage: checked === true })}
+                    />
+                  </label>
+
+                  {attachFeedImage ? (
+                    <label className="flex items-center justify-between rounded-md border p-3 text-sm">
+                      <span>Image only (no text under image)</span>
+                      <Switch
+                        checked={imageOnlyMode}
+                        onCheckedChange={(checked) => updateSendMode({ imageOnly: checked === true })}
+                      />
+                    </label>
+                  ) : (
+                    <label className="flex items-center justify-between rounded-md border p-3 text-sm">
+                      <span>Text only (disable link preview)</span>
+                      <Switch
+                        checked={textOnlyMode}
+                        onCheckedChange={(checked) => updateSendMode({ textOnly: checked === true })}
+                      />
+                    </label>
+                  )}
+
+                  <p className="text-xs text-muted-foreground">
+                    {watchedSendMode === 'image' && 'Sends image + your text.'}
+                    {watchedSendMode === 'image_only' && 'Sends image only. If no image exists, send is blocked.'}
+                    {watchedSendMode === 'link_preview' && 'Sends text and allows WhatsApp link preview.'}
+                    {watchedSendMode === 'text_only' && 'Sends plain text only.'}
+                  </p>
+
+                  <input type="hidden" {...form.register('send_mode')} />
 
                   <p className="border-t pt-3 text-xs text-muted-foreground">
                     Templates are always available to automations; pick which one to use on the Automations page.

@@ -17,7 +17,8 @@ const DEFAULTS = {
   send_timeout_ms: Number(process.env.SEND_TIMEOUT_MS || 45000),
   reconcile_queue_lookback_hours: Number(process.env.RECONCILE_QUEUE_LOOKBACK_HOURS || 12),
   dedupeThreshold: 0.88,
-  processingTimeoutMinutes: Number(process.env.PROCESSING_TIMEOUT_MINUTES || 30)
+  processingTimeoutMinutes: Number(process.env.PROCESSING_TIMEOUT_MINUTES || 30),
+  app_paused: false
 };
 
 const ensureDefaults = async () => {
@@ -112,9 +113,19 @@ const updateSettings = async (updates: Record<string, unknown>) => {
   }
 };
 
+const isAppPaused = async () => {
+  try {
+    const settings = await getSettings();
+    return settings?.app_paused === true;
+  } catch {
+    return false;
+  }
+};
+
 module.exports = {
   ensureDefaults,
   getSettings,
-  updateSettings
+  updateSettings,
+  isAppPaused
 };
 export {};

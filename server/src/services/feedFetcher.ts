@@ -18,6 +18,8 @@ type FetchMeta = {
   durationMs?: number;
   detectedType?: 'rss' | 'atom' | 'json';
   contentType?: string;
+  sourceUrl?: string;
+  discoveredFromUrl?: string;
 };
 
 const DEFAULT_USER_AGENT =
@@ -114,6 +116,100 @@ const pickFirstUrl = (...candidates: Array<string | undefined | null>) => {
     if (value && isValidUrl(value)) return value;
   }
   return undefined;
+};
+
+const resolveRelativeUrl = (baseUrl: string, candidate?: string | null) => {
+  const raw = String(candidate || '').trim();
+  if (!raw) return '';
+  try {
+    return new URL(raw, baseUrl).toString();
+  } catch {
+    return '';
+  }
+};
+
+const detectFeedTypeHint = (value?: string | null): 'rss' | 'atom' | 'json' | null => {
+  const normalized = String(value || '').toLowerCase();
+  if (!normalized) return null;
+  if (normalized.includes('json') || normalized.includes('feed+json')) return 'json';
+  if (normalized.includes('atom')) return 'atom';
+  if (normalized.includes('rss') || normalized.includes('xml')) return 'rss';
+  return null;
+};
+
+const discoverFeedEndpointFromHtml = async (
+  pageUrl: string
+): Promise<{ url: string; type: 'rss' | 'atom' | 'json' | null } | null> => {
+  await assertSafeOutboundUrl(pageUrl);
+  const response = await axios.get(pageUrl, {
+    timeout: 15000,
+    headers: {
+      'User-Agent': DEFAULT_USER_AGENT,
+      Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8'
+    }
+  });
+
+  const html = String(response.data || '');
+  if (!html.trim()) return null;
+  const $ = cheerio.load(html);
+
+  const candidates: Array<{ url: string; type: 'rss' | 'atom' | 'json' | null; score: number }> = [];
+  const pushCandidate = (urlLike?: string | null, hint?: string | null, score = 0) => {
+    const resolved = resolveRelativeUrl(pageUrl, urlLike);
+    if (!resolved || !isValidUrl(resolved)) return;
+    candidates.push({
+      url: resolved,
+      type: detectFeedTypeHint(hint),
+      score
+    });
+  };
+
+  // First preference: canonical feed autodiscovery tags.
+  $('link[rel~="alternate"][href]').each((_: number, element: unknown) => {
+    const el = $(element);
+    pushCandidate(el.attr('href'), el.attr('type') || el.attr('title'), 100);
+  });
+
+  // Second preference: any feed-like link tag.
+  $('link[href]').each((_: number, element: unknown) => {
+    const el = $(element);
+    const href = String(el.attr('href') || '').trim();
+    if (!href) return;
+    const combinedHint = `${String(el.attr('type') || '')} ${String(el.attr('title') || '')} ${href}`.toLowerCase();
+    const looksLikeFeed = /feed|rss|atom|json/.test(combinedHint);
+    if (!looksLikeFeed) return;
+    pushCandidate(href, combinedHint, 80);
+  });
+
+  // Fallback: obvious feed-like anchors.
+  $('a[href]').slice(0, 200).each((_: number, element: unknown) => {
+    const el = $(element);
+    const href = String(el.attr('href') || '').trim();
+    if (!href) return;
+    const text = String(el.text() || '').trim().toLowerCase();
+    const hint = `${href} ${text}`.toLowerCase();
+    const looksLikeFeed = /\/feed(?:[/?#]|$)|rss|atom|json/.test(hint);
+    if (!looksLikeFeed) return;
+    pushCandidate(href, hint, 40);
+  });
+
+  if (!candidates.length) return null;
+
+  const current = String(pageUrl).trim();
+  const deduped = new Map<string, { url: string; type: 'rss' | 'atom' | 'json' | null; score: number }>();
+  for (const item of candidates) {
+    const key = item.url.toLowerCase();
+    const existing = deduped.get(key);
+    if (!existing || item.score > existing.score) {
+      deduped.set(key, item);
+    }
+  }
+
+  const ranked = Array.from(deduped.values())
+    .filter((item) => item.url !== current)
+    .sort((a, b) => b.score - a.score);
+
+  return ranked[0] || null;
 };
 
 const extractFirstImageFromHtml = (html?: string) => {
@@ -467,11 +563,14 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
 const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedItemResult[]; meta: FetchMeta }> => {
   const start = Date.now();
 
-  const tryFetch = async (kind: 'json' | 'xml') => {
+  const tryFetch = async (kind: 'json' | 'xml', sourceFeed: FeedConfig = feed) => {
     if (kind === 'json') {
-      return fetchJsonItemsWithMeta({ ...feed, type: 'json' });
+      return fetchJsonItemsWithMeta({ ...sourceFeed, type: 'json' });
     }
-    return fetchRssItemsWithMeta({ ...feed, type: feed.type === 'atom' ? 'atom' : 'rss' });
+    return fetchRssItemsWithMeta({
+      ...sourceFeed,
+      type: sourceFeed.type === 'atom' ? 'atom' : 'rss'
+    });
   };
 
   const preferred: 'json' | 'xml' = feed.type === 'json' ? 'json' : 'xml';
@@ -482,7 +581,7 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
   let detectedType: FetchMeta['detectedType'] = feed.type || (preferred === 'json' ? 'json' : 'rss');
 
   try {
-    const result = await tryFetch(preferred);
+    const result = await tryFetch(preferred, feed);
     items = result.items;
     meta = result.meta;
     detectedType =
@@ -490,7 +589,7 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
 
     if (!meta?.notModified && (!items || items.length === 0)) {
       try {
-        const alt = await tryFetch(fallback);
+        const alt = await tryFetch(fallback, feed);
         if (alt?.items?.length) {
           items = alt.items;
           meta = alt.meta;
@@ -501,10 +600,67 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
       }
     }
   } catch (error) {
-    const alt = await tryFetch(fallback);
+    const alt = await tryFetch(fallback, feed);
     items = alt.items;
     meta = alt.meta;
     detectedType = fallback === 'json' ? 'json' : 'rss';
+  }
+
+  // Last fallback: if the URL is an HTML page, auto-discover its feed endpoint and retry.
+  if (!meta?.notModified && (!items || items.length === 0)) {
+    try {
+      const discovered = await discoverFeedEndpointFromHtml(feed.url);
+      if (discovered?.url) {
+        const resolvedDiscoveredType = discovered.type || feed.type;
+        const discoveredFeed: FeedConfig = {
+          ...feed,
+          url: discovered.url,
+          ...(resolvedDiscoveredType ? { type: resolvedDiscoveredType } : {})
+        };
+        const discoveredPreferred: 'json' | 'xml' = discoveredFeed.type === 'json' ? 'json' : 'xml';
+        const discoveredFallback: 'json' | 'xml' = discoveredPreferred === 'json' ? 'xml' : 'json';
+
+        try {
+          const discoveredResult = await tryFetch(discoveredPreferred, discoveredFeed);
+          items = discoveredResult.items;
+          meta = {
+            ...discoveredResult.meta,
+            sourceUrl: discovered.url,
+            discoveredFromUrl: feed.url
+          };
+          detectedType =
+            discoveredPreferred === 'json'
+              ? 'json'
+              : discoveredFeed.type === 'atom'
+                ? 'atom'
+                : 'rss';
+
+          if (!meta?.notModified && (!items || items.length === 0)) {
+            const discoveredAlt = await tryFetch(discoveredFallback, discoveredFeed);
+            if (discoveredAlt?.items?.length) {
+              items = discoveredAlt.items;
+              meta = {
+                ...discoveredAlt.meta,
+                sourceUrl: discovered.url,
+                discoveredFromUrl: feed.url
+              };
+              detectedType = discoveredFallback === 'json' ? 'json' : 'rss';
+            }
+          }
+        } catch {
+          const discoveredAlt = await tryFetch(discoveredFallback, discoveredFeed);
+          items = discoveredAlt.items;
+          meta = {
+            ...discoveredAlt.meta,
+            sourceUrl: discovered.url,
+            discoveredFromUrl: feed.url
+          };
+          detectedType = discoveredFallback === 'json' ? 'json' : 'rss';
+        }
+      }
+    } catch {
+      // Keep original result if discovery fails.
+    }
   }
 
   // Default cleaning options - always strip UTM and decode HTML entities
@@ -530,7 +686,12 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
 
   return {
     items: cleaned,
-    meta: { ...meta, detectedType, durationMs: Date.now() - start }
+    meta: {
+      ...meta,
+      sourceUrl: meta?.sourceUrl || feed.url,
+      detectedType,
+      durationMs: Date.now() - start
+    }
   };
 };
 

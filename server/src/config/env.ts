@@ -16,7 +16,7 @@ const env = {
   // Supabase configuration
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
-  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY,
   BASE_URL: baseUrl,
   KEEP_ALIVE: process.env.KEEP_ALIVE !== 'false', // Default to true unless explicitly disabled
   KEEP_ALIVE_URL: process.env.KEEP_ALIVE_URL,

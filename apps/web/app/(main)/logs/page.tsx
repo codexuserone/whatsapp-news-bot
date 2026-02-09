@@ -94,7 +94,7 @@ const LogsPage = () => {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">History</h1>
         <p className="text-muted-foreground">
-          Messages that have been sent.
+          Delivery history only. Use Queue for items that are still waiting or sending.
         </p>
       </div>
 
@@ -157,7 +157,7 @@ const LogsPage = () => {
                       className="hidden max-w-xs truncate text-muted-foreground lg:table-cell"
                       title={log.message_content || undefined}
                     >
-                      {log.message_content?.substring(0, 50) || '—'}
+                      {log.message_content?.substring(0, 50) || '-'}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {new Date(log.sent_at || log.created_at).toLocaleString()}

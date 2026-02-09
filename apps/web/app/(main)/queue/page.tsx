@@ -318,7 +318,7 @@ const QueuePage = () => {
   };
 
   const formatDate = (dateStr?: string | null) => {
-    if (!dateStr) return '—';
+    if (!dateStr) return '-';
     return new Date(dateStr).toLocaleString();
   };
 

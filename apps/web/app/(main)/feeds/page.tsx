@@ -332,11 +332,11 @@ const FeedsPage = () => {
                         </span>
                         <span>
                           Last fetched:{' '}
-                          {feed.last_fetched_at ? new Date(feed.last_fetched_at).toLocaleString() : '—'}
+                          {feed.last_fetched_at ? new Date(feed.last_fetched_at).toLocaleString() : '-'}
                         </span>
                         <span>
                           Last success:{' '}
-                          {feed.last_success_at ? new Date(feed.last_success_at).toLocaleString() : '—'}
+                          {feed.last_success_at ? new Date(feed.last_success_at).toLocaleString() : '-'}
                         </span>
                         {(feed.consecutive_failures || 0) > 0 ? (
                           <span className="text-destructive">
@@ -346,7 +346,7 @@ const FeedsPage = () => {
                         {feed.last_error ? (
                           <span className="text-destructive" title={feed.last_error}>
                             Error: {String(feed.last_error).slice(0, 80)}
-                            {String(feed.last_error).length > 80 ? '…' : ''}
+                            {String(feed.last_error).length > 80 ? '...' : ''}
                           </span>
                         ) : null}
                       </div>

@@ -95,7 +95,7 @@ const SchedulesPage = () => {
   const activeTargets = targets.filter((target) => target.active);
 
   const formatDateTime = (value?: string | null) => {
-    if (!value) return '—';
+    if (!value) return '-';
     const d = new Date(value);
     return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString();
   };

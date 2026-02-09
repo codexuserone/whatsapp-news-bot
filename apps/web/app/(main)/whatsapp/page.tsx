@@ -212,8 +212,8 @@ const WhatsAppPage = () => {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">WhatsApp Console</h1>
-          <p className="text-muted-foreground">Connect once and send normal messages to saved destinations.</p>
+          <h1 className="text-3xl font-bold tracking-tight">WhatsApp</h1>
+          <p className="text-muted-foreground">Connect once, then send normal messages to your saved destinations.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => disconnect.mutate()} disabled={disconnect.isPending || !isConnected}>
@@ -236,12 +236,12 @@ const WhatsAppPage = () => {
               <CardTitle>Connection Status</CardTitle>
               {getStatusBadge()}
             </div>
-            <CardDescription>Current connection health</CardDescription>
+            <CardDescription>Current account and connection health</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-3">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Connected account</span>
+                <span className="text-muted-foreground">Account</span>
                 <span className="font-medium">{status?.me?.name || status?.me?.jid?.split('@')[0] || 'Not connected'}</span>
               </div>
             </div>
@@ -255,12 +255,6 @@ const WhatsAppPage = () => {
             {!isConnected && !isQrReady ? (
               <div className="rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
                 Click <strong>Refresh QR Code</strong> to request a fresh QR code.
-              </div>
-            ) : null}
-
-            {isConnected ? (
-              <div className="rounded-lg bg-success/10 p-3 text-sm text-success">
-                Connected. Open <Link href="/targets" className="underline">Targets</Link> to review destinations.
               </div>
             ) : null}
           </CardContent>
@@ -280,7 +274,7 @@ const WhatsAppPage = () => {
                 <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-success/10">
                   <CheckCircle className="h-8 w-8 text-success" />
                 </div>
-                <p className="text-sm text-muted-foreground">WhatsApp is connected</p>
+                <p className="text-sm text-muted-foreground">Session is active</p>
               </div>
             ) : qr?.qr ? (
               <div className="space-y-3 text-center">

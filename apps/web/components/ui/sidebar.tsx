@@ -53,6 +53,7 @@ const SidebarProvider = React.forwardRef<HTMLDivElement, SidebarProviderProps>(
     );
 
     const [isMobile, setIsMobile] = React.useState(false);
+    const didAutoCloseOnMobile = React.useRef(false);
 
     React.useEffect(() => {
       const checkMobile = () => setIsMobile(window.innerWidth < 768);
@@ -60,6 +61,12 @@ const SidebarProvider = React.forwardRef<HTMLDivElement, SidebarProviderProps>(
       window.addEventListener('resize', checkMobile);
       return () => window.removeEventListener('resize', checkMobile);
     }, []);
+
+    React.useEffect(() => {
+      if (!isMobile || didAutoCloseOnMobile.current) return;
+      didAutoCloseOnMobile.current = true;
+      setOpen(false);
+    }, [isMobile, setOpen]);
 
     const toggleSidebar = React.useCallback(() => setOpen((prev) => !prev), [setOpen]);
 
@@ -186,7 +193,7 @@ const SidebarTrigger = React.forwardRef<HTMLButtonElement, React.ComponentPropsW
         data-sidebar="trigger"
         variant="ghost"
         size="icon"
-        className={cn('h-7 w-7', className)}
+        className={cn('h-9 w-9', className)}
         onClick={(event) => {
           onClick?.(event);
           toggleSidebar();

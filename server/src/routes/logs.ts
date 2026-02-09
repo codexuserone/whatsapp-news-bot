@@ -13,6 +13,7 @@ const logRoutes = () => {
       
       const { status } = req.query;
       const statusFilter = typeof status === 'string' ? status : undefined;
+      const includeQueue = String(req.query.include_queue || '').toLowerCase() === 'true';
       
       let query = supabase
         .from('message_logs')
@@ -28,6 +29,9 @@ const logRoutes = () => {
       
       if (statusFilter) {
         query = query.eq('status', statusFilter);
+      } else if (!includeQueue) {
+        // Logs page is delivery history by default. Queue/processing states belong in /api/queue.
+        query = query.not('status', 'in', '("pending","processing")');
       }
       
       const { data: logs, error } = await query;

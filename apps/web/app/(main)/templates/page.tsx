@@ -64,6 +64,7 @@ const TemplatesPage = () => {
   const [sampleFeedId, setSampleFeedId] = useState<string>('__all');
   const [previewTargetJid, setPreviewTargetJid] = useState<string>('');
   const [previewSendNotice, setPreviewSendNotice] = useState<string>('');
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
@@ -156,12 +157,13 @@ const TemplatesPage = () => {
   const saveTemplate = useMutation({
     mutationFn: (payload: TemplateFormValues) => {
       const { id, ...body } = payload;
-      const resolvedId = id || active?.id;
+      const resolvedId = id || editingTemplateId || active?.id;
       return resolvedId ? api.put(`/api/templates/${resolvedId}`, body) : api.post('/api/templates', body);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['templates'] });
       setActive(null);
+      setEditingTemplateId(null);
       form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_mode: 'image' });
     },
     onError: (error: unknown) => alert(`Failed to save template: ${getErrorMessage(error)}`)
@@ -174,6 +176,7 @@ const TemplatesPage = () => {
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
       if (active?.id === id) {
         setActive(null);
+        setEditingTemplateId(null);
         form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_mode: 'image' });
       }
     },
@@ -427,10 +430,10 @@ const TemplatesPage = () => {
                         <Label>What gets sent</Label>
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                           {[
-                            { value: 'image', label: 'Image + Text', icon: '🖼️' },
-                            { value: 'image_only', label: 'Image Only', icon: '📷' },
-                            { value: 'link_preview', label: 'Text + Link Preview', icon: '🔗' },
-                            { value: 'text_only', label: 'Text Only', icon: '📝' },
+                            { value: 'image', label: 'Image + text', hint: 'Preferred' },
+                            { value: 'image_only', label: 'Image only', hint: 'No caption' },
+                            { value: 'link_preview', label: 'Text + preview', hint: 'Auto preview' },
+                            { value: 'text_only', label: 'Text only', hint: 'No media' },
                           ].map((mode) => (
                             <div
                               key={mode.value}
@@ -440,8 +443,8 @@ const TemplatesPage = () => {
                                 : 'bg-background'
                                 }`}
                             >
-                              <div className="mb-1 text-2xl">{mode.icon}</div>
                               <div className="text-xs font-medium">{mode.label}</div>
+                              <div className="mt-1 text-[11px] text-muted-foreground">{mode.hint}</div>
                             </div>
                           ))}
                         </div>
@@ -491,6 +494,7 @@ const TemplatesPage = () => {
                       variant="outline"
                       onClick={() => {
                         setActive(null);
+                        setEditingTemplateId(null);
                         form.reset({ id: undefined, name: '', content: '', description: '', active: true, send_mode: 'image' });
                       }}
                     >
@@ -622,7 +626,14 @@ const TemplatesPage = () => {
                     </Badge>
                   </div>
                   <div className="flex gap-2">
-                    <Button size="sm" variant="outline" onClick={() => setActive(template)}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setEditingTemplateId(template.id);
+                        setActive(template);
+                      }}
+                    >
                       <Pencil className="mr-1 h-3 w-3" /> Edit
                     </Button>
                     <Button

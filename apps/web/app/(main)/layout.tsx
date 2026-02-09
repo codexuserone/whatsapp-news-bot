@@ -23,6 +23,7 @@ const statusVariant = (status?: string) => {
 
 const MainLayout = ({ children }: MainLayoutProps) => {
   const pathname = usePathname();
+  const showConnectionBadge = pathname !== '/whatsapp';
   const { data: status } = useQuery<WhatsAppStatus>({
     queryKey: ['whatsapp-status'],
     queryFn: () => api.get('/api/whatsapp/status'),
@@ -35,14 +36,16 @@ const MainLayout = ({ children }: MainLayoutProps) => {
       <SidebarInset className="bg-background/80">
         <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 border-b bg-background/70 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
           <SidebarTrigger className="-ml-1 h-10 w-10 rounded-md border border-border bg-background/80" />
+          <span className="md:hidden text-sm text-muted-foreground">Menu</span>
           <Separator orientation="vertical" className="mr-2 h-4" />
           <div className="flex flex-1 items-center justify-between">
             <Breadcrumbs />
             <div className="flex items-center gap-3">
-
-              <Badge variant={statusVariant(status?.status)} className="capitalize">
-                {status?.status || 'unknown'}
-              </Badge>
+              {showConnectionBadge ? (
+                <Badge variant={statusVariant(status?.status)} className="capitalize">
+                  {status?.status || 'unknown'}
+                </Badge>
+              ) : null}
               <ThemeToggle />
             </div>
           </div>

@@ -228,6 +228,9 @@ const queueRoutes = () => {
       const sAllCount = sentAllTimeRes.count ?? 0;
       const fAllCount = failedAllTimeRes.count ?? 0;
       const skAllCount = skippedAllTimeRes.count ?? 0;
+      const queuedNow = pCount + prCount;
+      const historyWindowTotal = sRecentCount + fRecentCount + skRecentCount;
+      const allTimeTotal = sAllCount + fAllCount + skAllCount;
 
       res.json({
         pending: pCount,
@@ -235,7 +238,10 @@ const queueRoutes = () => {
         sent: sRecentCount,
         failed: fRecentCount,
         skipped: skRecentCount,
-        total: pCount + prCount + sRecentCount + fRecentCount + skRecentCount,
+        total: queuedNow + historyWindowTotal,
+        queued_now: queuedNow,
+        history_window_total: historyWindowTotal,
+        history_all_time_total: allTimeTotal,
         sent_all_time: sAllCount,
         failed_all_time: fAllCount,
         skipped_all_time: skAllCount,

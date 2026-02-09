@@ -119,7 +119,7 @@ const OverviewPage = () => {
         <Card>
           <CardHeader>
             <CardTitle>Queue Summary</CardTitle>
-            <CardDescription>Current delivery pipeline status</CardDescription>
+            <CardDescription>Queued now + delivery results in the last 24 hours</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex items-center justify-between text-sm">
@@ -139,9 +139,9 @@ const OverviewPage = () => {
               <span className="font-medium">{queueStats?.failed ?? 0}</span>
             </div>
             <div className="text-xs text-muted-foreground">
-              {feedErrors > 0 ? `${feedErrors} feed error${feedErrors !== 1 ? 's' : ''}` : ''}
-              {feedErrors > 0 && (queueStats?.sent_all_time || 0) > 0 ? ' • ' : ''}
-              {(queueStats?.sent_all_time || 0) > 0 ? `All-time sent: ${queueStats?.sent_all_time}` : ''}
+              {feedErrors > 0
+                ? `${feedErrors} feed error${feedErrors !== 1 ? 's' : ''} need attention`
+                : 'No feed errors'}
             </div>
             <Button asChild variant="outline" size="sm" className="w-full">
               <Link href="/queue">View Queue</Link>
@@ -183,7 +183,7 @@ const OverviewPage = () => {
                   </TableCell>
                   <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>
                   <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
-                    {log.message_content?.substring(0, 50) || '—'}
+                    {log.message_content?.substring(0, 50) || '-'}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {new Date(log.sent_at || log.created_at).toLocaleString()}

@@ -133,8 +133,19 @@ const scheduleRoutes = () => {
 
   router.put('/:id', validate(schemas.schedule), async (req: Request, res: Response) => {
     try {
+      const supabase = getDb();
+      const { data: currentSchedule, error: currentScheduleError } = await supabase
+        .from('schedules')
+        .select('id,active')
+        .eq('id', req.params.id)
+        .single();
+
+      if (currentScheduleError || !currentSchedule) {
+        throw currentScheduleError || new Error('Schedule not found');
+      }
+
       const payload = normalizeSchedulePayload(req.body);
-      const { data: schedule, error } = await getDb()
+      const { data: schedule, error } = await supabase
         .from('schedules')
         .update(payload)
         .eq('id', req.params.id)
@@ -142,6 +153,25 @@ const scheduleRoutes = () => {
         .single();
 
       if (error) throw error;
+
+      let pausedQueueItems = 0;
+      const turnedOff = Boolean(currentSchedule.active) && schedule?.active === false;
+      if (turnedOff) {
+        const { data: pausedRows, error: pauseError } = await supabase
+          .from('message_logs')
+          .update({
+            status: 'skipped',
+            error_message: 'Automation paused',
+            processing_started_at: null
+          })
+          .eq('schedule_id', req.params.id)
+          .in('status', ['pending', 'processing'])
+          .select('id');
+
+        if (pauseError) throw pauseError;
+        pausedQueueItems = pausedRows?.length || 0;
+      }
+
       refreshSchedulers(req.app.locals.whatsapp);
 
       if (
@@ -152,7 +182,10 @@ const scheduleRoutes = () => {
       ) {
         dispatchImmediate(schedule.id, req.app.locals.whatsapp);
       }
-      res.json(schedule);
+      res.json({
+        ...schedule,
+        paused_queue_items: pausedQueueItems
+      });
     } catch (error) {
       console.error('Error updating schedule:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });

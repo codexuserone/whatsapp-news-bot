@@ -144,7 +144,7 @@ const FeedItemsPage = () => {
                           Link
                         </a>
                       ) : (
-                        '—'
+                        '-'
                       )}
                     </TableCell>
                     <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
@@ -171,11 +171,11 @@ const FeedItemsPage = () => {
                           </span>
                         </a>
                       ) : (
-                        '—'
+                        '-'
                       )}
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground lg:table-cell">
-                      {item.pub_date ? new Date(item.pub_date).toLocaleString() : '—'}
+                      {item.pub_date ? new Date(item.pub_date).toLocaleString() : '-'}
                     </TableCell>
                     <TableCell>
                       {(() => {

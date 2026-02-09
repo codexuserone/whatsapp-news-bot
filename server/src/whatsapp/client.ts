@@ -1538,6 +1538,38 @@ class WhatsAppClient {
     }
   }
 
+  async editMessage(jid: string, messageId: string, text: string) {
+    if (!this.socket) throw new Error('WhatsApp not connected');
+    if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
+    const normalizedText = String(text || '').trim();
+    if (!normalizedText) throw new Error('Updated message text is required');
+    const normalizedJid = String(jid || '').trim();
+    const normalizedMessageId = String(messageId || '').trim();
+    if (!normalizedJid || !normalizedMessageId) {
+      throw new Error('jid and messageId are required to edit a message');
+    }
+
+    const key: proto.IMessageKey = {
+      remoteJid: normalizedJid,
+      id: normalizedMessageId,
+      fromMe: true
+    };
+
+    try {
+      return await this.socket.sendMessage(normalizedJid, {
+        text: normalizedText,
+        edit: key
+      });
+    } catch (err) {
+      logger.error({ err, jid: normalizedJid, messageId: normalizedMessageId }, 'Failed to edit message');
+      const message = err instanceof Error ? err.message : String(err);
+      if (this.isAuthStateCorrupted(message)) {
+        void this.handleCorruptedAuthState(err);
+      }
+      throw err;
+    }
+  }
+
   getSocket(): WASocket | null {
     return this.socket;
   }

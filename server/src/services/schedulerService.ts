@@ -2,7 +2,7 @@ import type { ScheduledTask } from 'node-cron';
 const cron = require('node-cron');
 const { getSupabaseClient } = require('../db/supabase');
 const { fetchAndProcessFeed } = require('./feedProcessor');
-const { sendQueuedForSchedule } = require('./queueService');
+const { sendQueuedForSchedule, reconcileUpdatedFeedItems } = require('./queueService');
 const { computeNextRunAt } = require('../utils/cron');
 const { withScheduleLock, cleanupStaleLocks } = require('./scheduleLockService');
 const { isScheduleRunning } = require('./scheduleState');
@@ -348,6 +348,9 @@ const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
         let ok = true;
         try {
           const result = await fetchAndProcessFeed(feed);
+          if (Array.isArray(result.updatedItems) && result.updatedItems.length) {
+            await reconcileUpdatedFeedItems(result.updatedItems, whatsappClient);
+          }
           if (result.items.length) {
             await queueBatchSchedulesForFeed(feed.id);
             await triggerImmediateSchedules(feed.id, whatsappClient);

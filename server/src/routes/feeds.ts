@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
 const { fetchAndProcessFeed } = require('../services/feedProcessor');
+const { reconcileUpdatedFeedItems } = require('../services/queueService');
 const {
   initSchedulers,
   triggerImmediateSchedules,
@@ -271,6 +272,9 @@ const feedsRoutes = () => {
       }
       
       const result = await fetchAndProcessFeed(feed);
+      if (Array.isArray(result.updatedItems) && result.updatedItems.length) {
+        await reconcileUpdatedFeedItems(result.updatedItems, req.app.locals.whatsapp);
+      }
       if (result.items.length) {
         await queueBatchSchedulesForFeed(feed.id);
         await triggerImmediateSchedules(feed.id, req.app.locals.whatsapp);
@@ -278,8 +282,10 @@ const feedsRoutes = () => {
       res.json({
         ok: true,
         items: result.items,
+        updatedItems: result.updatedItems || [],
         fetchedCount: result.fetchedCount,
         insertedCount: result.insertedCount,
+        updatedCount: result.updatedCount || 0,
         duplicateCount: result.duplicateCount,
         errorCount: result.errorCount,
         queuedCount: 0
@@ -302,12 +308,16 @@ const feedsRoutes = () => {
       const results = [] as Array<Record<string, unknown>>;
       let totalFetched = 0;
       let totalInserted = 0;
+      let totalUpdated = 0;
       let totalDuplicates = 0;
       let totalErrors = 0;
       let totalQueued = 0;
 
       for (const feed of feeds || []) {
         const result = await fetchAndProcessFeed(feed);
+        if (Array.isArray(result.updatedItems) && result.updatedItems.length) {
+          await reconcileUpdatedFeedItems(result.updatedItems, req.app.locals.whatsapp);
+        }
         if (result.items.length) {
           await queueBatchSchedulesForFeed(feed.id);
           await triggerImmediateSchedules(feed.id, req.app.locals.whatsapp);
@@ -315,6 +325,7 @@ const feedsRoutes = () => {
 
         totalFetched += result.fetchedCount;
         totalInserted += result.insertedCount;
+        totalUpdated += result.updatedCount || 0;
         totalDuplicates += result.duplicateCount;
         totalErrors += result.errorCount;
 
@@ -324,6 +335,7 @@ const feedsRoutes = () => {
           url: feed.url,
           fetchedCount: result.fetchedCount,
           insertedCount: result.insertedCount,
+          updatedCount: result.updatedCount || 0,
           duplicateCount: result.duplicateCount,
           errorCount: result.errorCount,
           queuedCount: 0
@@ -336,6 +348,7 @@ const feedsRoutes = () => {
           feeds: results.length,
           fetchedCount: totalFetched,
           insertedCount: totalInserted,
+          updatedCount: totalUpdated,
           duplicateCount: totalDuplicates,
           errorCount: totalErrors,
           queuedCount: totalQueued

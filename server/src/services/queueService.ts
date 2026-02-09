@@ -49,6 +49,7 @@ type WhatsAppClient = {
   getStatus: () => { status: string };
   sendMessage: (jid: string, content: Record<string, unknown>, options?: Record<string, unknown>) => Promise<any>;
   sendStatusBroadcast: (content: Record<string, unknown>, options?: Record<string, unknown>) => Promise<any>;
+  editMessage?: (jid: string, messageId: string, text: string) => Promise<any>;
   reconnect?: () => Promise<void> | void;
   takeoverLease?: (
     ttlMs?: number
@@ -65,6 +66,8 @@ type WhatsAppClient = {
 };
 
 const DEFAULT_SEND_TIMEOUT_MS = 45000;
+const DEFAULT_POST_SEND_EDIT_WINDOW_MINUTES = 15;
+const DEFAULT_POST_SEND_CORRECTION_WINDOW_MINUTES = 120;
 const AUTH_ERROR_HINT = 'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
 const MANUAL_POST_PAUSE_ERROR = 'Paused for this post';
 const FEED_PAUSED_ERROR = 'Feed paused';
@@ -652,7 +655,9 @@ const ensurePreviewLink = (value: string, link?: string | null) => {
   return `${text}\n${normalizedLink}`;
 };
 
-const getTemplateSendMode = (template: Template) => {
+type TemplateSendMode = 'image' | 'image_only' | 'link_preview' | 'text_only';
+
+const getTemplateSendMode = (template: Template): TemplateSendMode => {
   if (template?.send_mode === 'image' && template?.send_images === false) {
     return 'image_only';
   }
@@ -662,9 +667,51 @@ const getTemplateSendMode = (template: Template) => {
     template?.send_mode === 'link_preview' ||
     template?.send_mode === 'text_only'
   ) {
-    return template.send_mode;
+    return template.send_mode as TemplateSendMode;
   }
   return template?.send_images === false ? 'link_preview' : 'image';
+};
+
+const renderTemplateMessage = (
+  template: Template,
+  feedItem: FeedItem,
+  overrideText?: string | null
+): {
+  sendMode: TemplateSendMode;
+  renderedText: string;
+  textWithPreview: string;
+  outboundText: string;
+  includeImageCaption: boolean;
+  allowTextFallback: boolean;
+} => {
+  const payload = buildMessageData(feedItem);
+  const manualOverrideText = normalizeMessageText(String(overrideText || '')).trim();
+  const renderedText = (manualOverrideText || applyTemplate(template.content, payload)).trim();
+  if (!renderedText) {
+    throw new Error('Template rendered empty message');
+  }
+
+  const sendMode = getTemplateSendMode(template);
+  const includeImageCaption = sendMode !== 'image_only';
+  const allowTextFallback = sendMode !== 'image_only';
+  const textWithPreview = ensurePreviewLink(renderedText, feedItem.link);
+  const outboundText =
+    sendMode === 'text_only'
+      ? renderedText
+      : sendMode === 'link_preview'
+        ? textWithPreview
+        : includeImageCaption
+          ? renderedText
+          : '';
+
+  return {
+    sendMode,
+    renderedText,
+    textWithPreview,
+    outboundText,
+    includeImageCaption,
+    allowTextFallback
+  };
 };
 
 type SendWithMediaResult = {
@@ -685,13 +732,6 @@ const sendMessageWithTemplate = async (
   feedItem: FeedItem,
   options?: { sendImages?: boolean; supabase?: SupabaseClient; sendTimeoutMs?: number; overrideText?: string | null }
 ): Promise<SendWithMediaResult> => {
-  const payload = buildMessageData(feedItem);
-  const manualOverrideText = normalizeMessageText(String(options?.overrideText || '')).trim();
-  const renderedText = (manualOverrideText || applyTemplate(template.content, payload)).trim();
-  if (!renderedText) {
-    throw new Error('Template rendered empty message');
-  }
-
   if (!whatsappClient || whatsappClient.getStatus().status !== 'connected') {
     throw new Error('WhatsApp not connected');
   }
@@ -703,9 +743,12 @@ const sendMessageWithTemplate = async (
   const jid = normalizeTargetJid(target);
   const allowImages = options?.sendImages !== false;
   const sendTimeoutMs = Math.max(Number(options?.sendTimeoutMs || DEFAULT_SEND_TIMEOUT_MS), 10000);
-  const sendMode = getTemplateSendMode(template);
-  const includeImageCaption = sendMode !== 'image_only';
-  const allowTextFallback = sendMode !== 'image_only';
+  const rendered = renderTemplateMessage(template, feedItem, options?.overrideText);
+  const sendMode = rendered.sendMode;
+  const includeImageCaption = rendered.includeImageCaption;
+  const allowTextFallback = rendered.allowTextFallback;
+  const renderedText = rendered.renderedText;
+  const textWithPreview = rendered.textWithPreview;
 
   const sendText = async (text: string, modeOptions?: { disableLinkPreview?: boolean }) => {
     const content: Record<string, unknown> = modeOptions?.disableLinkPreview
@@ -725,7 +768,6 @@ const sendMessageWithTemplate = async (
     );
   };
 
-  const textWithPreview = ensurePreviewLink(renderedText, feedItem.link);
   if (sendMode === 'text_only') {
     const response = await sendText(renderedText, { disableLinkPreview: true });
     return {
@@ -877,6 +919,324 @@ const sendMessageWithTemplate = async (
     text: textWithPreview,
     media: { type: null, url: null, sent: false, error: null }
   };
+};
+
+type ReconcileUpdatedFeedItemsResult = {
+  processed: number;
+  edited: number;
+  replaced: number;
+  skipped: number;
+  failed: number;
+  reason?: string;
+};
+
+const parseWindowMinutes = (value: unknown, fallbackMinutes: number) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallbackMinutes;
+  return Math.min(Math.max(Math.floor(parsed), 1), 720);
+};
+
+const getPostSendWindows = (settings: Record<string, unknown>) => {
+  const editMinutes = parseWindowMinutes(
+    settings.post_send_edit_window_minutes,
+    DEFAULT_POST_SEND_EDIT_WINDOW_MINUTES
+  );
+  const correctionMinutes = Math.max(
+    editMinutes,
+    parseWindowMinutes(
+      settings.post_send_correction_window_minutes,
+      DEFAULT_POST_SEND_CORRECTION_WINDOW_MINUTES
+    )
+  );
+  return {
+    editWindowMs: editMinutes * 60 * 1000,
+    correctionWindowMs: correctionMinutes * 60 * 1000
+  };
+};
+
+const getSentAgeMs = (sentAt: unknown): number | null => {
+  const iso = String(sentAt || '').trim();
+  if (!iso) return null;
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(Date.now() - parsed, 0);
+};
+
+const reconcileUpdatedFeedItems = async (
+  updatedFeedItems: FeedItem[],
+  whatsappClient?: WhatsAppClient | null
+): Promise<ReconcileUpdatedFeedItemsResult> => {
+  const result: ReconcileUpdatedFeedItemsResult = {
+    processed: 0,
+    edited: 0,
+    replaced: 0,
+    skipped: 0,
+    failed: 0
+  };
+
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return { ...result, reason: 'Database not available' };
+  }
+
+  if (!Array.isArray(updatedFeedItems) || updatedFeedItems.length === 0) {
+    return result;
+  }
+
+  if (await settingsService.isAppPaused()) {
+    return { ...result, reason: 'App is paused' };
+  }
+
+  if (!whatsappClient || whatsappClient.getStatus().status !== 'connected') {
+    return { ...result, reason: 'WhatsApp not connected' };
+  }
+
+  const byFeedItemId = new Map<string, FeedItem>();
+  for (const item of updatedFeedItems) {
+    const id = String(item?.id || '').trim();
+    if (!id) continue;
+    byFeedItemId.set(id, item);
+  }
+
+  const feedItemIds = Array.from(byFeedItemId.keys());
+  if (!feedItemIds.length) {
+    return result;
+  }
+
+  const settings = await settingsService.getSettings();
+  const sendTimeoutMs = Math.max(Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS), 10000);
+  const { editWindowMs, correctionWindowMs } = getPostSendWindows(settings);
+  const correctionCutoffIso = new Date(Date.now() - correctionWindowMs).toISOString();
+
+  const { data: logRows, error: logsError } = await supabase
+    .from('message_logs')
+    .select('id,feed_item_id,target_id,template_id,sent_at,whatsapp_message_id,message_content')
+    .in('feed_item_id', feedItemIds)
+    .eq('status', 'sent')
+    .gte('sent_at', correctionCutoffIso)
+    .not('target_id', 'is', null);
+
+  if (logsError) {
+    logger.warn({ error: logsError }, 'Failed loading sent logs for feed-item reconciliation');
+    return { ...result, reason: 'Failed loading sent logs' };
+  }
+
+  type SentLogRow = {
+    id: string;
+    feed_item_id?: string | null;
+    target_id?: string | null;
+    template_id?: string | null;
+    sent_at?: string | null;
+    whatsapp_message_id?: string | null;
+    message_content?: string | null;
+  };
+
+  const sentLogs = (logRows || []) as SentLogRow[];
+  if (!sentLogs.length) {
+    return result;
+  }
+
+  const targetIds = Array.from(
+    new Set(
+      sentLogs
+        .map((row) => String(row.target_id || '').trim())
+        .filter(Boolean)
+    )
+  );
+  const templateIds = Array.from(
+    new Set(
+      sentLogs
+        .map((row) => String(row.template_id || '').trim())
+        .filter(Boolean)
+    )
+  );
+
+  const [targetsRes, templatesRes] = await Promise.all([
+    targetIds.length
+      ? supabase.from('targets').select('*').in('id', targetIds)
+      : Promise.resolve({ data: [], error: null }),
+    templateIds.length
+      ? supabase.from('templates').select('*').in('id', templateIds)
+      : Promise.resolve({ data: [], error: null })
+  ]);
+
+  if (targetsRes.error || templatesRes.error) {
+    logger.warn(
+      { targetError: targetsRes.error, templateError: templatesRes.error },
+      'Failed loading targets/templates for feed-item reconciliation'
+    );
+    return { ...result, reason: 'Failed loading targets/templates' };
+  }
+
+  const targetsById = new Map<string, Target>();
+  for (const row of (targetsRes.data || []) as Target[]) {
+    const id = String(row?.id || '').trim();
+    if (!id) continue;
+    targetsById.set(id, row);
+  }
+
+  const templatesById = new Map<string, Template>();
+  for (const row of (templatesRes.data || []) as Template[]) {
+    const id = String(row?.id || '').trim();
+    if (!id) continue;
+    templatesById.set(id, row);
+  }
+
+  for (const log of sentLogs) {
+    const feedItemId = String(log.feed_item_id || '').trim();
+    const targetId = String(log.target_id || '').trim();
+    const templateId = String(log.template_id || '').trim();
+
+    const feedItem = byFeedItemId.get(feedItemId);
+    const target = targetsById.get(targetId);
+    const template = templatesById.get(templateId);
+
+    if (!feedItem || !target || !template || target.active === false) {
+      result.skipped += 1;
+      continue;
+    }
+
+    let rendered: ReturnType<typeof renderTemplateMessage>;
+    try {
+      rendered = renderTemplateMessage(template, feedItem);
+    } catch (error) {
+      result.failed += 1;
+      logger.warn({ error, feedItemId, targetId, templateId }, 'Failed to render updated template for sent message');
+      continue;
+    }
+
+    const desiredText = String(rendered.outboundText || '').trim();
+    if (!desiredText) {
+      result.skipped += 1;
+      continue;
+    }
+
+    const currentComparable = normalizeMessageText(String(log.message_content || '')).trim();
+    const desiredComparable = normalizeMessageText(desiredText).trim();
+    if (currentComparable && currentComparable === desiredComparable) {
+      result.skipped += 1;
+      continue;
+    }
+
+    const sentAgeMs = getSentAgeMs(log.sent_at);
+    if (sentAgeMs == null || sentAgeMs > correctionWindowMs) {
+      result.skipped += 1;
+      continue;
+    }
+
+    result.processed += 1;
+
+    const normalizedTargetId = String(target.id || target.phone_number || targetId);
+    let jid = '';
+    try {
+      jid = normalizeTargetJid(target);
+    } catch (error) {
+      result.failed += 1;
+      logger.warn({ error, logId: log.id, targetId }, 'Failed to normalize target JID for feed-item reconciliation');
+      continue;
+    }
+    const hasEditCandidate = Boolean(
+      whatsappClient.editMessage &&
+      target.type !== 'status' &&
+      sentAgeMs <= editWindowMs &&
+      String(log.whatsapp_message_id || '').trim()
+    );
+
+    if (hasEditCandidate) {
+      try {
+        await withGlobalSendLock(async () => {
+          await waitForDelays(normalizedTargetId, settings);
+          await withTimeout(
+            whatsappClient.editMessage!(
+              jid,
+              String(log.whatsapp_message_id || '').trim(),
+              desiredText
+            ),
+            sendTimeoutMs,
+            'Timed out editing message'
+          );
+        });
+
+        await supabase
+          .from('message_logs')
+          .update({
+            message_content: desiredText,
+            error_message: null
+          })
+          .eq('id', log.id);
+
+        result.edited += 1;
+        continue;
+      } catch (error) {
+        logger.warn(
+          { error, logId: log.id, targetId, feedItemId },
+          'Failed to edit sent message; will attempt replacement send'
+        );
+      }
+    }
+
+    try {
+      const sendResult = await withGlobalSendLock(async () => {
+        await waitForDelays(normalizedTargetId, settings);
+        return sendMessageWithTemplate(whatsappClient, target, template, feedItem, {
+          sendImages: template.send_images !== false,
+          supabase,
+          sendTimeoutMs,
+          overrideText: desiredText
+        });
+      });
+
+      const replacementMessageId = sendResult?.response?.key?.id
+        ? String(sendResult.response.key.id)
+        : null;
+
+      if (replacementMessageId) {
+        if (whatsappClient.confirmSend) {
+          const isImage = sendResult?.media?.type === 'image' && Boolean(sendResult?.media?.sent);
+          const confirmation = await whatsappClient.confirmSend(
+            replacementMessageId,
+            isImage
+              ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
+              : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 }
+          );
+          if (!confirmation?.ok) {
+            throw new Error('Replacement message send not confirmed (no upsert/ack)');
+          }
+        } else if (whatsappClient.waitForMessage) {
+          const observed = await whatsappClient.waitForMessage(replacementMessageId, 15000);
+          if (!observed) {
+            throw new Error('Replacement message send not confirmed (no local upsert)');
+          }
+        }
+      }
+
+      await supabase
+        .from('message_logs')
+        .update({
+          status: 'sent',
+          message_content: sendResult?.text || desiredText,
+          whatsapp_message_id: replacementMessageId || log.whatsapp_message_id || null,
+          error_message: null,
+          retry_count: 0,
+          processing_started_at: null,
+          media_url: sendResult?.media?.url || null,
+          media_type: sendResult?.media?.type || null,
+          media_sent: Boolean(sendResult?.media?.sent),
+          media_error: sendResult?.media?.error || null
+        })
+        .eq('id', log.id);
+
+      result.replaced += 1;
+    } catch (error) {
+      result.failed += 1;
+      logger.warn(
+        { error, logId: log.id, targetId, feedItemId },
+        'Failed to send replacement message for updated feed item'
+      );
+    }
+  }
+
+  return result;
 };
 
 type Schedule = {
@@ -1404,7 +1764,13 @@ const sendQueuedForSchedule = async (
 
     if (!options?.skipFeedRefresh) {
       try {
-        await fetchAndProcessFeed(feed);
+        const feedRefreshResult = await fetchAndProcessFeed(feed);
+        const updatedItems = Array.isArray(feedRefreshResult?.updatedItems)
+          ? feedRefreshResult.updatedItems
+          : [];
+        if (updatedItems.length && whatsappClient?.getStatus?.().status === 'connected') {
+          await reconcileUpdatedFeedItems(updatedItems, whatsappClient);
+        }
       } catch (error) {
         logger.warn({ scheduleId, feedId: schedule.feed_id, error }, 'Failed to refresh feed during dispatch');
       }
@@ -2216,5 +2582,6 @@ module.exports = {
   sendQueuedForSchedule,
   sendPendingForAllSchedules,
   queueLatestForSchedule,
-  sendQueueLogNow
+  sendQueueLogNow,
+  reconcileUpdatedFeedItems
 };

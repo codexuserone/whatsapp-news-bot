@@ -54,16 +54,20 @@ const extractWordpressNumericId = (value?: string) => {
 
 type FeedProcessResult = {
   items: FeedItemRecord[];
+  updatedItems: FeedItemRecord[];
   fetchedCount: number;
   insertedCount: number;
+  updatedCount: number;
   duplicateCount: number;
   errorCount: number;
 };
 
 const emptyResult = (): FeedProcessResult => ({
   items: [],
+  updatedItems: [],
   fetchedCount: 0,
   insertedCount: 0,
+  updatedCount: 0,
   duplicateCount: 0,
   errorCount: 0
 });
@@ -75,6 +79,24 @@ const makeSnippet = (value: string, maxLen = 280) => {
   if (!normalized) return '';
   if (normalized.length <= maxLen) return normalized;
   return `${normalized.slice(0, Math.max(maxLen - 1, 1)).trim()}…`;
+};
+
+const normalizeIso = (value?: string | Date | null) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  const time = parsed.getTime();
+  if (!Number.isFinite(time)) return null;
+  return parsed.toISOString();
+};
+
+const normalizeComparableText = (value: unknown) => collapseWhitespace(String(value || ''));
+
+const normalizeComparableList = (value: unknown) => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => collapseWhitespace(String(entry || '')))
+    .filter(Boolean)
+    .sort();
 };
 
 const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult> => {
@@ -107,48 +129,14 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
 
     const isFirstFetch = !feed.last_fetched_at;
 
-    const { data: existingMarkers } = await supabase
-      .from('feed_items')
-      .select('guid, normalized_url')
-      .eq('feed_id', feed.id)
-      .order('created_at', { ascending: false })
-      .limit(500);
-
-    const knownGuids = new Set(
-      (existingMarkers || [])
-        .map((row: { guid?: string | null }) => (row?.guid ? String(row.guid) : ''))
-        .filter(Boolean)
-    );
-    const knownUrls = new Set(
-      (existingMarkers || [])
-        .map((row: { normalized_url?: string | null }) =>
-          row?.normalized_url ? String(row.normalized_url) : ''
-        )
-        .filter(Boolean)
-    );
-
     const sourceItems = isFirstFetch
       ? [...byMostRecent.slice(0, bootstrapLimit)].reverse()
       : (() => {
-        // CRITICAL FIX: Do not stop on the first seen item. Sticky posts or out-of-order 
-        // updates can cause "new" items to appear AFTER "seen" items in the feed.
-        // Instead, check the top 50 items and filter out anything we already know.
+        // Process the top feed window on every poll.
+        // This catches both newly published entries and edits to already-seen entries.
         const checkLimit = 50;
         const candidates = byMostRecent.slice(0, checkLimit);
-        const freshItems: FeedItemInput[] = [];
-
-        for (const candidate of candidates) {
-          const guid = candidate?.guid ? String(candidate.guid) : '';
-          const normalizedCandidateUrl = normalizeUrl(candidate?.url || '');
-          const seenByGuid = guid ? knownGuids.has(guid) : false;
-          const seenByUrl = normalizedCandidateUrl ? knownUrls.has(normalizedCandidateUrl) : false;
-
-          if (!seenByGuid && !seenByUrl) {
-            freshItems.push(candidate);
-          }
-        }
-
-        return freshItems.reverse();
+        return candidates.reverse();
       })();
 
     if (isFirstFetch && items.length > sourceItems.length) {
@@ -158,25 +146,13 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
     }
 
     const newItems: FeedItemRecord[] = [];
+    const updatedItems: FeedItemRecord[] = [];
     const fetchedCount = Array.isArray(sourceItems) ? sourceItems.length : 0;
     let duplicateCount = 0;
     let errorCount = 0;
     let feedMissing = false;
 
     for (const item of sourceItems as FeedItemInput[]) {
-      const duplicate = await isDuplicateFeedItem({
-        title: item.title,
-        url: item.url,
-        threshold: settings.dedupeThreshold,
-        since,
-        feedId: feed.id
-      });
-
-      if (duplicate) {
-        duplicateCount += 1;
-        continue;
-      }
-
       // Generate a unique GUID if not provided
       const guid = item.guid || item.url || `${feed.id}-${Date.now()}-${Math.random()}`;
 
@@ -199,6 +175,10 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
       const normalizedContent = collapseWhitespace(String(item.content || ''));
       const fallbackSnippet = makeSnippet(normalizedContent, 280);
       const descriptionForStorage = normalizedDescription || fallbackSnippet;
+      const normalizedCategories = Array.isArray(item.categories)
+        ? item.categories.map((entry) => String(entry || '')).filter(Boolean)
+        : [];
+      const normalizedPubDate = normalizeIso(item.publishedAt);
 
       for (const [key, value] of Object.entries(rawInput)) {
         if (value == null) continue;
@@ -207,23 +187,101 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
         }
       }
 
+      const incomingPayload: Record<string, unknown> = {
+        guid,
+        title: item.title || null,
+        link: item.url || null,
+        description: descriptionForStorage || null,
+        image_url: item.imageUrl || null,
+        image_source: item.imageUrl ? 'feed' : null,
+        pub_date: normalizedPubDate,
+        normalized_url: normalizedUrlValue || null,
+        content_hash: contentHash || null,
+        raw_data: rawData,
+        content: item.content || null,
+        author: item.author || null,
+        categories: normalizedCategories
+      };
+
+      let existingItem: FeedItemRecord | null = null;
+      if (guid) {
+        const { data: existingByGuid } = await supabase
+          .from('feed_items')
+          .select('*')
+          .eq('feed_id', feed.id)
+          .eq('guid', guid)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        existingItem = (existingByGuid as FeedItemRecord | null) || null;
+      }
+
+      if (!existingItem && normalizedUrlValue) {
+        const { data: existingByUrl } = await supabase
+          .from('feed_items')
+          .select('*')
+          .eq('feed_id', feed.id)
+          .eq('normalized_url', normalizedUrlValue)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        existingItem = (existingByUrl as FeedItemRecord | null) || null;
+      }
+
+      if (!existingItem) {
+        const duplicate = await isDuplicateFeedItem({
+          title: item.title,
+          url: item.url,
+          threshold: settings.dedupeThreshold,
+          since,
+          feedId: feed.id
+        });
+
+        if (duplicate) {
+          duplicateCount += 1;
+          continue;
+        }
+      }
+
+      if (existingItem) {
+        const existingRecord = existingItem as Record<string, unknown>;
+        const hasChanges =
+          normalizeComparableText(existingRecord.title) !== normalizeComparableText(incomingPayload.title) ||
+          normalizeComparableText(existingRecord.link) !== normalizeComparableText(incomingPayload.link) ||
+          normalizeComparableText(existingRecord.description) !== normalizeComparableText(incomingPayload.description) ||
+          normalizeComparableText(existingRecord.content) !== normalizeComparableText(incomingPayload.content) ||
+          normalizeComparableText(existingRecord.author) !== normalizeComparableText(incomingPayload.author) ||
+          normalizeComparableText(existingRecord.image_url) !== normalizeComparableText(incomingPayload.image_url) ||
+          normalizeIso(existingRecord.pub_date as string | Date | null | undefined) !== normalizeIso(normalizedPubDate) ||
+          normalizeComparableText(existingRecord.content_hash) !== normalizeComparableText(incomingPayload.content_hash) ||
+          normalizeComparableList(existingRecord.categories).join('|') !==
+            normalizeComparableList(incomingPayload.categories).join('|');
+
+        if (hasChanges) {
+          const { data: updatedItem, error: updateError } = await supabase
+            .from('feed_items')
+            .update(incomingPayload)
+            .eq('id', String(existingItem.id))
+            .select('*')
+            .single();
+
+          if (updateError) {
+            errorCount += 1;
+            console.error('Error updating feed item:', updateError);
+          } else if (updatedItem) {
+            updatedItems.push(updatedItem as FeedItemRecord);
+          }
+        } else {
+          duplicateCount += 1;
+        }
+        continue;
+      }
+
       const { data: feedItem, error } = await supabase
         .from('feed_items')
         .insert({
           feed_id: feed.id,
-          guid,
-          title: item.title,
-          link: item.url,
-          description: descriptionForStorage,
-          image_url: item.imageUrl,
-          image_source: item.imageUrl ? 'feed' : null,
-          pub_date: item.publishedAt ? new Date(item.publishedAt).toISOString() : null,
-          normalized_url: normalizedUrlValue || null,
-          content_hash: contentHash || null,
-          raw_data: rawData,
-          content: item.content,
-          author: item.author,
-          categories: item.categories || []
+          ...incomingPayload
         })
         .select()
         .single();
@@ -275,8 +333,10 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
 
     return {
       items: newItems,
+      updatedItems,
       fetchedCount,
       insertedCount: newItems.length,
+      updatedCount: updatedItems.length,
       duplicateCount,
       errorCount
     };
@@ -401,6 +461,7 @@ const processAllFeeds = async () => {
         feedId: feed.id,
         fetchedCount: result.fetchedCount,
         insertedCount: result.insertedCount,
+        updatedCount: result.updatedCount,
         duplicateCount: result.duplicateCount,
         errorCount: result.errorCount,
         queuedCount: queuedLogs.length

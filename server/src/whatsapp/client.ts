@@ -689,7 +689,8 @@ class WhatsAppClient {
 
       // Acquire a cross-instance lease so only one bot connects at a time.
       // This prevents WhatsApp "conflict/replaced" errors during rolling deploys.
-      const skipLease = String(process.env.SKIP_WHATSAPP_LEASE || 'true').toLowerCase() !== 'false';
+      // Keep lease protection ON by default so deploy overlaps don't fight for the same WA session.
+      const skipLease = String(process.env.SKIP_WHATSAPP_LEASE || 'false').toLowerCase() === 'true';
       const allowAutoTakeover = process.env.WHATSAPP_LEASE_AUTO_TAKEOVER !== 'false'; // Default to true
       if (!skipLease && authStore.acquireLease) {
         try {

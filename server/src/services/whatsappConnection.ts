@@ -35,9 +35,16 @@ const ensureWhatsAppConnected = async (
       return true;
     }
 
-    if (options?.triggerTakeover && status === 'conflict' && whatsappClient.takeoverLease && attempt <= 2) {
+    const takeoverLease = whatsappClient.takeoverLease;
+    const shouldAttemptTakeover =
+      options?.triggerTakeover &&
+      status === 'conflict' &&
+      typeof takeoverLease === 'function' &&
+      (attempt === 1 || attempt % 3 === 0);
+
+    if (shouldAttemptTakeover) {
       try {
-        const takeover = await whatsappClient.takeoverLease(takeoverTtlMs);
+        const takeover = await takeoverLease(takeoverTtlMs);
         if (takeover.ok) {
           logger.info(
             { ownerId: takeover.ownerId, expiresAt: takeover.expiresAt, attempt, status, context: logContext },
@@ -49,7 +56,12 @@ const ensureWhatsAppConnected = async (
       }
     }
 
-    if (options?.triggerReconnect && attempt === 1 && (status === 'conflict' || status === 'disconnected' || status === 'error')) {
+    const shouldAttemptReconnect =
+      options?.triggerReconnect &&
+      (attempt === 1 || attempt % 3 === 0) &&
+      (status === 'conflict' || status === 'disconnected' || status === 'error' || status === 'unknown');
+
+    if (shouldAttemptReconnect) {
       try {
         await Promise.resolve(whatsappClient.reconnect?.());
       } catch (error) {

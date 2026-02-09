@@ -415,7 +415,15 @@ const whatsappRoutes = () => {
       throw badRequest('message or imageUrl is required');
     }
 
-    if (whatsapp?.getStatus()?.status !== 'connected') {
+    const connected = await ensureWhatsAppConnected(whatsapp, {
+      attempts: 8,
+      delayMs: 900,
+      triggerReconnect: true,
+      triggerTakeover: true,
+      logContext: 'send-status route'
+    });
+
+    if (!connected) {
       throw badRequest('WhatsApp is not connected');
     }
 

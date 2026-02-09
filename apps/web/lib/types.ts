@@ -80,6 +80,7 @@ export type FeedItem = {
     sent: number;
     failed: number;
     skipped: number;
+    manual_paused?: number;
     total: number;
   } | null;
   delivery_status?: string | null;

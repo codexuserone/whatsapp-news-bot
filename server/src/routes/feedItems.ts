@@ -4,6 +4,8 @@ const { getSupabaseClient } = require('../db/supabase');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 
+const MANUAL_POST_PAUSE_REASON = 'Paused for this post';
+
 const feedItemRoutes = () => {
   const router = express.Router();
   
@@ -31,20 +33,20 @@ const feedItemRoutes = () => {
       const ids = (items || []).map((item: { id?: string }) => item.id).filter(Boolean) as string[];
       const deliveryByItem = new Map<
         string,
-        { pending: number; processing: number; sent: number; failed: number; skipped: number }
+        { pending: number; processing: number; sent: number; failed: number; skipped: number; manual_paused: number }
       >();
 
       if (ids.length) {
         const { data: logs, error: logsError } = await supabase
           .from('message_logs')
-          .select('feed_item_id,status')
+          .select('feed_item_id,status,error_message')
           .in('feed_item_id', ids);
 
         if (logsError) {
           console.warn('Error fetching message log summaries:', logsError);
         }
 
-        for (const row of (logs || []) as Array<{ feed_item_id?: string; status?: string }>) {
+        for (const row of (logs || []) as Array<{ feed_item_id?: string; status?: string; error_message?: string | null }>) {
           const feedItemId = row.feed_item_id;
           const status = row.status;
           if (!feedItemId || !status) continue;
@@ -54,14 +56,20 @@ const feedItemRoutes = () => {
             processing: 0,
             sent: 0,
             failed: 0,
-            skipped: 0
+            skipped: 0,
+            manual_paused: 0
           };
 
           if (status === 'pending') current.pending += 1;
           else if (status === 'processing') current.processing += 1;
           else if (status === 'sent' || status === 'delivered' || status === 'read') current.sent += 1;
           else if (status === 'failed') current.failed += 1;
-          else if (status === 'skipped') current.skipped += 1;
+          else if (status === 'skipped') {
+            current.skipped += 1;
+            if (String(row.error_message || '') === MANUAL_POST_PAUSE_REASON) {
+              current.manual_paused += 1;
+            }
+          }
 
           deliveryByItem.set(feedItemId, current);
         }
@@ -74,15 +82,21 @@ const feedItemRoutes = () => {
           processing: 0,
           sent: 0,
           failed: 0,
-          skipped: 0
+          skipped: 0,
+          manual_paused: 0
         };
         const queued = delivery.pending + delivery.processing;
         const total = delivery.pending + delivery.processing + delivery.sent + delivery.failed + delivery.skipped;
         const hasQueued = queued > 0;
         const hasSent = delivery.sent > 0;
         const hasFailed = delivery.failed > 0;
+        const hasManualPause = delivery.manual_paused > 0;
         const delivery_status =
-          hasQueued && hasSent && hasFailed
+          hasManualPause && hasQueued
+            ? 'paused_with_queue'
+            : hasManualPause
+              ? 'paused'
+              : hasQueued && hasSent && hasFailed
             ? 'mixed'
             : hasQueued && hasSent
               ? 'partially_sent'
@@ -126,6 +140,129 @@ const feedItemRoutes = () => {
       res.json(items);
     } catch (error) {
       console.error('Error fetching feed items by feed:', error);
+      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+    }
+  });
+
+  router.post('/:id/pause', async (req: Request, res: Response) => {
+    try {
+      const feedItemId = String(req.params.id || '').trim();
+      if (!feedItemId) {
+        return res.status(400).json({ error: 'Feed item id is required' });
+      }
+
+      const supabase = getDb();
+      const { data: feedItem, error: feedItemError } = await supabase
+        .from('feed_items')
+        .select('id,feed_id')
+        .eq('id', feedItemId)
+        .single();
+
+      if (feedItemError || !feedItem) {
+        return res.status(404).json({ error: 'Feed item not found' });
+      }
+
+      const { data: schedules, error: schedulesError } = await supabase
+        .from('schedules')
+        .select('id,target_ids,template_id')
+        .eq('feed_id', feedItem.feed_id);
+
+      if (schedulesError) throw schedulesError;
+
+      const scheduleIds = (schedules || [])
+        .map((schedule: { id?: string }) => String(schedule.id || ''))
+        .filter(Boolean);
+
+      let updatedExisting = 0;
+      if (scheduleIds.length) {
+        const { data: updatedRows, error: updateError } = await supabase
+          .from('message_logs')
+          .update({
+            status: 'skipped',
+            error_message: MANUAL_POST_PAUSE_REASON,
+            processing_started_at: null
+          })
+          .eq('feed_item_id', feedItemId)
+          .in('schedule_id', scheduleIds)
+          .in('status', ['pending', 'processing', 'failed'])
+          .select('id');
+
+        if (updateError) throw updateError;
+        updatedExisting = updatedRows?.length || 0;
+      }
+
+      const suppressionRows: Array<Record<string, unknown>> = [];
+      for (const schedule of schedules || []) {
+        const scheduleId = schedule?.id ? String(schedule.id) : '';
+        if (!scheduleId) continue;
+        const targetIds = Array.isArray(schedule.target_ids) ? schedule.target_ids : [];
+        for (const targetIdRaw of targetIds) {
+          const targetId = String(targetIdRaw || '').trim();
+          if (!targetId) continue;
+          suppressionRows.push({
+            schedule_id: scheduleId,
+            feed_item_id: feedItemId,
+            target_id: targetId,
+            template_id: schedule.template_id || null,
+            status: 'skipped',
+            error_message: MANUAL_POST_PAUSE_REASON
+          });
+        }
+      }
+
+      let insertedSuppressions = 0;
+      if (suppressionRows.length) {
+        const { data: insertedRows, error: insertError } = await supabase
+          .from('message_logs')
+          .upsert(suppressionRows, { onConflict: 'schedule_id,feed_item_id,target_id', ignoreDuplicates: true })
+          .select('id');
+        if (insertError) throw insertError;
+        insertedSuppressions = insertedRows?.length || 0;
+      }
+
+      return res.json({
+        ok: true,
+        feed_item_id: feedItemId,
+        schedule_count: scheduleIds.length,
+        updated_existing: updatedExisting,
+        inserted_suppressions: insertedSuppressions
+      });
+    } catch (error) {
+      console.error('Error pausing feed item:', error);
+      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+    }
+  });
+
+  router.post('/:id/resume', async (req: Request, res: Response) => {
+    try {
+      const feedItemId = String(req.params.id || '').trim();
+      if (!feedItemId) {
+        return res.status(400).json({ error: 'Feed item id is required' });
+      }
+
+      const supabase = getDb();
+      const { data: resumedRows, error: resumeError } = await supabase
+        .from('message_logs')
+        .update({
+          status: 'pending',
+          error_message: null,
+          retry_count: 0,
+          processing_started_at: null
+        })
+        .eq('feed_item_id', feedItemId)
+        .eq('status', 'skipped')
+        .eq('error_message', MANUAL_POST_PAUSE_REASON)
+        .select('id');
+
+      if (resumeError) throw resumeError;
+
+      return res.json({
+        ok: true,
+        feed_item_id: feedItemId,
+        resumed: resumedRows?.length || 0
+      });
+    } catch (error) {
+      console.error('Error resuming feed item:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
     }
   });

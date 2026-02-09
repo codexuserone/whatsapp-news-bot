@@ -2,19 +2,39 @@
 
 import React from 'react';
 import Image from 'next/image';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { FeedItem } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { ClipboardList, ExternalLink, Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { ClipboardList, ExternalLink, Loader2, PauseCircle, PlayCircle } from 'lucide-react';
 
 const FeedItemsPage = () => {
+  const queryClient = useQueryClient();
   const { data: items = [], isLoading } = useQuery<FeedItem[]>({
     queryKey: ['feed-items'],
     queryFn: () => api.get('/api/feed-items'),
     refetchInterval: 15000
+  });
+
+  const pausePost = useMutation({
+    mutationFn: (id: string) => api.post(`/api/feed-items/${id}/pause`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['feed-items'] });
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      queryClient.invalidateQueries({ queryKey: ['logs'] });
+    }
+  });
+
+  const resumePost = useMutation({
+    mutationFn: (id: string) => api.post(`/api/feed-items/${id}/resume`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['feed-items'] });
+      queryClient.invalidateQueries({ queryKey: ['queue'] });
+      queryClient.invalidateQueries({ queryKey: ['logs'] });
+    }
   });
 
   const getStatus = (item: FeedItem) => {
@@ -24,12 +44,21 @@ const FeedItemsPage = () => {
       sent: 0,
       failed: 0,
       skipped: 0,
+      manual_paused: 0,
       total: 0
     };
     const queued = (delivery.pending || 0) + (delivery.processing || 0);
     const sent = delivery.sent || 0;
     const failed = delivery.failed || 0;
+    const manualPaused = delivery.manual_paused || 0;
     const total = delivery.total || 0;
+
+    if (manualPaused > 0 && queued > 0) {
+      return { label: `Paused (${manualPaused}), queued (${queued})`, variant: 'warning' as const };
+    }
+    if (manualPaused > 0) {
+      return { label: `Paused (${manualPaused})`, variant: 'secondary' as const };
+    }
 
     if (queued > 0 && sent > 0 && failed > 0) {
       return { label: `Mixed (${sent} sent, ${queued} queued, ${failed} failed)`, variant: 'warning' as const };
@@ -91,6 +120,7 @@ const FeedItemsPage = () => {
                   <TableHeaderCell className="hidden md:table-cell">Image</TableHeaderCell>
                   <TableHeaderCell className="hidden lg:table-cell">Published</TableHeaderCell>
                   <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell className="hidden lg:table-cell">Actions</TableHeaderCell>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -153,11 +183,33 @@ const FeedItemsPage = () => {
                         return <Badge variant={status.variant}>{status.label}</Badge>;
                       })()}
                     </TableCell>
+                    <TableCell className="hidden lg:table-cell">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => pausePost.mutate(item.id)}
+                          disabled={pausePost.isPending || resumePost.isPending}
+                        >
+                          <PauseCircle className="mr-1 h-3 w-3" />
+                          Pause post
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => resumePost.mutate(item.id)}
+                          disabled={pausePost.isPending || resumePost.isPending}
+                        >
+                          <PlayCircle className="mr-1 h-3 w-3" />
+                          Resume post
+                        </Button>
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))}
                 {items.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                       No feed items yet. Add feeds and refresh them to see items here.
                     </TableCell>
                   </TableRow>

@@ -60,6 +60,9 @@ type WhatsAppClient = {
 
 const DEFAULT_SEND_TIMEOUT_MS = 45000;
 const AUTH_ERROR_HINT = 'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
+const MANUAL_POST_PAUSE_ERROR = 'Paused for this post';
+const FEED_PAUSED_ERROR = 'Feed paused';
+const NON_REVIVABLE_SKIP_ERRORS = new Set([MANUAL_POST_PAUSE_ERROR, FEED_PAUSED_ERROR]);
 const ONE_PX_JPEG_THUMBNAIL = Buffer.from(
   '/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRAQEA8QDw8PEA8QEA8QFREWFhURFRUYHSggGBolGxUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGxAQGi0fHyUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBIgACEQEDEQH/xAAbAAACAwEBAQAAAAAAAAAAAAAEBQIDBgABB//EADQQAAIBAgQDBgQEBwAAAAAAAAECAwQRAAUSITFBUQYTImFxgZGh8BMyQrHB0fAjYoKS4f/EABkBAQADAQEAAAAAAAAAAAAAAAABAgMEBf/EACMRAQEAAgIDAQACAwAAAAAAAAABAhEDIRIxBEEiUWEUMmH/2gAMAwEAAhEDEQA/APqgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB9Qwq0qfW5U0k8rPpsl9k0vVfQ1Z0x7w2Lx6j3rIuYvT8fG7xq3qM2p2q6Yz6L1dV0X8n8U6dL8d8WQ8lM9m7m4t6f4c6R0rN4s9VbY5p8fN+R4r5uK9n1q8rX2h6rWlX2mP8A3G2f8A8fW8e9d7f4fXr7jQ9bq5T2x7V5r1fY8s9Y2a7l5t+3aX6m7a2m8l8l9W7W7k8f8A5Z8QwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/Z',
   'base64'
@@ -1175,7 +1178,7 @@ const queueLatestForSchedule = async (
   const targetIds = targets.map((target) => target.id).filter(Boolean) as string[];
   const { data: existingLogs, error: existingLogsError } = await supabase
     .from('message_logs')
-    .select('id, target_id, status')
+    .select('id, target_id, status, error_message')
     .eq('schedule_id', schedule.id)
     .eq('feed_item_id', latestFeedItem.id)
     .in('target_id', targetIds);
@@ -1184,14 +1187,15 @@ const queueLatestForSchedule = async (
     logger.warn({ scheduleId: schedule.id, error: existingLogsError }, 'Failed to check existing logs');
   }
 
-  type ExistingLogRow = { id: string; target_id: string; status: string };
+  type ExistingLogRow = { id: string; target_id: string; status: string; error_message?: string | null };
   const existingByTarget = new Map<string, ExistingLogRow>();
   for (const row of (existingLogs || []) as Array<Partial<ExistingLogRow>>) {
     if (!row?.id || !row?.target_id || !row?.status) continue;
     existingByTarget.set(String(row.target_id), {
       id: String(row.id),
       target_id: String(row.target_id),
-      status: String(row.status)
+      status: String(row.status),
+      error_message: row.error_message ? String(row.error_message) : null
     });
   }
 
@@ -1213,6 +1217,11 @@ const queueLatestForSchedule = async (
     }
 
     if (existing.status === 'sent' || existing.status === 'processing') {
+      skipped += 1;
+      continue;
+    }
+
+    if (existing.status === 'skipped' && NON_REVIVABLE_SKIP_ERRORS.has(String(existing.error_message || ''))) {
       skipped += 1;
       continue;
     }
@@ -1351,12 +1360,25 @@ const sendQueuedForSchedule = async (
 
     const settings = await settingsService.getSettings();
 
+    const { data: feed, error: feedError } = await supabase
+      .from('feeds')
+      .select('*')
+      .eq('id', schedule.feed_id)
+      .single();
+
+    if (feedError || !feed) {
+      logger.warn({ scheduleId, feedId: schedule.feed_id, error: feedError }, 'Feed not found for schedule dispatch');
+      return { sent: 0, queued: 0, skipped: true, reason: 'Feed not found' };
+    }
+
+    if (feed.active === false) {
+      logger.info({ scheduleId, feedId: schedule.feed_id }, 'Skipping dispatch because feed is paused');
+      return { sent: 0, queued: 0, skipped: true, reason: FEED_PAUSED_ERROR };
+    }
+
     if (!options?.skipFeedRefresh) {
       try {
-        const { data: feed } = await supabase.from('feeds').select('*').eq('id', schedule.feed_id).single();
-        if (feed) {
-          await fetchAndProcessFeed(feed);
-        }
+        await fetchAndProcessFeed(feed);
       } catch (error) {
         logger.warn({ scheduleId, feedId: schedule.feed_id, error }, 'Failed to refresh feed during dispatch');
       }

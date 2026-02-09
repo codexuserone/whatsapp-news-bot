@@ -136,7 +136,22 @@ const cleanupCreatedData = async () => {
   const cleanup = async (kind, ids, route) => {
     for (const id of ids.reverse()) {
       try {
-        await apiRequest('DELETE', `${route}/${id}`, undefined, [200, 204]);
+        let deleted = false;
+        for (let attempt = 1; attempt <= 4; attempt += 1) {
+          const response = await apiRequest('DELETE', `${route}/${id}`, undefined, [200, 204, 429]);
+          if (response.status !== 429) {
+            deleted = true;
+            break;
+          }
+          const retryAfterSec = Number(response.data?.retryAfter || 2);
+          if (attempt < 4) {
+            await sleep(Math.max(retryAfterSec, 1) * 1000);
+          }
+        }
+
+        if (!deleted) {
+          throw new Error(`DELETE ${route}/${id} rate-limited repeatedly`);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         pushFinding('warning', `Cleanup failed (${kind})`, `${id}: ${message}`);
@@ -286,7 +301,25 @@ const run = async () => {
 
   for (const feed of [createdFeedRss, createdFeedJson].filter(Boolean)) {
     await step(`POST /api/feeds/${feed.id}/refresh`, async () => {
-      const response = await apiRequest('POST', `/api/feeds/${feed.id}/refresh`, {});
+      let response = null;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const current = await apiRequest('POST', `/api/feeds/${feed.id}/refresh`, {}, [200, 429]);
+        if (current.status !== 429) {
+          response = current;
+          break;
+        }
+
+        const retryAfterSec = Number(current.data?.retryAfter || 2);
+        if (attempt >= 3) {
+          throw new Error(`Feed refresh rate-limited after ${attempt} attempts`);
+        }
+        await sleep(Math.max(retryAfterSec, 1) * 1000);
+      }
+
+      if (!response) {
+        throw new Error('Feed refresh returned no response');
+      }
+
       if (!response.data?.insertedCount && !response.data?.duplicateCount) {
         pushFinding('warning', 'Feed refresh returned no parsed items', `Feed ${feed.name} returned empty refresh payload.`);
       }

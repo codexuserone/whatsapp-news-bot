@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { FeedItem, Template } from '@/lib/types';
+import type { Feed, FeedItem, Template } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -15,6 +15,7 @@ import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Layers, Pencil, Trash2, Eye, Loader2 } from 'lucide-react';
 
 const schema = z.object({
@@ -60,14 +61,22 @@ const formatWhatsAppMarkdown = (text: string) => {
 const TemplatesPage = () => {
   const queryClient = useQueryClient();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [sampleFeedId, setSampleFeedId] = useState<string>('__all');
+  const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
   const { data: availableVariables = [] } = useQuery<Array<{ name: string }>>({
-    queryKey: ['available-variables'],
-    queryFn: () => api.get('/api/templates/available-variables')
+    queryKey: ['available-variables', sampleFeedId],
+    queryFn: () =>
+      sampleFeedId === '__all'
+        ? api.get('/api/templates/available-variables')
+        : api.get(`/api/templates/available-variables?feed_id=${encodeURIComponent(sampleFeedId)}`)
   });
   const { data: feedItems = [] } = useQuery<FeedItem[]>({
-    queryKey: ['feed-items'],
-    queryFn: () => api.get('/api/feed-items')
+    queryKey: ['feed-items', sampleFeedId],
+    queryFn: () =>
+      sampleFeedId === '__all'
+        ? api.get('/api/feed-items')
+        : api.get(`/api/feed-items/by-feed/${encodeURIComponent(sampleFeedId)}`)
   });
   const [active, setActive] = useState<Template | null>(null);
   const [previewWithData, setPreviewWithData] = useState(true);
@@ -211,6 +220,23 @@ const TemplatesPage = () => {
                 </div>
 
                 <div className="space-y-2">
+                  <Label>Sample Feed (for variables + preview)</Label>
+                  <Select value={sampleFeedId} onValueChange={setSampleFeedId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="All feeds" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all">All feeds</SelectItem>
+                      {feeds.map((feed) => (
+                        <SelectItem key={feed.id} value={feed.id}>
+                          {feed.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
                   <Label htmlFor="content">Content</Label>
                   <Textarea
                     id="content"
@@ -268,9 +294,9 @@ const TemplatesPage = () => {
                         <Label>Message Format</Label>
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                           {[
-                            { value: 'image', label: 'Image + Caption', icon: '🖼️' },
+                            { value: 'image', label: 'Image + Text', icon: '🖼️' },
                             { value: 'image_only', label: 'Image Only', icon: '📷' },
-                            { value: 'link_preview', label: 'Link Preview', icon: '🔗' },
+                            { value: 'link_preview', label: 'Text + Link Preview', icon: '🔗' },
                             { value: 'text_only', label: 'Text Only', icon: '📝' },
                           ].map((mode) => (
                             <div
@@ -287,7 +313,10 @@ const TemplatesPage = () => {
                           ))}
                         </div>
                         <p className="text-xs text-muted-foreground">
-                          Select how the message will appear in WhatsApp.
+                          {field.value === 'image' && 'Sends an image with your template text under it.'}
+                          {field.value === 'image_only' && 'Sends image only. Template text is kept for fallback if image fails.'}
+                          {field.value === 'link_preview' && 'Sends text and ensures a link preview is included.'}
+                          {field.value === 'text_only' && 'Sends plain text only (no media, no preview).'}
                         </p>
                       </div>
                     )}

@@ -14,6 +14,8 @@ const { validate, schemas } = require('../middleware/validation');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 
+const FEED_PAUSED_ERROR = 'Feed paused';
+
 const feedsRoutes = () => {
   const router = express.Router();
 
@@ -27,6 +29,36 @@ const feedsRoutes = () => {
 
   const refreshSchedulers = (whatsappClient: unknown) =>
     runAsync('Scheduler refresh', () => initSchedulers(whatsappClient));
+
+  const pausePendingLogsForFeed = async (feedId: string) => {
+    const supabase = getDb();
+    const { data: schedules, error: schedulesError } = await supabase
+      .from('schedules')
+      .select('id')
+      .eq('feed_id', feedId);
+
+    if (schedulesError) throw schedulesError;
+
+    const scheduleIds = (schedules || [])
+      .map((row: { id?: string }) => String(row.id || ''))
+      .filter(Boolean);
+
+    if (!scheduleIds.length) return 0;
+
+    const { data: pausedRows, error: pauseError } = await supabase
+      .from('message_logs')
+      .update({
+        status: 'skipped',
+        error_message: FEED_PAUSED_ERROR,
+        processing_started_at: null
+      })
+      .in('schedule_id', scheduleIds)
+      .in('status', ['pending', 'processing'])
+      .select('id');
+
+    if (pauseError) throw pauseError;
+    return pausedRows?.length || 0;
+  };
 
   // Helper to get supabase client
   const getDb = () => {
@@ -134,8 +166,14 @@ const feedsRoutes = () => {
         .single();
       
       if (error) throw error;
+
+      let pausedQueueItems = 0;
+      if (req.body?.active === false) {
+        pausedQueueItems = await pausePendingLogsForFeed(String(req.params.id));
+      }
+
       refreshSchedulers(req.app.locals.whatsapp);
-      res.json(feed);
+      res.json({ ...feed, paused_queue_items: pausedQueueItems });
     } catch (error) {
       console.error('Error updating feed:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });

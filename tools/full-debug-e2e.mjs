@@ -175,10 +175,43 @@ const run = async () => {
   await step('GET /health', async () => (await apiRequest('GET', '/health')).data);
   await step('GET /ready', async () => (await apiRequest('GET', '/ready')).data);
 
-  const whatsappStatus = await step('GET /api/whatsapp/status', async () => {
+  let whatsappStatus = await step('GET /api/whatsapp/status', async () => {
     const response = await apiRequest('GET', '/api/whatsapp/status');
     return response.data;
   });
+
+  if (!whatsappStatus || whatsappStatus.status !== 'connected') {
+    await step('WhatsApp auto-recovery wait', async () => {
+      const initialStatus = whatsappStatus?.status || 'unknown';
+
+      if (initialStatus === 'conflict') {
+        try {
+          await apiRequest('POST', '/api/whatsapp/takeover', {}, [200, 400]);
+        } catch {
+          // continue polling status below
+        }
+      }
+
+      for (let attempt = 1; attempt <= 8; attempt += 1) {
+        await sleep(3000);
+        const latest = await apiRequest('GET', '/api/whatsapp/status');
+        whatsappStatus = latest.data;
+        if (whatsappStatus?.status === 'connected') break;
+        if (attempt === 3 && whatsappStatus?.status === 'conflict') {
+          try {
+            await apiRequest('POST', '/api/whatsapp/takeover', {}, [200, 400]);
+          } catch {
+            // ignore and continue polling
+          }
+        }
+      }
+
+      return {
+        initial: initialStatus,
+        final: whatsappStatus?.status || 'unknown'
+      };
+    });
+  }
 
   if (!whatsappStatus || whatsappStatus.status !== 'connected') {
     pushBlocker(

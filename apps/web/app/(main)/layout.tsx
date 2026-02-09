@@ -1,51 +1,43 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
 import { usePathname } from 'next/navigation';
 import AppSidebar from '@/components/layout/AppSidebar';
 import { SidebarProvider, SidebarInset, SidebarTrigger } from '@/components/ui/sidebar';
 import { Separator } from '@/components/ui/separator';
-import { Badge } from '@/components/ui/badge';
 import Breadcrumbs from '@/components/layout/Breadcrumbs';
 import ThemeToggle from '@/components/layout/ThemeToggle';
-import { api } from '@/lib/api';
-import type { WhatsAppStatus } from '@/lib/types';
+import { navLookup } from '@/lib/navigation';
 
 type MainLayoutProps = {
   children: React.ReactNode;
 };
 
-const statusVariant = (status?: string) => {
-  if (status === 'connected') return 'success';
-  if (status === 'qr' || status === 'qr_ready' || status === 'connecting') return 'warning';
-  return 'destructive';
+const titleCase = (value: string) => value.replace(/-/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+
+const getMobileTitle = (pathname: string) => {
+  if (navLookup[pathname]) return navLookup[pathname]!;
+  const parts = pathname.split('/').filter(Boolean);
+  const last = parts[parts.length - 1] || '';
+  return last ? titleCase(last) : 'Overview';
 };
 
 const MainLayout = ({ children }: MainLayoutProps) => {
   const pathname = usePathname();
-  const showConnectionBadge = pathname !== '/whatsapp';
-  const { data: status } = useQuery<WhatsAppStatus>({
-    queryKey: ['whatsapp-status'],
-    queryFn: () => api.get('/api/whatsapp/status'),
-    refetchInterval: 5000
-  });
+  const mobileTitle = getMobileTitle(pathname);
 
   return (
     <SidebarProvider>
       <AppSidebar />
       <SidebarInset className="bg-background/80">
         <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 border-b bg-background/70 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-          <SidebarTrigger className="-ml-1 h-10 w-10 rounded-md border border-border bg-background/80" />
-          <span className="md:hidden text-sm text-muted-foreground">Menu</span>
+          <SidebarTrigger className="-ml-1 h-11 w-11 rounded-md border border-border bg-background/80" />
+          <span className="md:hidden text-sm font-medium">{mobileTitle}</span>
           <Separator orientation="vertical" className="mr-2 h-4" />
           <div className="flex flex-1 items-center justify-between">
-            <Breadcrumbs />
+            <div className="hidden md:block">
+              <Breadcrumbs />
+            </div>
             <div className="flex items-center gap-3">
-              {showConnectionBadge ? (
-                <Badge variant={statusVariant(status?.status)} className="capitalize">
-                  {status?.status || 'unknown'}
-                </Badge>
-              ) : null}
               <ThemeToggle />
             </div>
           </div>

@@ -38,14 +38,14 @@ export const navSections: NavSection[] = [
       { label: 'Templates', to: '/templates', icon: Layers },
       { label: 'Targets', to: '/targets', icon: Target },
       { label: 'Automations', to: '/schedules', icon: CalendarClock },
-      { label: 'Queue', to: '/queue', icon: ListOrdered }
+      { label: 'Send Queue', to: '/queue', icon: ListOrdered }
     ]
   },
   {
     title: 'Monitoring',
     items: [
-      { label: 'Feed Items', to: '/feed-items', icon: ClipboardList },
-      { label: 'Logs', to: '/logs', icon: Activity }
+      { label: 'Stories', to: '/feed-items', icon: ClipboardList },
+      { label: 'History', to: '/logs', icon: Activity }
     ]
   },
   {

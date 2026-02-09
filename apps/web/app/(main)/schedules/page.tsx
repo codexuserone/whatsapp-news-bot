@@ -27,8 +27,7 @@ const schema = z.object({
   timezone: z.string().optional(),
   feed_id: z.string().min(1, 'Feed is required'),
   target_ids: z.array(z.string()).min(1),
-  template_id: z.string().min(1),
-  state: z.enum(['active', 'paused', 'stopped']).default('active')
+  template_id: z.string().min(1)
 });
 
 type ScheduleFormValues = z.infer<typeof schema>;
@@ -50,13 +49,6 @@ type DispatchResult = {
   skipped?: boolean;
   reason?: string;
   resumeAt?: string | null;
-  error?: string | null;
-};
-
-type DispatchAllResult = {
-  sent?: number;
-  queued?: number;
-  schedules?: number;
   error?: string | null;
 };
 
@@ -227,8 +219,7 @@ const SchedulesPage = () => {
       timezone: defaultTimezone,
       feed_id: '',
       target_ids: [],
-      template_id: '',
-      state: 'active'
+      template_id: ''
     }
   });
 
@@ -246,8 +237,7 @@ const SchedulesPage = () => {
         timezone: active.timezone || localTimezone,
         feed_id: active.feed_id || '',
         target_ids: (active.target_ids || []).map((id: string) => id.toString()),
-        template_id: active.template_id || '',
-        state: getScheduleState(active)
+        template_id: active.template_id || ''
       });
     }
   }, [active, form, localTimezone, deriveTimingFromCron]);
@@ -360,26 +350,6 @@ const SchedulesPage = () => {
   });
 
 
-  const dispatchAll = useMutation({
-    mutationFn: () => api.post<DispatchAllResult>('/api/schedules/dispatch-all'),
-    onSuccess: (data: DispatchAllResult) => {
-      queryClient.invalidateQueries({ queryKey: ['logs'] });
-      queryClient.invalidateQueries({ queryKey: ['queue'] });
-      const sent = data?.sent || 0;
-      const queued = data?.queued || 0;
-      const schedulesCount = data?.schedules || 0;
-      let message = `Dispatch completed for ${schedulesCount} schedule${schedulesCount !== 1 ? 's' : ''}.`;
-      if (sent > 0) {
-        message += ` Sent ${sent}.`;
-      }
-      if (queued > 0) {
-        message += ` Queued ${queued}.`;
-      }
-      alert(message);
-    },
-    onError: (error: unknown) => alert(`Failed to dispatch all: ${getErrorMessage(error)}`)
-  });
-
   const onSubmit = (values: ScheduleFormValues) => {
     const tz = defaultTimezone;
 
@@ -405,6 +375,8 @@ const SchedulesPage = () => {
       }
     }
 
+    const nextState: 'active' | 'paused' | 'stopped' = active ? getScheduleState(active) : 'active';
+
     const payload: ScheduleApiPayload = {
       name: values.name,
       cron_expression,
@@ -412,8 +384,8 @@ const SchedulesPage = () => {
       feed_id: values.feed_id,
       target_ids: values.target_ids,
       template_id: values.template_id,
-      state: values.state,
-      active: values.state === 'active'
+      state: nextState,
+      active: nextState === 'active'
     };
     saveSchedule.mutate(payload);
   };
@@ -432,10 +404,6 @@ const SchedulesPage = () => {
           <Badge variant="outline" className="text-sm">
             {schedules.length} Automation{schedules.length !== 1 ? 's' : ''}
           </Badge>
-          <Button variant="outline" size="sm" onClick={() => dispatchAll.mutate()} disabled={dispatchAll.isPending}>
-            {dispatchAll.isPending && <Loader2 className="mr-2 h-3 w-3 animate-spin" />}
-            Send once (all)
-          </Button>
         </div>
       </div>
 
@@ -683,26 +651,6 @@ const SchedulesPage = () => {
                       </Select>
                     );
                   }}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="state">Automation state</Label>
-                <Controller
-                  control={form.control}
-                  name="state"
-                  render={({ field }) => (
-                    <Select value={field.value} onValueChange={field.onChange}>
-                      <SelectTrigger id="state">
-                        <SelectValue placeholder="State" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="active">Running</SelectItem>
-                        <SelectItem value="paused">Paused</SelectItem>
-                        <SelectItem value="stopped">Stopped</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  )}
                 />
               </div>
 

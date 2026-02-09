@@ -161,7 +161,7 @@ const FeedsPage = () => {
                     <Input id="url" {...form.register('url')} placeholder="https://example.com/feed" className="flex-1" />
                     <Button type="button" variant="outline" onClick={testFeedUrl} disabled={testLoading || !watchedUrl}>
                       {testLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <TestTube className="mr-2 h-4 w-4" />}
-                      Test
+                      Check URL
                     </Button>
                   </div>
                 </div>
@@ -210,7 +210,7 @@ const FeedsPage = () => {
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  Feed Test Result
+                  URL Check
                   {testResult.error ? (
                     <Badge variant="destructive">
                       <XCircle className="mr-1 h-3 w-3" /> Error
@@ -251,22 +251,6 @@ const FeedsPage = () => {
                         ))}
                       </div>
                     </div>
-                    {testResult.sampleItem && (
-                      <div>
-                        <p className="text-sm font-medium text-muted-foreground mb-2">Sample Item</p>
-                        <div className="rounded-lg border bg-muted/50 p-3 space-y-1">
-                          {Object.entries(testResult.sampleItem).map(([key, value]) => (
-                            <div key={key} className="text-xs">
-                              <span className="font-medium text-primary font-mono">{key}:</span>{' '}
-                              <span className="text-muted-foreground">
-                                {String(value || '').slice(0, 100)}
-                                {String(value || '').length > 100 ? '...' : ''}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
                   </div>
                 )}
               </CardContent>
@@ -299,18 +283,9 @@ const FeedsPage = () => {
                           Active automations: {activeAutomationCountByFeedId.get(feed.id) || 0}
                         </span>
                         <span>
-                          Last fetched:{' '}
+                          Last checked:{' '}
                           {feed.last_fetched_at ? new Date(feed.last_fetched_at).toLocaleString() : '-'}
                         </span>
-                        <span>
-                          Last success:{' '}
-                          {feed.last_success_at ? new Date(feed.last_success_at).toLocaleString() : '-'}
-                        </span>
-                        {(feed.consecutive_failures || 0) > 0 ? (
-                          <span className="text-destructive">
-                            Failures: {feed.consecutive_failures}
-                          </span>
-                        ) : null}
                         {feed.last_error ? (
                           <span className="text-destructive" title={feed.last_error}>
                             Error: {String(feed.last_error).slice(0, 80)}

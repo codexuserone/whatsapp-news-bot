@@ -197,40 +197,30 @@ const TargetsPage = () => {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <RefreshCw className="h-5 w-5" />
-              Auto Sync
+              Connected Destinations
             </CardTitle>
-            <CardDescription>Groups/channels sync in the background every minute.</CardDescription>
+            <CardDescription>Groups and channels appear here automatically.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-3">
               <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Groups found</p>
+                <p className="text-xs text-muted-foreground">Groups</p>
                 <p className="text-xl font-semibold">{waGroups.length}</p>
               </div>
               <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Channels found</p>
+                <p className="text-xs text-muted-foreground">Channels</p>
                 <p className="text-xl font-semibold">{waChannels.length}</p>
               </div>
               <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Targets saved</p>
+                <p className="text-xs text-muted-foreground">Saved targets</p>
                 <p className="text-xl font-semibold">{targets.length}</p>
               </div>
             </div>
 
-            <p className="text-sm text-muted-foreground">
-              {syncTargets.isPending
-                ? 'Sync in progress...'
-                : syncTargets.isSuccess
-                  ? `Last sync: added ${syncTargets.data?.inserted || 0}, updated ${syncTargets.data?.updated || 0}.`
-                  : 'Waiting for initial sync...'}
-            </p>
             {syncTargets.isSuccess && (syncTargets.data?.discovered?.channels || 0) === 0 ? (
               <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                 No channels discovered yet. Open the channel in WhatsApp on your phone, send one message there, and it will auto-sync here.
               </p>
-            ) : null}
-            {syncTargets.isSuccess && syncTargets.data?.diagnostics?.limitation ? (
-              <p className="text-xs text-muted-foreground">{syncTargets.data.diagnostics.limitation}</p>
             ) : null}
           </CardContent>
         </Card>

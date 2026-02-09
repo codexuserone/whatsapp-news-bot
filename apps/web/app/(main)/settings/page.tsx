@@ -185,51 +185,56 @@ const SettingsPage = () => {
               <Clock className="h-5 w-5" />
               Messaging
             </CardTitle>
-            <CardDescription>Configure delays, retries, and queue behavior</CardDescription>
+            <CardDescription>Core defaults for sending and history.</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <div className="space-y-2" id="delays">
-              <Label htmlFor="message_delay_ms">Message Delay (ms)</Label>
-              <Input id="message_delay_ms" type="number" {...form.register('message_delay_ms', { valueAsNumber: true })} />
-              <p className="text-xs text-muted-foreground">Delay between messages to avoid rate limiting</p>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2" id="delays">
+                <Label htmlFor="message_delay_ms">Gap Between Messages (ms)</Label>
+                <Input id="message_delay_ms" type="number" {...form.register('message_delay_ms', { valueAsNumber: true })} />
+                <p className="text-xs text-muted-foreground">Higher value = slower and safer sending.</p>
+              </div>
+              <div className="space-y-2" id="retention">
+                <Label htmlFor="log_retention_days">Keep History (days)</Label>
+                <Input id="log_retention_days" type="number" {...form.register('log_retention_days', { valueAsNumber: true })} />
+                <p className="text-xs text-muted-foreground">How long sent/failed history stays visible.</p>
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="max_retries">Max Retries</Label>
-              <Input id="max_retries" type="number" {...form.register('max_retries', { valueAsNumber: true })} />
-              <p className="text-xs text-muted-foreground">Retry failed sends before marking failed</p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="defaultInterTargetDelaySec">Inter-target Delay (sec)</Label>
-              <Input
-                id="defaultInterTargetDelaySec"
-                type="number"
-                {...form.register('defaultInterTargetDelaySec', { valueAsNumber: true })}
-              />
-              <p className="text-xs text-muted-foreground">Delay between different targets</p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="defaultIntraTargetDelaySec">Intra-target Delay (sec)</Label>
-              <Input
-                id="defaultIntraTargetDelaySec"
-                type="number"
-                {...form.register('defaultIntraTargetDelaySec', { valueAsNumber: true })}
-              />
-              <p className="text-xs text-muted-foreground">Delay between messages to the same target</p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="processingTimeoutMinutes">Processing Timeout (min)</Label>
-              <Input
-                id="processingTimeoutMinutes"
-                type="number"
-                {...form.register('processingTimeoutMinutes', { valueAsNumber: true })}
-              />
-              <p className="text-xs text-muted-foreground">Reset stuck processing logs after this window</p>
-            </div>
-            <div className="space-y-2" id="retention">
-              <Label htmlFor="log_retention_days">Log Retention (days)</Label>
-              <Input id="log_retention_days" type="number" {...form.register('log_retention_days', { valueAsNumber: true })} />
-              <p className="text-xs text-muted-foreground">How long to keep message logs</p>
-            </div>
+
+            <details className="rounded-lg border bg-muted/20 p-3">
+              <summary className="cursor-pointer text-sm font-medium">Advanced delivery options</summary>
+              <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="space-y-2">
+                  <Label htmlFor="max_retries">Max Retries</Label>
+                  <Input id="max_retries" type="number" {...form.register('max_retries', { valueAsNumber: true })} />
+                  <p className="text-xs text-muted-foreground">Retries before a message is marked failed.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="defaultInterTargetDelaySec">Gap Between Targets (sec)</Label>
+                  <Input
+                    id="defaultInterTargetDelaySec"
+                    type="number"
+                    {...form.register('defaultInterTargetDelaySec', { valueAsNumber: true })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="defaultIntraTargetDelaySec">Gap Within One Target (sec)</Label>
+                  <Input
+                    id="defaultIntraTargetDelaySec"
+                    type="number"
+                    {...form.register('defaultIntraTargetDelaySec', { valueAsNumber: true })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="processingTimeoutMinutes">Stuck Send Timeout (min)</Label>
+                  <Input
+                    id="processingTimeoutMinutes"
+                    type="number"
+                    {...form.register('processingTimeoutMinutes', { valueAsNumber: true })}
+                  />
+                </div>
+              </div>
+            </details>
           </CardContent>
         </Card>
 
@@ -237,11 +242,11 @@ const SettingsPage = () => {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Copy className="h-5 w-5" />
-              Duplicate Detection
+              Duplicate Filter
             </CardTitle>
-            <CardDescription>Prevent sending duplicate articles</CardDescription>
+            <CardDescription>Optional: block near-duplicate stories.</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4 sm:grid-cols-2">
+          <CardContent>
             <div className="space-y-2">
               <Label htmlFor="dedupeThreshold">Similarity Threshold</Label>
               <Input
@@ -253,16 +258,8 @@ const SettingsPage = () => {
                 {...form.register('dedupeThreshold', { valueAsNumber: true })}
               />
               <p className="text-xs text-muted-foreground">
-                0.88 = strict (88% similar titles are duplicates). Lower = more aggressive deduplication.
+                Default 0.88. Lower catches more near-duplicates.
               </p>
-            </div>
-            <div className="rounded-lg border bg-muted/50 p-4 space-y-2 text-sm">
-              <p className="font-medium">How it works:</p>
-              <ul className="list-disc list-inside space-y-1 text-muted-foreground">
-                <li>Exact URL matches are always detected</li>
-                <li>Similar titles are compared using fuzzy matching</li>
-                <li>Only items within the retention period are checked</li>
-              </ul>
             </div>
           </CardContent>
         </Card>

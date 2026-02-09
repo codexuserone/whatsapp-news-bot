@@ -37,26 +37,6 @@ type SendTestResponse = {
   } | null;
 };
 
-const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | null) => {
-  if (statusLabel) return statusLabel;
-  switch (status) {
-    case 0:
-      return 'error';
-    case 1:
-      return 'pending';
-    case 2:
-      return 'server';
-    case 3:
-      return 'delivered';
-    case 4:
-      return 'read';
-    case 5:
-      return 'played';
-    default:
-      return null;
-  }
-};
-
 const WhatsAppPage = () => {
   const queryClient = useQueryClient();
   const [testTarget, setTestTarget] = React.useState('');
@@ -242,7 +222,7 @@ const WhatsAppPage = () => {
             <div className="space-y-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Account</span>
-                <span className="font-medium">{status?.me?.name || status?.me?.jid?.split('@')[0] || 'Not connected'}</span>
+                <span className="font-medium">{status?.me?.name || (isConnected ? 'Connected account' : 'Not connected')}</span>
               </div>
             </div>
 
@@ -399,12 +379,7 @@ const WhatsAppPage = () => {
                 Send
               </Button>
               {sendTestMessage.isSuccess ? (
-                <span className="text-sm text-success">
-                  Sent {sendTestMessage.data?.messageId ? `(${sendTestMessage.data.messageId})` : ''}
-                  {sendTestMessage.data?.confirmation
-                    ? ` via ${sendTestMessage.data.confirmation.via || 'unknown'}${mapMessageStatusLabel(sendTestMessage.data.confirmation.status, sendTestMessage.data.confirmation.statusLabel) ? ` (${mapMessageStatusLabel(sendTestMessage.data.confirmation.status, sendTestMessage.data.confirmation.statusLabel)})` : ''}`
-                    : ''}
-                </span>
+                <span className="text-sm text-success">Message sent.</span>
               ) : null}
               {sendTestMessage.isError ? (
                 <span className="text-sm text-destructive">Failed: {(sendTestMessage.error as Error)?.message || 'Unknown error'}</span>

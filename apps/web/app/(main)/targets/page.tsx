@@ -213,59 +213,61 @@ const TargetsPage = () => {
               {targets.length === 0 ? 'No targets yet. Connect WhatsApp and wait for auto sync.' : 'No targets match your search.'}
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHeaderCell className="w-12">Active</TableHeaderCell>
-                  <TableHeaderCell>Name</TableHeaderCell>
-                  <TableHeaderCell>Type</TableHeaderCell>
-                  <TableHeaderCell className="hidden md:table-cell">Address</TableHeaderCell>
-                  <TableHeaderCell className="w-20">Actions</TableHeaderCell>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredTargets.map((target) => (
-                  <TableRow key={target.id}>
-                    <TableCell>
-                      <Checkbox
-                        checked={target.active}
-                        onCheckedChange={(checked) =>
-                          updateTarget.mutate({
-                            id: target.id,
-                            payload: {
-                              name: target.name,
-                              phone_number: target.phone_number,
-                              type: target.type,
-                              active: checked === true,
-                              notes: target.notes || null
-                            }
-                          })
-                        }
-                      />
-                    </TableCell>
-                    <TableCell className="font-medium">{target.name}</TableCell>
-                    <TableCell>
-                      <Badge variant={TYPE_BADGES[target.type]?.variant || 'secondary'}>
-                        {TYPE_BADGES[target.type]?.label || target.type}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="hidden max-w-[280px] truncate text-xs text-muted-foreground md:table-cell">
-                      {target.phone_number}
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setDeleteTarget(target)}
-                        className="text-destructive hover:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHeaderCell className="w-12">Active</TableHeaderCell>
+                    <TableHeaderCell>Name</TableHeaderCell>
+                    <TableHeaderCell>Type</TableHeaderCell>
+                    <TableHeaderCell className="hidden md:table-cell">Address</TableHeaderCell>
+                    <TableHeaderCell className="w-20">Actions</TableHeaderCell>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {filteredTargets.map((target) => (
+                    <TableRow key={target.id}>
+                      <TableCell>
+                        <Checkbox
+                          checked={target.active}
+                          onCheckedChange={(checked) =>
+                            updateTarget.mutate({
+                              id: target.id,
+                              payload: {
+                                name: target.name,
+                                phone_number: target.phone_number,
+                                type: target.type,
+                                active: checked === true,
+                                notes: target.notes || null
+                              }
+                            })
+                          }
+                        />
+                      </TableCell>
+                      <TableCell className="font-medium">{target.name}</TableCell>
+                      <TableCell>
+                        <Badge variant={TYPE_BADGES[target.type]?.variant || 'secondary'}>
+                          {TYPE_BADGES[target.type]?.label || target.type}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="hidden max-w-[280px] truncate text-xs text-muted-foreground md:table-cell">
+                        {target.phone_number}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setDeleteTarget(target)}
+                          className="text-destructive hover:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>

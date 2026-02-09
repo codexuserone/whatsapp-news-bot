@@ -123,6 +123,16 @@ const WhatsAppPage = () => {
     const individuals = activeTargets.filter((target) => target.type === 'individual');
     return { groups, channels, statusTargets, individuals };
   }, [activeTargets]);
+  const targetBuckets = React.useMemo(
+    () => ({
+      all: activeTargets.map((target) => target.phone_number),
+      group: groupedTargets.groups.map((target) => target.phone_number),
+      channel: groupedTargets.channels.map((target) => target.phone_number),
+      status: groupedTargets.statusTargets.map((target) => target.phone_number),
+      individual: groupedTargets.individuals.map((target) => target.phone_number)
+    }),
+    [activeTargets, groupedTargets]
+  );
 
   React.useEffect(() => {
     setSelectedTargets((current) => {
@@ -317,7 +327,7 @@ const WhatsAppPage = () => {
               <MessageSquare className="h-5 w-5" />
               Send Message
             </CardTitle>
-            <CardDescription>Choose destination, write text, and optionally attach an image/video file.</CardDescription>
+            <CardDescription>Select one or many destinations, then send text or media.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -328,7 +338,7 @@ const WhatsAppPage = () => {
                     type="button"
                     size="sm"
                     variant="outline"
-                    onClick={() => setSelectedTargets(activeTargets.map((target) => target.phone_number))}
+                    onClick={() => setSelectedTargets(targetBuckets.all)}
                     disabled={!activeTargets.length}
                   >
                     Select all
@@ -343,6 +353,44 @@ const WhatsAppPage = () => {
                     Clear
                   </Button>
                 </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setSelectedTargets(targetBuckets.group)}
+                  disabled={!targetBuckets.group.length}
+                >
+                  Groups ({targetBuckets.group.length})
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setSelectedTargets(targetBuckets.channel)}
+                  disabled={!targetBuckets.channel.length}
+                >
+                  Channels ({targetBuckets.channel.length})
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setSelectedTargets(targetBuckets.status)}
+                  disabled={!targetBuckets.status.length}
+                >
+                  Status ({targetBuckets.status.length})
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setSelectedTargets(targetBuckets.individual)}
+                  disabled={!targetBuckets.individual.length}
+                >
+                  Individuals ({targetBuckets.individual.length})
+                </Button>
               </div>
               <div className="max-h-60 space-y-3 overflow-y-auto rounded-lg border p-3">
                 {!activeTargets.length ? (

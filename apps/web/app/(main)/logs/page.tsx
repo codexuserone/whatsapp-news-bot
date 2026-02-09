@@ -126,53 +126,55 @@ const LogsPage = () => {
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHeaderCell>Status</TableHeaderCell>
-                  <TableHeaderCell>To</TableHeaderCell>
-                  <TableHeaderCell className="hidden lg:table-cell">Content</TableHeaderCell>
-                  <TableHeaderCell>When</TableHeaderCell>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {logs.map((log) => (
-                  <TableRow key={log.id}>
-                    <TableCell>
-                      <Badge
-                        variant={STATUS_COLORS[log.status] || 'secondary'}
-                        title={log.error_message || undefined}
-                      >
-                        {log.status === 'sent' ? 'Sent' : 
-                         log.status === 'failed' ? 'Failed' :
-                         log.status === 'pending' ? 'Sending' :
-                         log.status === 'delivered' ? 'Delivered' :
-                         log.status === 'read' ? 'Read' :
-                         log.status}
-                      </Badge>
-                      {getReceiptBadge(log)}
-                    </TableCell>
-                    <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>
-                    <TableCell
-                      className="hidden max-w-xs truncate text-muted-foreground lg:table-cell"
-                      title={log.message_content || undefined}
-                    >
-                      {log.message_content?.substring(0, 50) || '-'}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {new Date(log.sent_at || log.created_at).toLocaleString()}
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {logs.length === 0 && (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
-                      No messages sent yet.
-                    </TableCell>
+                    <TableHeaderCell>Status</TableHeaderCell>
+                    <TableHeaderCell>To</TableHeaderCell>
+                    <TableHeaderCell className="hidden lg:table-cell">Content</TableHeaderCell>
+                    <TableHeaderCell>When</TableHeaderCell>
                   </TableRow>
-                )}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {logs.map((log) => (
+                    <TableRow key={log.id}>
+                      <TableCell>
+                        <Badge
+                          variant={STATUS_COLORS[log.status] || 'secondary'}
+                          title={log.error_message || undefined}
+                        >
+                          {log.status === 'sent' ? 'Sent' :
+                           log.status === 'failed' ? 'Failed' :
+                           log.status === 'pending' ? 'Sending' :
+                           log.status === 'delivered' ? 'Delivered' :
+                           log.status === 'read' ? 'Read' :
+                           log.status}
+                        </Badge>
+                        {getReceiptBadge(log)}
+                      </TableCell>
+                      <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>
+                      <TableCell
+                        className="hidden max-w-xs truncate text-muted-foreground lg:table-cell"
+                        title={log.message_content || undefined}
+                      >
+                        {log.message_content?.substring(0, 50) || '-'}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {new Date(log.sent_at || log.created_at).toLocaleString()}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {logs.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                        No messages sent yet.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>

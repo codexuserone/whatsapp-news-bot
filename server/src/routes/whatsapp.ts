@@ -137,6 +137,86 @@ const normalizeChannelJid = (value: string) => {
   return digits ? `${digits}@newsletter` : raw;
 };
 
+type DiscoveredTargetCandidate = {
+  name: string;
+  phone_number: string;
+  type: 'group' | 'channel' | 'status';
+  active: boolean;
+  notes?: string | null;
+};
+
+const upsertDiscoveredTargets = async (
+  supabase: ReturnType<typeof getSupabaseClient> | null,
+  candidates: DiscoveredTargetCandidate[]
+) => {
+  if (!supabase || !Array.isArray(candidates) || !candidates.length) return;
+
+  const deduped = new Map<string, DiscoveredTargetCandidate>();
+  for (const candidate of candidates) {
+    const phone = String(candidate?.phone_number || '').trim();
+    if (!phone) continue;
+    deduped.set(phone, {
+      ...candidate,
+      phone_number: phone,
+      name: String(candidate?.name || phone).trim() || phone,
+      active: true,
+      notes: candidate?.notes || null
+    });
+  }
+
+  const phoneNumbers = Array.from(deduped.keys());
+  if (!phoneNumbers.length) return;
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from('targets')
+    .select('id,name,phone_number,type,active,notes')
+    .in('phone_number', phoneNumbers);
+
+  if (existingError) {
+    return;
+  }
+
+  const existingByPhone = new Map<string, {
+    id: string;
+    name?: string;
+    phone_number?: string;
+    type?: string;
+    active?: boolean;
+    notes?: string | null;
+  }>();
+
+  for (const row of (existingRows || []) as Array<{
+    id?: string;
+    name?: string;
+    phone_number?: string;
+    type?: string;
+    active?: boolean;
+    notes?: string | null;
+  }>) {
+    const phone = String(row.phone_number || '').trim();
+    const id = String(row.id || '').trim();
+    if (!phone || !id) continue;
+    existingByPhone.set(phone, { ...row, id, phone_number: phone });
+  }
+
+  for (const candidate of deduped.values()) {
+    const current = existingByPhone.get(candidate.phone_number);
+    if (!current) {
+      await supabase.from('targets').insert(candidate);
+      continue;
+    }
+
+    const patch: Record<string, unknown> = {};
+    if (String(current.name || '') !== String(candidate.name || '')) patch.name = candidate.name;
+    if (String(current.type || '') !== String(candidate.type || '')) patch.type = candidate.type;
+    if (current.active !== true) patch.active = true;
+    if (String(current.notes || '') !== String(candidate.notes || '')) patch.notes = candidate.notes || null;
+
+    if (!Object.keys(patch).length) continue;
+    await supabase.from('targets').update(patch).eq('id', current.id);
+  }
+};
+
 const whatsappRoutes = () => {
   const router = express.Router();
 
@@ -153,11 +233,12 @@ const whatsappRoutes = () => {
   router.get('/groups', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
     const supabase = getSupabaseClient();
+    const isConnected = whatsapp?.getStatus?.().status === 'connected';
     // Try to get from WhatsApp first
     const groups = await whatsapp?.getGroups() || [];
-    
+
     // If no groups returned and WhatsApp is not connected, fallback to database
-    if (!groups.length && whatsapp?.getStatus?.().status !== 'connected' && supabase) {
+    if (!groups.length && !isConnected && supabase) {
       const { data: dbGroups } = await supabase
         .from('targets')
         .select('*')
@@ -173,6 +254,19 @@ const whatsappRoutes = () => {
       
       return res.json(fallbackGroups);
     }
+
+    if (groups.length && isConnected && supabase) {
+      await upsertDiscoveredTargets(
+        supabase,
+        groups.map((group: { jid?: string; name?: string; size?: number }) => ({
+          name: String(group?.name || group?.jid || '').trim() || String(group?.jid || ''),
+          phone_number: String(group?.jid || '').trim(),
+          type: 'group',
+          active: true,
+          notes: Number.isFinite(group?.size) ? `${Number(group?.size || 0)} members` : null
+        }))
+      );
+    }
     
     res.json(groups);
   }));
@@ -187,6 +281,7 @@ const whatsappRoutes = () => {
       subscribers: number;
       source: 'live' | 'saved';
     }>();
+    const discoveredChannelCandidates: DiscoveredTargetCandidate[] = [];
     const isConnected = whatsapp?.getStatus?.().status === 'connected';
     
     if (whatsapp && isConnected) {
@@ -205,6 +300,17 @@ const whatsappRoutes = () => {
           subscribers: Number(channel?.subscribers || 0),
           source: 'live'
         });
+        discoveredChannelCandidates.push({
+          name: String(channel?.name || jid).trim() || jid,
+          phone_number: jid,
+          type: 'channel',
+          active: true,
+          notes: Number.isFinite(channel?.subscribers) ? `${Number(channel?.subscribers || 0)} subscribers` : null
+        });
+      }
+
+      if (supabase && discoveredChannelCandidates.length) {
+        await upsertDiscoveredTargets(supabase, discoveredChannelCandidates);
       }
     }
     

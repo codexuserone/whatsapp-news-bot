@@ -584,8 +584,10 @@ const normalizeTargetJid = (target: Target) => {
   }
 
   if (target.type === 'channel') {
-    const directMatch = raw.match(/(\d{8,})@newsletter(?:_[a-z0-9]+)?$/i);
-    const channelId = directMatch?.[1] || raw.replace(/[^0-9]/g, '');
+    if (raw.toLowerCase().includes('@newsletter')) {
+      return raw;
+    }
+    const channelId = raw.replace(/[^0-9]/g, '');
     if (!channelId) {
       throw new Error('Channel ID invalid');
     }
@@ -593,12 +595,7 @@ const normalizeTargetJid = (target: Target) => {
   }
 
   if (lower.includes('@newsletter')) {
-    const channelIdMatch = raw.match(/(\d{8,})@newsletter(?:_[a-z0-9]+)?$/i);
-    const channelId = channelIdMatch?.[1] || raw.replace(/[^0-9]/g, '');
-    if (!channelId) {
-      throw new Error('Channel ID invalid');
-    }
-    return `${channelId}@newsletter`;
+    return raw;
   }
 
   const phoneDigits = raw.replace(/[^0-9]/g, '');

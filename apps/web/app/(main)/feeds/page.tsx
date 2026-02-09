@@ -17,7 +17,7 @@ import { Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2 } from 'lu
 const schema = z.object({
   name: z.string().min(1),
   url: z.string().url(),
-  type: z.enum(['rss', 'atom', 'json']).optional(),
+  type: z.enum(['rss', 'atom', 'json', 'html']).optional(),
   fetch_interval: z.coerce.number().min(300)
 });
 
@@ -200,7 +200,7 @@ const FeedsPage = () => {
                         {form.getValues('type') ? 'Detected' : 'Auto-detect'}
                       </span>
                       <Badge variant="secondary" className="capitalize">
-                        {form.getValues('type') || testResult?.detectedType || active?.type || 'rss'}
+                        {form.getValues('type') || testResult?.detectedType || active?.type || 'auto'}
                       </Badge>
                     </div>
                     <input type="hidden" {...form.register('type')} />

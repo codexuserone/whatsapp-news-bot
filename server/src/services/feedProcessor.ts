@@ -9,7 +9,7 @@ const { getErrorMessage } = require('../utils/errorUtils');
 type FeedConfig = {
   id: string;
   url: string;
-  type?: 'rss' | 'atom' | 'json';
+  type?: 'rss' | 'atom' | 'json' | 'html';
   active?: boolean;
   fetch_interval?: number;
   last_fetched_at?: string | null;

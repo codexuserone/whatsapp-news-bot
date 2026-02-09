@@ -215,8 +215,9 @@ const feedsRoutes = () => {
 
       if (deactivateError) throw deactivateError;
 
-      // Refresh schedulers synchronously to minimize delete-vs-refresh races.
-      await initSchedulers(req.app.locals.whatsapp);
+      // Trigger a non-blocking scheduler refresh to avoid request timeouts
+      // on large instances while still moving this feed out of active polling quickly.
+      refreshSchedulers(req.app.locals.whatsapp);
 
       // Wait briefly for any in-flight feed refresh to finish.
       const idle = await waitForFeedIdle(feedId);
@@ -231,8 +232,8 @@ const feedsRoutes = () => {
       
       if (error) throw error;
 
-      // Keep scheduler state in sync after deletion.
-      await initSchedulers(req.app.locals.whatsapp);
+      // Keep scheduler state in sync after deletion (non-blocking).
+      refreshSchedulers(req.app.locals.whatsapp);
 
       res.json({ ok: true, waitedForIdle: idle });
     } catch (error) {

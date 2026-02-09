@@ -38,15 +38,8 @@ const targetRoutes = () => {
   const normalizeChannelJid = (phoneNumber: string) => {
     const trimmed = String(phoneNumber || '').trim();
     if (!trimmed) return trimmed;
-
-    // Accept decorated values like "true_1234567890@newsletter_ABC..." and normalize.
-    const directMatch = trimmed.match(/(\d{8,})@newsletter(?:_[a-z0-9]+)?$/i);
-    if (directMatch?.[1]) {
-      return `${directMatch[1]}@newsletter`;
-    }
-    if (/^[a-z0-9._-]+@newsletter(?:_[a-z0-9]+)?$/i.test(trimmed)) {
-      const numericPart = trimmed.replace(/[^0-9]/g, '');
-      return numericPart ? `${numericPart}@newsletter` : trimmed;
+    if (trimmed.toLowerCase().includes('@newsletter')) {
+      return trimmed;
     }
     const cleaned = trimmed.replace(/[^0-9]/g, '');
     return cleaned ? `${cleaned}@newsletter` : trimmed;

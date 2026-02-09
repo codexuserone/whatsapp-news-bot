@@ -132,9 +132,7 @@ const parseVideoDataUrl = (value: string) => {
 const normalizeChannelJid = (value: string) => {
   const raw = String(value || '').trim();
   if (!raw) return raw;
-  const match = raw.match(/(\d{8,})@newsletter(?:_[a-z0-9]+)?$/i);
-  if (match?.[1]) return `${match[1]}@newsletter`;
-  if (raw.endsWith('@newsletter')) return raw;
+  if (raw.toLowerCase().includes('@newsletter')) return raw;
   const digits = raw.replace(/[^0-9]/g, '');
   return digits ? `${digits}@newsletter` : raw;
 };
@@ -183,8 +181,9 @@ const whatsappRoutes = () => {
     const whatsapp = req.app.locals.whatsapp;
     const supabase = getSupabaseClient();
     let channels: Array<{ id: string; jid: string; name: string; subscribers: number }> = [];
+    const isConnected = whatsapp?.getStatus?.().status === 'connected';
     
-    if (whatsapp && whatsapp.getStatus?.().status === 'connected') {
+    if (whatsapp && isConnected) {
       const enriched =
         typeof whatsapp.getChannelsWithDiagnostics === 'function'
           ? await whatsapp.getChannelsWithDiagnostics()
@@ -192,8 +191,9 @@ const whatsappRoutes = () => {
       channels = enriched?.channels || await whatsapp.getChannels?.() || [];
     }
     
-    // If no channels returned, fallback to database
-    if (!channels.length && supabase) {
+    // Fallback to saved channels only when disconnected.
+    // When connected, return live discovery only so the UI does not show stale/fake channels.
+    if (!channels.length && !isConnected && supabase) {
       const { data: dbChannels } = await supabase
         .from('targets')
         .select('*')
@@ -276,10 +276,7 @@ const whatsappRoutes = () => {
   const normalizeTestJid = (jid: string) => {
     const raw = String(jid || '').trim();
     if (!raw) return raw;
-    const channelMatch = raw.match(/(\d{8,})@newsletter(?:_[a-z0-9]+)?$/i);
-    if (channelMatch?.[1]) {
-      return `${channelMatch[1]}@newsletter`;
-    }
+    if (raw.toLowerCase().includes('@newsletter')) return raw;
     if (raw.includes('@')) return raw;
     return `${raw.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
   };

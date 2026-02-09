@@ -16,7 +16,7 @@ type FetchMeta = {
   lastModified?: string;
   notModified?: boolean;
   durationMs?: number;
-  detectedType?: 'rss' | 'atom' | 'json';
+  detectedType?: 'rss' | 'atom' | 'json' | 'html';
   contentType?: string;
   sourceUrl?: string;
   discoveredFromUrl?: string;
@@ -241,7 +241,7 @@ const applyCleaning = (value: string = '', cleaning?: FeedCleaning) => {
 
 type FeedConfig = {
   url: string;
-  type?: 'rss' | 'atom' | 'json';
+  type?: 'rss' | 'atom' | 'json' | 'html';
   parseConfig?: Record<string, unknown>;
   cleaning?: FeedCleaning;
   etag?: string | null;

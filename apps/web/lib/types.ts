@@ -2,7 +2,7 @@ export type Feed = {
   id: string;
   name: string;
   url: string;
-  type: 'rss' | 'atom' | 'json';
+  type: 'rss' | 'atom' | 'json' | 'html';
   active: boolean;
   fetch_interval?: number;
   last_error?: string | null;

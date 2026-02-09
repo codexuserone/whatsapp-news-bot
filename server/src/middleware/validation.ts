@@ -64,7 +64,7 @@ const schemas = {
   feed: z.object({
     name: z.string().min(1).max(255),
     url: z.string().url(),
-    type: z.enum(['rss', 'atom', 'json']).optional(),
+    type: z.enum(['rss', 'atom', 'json', 'html']).optional(),
     active: z.boolean().optional(),
     fetch_interval: z.number().int().min(60).default(300),
     parse_config: z

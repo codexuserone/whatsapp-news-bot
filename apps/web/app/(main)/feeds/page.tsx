@@ -9,11 +9,9 @@ import { api } from '@/lib/api';
 import type { Feed, Schedule } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2, PauseCircle, PlayCircle } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 
@@ -128,8 +126,8 @@ const FeedsPage = () => {
       if (!form.getValues('name') && result.feedTitle) {
         form.setValue('name', result.feedTitle);
       }
-      if (result.detectedType) {
-        form.setValue('type', result.detectedType as any);
+      if (result.detectedType === 'rss' || result.detectedType === 'atom' || result.detectedType === 'json') {
+        form.setValue('type', result.detectedType);
       }
     } catch (error: unknown) {
       setTestResult({ error: getErrorMessage(error) || 'Failed to test feed' });

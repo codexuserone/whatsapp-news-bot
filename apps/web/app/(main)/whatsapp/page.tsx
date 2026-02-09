@@ -79,13 +79,13 @@ const WhatsAppPage = () => {
     enabled: status?.status !== 'connected'
   });
 
-  const { data: groups = [], isLoading: groupsLoading } = useQuery<WhatsAppGroup[]>({
+  const { data: groups = [] } = useQuery<WhatsAppGroup[]>({
     queryKey: ['whatsapp-groups'],
     queryFn: () => api.get('/api/whatsapp/groups'),
     enabled: status?.status === 'connected'
   });
 
-  const { data: channels = [], isLoading: channelsLoading } = useQuery<WhatsAppChannel[]>({
+  const { data: channels = [] } = useQuery<WhatsAppChannel[]>({
     queryKey: ['whatsapp-channels'],
     queryFn: () => api.get('/api/whatsapp/channels'),
     enabled: status?.status === 'connected'

@@ -88,16 +88,22 @@ const targetRoutes = () => {
         getStatus?: () => { status?: string };
         getGroups?: () => Promise<Array<{ jid?: string; name?: string; size?: number }>>;
         getChannels?: () => Promise<Array<{ jid?: string; name?: string; subscribers?: number }>>;
+        getChannelsWithDiagnostics?: () => Promise<{
+          channels: Array<{ jid?: string; name?: string; subscribers?: number }>;
+          diagnostics?: Record<string, unknown>;
+        }>;
       } | null;
 
       if (!whatsapp || whatsapp.getStatus?.()?.status !== 'connected') {
         return res.status(400).json({ error: 'WhatsApp is not connected' });
       }
 
-      const [groupsRaw, channelsRaw] = await Promise.all([
-        whatsapp.getGroups?.() || [],
-        whatsapp.getChannels?.() || []
-      ]);
+      const groupsRaw = await (whatsapp.getGroups?.() || []);
+      const channelsWithDiagnostics =
+        typeof whatsapp.getChannelsWithDiagnostics === 'function'
+          ? await whatsapp.getChannelsWithDiagnostics()
+          : null;
+      const channelsRaw = channelsWithDiagnostics?.channels || (await (whatsapp.getChannels?.() || []));
 
       const includeStatus =
         String((req.body as { includeStatus?: unknown })?.includeStatus ?? req.query.includeStatus ?? 'true').toLowerCase() !==
@@ -194,7 +200,8 @@ const targetRoutes = () => {
         candidates: candidates.length,
         inserted,
         updated,
-        unchanged
+        unchanged,
+        diagnostics: channelsWithDiagnostics?.diagnostics || null
       });
     } catch (error) {
       console.error('Error syncing targets:', error);

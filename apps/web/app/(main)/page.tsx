@@ -3,20 +3,15 @@
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Feed, LogEntry, QueueStats, Schedule, Target, Template, WhatsAppStatus } from '@/lib/types';
+import type { Feed, LogEntry, QueueStats, Schedule, Target, Template } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '@/components/ui/table';
-import { Rss, Layers, Target as TargetIcon, CalendarClock, ArrowRight, CheckCircle, AlertCircle, Send } from 'lucide-react';
+import { Rss, Layers, Target as TargetIcon, CalendarClock, ArrowRight, Send } from 'lucide-react';
 
 const OverviewPage = () => {
   const queryClient = useQueryClient();
-  const { data: status } = useQuery<WhatsAppStatus>({
-    queryKey: ['whatsapp-status'],
-    queryFn: () => api.get('/api/whatsapp/status'),
-    refetchInterval: 5000
-  });
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
   const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
@@ -43,18 +38,6 @@ const OverviewPage = () => {
     { label: 'Schedules', value: schedules.length, to: '/schedules', icon: CalendarClock, color: 'text-sky-500' }
   ];
 
-  const statusVariant =
-    status?.status === 'connected'
-      ? 'success'
-      : status?.status === 'qr' || status?.status === 'qr_ready' || status?.status === 'connecting'
-        ? 'warning'
-        : 'destructive';
-
-  const lastFetched = feeds
-    .map((feed) => feed.last_fetched_at)
-    .filter(Boolean)
-    .sort()
-    .slice(-1)[0];
   const feedErrors = feeds.filter((feed) => feed.last_error).length;
 
   return (

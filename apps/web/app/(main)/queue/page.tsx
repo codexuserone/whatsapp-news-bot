@@ -152,6 +152,16 @@ const QueuePage = () => {
     onSuccess: refreshQueueViews
   });
 
+  const pausePost = useMutation({
+    mutationFn: (feedItemId: string) => api.post(`/api/feed-items/${feedItemId}/pause`),
+    onSuccess: refreshQueueViews
+  });
+
+  const resumePost = useMutation({
+    mutationFn: (feedItemId: string) => api.post(`/api/feed-items/${feedItemId}/resume`),
+    onSuccess: refreshQueueViews
+  });
+
   const beginEdit = (item: QueueItem) => {
     setEditingId(item.id);
     setDraftMessage(item.rendered_content || '');
@@ -170,8 +180,15 @@ const QueuePage = () => {
     });
   };
 
-  const isPaused = (item: QueueItem) =>
-    item.status === 'skipped' && String(item.error_message || '').toLowerCase().includes('paused by user');
+  const pauseReason = (item: QueueItem) => String(item.error_message || '').toLowerCase();
+
+  const isItemPaused = (item: QueueItem) =>
+    item.status === 'skipped' && pauseReason(item).includes('paused by user');
+
+  const isPostPaused = (item: QueueItem) =>
+    item.status === 'skipped' && pauseReason(item).includes('paused for this post');
+
+  const isPaused = (item: QueueItem) => isItemPaused(item) || isPostPaused(item);
 
   const canEdit = (item: QueueItem) => item.status === 'pending' || item.status === 'failed' || isPaused(item);
 
@@ -179,9 +196,17 @@ const QueuePage = () => {
 
   const canResume = (item: QueueItem) => isPaused(item) || item.status === 'failed';
 
+  const canPausePost = (item: QueueItem) => Boolean(item.feed_item_id) && !isPostPaused(item);
+
+  const canResumePost = (item: QueueItem) => Boolean(item.feed_item_id) && isPostPaused(item);
+
   const canSendNow = (item: QueueItem) => item.status !== 'sent' && item.status !== 'processing';
 
   const getStatusBadge = (item: QueueItem) => {
+    if (isPostPaused(item)) {
+      return <Badge variant="secondary">Post paused</Badge>;
+    }
+
     if (isPaused(item)) {
       return <Badge variant="secondary">Paused</Badge>;
     }
@@ -437,9 +462,31 @@ const QueuePage = () => {
                         </Button>
                       ) : null}
 
+                      {canPausePost(item) ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => item.feed_item_id && pausePost.mutate(item.feed_item_id)}
+                          disabled={pausePost.isPending}
+                        >
+                          <PauseCircle className="mr-1 h-3 w-3" /> Pause post
+                        </Button>
+                      ) : null}
+
                       {canResume(item) ? (
                         <Button size="sm" variant="outline" onClick={() => resumeItem.mutate(item.id)} disabled={resumeItem.isPending}>
                           <PlayCircle className="mr-1 h-3 w-3" /> Resume
+                        </Button>
+                      ) : null}
+
+                      {canResumePost(item) ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => item.feed_item_id && resumePost.mutate(item.feed_item_id)}
+                          disabled={resumePost.isPending}
+                        >
+                          <PlayCircle className="mr-1 h-3 w-3" /> Resume post
                         </Button>
                       ) : null}
 
@@ -513,9 +560,29 @@ const QueuePage = () => {
                           <PauseCircle className="mr-1 h-3 w-3" /> Pause
                         </Button>
                       )}
+                      {canPausePost(item) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs px-2"
+                          onClick={() => item.feed_item_id && pausePost.mutate(item.feed_item_id)}
+                        >
+                          <PauseCircle className="mr-1 h-3 w-3" /> Pause post
+                        </Button>
+                      )}
                       {canResume(item) && (
                         <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={() => resumeItem.mutate(item.id)}>
                           <PlayCircle className="mr-1 h-3 w-3" /> Resume
+                        </Button>
+                      )}
+                      {canResumePost(item) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs px-2"
+                          onClick={() => item.feed_item_id && resumePost.mutate(item.feed_item_id)}
+                        >
+                          <PlayCircle className="mr-1 h-3 w-3" /> Resume post
                         </Button>
                       )}
                       <Button size="sm" variant="outline" className="h-7 text-xs px-2 ml-auto" onClick={() => sendNowItem.mutate(item.id)} disabled={!canSendNow(item)}>

@@ -34,14 +34,19 @@ const normalizeTemplatePayload = (payload: Record<string, unknown>) => {
   const explicitMode = next.send_mode;
 
   if (explicitMode === 'image_only') {
-    next.send_mode = 'image';
+    next.send_mode = 'image_only';
     next.send_images = false;
     return next;
   }
 
   if (explicitMode === 'image') {
+    if (next.send_images === false) {
+      next.send_mode = 'image_only';
+      next.send_images = false;
+      return next;
+    }
     next.send_mode = 'image';
-    next.send_images = next.send_images !== false;
+    next.send_images = true;
     return next;
   }
 
@@ -65,6 +70,10 @@ const normalizeTemplateResponse = <T extends Record<string, unknown>>(template: 
 
   if (next.send_mode === 'image' && next.send_images === false) {
     next.send_mode = 'image_only';
+  }
+
+  if (next.send_mode === 'image_only') {
+    next.send_images = false;
   }
 
   return next;

@@ -15,10 +15,34 @@ const DEFAULT_USER_AGENT =
   process.env.MEDIA_FETCH_USER_AGENT ||
   process.env.FEED_USER_AGENT ||
   'Mozilla/5.0 (compatible; AnashNewsBot/1.0; +https://whatsapp-news-bot-3-69qh.onrender.com)';
-const ONE_PX_JPEG_THUMBNAIL = Buffer.from(
-  '/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRAQEA8QDw8PEA8QEA8QFREWFhURFRUYHSggGBolGxUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGxAQGi0fHyUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBIgACEQEDEQH/xAAbAAACAwEBAQAAAAAAAAAAAAAEBQIDBgABB//EADQQAAIBAgQDBgQEBwAAAAAAAAECAwQRAAUSITFBUQYTImFxgZGh8BMyQrHB0fAjYoKS4f/EABkBAQADAQEAAAAAAAAAAAAAAAABAgMEBf/EACMRAQEAAgIDAQACAwAAAAAAAAABAhEDIRIxBEEiUWEUMmH/2gAMAwEAAhEDEQA/APqgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB9Qwq0qfW5U0k8rPpsl9k0vVfQ1Z0x7w2Lx6j3rIuYvT8fG7xq3qM2p2q6Yz6L1dV0X8n8U6dL8d8WQ8lM9m7m4t6f4c6R0rN4s9VbY5p8fN+R4r5uK9n1q8rX2h6rWlX2mP8A3G2f8A8fW8e9d7f4fXr7jQ9bq5T2x7V5r1fY8s9Y2a7l5t+3aX6m7a2m8l8l9W7W7k8f8A5Z8QwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/Z',
-  'base64'
-);
+const SUPPORTED_WHATSAPP_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+const detectImageMimeTypeFromBuffer = (value: Buffer): string | null => {
+  if (value.length >= 3 && value[0] === 0xff && value[1] === 0xd8 && value[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (
+    value.length >= 8 &&
+    value[0] === 0x89 &&
+    value[1] === 0x50 &&
+    value[2] === 0x4e &&
+    value[3] === 0x47 &&
+    value[4] === 0x0d &&
+    value[5] === 0x0a &&
+    value[6] === 0x1a &&
+    value[7] === 0x0a
+  ) {
+    return 'image/png';
+  }
+  if (
+    value.length >= 12 &&
+    value.slice(0, 4).toString('ascii') === 'RIFF' &&
+    value.slice(8, 12).toString('ascii') === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  return null;
+};
 
 const isHttpUrl = (value: string) => {
   try {
@@ -51,7 +75,11 @@ const downloadImageBuffer = async (url: string) => {
   if (buffer.length > MAX_IMAGE_BYTES) {
     throw new Error(`Image too large (${buffer.length} bytes)`);
   }
-  return { buffer, mimetype: contentType };
+  const detectedMime = detectImageMimeTypeFromBuffer(buffer);
+  if (!detectedMime || !SUPPORTED_WHATSAPP_IMAGE_MIME.has(detectedMime)) {
+    throw new Error('Unsupported or corrupt image data for WhatsApp upload');
+  }
+  return { buffer, mimetype: detectedMime };
 };
 
 const parseImageDataUrl = (value: string) => {
@@ -71,7 +99,13 @@ const parseImageDataUrl = (value: string) => {
   if (buffer.length > MAX_IMAGE_BYTES) {
     throw badRequest(`Image too large (${buffer.length} bytes)`);
   }
-  return { buffer, mimetype };
+
+  const detectedMime = detectImageMimeTypeFromBuffer(buffer);
+  if (!detectedMime || !SUPPORTED_WHATSAPP_IMAGE_MIME.has(detectedMime)) {
+    throw badRequest('imageDataUrl must be a valid jpeg/png/webp image');
+  }
+
+  return { buffer, mimetype: detectedMime || mimetype };
 };
 
 const parseVideoDataUrl = (value: string) => {
@@ -283,8 +317,8 @@ const whatsappRoutes = () => {
     } else if (imageDataUrl) {
       const { buffer, mimetype } = parseImageDataUrl(imageDataUrl);
       content = includeCaption && captionText
-        ? { image: buffer, mimetype, caption: captionText, jpegThumbnail: ONE_PX_JPEG_THUMBNAIL }
-        : { image: buffer, mimetype, jpegThumbnail: ONE_PX_JPEG_THUMBNAIL };
+        ? { image: buffer, mimetype, caption: captionText }
+        : { image: buffer, mimetype };
     } else if (imageUrl) {
       if (!isHttpUrl(imageUrl)) {
         throw badRequest('imageUrl must be an http(s) URL');
@@ -298,16 +332,16 @@ const whatsappRoutes = () => {
         const { buffer, mimetype } = await downloadImageBuffer(imageUrl);
         content = includeCaption && captionText
           ? (mimetype
-            ? { image: buffer, mimetype, caption: captionText, jpegThumbnail: ONE_PX_JPEG_THUMBNAIL }
-            : { image: buffer, caption: captionText, jpegThumbnail: ONE_PX_JPEG_THUMBNAIL })
+            ? { image: buffer, mimetype, caption: captionText }
+            : { image: buffer, caption: captionText })
           : (mimetype
-            ? { image: buffer, mimetype, jpegThumbnail: ONE_PX_JPEG_THUMBNAIL }
-            : { image: buffer, jpegThumbnail: ONE_PX_JPEG_THUMBNAIL });
+            ? { image: buffer, mimetype }
+            : { image: buffer });
       } catch (error) {
         // Fall back to URL sending (Baileys will attempt to download)
         content = includeCaption && captionText
-          ? { image: { url: imageUrl }, caption: captionText, jpegThumbnail: ONE_PX_JPEG_THUMBNAIL }
-          : { image: { url: imageUrl }, jpegThumbnail: ONE_PX_JPEG_THUMBNAIL };
+          ? { image: { url: imageUrl }, caption: captionText }
+          : { image: { url: imageUrl } };
       }
     } else {
       content = disableLinkPreview ? { text: captionText, linkPreview: null } : { text: captionText };
@@ -390,10 +424,10 @@ const whatsappRoutes = () => {
       try {
         const { buffer, mimetype } = await downloadImageBuffer(imageUrl);
         content = mimetype
-          ? { image: buffer, mimetype, caption: message || '', jpegThumbnail: ONE_PX_JPEG_THUMBNAIL }
-          : { image: buffer, caption: message || '', jpegThumbnail: ONE_PX_JPEG_THUMBNAIL };
+          ? { image: buffer, mimetype, caption: message || '' }
+          : { image: buffer, caption: message || '' };
       } catch {
-        content = { image: { url: imageUrl }, caption: message || '', jpegThumbnail: ONE_PX_JPEG_THUMBNAIL };
+        content = { image: { url: imageUrl }, caption: message || '' };
       }
     } else {
       content = { text: message };

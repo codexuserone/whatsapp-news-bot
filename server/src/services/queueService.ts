@@ -63,10 +63,6 @@ const AUTH_ERROR_HINT = 'WhatsApp auth state corrupted. Clear sender keys or re-
 const MANUAL_POST_PAUSE_ERROR = 'Paused for this post';
 const FEED_PAUSED_ERROR = 'Feed paused';
 const NON_REVIVABLE_SKIP_ERRORS = new Set([MANUAL_POST_PAUSE_ERROR, FEED_PAUSED_ERROR]);
-const ONE_PX_JPEG_THUMBNAIL = Buffer.from(
-  '/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRAQEA8QDw8PEA8QEA8QFREWFhURFRUYHSggGBolGxUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGxAQGi0fHyUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBIgACEQEDEQH/xAAbAAACAwEBAQAAAAAAAAAAAAAEBQIDBgABB//EADQQAAIBAgQDBgQEBwAAAAAAAAECAwQRAAUSITFBUQYTImFxgZGh8BMyQrHB0fAjYoKS4f/EABkBAQADAQEAAAAAAAAAAAAAAAABAgMEBf/EACMRAQEAAgIDAQACAwAAAAAAAAABAhEDIRIxBEEiUWEUMmH/2gAMAwEAAhEDEQA/APqgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB9Qwq0qfW5U0k8rPpsl9k0vVfQ1Z0x7w2Lx6j3rIuYvT8fG7xq3qM2p2q6Yz6L1dV0X8n8U6dL8d8WQ8lM9m7m4t6f4c6R0rN4s9VbY5p8fN+R4r5uK9n1q8rX2h6rWlX2mP8A3G2f8A8fW8e9d7f4fXr7jQ9bq5T2x7V5r1fY8s9Y2a7l5t+3aX6m7a2m8l8l9W7W7k8f8A5Z8QwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/Z',
-  'base64'
-);
 
 let globalLastTargetId: string | null = null;
 let globalLastSentAtMs = 0;
@@ -761,8 +757,8 @@ const sendMessageWithTemplate = async (
     try {
       const { buffer, mimetype } = await downloadImageBuffer(safeUrl, feedItem.link);
       const content: Record<string, unknown> = includeImageCaption
-        ? { image: buffer, caption: renderedText, jpegThumbnail: ONE_PX_JPEG_THUMBNAIL }
-        : { image: buffer, jpegThumbnail: ONE_PX_JPEG_THUMBNAIL };
+        ? { image: buffer, caption: renderedText }
+        : { image: buffer };
       if (mimetype) {
         content.mimetype = mimetype;
       }
@@ -814,8 +810,8 @@ const sendMessageWithTemplate = async (
 
       try {
         const content: Record<string, unknown> = includeImageCaption
-          ? { image: { url: safeUrl }, caption: renderedText, jpegThumbnail: ONE_PX_JPEG_THUMBNAIL }
-          : { image: { url: safeUrl }, jpegThumbnail: ONE_PX_JPEG_THUMBNAIL };
+          ? { image: { url: safeUrl }, caption: renderedText }
+          : { image: { url: safeUrl } };
         const response =
           target.type === 'status'
             ? await withTimeout(

@@ -30,9 +30,18 @@ const FeedItemsPage = () => {
     const sent = delivery.sent || 0;
     const failed = delivery.failed || 0;
     const total = delivery.total || 0;
-    
+
+    if (queued > 0 && sent > 0 && failed > 0) {
+      return { label: `Mixed (${sent} sent, ${queued} queued, ${failed} failed)`, variant: 'warning' as const };
+    }
+    if (queued > 0 && sent > 0) {
+      return { label: `Partially sent (${sent} sent, ${queued} queued)`, variant: 'warning' as const };
+    }
+    if (queued > 0 && failed > 0) {
+      return { label: `Retrying (${queued} queued, ${failed} failed)`, variant: 'warning' as const };
+    }
     if (queued > 0) {
-      return { label: `Sending soon (${queued})`, variant: 'warning' as const };
+      return { label: `Queued (${queued})`, variant: 'warning' as const };
     }
     if (sent > 0 && failed > 0) {
       return { label: `Partial (${sent} sent, ${failed} failed)`, variant: 'warning' as const };

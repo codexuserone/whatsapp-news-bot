@@ -400,17 +400,50 @@ const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null)
   const contentType = String(response.headers?.['content-type'] || '').toLowerCase();
   const data = response.data;
   const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+
+  const detectMimeTypeFromBuffer = (value: Buffer): string | null => {
+    if (value.length >= 3 && value[0] === 0xff && value[1] === 0xd8 && value[2] === 0xff) {
+      return 'image/jpeg';
+    }
+    if (
+      value.length >= 8 &&
+      value[0] === 0x89 &&
+      value[1] === 0x50 &&
+      value[2] === 0x4e &&
+      value[3] === 0x47 &&
+      value[4] === 0x0d &&
+      value[5] === 0x0a &&
+      value[6] === 0x1a &&
+      value[7] === 0x0a
+    ) {
+      return 'image/png';
+    }
+    if (
+      value.length >= 12 &&
+      value.slice(0, 4).toString('ascii') === 'RIFF' &&
+      value.slice(8, 12).toString('ascii') === 'WEBP'
+    ) {
+      return 'image/webp';
+    }
+    return null;
+  };
+
   if (!contentType.startsWith('image/')) {
     throw new Error(`URL did not return an image (content-type: ${contentType || 'unknown'})`);
   }
   const normalizedMimeType = contentType.split(';')[0]?.trim() || '';
-  if (!SUPPORTED_WHATSAPP_IMAGE_MIME.has(normalizedMimeType)) {
+  const detectedMimeType = detectMimeTypeFromBuffer(buffer);
+  const finalMimeType = detectedMimeType || normalizedMimeType;
+  if (!detectedMimeType) {
+    throw new Error('Unsupported or corrupt image data for WhatsApp upload');
+  }
+  if (!SUPPORTED_WHATSAPP_IMAGE_MIME.has(finalMimeType)) {
     throw new Error(`Unsupported image MIME type for WhatsApp upload (${normalizedMimeType || 'unknown'})`);
   }
   if (buffer.length > MAX_IMAGE_BYTES) {
     throw new Error(`Image too large (${buffer.length} bytes)`);
   }
-  return { buffer, mimetype: normalizedMimeType };
+  return { buffer, mimetype: finalMimeType };
 };
 
 const maybeUpdateFeedItemImage = async (
@@ -747,7 +780,11 @@ const sendMessageWithTemplate = async (
       };
     } catch (error) {
       const bufferErrorMessage = getErrorMessage(error);
-      if (/Unsupported image MIME type for WhatsApp upload/i.test(bufferErrorMessage)) {
+      if (
+        /Unsupported image MIME type for WhatsApp upload|Unsupported or corrupt image data for WhatsApp upload|URL did not return an image/i.test(
+          bufferErrorMessage
+        )
+      ) {
         if (!allowTextFallback) {
           throw new Error(bufferErrorMessage);
         }

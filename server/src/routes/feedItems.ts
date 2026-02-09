@@ -78,8 +78,25 @@ const feedItemRoutes = () => {
         };
         const queued = delivery.pending + delivery.processing;
         const total = delivery.pending + delivery.processing + delivery.sent + delivery.failed + delivery.skipped;
+        const hasQueued = queued > 0;
+        const hasSent = delivery.sent > 0;
+        const hasFailed = delivery.failed > 0;
         const delivery_status =
-          queued > 0 ? 'queued' : delivery.failed > 0 ? 'failed' : delivery.sent > 0 ? 'sent' : 'not_queued';
+          hasQueued && hasSent && hasFailed
+            ? 'mixed'
+            : hasQueued && hasSent
+              ? 'partially_sent'
+              : hasQueued && hasFailed
+                ? 'retrying'
+                : hasQueued
+                  ? 'queued'
+                  : hasSent && hasFailed
+                    ? 'partially_sent'
+                    : hasSent
+                      ? 'sent'
+                      : hasFailed
+                        ? 'failed'
+                        : 'not_queued';
         return {
           ...item,
           sent: Boolean(item.sent) || delivery.sent > 0,

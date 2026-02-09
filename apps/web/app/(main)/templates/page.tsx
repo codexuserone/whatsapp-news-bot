@@ -77,7 +77,7 @@ const TemplatesPage = () => {
     queryKey: ['feed-items', sampleFeedId],
     queryFn: () =>
       sampleFeedId === '__all'
-        ? api.get('/api/feed-items')
+        ? api.get('/api/feed-items?scope=all')
         : api.get(`/api/feed-items/by-feed/${encodeURIComponent(sampleFeedId)}`)
   });
   const [active, setActive] = useState<Template | null>(null);

@@ -188,12 +188,27 @@ const feedsRoutes = () => {
       if (error) throw error;
 
       let pausedQueueItems = 0;
+      let pausedAutomations = 0;
       if (payload?.active === false) {
         pausedQueueItems = await pausePendingLogsForFeed(String(req.params.id));
+
+        const { data: pausedSchedules, error: pauseScheduleError } = await supabase
+          .from('schedules')
+          .update({ state: 'paused', active: false, next_run_at: null })
+          .eq('feed_id', req.params.id)
+          .or('state.eq.active,active.eq.true')
+          .select('id');
+
+        if (pauseScheduleError) throw pauseScheduleError;
+        pausedAutomations = pausedSchedules?.length || 0;
       }
 
       refreshSchedulers(req.app.locals.whatsapp);
-      res.json({ ...feed, paused_queue_items: pausedQueueItems });
+      res.json({
+        ...feed,
+        paused_queue_items: pausedQueueItems,
+        paused_automations: pausedAutomations
+      });
     } catch (error) {
       console.error('Error updating feed:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });

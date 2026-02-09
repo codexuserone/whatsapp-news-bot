@@ -182,49 +182,51 @@ const OverviewPage = () => {
           <CardDescription>Latest message delivery attempts</CardDescription>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHeaderCell>Status</TableHeaderCell>
-                <TableHeaderCell>Target</TableHeaderCell>
-                <TableHeaderCell className="hidden md:table-cell">Message</TableHeaderCell>
-                <TableHeaderCell>Time</TableHeaderCell>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {logs.slice(0, 5).map((log) => (
-                <TableRow key={log.id}>
-                  <TableCell>
-                    <Badge
-                      variant={
-                        log.status === 'sent'
-                          ? 'success'
-                          : log.status === 'failed'
-                            ? 'destructive'
-                            : 'warning'
-                      }
-                    >
-                      {log.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>
-                  <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
-                    {log.message_content?.substring(0, 50) || '-'}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {new Date(log.sent_at || log.created_at).toLocaleString()}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {logs.length === 0 && (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
-                    No delivery logs yet.
-                  </TableCell>
+                  <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Target</TableHeaderCell>
+                  <TableHeaderCell className="hidden md:table-cell">Message</TableHeaderCell>
+                  <TableHeaderCell>Time</TableHeaderCell>
                 </TableRow>
-              )}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {logs.slice(0, 5).map((log) => (
+                  <TableRow key={log.id}>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          log.status === 'sent'
+                            ? 'success'
+                            : log.status === 'failed'
+                              ? 'destructive'
+                              : 'warning'
+                        }
+                      >
+                        {log.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>
+                    <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
+                      {log.message_content?.substring(0, 50) || '-'}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {new Date(log.sent_at || log.created_at).toLocaleString()}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {logs.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                      No delivery logs yet.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
           {logs.length > 5 && (
             <div className="mt-4 text-center">
               <Button asChild variant="outline" size="sm">

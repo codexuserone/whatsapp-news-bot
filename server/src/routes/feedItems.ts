@@ -3,6 +3,7 @@ const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
+const { isScheduleRunning } = require('../services/scheduleState');
 
 const MANUAL_POST_PAUSE_REASON = 'Paused for this post';
 
@@ -15,11 +16,35 @@ const feedItemRoutes = () => {
     return supabase;
   };
 
-  // Get all feed items with feed information
-  router.get('/', async (_req: Request, res: Response) => {
+  // Get feed items with delivery summary
+  // Default scope is automation-only so the list matches what can actually be sent.
+  router.get('/', async (req: Request, res: Response) => {
     try {
       const supabase = getDb();
-      const { data: items, error } = await supabase
+      const scope = String(req.query.scope || 'automation').toLowerCase();
+      const includeAllFeeds = scope === 'all';
+      const dedupe = String(req.query.dedupe || 'true').toLowerCase() !== 'false';
+
+      const { data: schedules, error: schedulesError } = await supabase
+        .from('schedules')
+        .select('feed_id,active,state');
+
+      if (schedulesError) throw schedulesError;
+
+      const runningAutomationCountByFeedId = new Map<string, number>();
+      for (const schedule of (schedules || []) as Array<{ feed_id?: string | null; active?: boolean | null; state?: string | null }>) {
+        const feedId = String(schedule.feed_id || '').trim();
+        if (!feedId) continue;
+        if (!isScheduleRunning(schedule)) continue;
+        runningAutomationCountByFeedId.set(feedId, (runningAutomationCountByFeedId.get(feedId) || 0) + 1);
+      }
+
+      const activeAutomationFeedIds = Array.from(runningAutomationCountByFeedId.keys());
+      if (!includeAllFeeds && !activeAutomationFeedIds.length) {
+        return res.json([]);
+      }
+
+      let itemsQuery = supabase
         .from('feed_items')
         .select(`
           *,
@@ -28,8 +53,28 @@ const feedItemRoutes = () => {
         .order('pub_date', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false })
         .limit(200);
-      
+
+      if (!includeAllFeeds) {
+        itemsQuery = itemsQuery.in('feed_id', activeAutomationFeedIds);
+      }
+
+      const { data: fetchedItems, error } = await itemsQuery;
       if (error) throw error;
+
+      const seenKeys = new Set<string>();
+      const items = (fetchedItems || []).filter((item: Record<string, unknown>) => {
+        if (!dedupe) return true;
+        const key =
+          String(item.normalized_url || '').trim().toLowerCase() ||
+          String(item.link || '').trim().toLowerCase() ||
+          String(item.guid || '').trim().toLowerCase() ||
+          `${String(item.feed_id || '').trim()}:${String(item.title || '').trim().toLowerCase()}:${String(item.pub_date || '').trim()}`;
+
+        if (!key) return true;
+        if (seenKeys.has(key)) return false;
+        seenKeys.add(key);
+        return true;
+      });
 
       const ids = (items || []).map((item: { id?: string }) => item.id).filter(Boolean) as string[];
       const deliveryByItem = new Map<
@@ -92,6 +137,8 @@ const feedItemRoutes = () => {
         const hasSent = delivery.sent > 0;
         const hasFailed = delivery.failed > 0;
         const hasManualPause = delivery.manual_paused > 0;
+        const feedId = String(item.feed_id || '').trim();
+        const activeAutomationCount = runningAutomationCountByFeedId.get(feedId) || 0;
         const delivery_status =
           hasManualPause && hasQueued
             ? 'paused_with_queue'
@@ -111,12 +158,17 @@ const feedItemRoutes = () => {
                       ? 'sent'
                       : hasFailed
                         ? 'failed'
-                        : 'not_queued';
+                        : activeAutomationCount > 0
+                          ? 'not_queued'
+                          : 'no_automation';
         return {
           ...item,
           sent: Boolean(item.sent) || delivery.sent > 0,
           delivery: { ...delivery, total },
-          delivery_status
+          delivery_status,
+          routing: {
+            active_automations: activeAutomationCount
+          }
         };
       });
 

@@ -127,7 +127,12 @@ const FeedsPage = () => {
       if (!form.getValues('name') && result.feedTitle) {
         form.setValue('name', result.feedTitle);
       }
-      if (result.detectedType === 'rss' || result.detectedType === 'atom' || result.detectedType === 'json') {
+      if (
+        result.detectedType === 'rss' ||
+        result.detectedType === 'atom' ||
+        result.detectedType === 'json' ||
+        result.detectedType === 'html'
+      ) {
         form.setValue('type', result.detectedType);
       }
     } catch (error: unknown) {

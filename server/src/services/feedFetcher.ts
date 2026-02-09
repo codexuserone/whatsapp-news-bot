@@ -562,6 +562,26 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
 
 const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedItemResult[]; meta: FetchMeta }> => {
   const start = Date.now();
+  let sourceFeed = { ...feed };
+  let discoveredFromHtmlUrl: string | null = null;
+
+  // If user explicitly picked HTML, treat this URL as a web page and discover
+  // the real feed endpoint first (RSS/Atom/JSON).
+  if (feed.type === 'html') {
+    try {
+      const discovered = await discoverFeedEndpointFromHtml(feed.url);
+      if (discovered?.url) {
+        discoveredFromHtmlUrl = feed.url;
+        sourceFeed = {
+          ...feed,
+          url: discovered.url,
+          ...(discovered.type ? { type: discovered.type } : {})
+        };
+      }
+    } catch {
+      // Keep original URL if discovery fails; fallback logic below still applies.
+    }
+  }
 
   const tryFetch = async (kind: 'json' | 'xml', sourceFeed: FeedConfig = feed) => {
     if (kind === 'json') {
@@ -573,23 +593,23 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
     });
   };
 
-  const preferred: 'json' | 'xml' = feed.type === 'json' ? 'json' : 'xml';
+  const preferred: 'json' | 'xml' = sourceFeed.type === 'json' ? 'json' : 'xml';
   const fallback: 'json' | 'xml' = preferred === 'json' ? 'xml' : 'json';
 
   let items: FeedItemResult[] = [];
   let meta: FetchMeta = {};
-  let detectedType: FetchMeta['detectedType'] = feed.type || (preferred === 'json' ? 'json' : 'rss');
+  let detectedType: FetchMeta['detectedType'] = sourceFeed.type || (preferred === 'json' ? 'json' : 'rss');
 
   try {
-    const result = await tryFetch(preferred, feed);
+    const result = await tryFetch(preferred, sourceFeed);
     items = result.items;
     meta = result.meta;
     detectedType =
-      preferred === 'json' ? 'json' : feed.type === 'atom' ? 'atom' : 'rss';
+      preferred === 'json' ? 'json' : sourceFeed.type === 'atom' ? 'atom' : 'rss';
 
     if (!meta?.notModified && (!items || items.length === 0)) {
       try {
-        const alt = await tryFetch(fallback, feed);
+        const alt = await tryFetch(fallback, sourceFeed);
         if (alt?.items?.length) {
           items = alt.items;
           meta = alt.meta;
@@ -600,7 +620,7 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
       }
     }
   } catch (error) {
-    const alt = await tryFetch(fallback, feed);
+    const alt = await tryFetch(fallback, sourceFeed);
     items = alt.items;
     meta = alt.meta;
     detectedType = fallback === 'json' ? 'json' : 'rss';
@@ -683,12 +703,14 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
         imageUrl: cleanedImageUrl
       };
     });
+  const discoveredFromUrl = meta?.discoveredFromUrl || discoveredFromHtmlUrl;
 
   return {
     items: cleaned,
     meta: {
       ...meta,
-      sourceUrl: meta?.sourceUrl || feed.url,
+      sourceUrl: meta?.sourceUrl || sourceFeed.url,
+      ...(discoveredFromUrl ? { discoveredFromUrl } : {}),
       detectedType,
       durationMs: Date.now() - start
     }

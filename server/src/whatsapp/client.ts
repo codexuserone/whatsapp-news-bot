@@ -84,13 +84,15 @@ const mapMessageStatusLabel = (status: number | null) => {
 const normalizeNewsletterJid = (value: unknown, options?: { allowNumeric?: boolean }) => {
   const raw = String(value || '').trim();
   if (!raw) return '';
-  const directMatch = raw.match(/(\d{8,})@newsletter(?:_[a-z0-9]+)?$/i);
-  if (directMatch?.[1]) return `${directMatch[1]}@newsletter`;
-  if (raw.endsWith('@newsletter')) return raw;
-  if (raw.includes('@')) {
-    const numericFromDecorated = raw.replace(/[^0-9]/g, '');
-    return numericFromDecorated ? `${numericFromDecorated}@newsletter` : '';
+
+  // Keep explicit newsletter JIDs as-is (including WhatsApp-decorated suffixes),
+  // because stripping suffix/prefix can produce non-deliverable channel IDs.
+  if (raw.toLowerCase().includes('@newsletter')) {
+    const tokenMatch = raw.match(/[a-z0-9._-]+@newsletter(?:_[a-z0-9]+)?/i);
+    return tokenMatch?.[0] || raw;
   }
+
+  if (raw.includes('@')) return '';
   if (!options?.allowNumeric) return '';
   const digits = raw.replace(/[^0-9]/g, '');
   return digits ? `${digits}@newsletter` : '';

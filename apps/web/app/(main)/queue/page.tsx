@@ -56,7 +56,7 @@ const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | nu
 
 const QueuePage = () => {
   const queryClient = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState('pending');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftMessage, setDraftMessage] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
@@ -77,15 +77,10 @@ const QueuePage = () => {
     refetchInterval: 10000
   });
 
-  const effectiveStatusFilter =
-    statusFilter === 'pending' && (queueStats?.pending ?? 0) === 0 && (queueStats?.sent ?? 0) > 0
-      ? 'sent'
-      : statusFilter;
-
   const { data: queueItems = [], isLoading } = useQuery<QueueItem[]>({
-    queryKey: ['queue', effectiveStatusFilter],
+    queryKey: ['queue', statusFilter],
     queryFn: () =>
-      api.get(effectiveStatusFilter === 'all' ? '/api/queue' : `/api/queue?status=${effectiveStatusFilter}`),
+      api.get(statusFilter === 'all' ? '/api/queue' : `/api/queue?status=${statusFilter}`),
     refetchInterval: 10000
   });
 
@@ -414,7 +409,7 @@ const QueuePage = () => {
             Grid
           </Button>
         </div>
-        <Select value={effectiveStatusFilter === '' ? 'all' : effectiveStatusFilter} onValueChange={setStatusFilter}>
+        <Select value={statusFilter || 'all'} onValueChange={setStatusFilter}>
           <SelectTrigger className="w-44">
             <SelectValue placeholder="Select status" />
           </SelectTrigger>
@@ -429,12 +424,6 @@ const QueuePage = () => {
         </Select>
         <span className="text-sm text-muted-foreground">{queueItems.length} item{queueItems.length !== 1 ? 's' : ''}</span>
       </div>
-
-      {statusFilter === 'pending' && !isLoading && queueItems.length === 0 && (queueStats?.sent || 0) > 0 && (
-        <div className="text-sm text-muted-foreground">
-          Nothing queued right now. Switch to <span className="font-medium">Sent</span> to see delivery history.
-        </div>
-      )}
 
       {actionNotice ? (
         <div
@@ -462,7 +451,7 @@ const QueuePage = () => {
             </div>
           ) : queueItems.length === 0 ? (
             <div className="py-8 text-center text-muted-foreground">
-              No messages in queue with status &quot;{effectiveStatusFilter === 'all' ? 'any' : effectiveStatusFilter}&quot;
+              No messages in queue with status &quot;{statusFilter === 'all' ? 'any' : statusFilter}&quot;
             </div>
           ) : viewMode === 'list' ? (
             <div className="space-y-3">
@@ -483,7 +472,7 @@ const QueuePage = () => {
                           {item.delivery_mode === 'batch' || item.delivery_mode === 'batched' ? (
                             <Badge variant="outline">Scheduled time</Badge>
                           ) : null}
-                          {(effectiveStatusFilter === 'pending' || effectiveStatusFilter === 'processing') ? (
+                          {(statusFilter === 'pending' || statusFilter === 'processing') ? (
                             <Badge variant="outline">#{index + 1} in send order</Badge>
                           ) : null}
                           {item.target_name ? <Badge variant="outline">{item.target_name}</Badge> : null}

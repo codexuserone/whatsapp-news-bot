@@ -66,6 +66,7 @@ export type LogEntry = {
 
 export type FeedItem = {
   id: string;
+  feed_id?: string | null;
   title?: string | null;
   description?: string | null;
   content?: string | null;
@@ -85,6 +86,9 @@ export type FeedItem = {
     total: number;
   } | null;
   delivery_status?: string | null;
+  routing?: {
+    active_automations?: number;
+  } | null;
   feed?: { name?: string | null } | null;
 };
 
@@ -178,6 +182,7 @@ export type WhatsAppChannel = {
   jid: string;
   name: string;
   subscribers: number;
+  source?: 'live' | 'saved';
 };
 
 export type ShabbosStatus = {

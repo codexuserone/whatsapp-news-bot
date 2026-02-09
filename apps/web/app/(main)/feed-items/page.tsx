@@ -13,9 +13,10 @@ import { ClipboardList, ExternalLink, Loader2, PauseCircle, PlayCircle } from 'l
 
 const FeedItemsPage = () => {
   const queryClient = useQueryClient();
+  const [scope, setScope] = React.useState<'automation' | 'all'>('automation');
   const { data: items = [], isLoading } = useQuery<FeedItem[]>({
-    queryKey: ['feed-items'],
-    queryFn: () => api.get('/api/feed-items'),
+    queryKey: ['feed-items', scope],
+    queryFn: () => api.get(`/api/feed-items?scope=${scope}`),
     refetchInterval: 15000
   });
 
@@ -38,6 +39,10 @@ const FeedItemsPage = () => {
   });
 
   const getStatus = (item: FeedItem) => {
+    if (item.delivery_status === 'no_automation') {
+      return { label: 'No active automation', variant: 'secondary' as const };
+    }
+
     const delivery = item.delivery || {
       pending: 0,
       processing: 0,
@@ -93,17 +98,37 @@ const FeedItemsPage = () => {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Feed Items</h1>
         <p className="text-muted-foreground">
-          Raw stories fetched from feeds (sorted by publish time). Queue is where editable outgoing messages live before they are sent.
+          Stories from your feeds. Queue is where editable outgoing messages live before they are sent.
         </p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ClipboardList className="h-5 w-5" />
-            Latest Items
-          </CardTitle>
-          <CardDescription>{items.length} item{items.length !== 1 ? 's' : ''} fetched</CardDescription>
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <ClipboardList className="h-5 w-5" />
+                Latest Items
+              </CardTitle>
+              <CardDescription>{items.length} item{items.length !== 1 ? 's' : ''} fetched</CardDescription>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant={scope === 'automation' ? 'default' : 'outline'}
+                onClick={() => setScope('automation')}
+              >
+                In automations
+              </Button>
+              <Button
+                size="sm"
+                variant={scope === 'all' ? 'default' : 'outline'}
+                onClick={() => setScope('all')}
+              >
+                All feeds
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -111,111 +136,113 @@ const FeedItemsPage = () => {
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHeaderCell>Title</TableHeaderCell>
-                  <TableHeaderCell className="hidden sm:table-cell">Feed</TableHeaderCell>
-                  <TableHeaderCell className="hidden md:table-cell">Link</TableHeaderCell>
-                  <TableHeaderCell className="hidden md:table-cell">Image</TableHeaderCell>
-                  <TableHeaderCell className="hidden lg:table-cell">Published</TableHeaderCell>
-                  <TableHeaderCell>Status</TableHeaderCell>
-                  <TableHeaderCell className="hidden lg:table-cell">Actions</TableHeaderCell>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell className="max-w-xs truncate font-medium" title={item.title || undefined}>
-                      {item.title || 'Untitled'}
-                    </TableCell>
-                    <TableCell className="hidden sm:table-cell">
-                      <Badge variant="secondary">{item.feed?.name || 'Unknown'}</Badge>
-                    </TableCell>
-                    <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
-                      {item.link ? (
-                        <a
-                          href={item.link}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1 text-primary hover:underline"
-                        >
-                          <ExternalLink className="h-3 w-3" />
-                          Link
-                        </a>
-                      ) : (
-                        '-'
-                      )}
-                    </TableCell>
-                    <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
-                      {item.image_url ? (
-                        <a
-                          href={item.image_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-2"
-                        >
-                          <span className="relative h-10 w-10 shrink-0 overflow-hidden rounded border bg-muted">
-                            <Image
-                              src={item.image_url}
-                              alt=""
-                              fill
-                              sizes="40px"
-                              className="object-cover"
-                              unoptimized
-                            />
-                          </span>
-                          <span className="flex items-center gap-1 text-primary hover:underline">
-                            <ExternalLink className="h-3 w-3" />
-                            Image
-                          </span>
-                        </a>
-                      ) : (
-                        '-'
-                      )}
-                    </TableCell>
-                    <TableCell className="hidden text-muted-foreground lg:table-cell">
-                      {item.pub_date ? new Date(item.pub_date).toLocaleString() : '-'}
-                    </TableCell>
-                    <TableCell>
-                      {(() => {
-                        const status = getStatus(item);
-                        return <Badge variant={status.variant}>{status.label}</Badge>;
-                      })()}
-                    </TableCell>
-                    <TableCell className="hidden lg:table-cell">
-                      <div className="flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => pausePost.mutate(item.id)}
-                          disabled={pausePost.isPending || resumePost.isPending}
-                        >
-                          <PauseCircle className="mr-1 h-3 w-3" />
-                          Pause post
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => resumePost.mutate(item.id)}
-                          disabled={pausePost.isPending || resumePost.isPending}
-                        >
-                          <PlayCircle className="mr-1 h-3 w-3" />
-                          Resume post
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {items.length === 0 && (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
-                      No feed items yet. Add feeds and refresh them to see items here.
-                    </TableCell>
+                    <TableHeaderCell>Title</TableHeaderCell>
+                    <TableHeaderCell className="hidden sm:table-cell">Feed</TableHeaderCell>
+                    <TableHeaderCell className="hidden md:table-cell">Link</TableHeaderCell>
+                    <TableHeaderCell className="hidden md:table-cell">Image</TableHeaderCell>
+                    <TableHeaderCell className="hidden lg:table-cell">Published</TableHeaderCell>
+                    <TableHeaderCell>Status</TableHeaderCell>
+                    <TableHeaderCell className="hidden lg:table-cell">Actions</TableHeaderCell>
                   </TableRow>
-                )}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {items.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell className="max-w-xs truncate font-medium" title={item.title || undefined}>
+                        {item.title || 'Untitled'}
+                      </TableCell>
+                      <TableCell className="hidden sm:table-cell">
+                        <Badge variant="secondary">{item.feed?.name || 'Unknown'}</Badge>
+                      </TableCell>
+                      <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
+                        {item.link ? (
+                          <a
+                            href={item.link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-primary hover:underline"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            Link
+                          </a>
+                        ) : (
+                          '-'
+                        )}
+                      </TableCell>
+                      <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
+                        {item.image_url ? (
+                          <a
+                            href={item.image_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2"
+                          >
+                            <span className="relative h-10 w-10 shrink-0 overflow-hidden rounded border bg-muted">
+                              <Image
+                                src={item.image_url}
+                                alt=""
+                                fill
+                                sizes="40px"
+                                className="object-cover"
+                                unoptimized
+                              />
+                            </span>
+                            <span className="flex items-center gap-1 text-primary hover:underline">
+                              <ExternalLink className="h-3 w-3" />
+                              Image
+                            </span>
+                          </a>
+                        ) : (
+                          '-'
+                        )}
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground lg:table-cell">
+                        {item.pub_date ? new Date(item.pub_date).toLocaleString() : '-'}
+                      </TableCell>
+                      <TableCell>
+                        {(() => {
+                          const status = getStatus(item);
+                          return <Badge variant={status.variant}>{status.label}</Badge>;
+                        })()}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell">
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => pausePost.mutate(item.id)}
+                            disabled={pausePost.isPending || resumePost.isPending}
+                          >
+                            <PauseCircle className="mr-1 h-3 w-3" />
+                            Pause post
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => resumePost.mutate(item.id)}
+                            disabled={pausePost.isPending || resumePost.isPending}
+                          >
+                            <PlayCircle className="mr-1 h-3 w-3" />
+                            Resume post
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {items.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                        No feed items found for this filter.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>

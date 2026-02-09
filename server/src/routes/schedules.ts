@@ -119,7 +119,26 @@ const scheduleRoutes = () => {
 
   router.post('/', validate(schemas.schedule), async (req: Request, res: Response) => {
     try {
+      const supabase = getDb();
       const payload = normalizeSchedulePayload(req.body, { forInsert: true });
+      const { data: feed, error: feedError } = await supabase
+        .from('feeds')
+        .select('id,active')
+        .eq('id', payload.feed_id)
+        .single();
+
+      if (feedError || !feed) {
+        return res.status(400).json({ error: 'Feed not found for this automation' });
+      }
+
+      let feedInactiveWarning: string | null = null;
+      if (feed.active === false && payload.active === true) {
+        payload.state = 'paused';
+        payload.active = false;
+        payload.next_run_at = null;
+        feedInactiveWarning = 'Feed is disabled, so this automation was saved as paused.';
+      }
+
       const { data: schedule, error } = await getDb()
         .from('schedules')
         .insert(payload)
@@ -141,7 +160,8 @@ const scheduleRoutes = () => {
       res.json({
         ...schedule,
         state: resolveScheduleState(schedule),
-        active: isScheduleRunning(schedule)
+        active: isScheduleRunning(schedule),
+        warning: feedInactiveWarning
       });
     } catch (error) {
       console.error('Error creating schedule:', error);
@@ -166,6 +186,24 @@ const scheduleRoutes = () => {
         forInsert: false,
         fallback: currentSchedule as Record<string, unknown>
       });
+      const { data: feed, error: feedError } = await supabase
+        .from('feeds')
+        .select('id,active')
+        .eq('id', payload.feed_id)
+        .single();
+
+      if (feedError || !feed) {
+        return res.status(400).json({ error: 'Feed not found for this automation' });
+      }
+
+      let feedInactiveWarning: string | null = null;
+      if (feed.active === false && payload.active === true) {
+        payload.state = 'paused';
+        payload.active = false;
+        payload.next_run_at = null;
+        feedInactiveWarning = 'Feed is disabled, so this automation was saved as paused.';
+      }
+
       const { data: schedule, error } = await supabase
         .from('schedules')
         .update(payload)
@@ -207,7 +245,8 @@ const scheduleRoutes = () => {
         ...schedule,
         state: resolveScheduleState(schedule),
         active: isScheduleRunning(schedule),
-        paused_queue_items: pausedQueueItems
+        paused_queue_items: pausedQueueItems,
+        warning: feedInactiveWarning
       });
     } catch (error) {
       console.error('Error updating schedule:', error);

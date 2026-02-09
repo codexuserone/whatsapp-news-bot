@@ -54,14 +54,8 @@ const DEFAULT_SYNC_INTERVAL_MS = Math.max(
 const normalizeChannelJid = (value: string) => {
   const trimmed = String(value || '').trim();
   if (!trimmed) return trimmed;
-
-  const directMatch = trimmed.match(/(\d{8,})@newsletter(?:_[a-z0-9]+)?$/i);
-  if (directMatch?.[1]) {
-    return `${directMatch[1]}@newsletter`;
-  }
-  if (/^[a-z0-9._-]+@newsletter(?:_[a-z0-9]+)?$/i.test(trimmed)) {
-    const numericPart = trimmed.replace(/[^0-9]/g, '');
-    return numericPart ? `${numericPart}@newsletter` : trimmed;
+  if (trimmed.toLowerCase().includes('@newsletter')) {
+    return trimmed;
   }
   const cleaned = trimmed.replace(/[^0-9]/g, '');
   return cleaned ? `${cleaned}@newsletter` : trimmed;

@@ -22,7 +22,9 @@ const queueRoutes = () => {
     try {
       const supabase = getDb();
       const { status } = req.query;
-      const statusFilter = typeof status === 'string' ? status : undefined;
+      const statusFilterRaw = typeof status === 'string' ? status : undefined;
+      const statusFilter = statusFilterRaw ? String(statusFilterRaw).toLowerCase() : undefined;
+      const shouldFilterByStatus = Boolean(statusFilter && statusFilter !== 'all');
       const includeManual = String(req.query.include_manual || '').toLowerCase() === 'true';
 
       let query = supabase
@@ -62,7 +64,7 @@ const queueRoutes = () => {
           )
         `);
 
-      if (statusFilter) {
+      if (shouldFilterByStatus && statusFilter) {
         query = query.eq('status', statusFilter);
       }
       if (!includeManual) {

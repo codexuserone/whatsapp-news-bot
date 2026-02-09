@@ -113,6 +113,8 @@ const WhatsAppPage = () => {
 
   const isConnected = status?.status === 'connected';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
+  const liveChannelCount = channels.filter((channel) => channel.source === 'live').length;
+  const savedChannelCount = channels.filter((channel) => channel.source === 'saved').length;
   const activeTargets = existingTargets.filter((target) => target.active);
   const groupedTargets = React.useMemo(() => {
     const groups = activeTargets.filter((target) => target.type === 'group');
@@ -477,6 +479,9 @@ const WhatsAppPage = () => {
                 <span className="font-medium">Channels</span>
                 <Badge variant="secondary">{channels.length}</Badge>
               </div>
+              {savedChannelCount > 0 && liveChannelCount === 0 ? (
+                <p className="mt-1 text-xs text-muted-foreground">Using saved channel targets</p>
+              ) : null}
             </div>
           </div>
 

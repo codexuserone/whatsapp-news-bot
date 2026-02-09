@@ -180,7 +180,13 @@ const whatsappRoutes = () => {
   router.get('/channels', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
     const supabase = getSupabaseClient();
-    let channels: Array<{ id: string; jid: string; name: string; subscribers: number }> = [];
+    const channelsByJid = new Map<string, {
+      id: string;
+      jid: string;
+      name: string;
+      subscribers: number;
+      source: 'live' | 'saved';
+    }>();
     const isConnected = whatsapp?.getStatus?.().status === 'connected';
     
     if (whatsapp && isConnected) {
@@ -188,26 +194,45 @@ const whatsappRoutes = () => {
         typeof whatsapp.getChannelsWithDiagnostics === 'function'
           ? await whatsapp.getChannelsWithDiagnostics()
           : null;
-      channels = enriched?.channels || await whatsapp.getChannels?.() || [];
+      const liveChannels = enriched?.channels || await whatsapp.getChannels?.() || [];
+      for (const channel of liveChannels) {
+        const jid = normalizeChannelJid(String(channel?.jid || '').trim());
+        if (!jid) continue;
+        channelsByJid.set(jid.toLowerCase(), {
+          id: jid,
+          jid,
+          name: String(channel?.name || jid),
+          subscribers: Number(channel?.subscribers || 0),
+          source: 'live'
+        });
+      }
     }
     
-    // Fallback to saved channels only when disconnected.
-    // When connected, return live discovery only so the UI does not show stale/fake channels.
-    if (!channels.length && !isConnected && supabase) {
+    // Always merge saved channel targets as a fallback source.
+    // This keeps channels selectable even when live channel discovery is unavailable.
+    if (supabase) {
       const { data: dbChannels } = await supabase
         .from('targets')
         .select('*')
         .eq('type', 'channel')
         .eq('active', true);
       
-      channels = (dbChannels || []).map((t: { id?: string; name?: string; phone_number?: string; notes?: string }) => ({
-        id: normalizeChannelJid(t.phone_number || t.id || ''),
-        jid: normalizeChannelJid(t.phone_number || ''),
-        name: t.name || '',
-        subscribers: Number(String(t.notes || '').match(/\d+/)?.[0] || 0)
-      }));
+      for (const target of (dbChannels || []) as Array<{ id?: string; name?: string; phone_number?: string; notes?: string }>) {
+        const jid = normalizeChannelJid(String(target.phone_number || target.id || '').trim());
+        if (!jid) continue;
+        const key = jid.toLowerCase();
+        if (channelsByJid.has(key)) continue;
+        channelsByJid.set(key, {
+          id: jid,
+          jid,
+          name: String(target.name || jid),
+          subscribers: Number(String(target.notes || '').match(/\d+/)?.[0] || 0),
+          source: 'saved'
+        });
+      }
     }
-    
+
+    const channels = Array.from(channelsByJid.values()).sort((a, b) => a.name.localeCompare(b.name));
     res.json(channels);
   }));
 

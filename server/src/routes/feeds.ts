@@ -194,9 +194,9 @@ const feedsRoutes = () => {
 
         const { data: pausedSchedules, error: pauseScheduleError } = await supabase
           .from('schedules')
-          .update({ state: 'paused', active: false, next_run_at: null })
+          .update({ active: false, next_run_at: null })
           .eq('feed_id', req.params.id)
-          .or('state.eq.active,active.eq.true')
+          .eq('active', true)
           .select('id');
 
         if (pauseScheduleError) throw pauseScheduleError;

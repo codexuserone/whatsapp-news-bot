@@ -60,6 +60,7 @@ const QueuePage = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftMessage, setDraftMessage] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  const [actionNotice, setActionNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const refreshQueueViews = () => {
     queryClient.invalidateQueries({ queryKey: ['queue'] });
@@ -67,6 +68,8 @@ const QueuePage = () => {
     queryClient.invalidateQueries({ queryKey: ['logs'] });
     queryClient.invalidateQueries({ queryKey: ['feed-items'] });
   };
+
+  const getMutationErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Request failed');
 
   const { data: queueStats } = useQuery<QueueStats>({
     queryKey: ['queue-stats'],
@@ -109,22 +112,46 @@ const QueuePage = () => {
 
   const deleteItem = useMutation({
     mutationFn: (id: string) => api.delete(`/api/queue/${id}`),
-    onSuccess: refreshQueueViews
+    onSuccess: () => {
+      setActionNotice({ type: 'success', message: 'Queue item removed.' });
+      refreshQueueViews();
+    },
+    onError: (error: unknown) => {
+      setActionNotice({ type: 'error', message: `Delete failed: ${getMutationErrorMessage(error)}` });
+    }
   });
 
   const clearPending = useMutation({
     mutationFn: () => api.delete('/api/queue/clear?status=pending'),
-    onSuccess: refreshQueueViews
+    onSuccess: () => {
+      setActionNotice({ type: 'success', message: 'Queued items cleared.' });
+      refreshQueueViews();
+    },
+    onError: (error: unknown) => {
+      setActionNotice({ type: 'error', message: `Clear failed: ${getMutationErrorMessage(error)}` });
+    }
   });
 
   const retryFailed = useMutation({
     mutationFn: () => api.post('/api/queue/retry-failed'),
-    onSuccess: refreshQueueViews
+    onSuccess: () => {
+      setActionNotice({ type: 'success', message: 'Failed items were moved back to queue.' });
+      refreshQueueViews();
+    },
+    onError: (error: unknown) => {
+      setActionNotice({ type: 'error', message: `Retry failed: ${getMutationErrorMessage(error)}` });
+    }
   });
 
   const resetProcessing = useMutation({
     mutationFn: () => api.post('/api/queue/reset-processing'),
-    onSuccess: refreshQueueViews
+    onSuccess: () => {
+      setActionNotice({ type: 'success', message: 'Stuck sends were reset.' });
+      refreshQueueViews();
+    },
+    onError: (error: unknown) => {
+      setActionNotice({ type: 'error', message: `Reset failed: ${getMutationErrorMessage(error)}` });
+    }
   });
 
   const updateItem = useMutation({
@@ -133,33 +160,67 @@ const QueuePage = () => {
     onSuccess: () => {
       setEditingId(null);
       setDraftMessage('');
+      setActionNotice({ type: 'success', message: 'Message text updated.' });
       refreshQueueViews();
+    },
+    onError: (error: unknown) => {
+      setActionNotice({ type: 'error', message: `Save failed: ${getMutationErrorMessage(error)}` });
     }
   });
 
   const pauseItem = useMutation({
     mutationFn: (id: string) => api.post(`/api/queue/${id}/pause`),
-    onSuccess: refreshQueueViews
+    onSuccess: () => {
+      setActionNotice({ type: 'success', message: 'Item paused.' });
+      refreshQueueViews();
+    },
+    onError: (error: unknown) => {
+      setActionNotice({ type: 'error', message: `Pause failed: ${getMutationErrorMessage(error)}` });
+    }
   });
 
   const resumeItem = useMutation({
     mutationFn: (id: string) => api.post(`/api/queue/${id}/resume`),
-    onSuccess: refreshQueueViews
+    onSuccess: () => {
+      setActionNotice({ type: 'success', message: 'Item resumed.' });
+      refreshQueueViews();
+    },
+    onError: (error: unknown) => {
+      setActionNotice({ type: 'error', message: `Resume failed: ${getMutationErrorMessage(error)}` });
+    }
   });
 
   const sendNowItem = useMutation({
-    mutationFn: (id: string) => api.post(`/api/queue/${id}/send-now`),
-    onSuccess: refreshQueueViews
+    mutationFn: (id: string) => api.post<{ messageId?: string }>(`/api/queue/${id}/send-now`),
+    onSuccess: (result: { messageId?: string }) => {
+      setActionNotice({ type: 'success', message: result?.messageId ? `Sent now (${result.messageId}).` : 'Sent now.' });
+      refreshQueueViews();
+    },
+    onError: (error: unknown) => {
+      setActionNotice({ type: 'error', message: `Send now failed: ${getMutationErrorMessage(error)}` });
+    }
   });
 
   const pausePost = useMutation({
     mutationFn: (feedItemId: string) => api.post(`/api/feed-items/${feedItemId}/pause`),
-    onSuccess: refreshQueueViews
+    onSuccess: () => {
+      setActionNotice({ type: 'success', message: 'This post was paused for all queued targets.' });
+      refreshQueueViews();
+    },
+    onError: (error: unknown) => {
+      setActionNotice({ type: 'error', message: `Pause post failed: ${getMutationErrorMessage(error)}` });
+    }
   });
 
   const resumePost = useMutation({
     mutationFn: (feedItemId: string) => api.post(`/api/feed-items/${feedItemId}/resume`),
-    onSuccess: refreshQueueViews
+    onSuccess: () => {
+      setActionNotice({ type: 'success', message: 'Post resumed for queued targets.' });
+      refreshQueueViews();
+    },
+    onError: (error: unknown) => {
+      setActionNotice({ type: 'error', message: `Resume post failed: ${getMutationErrorMessage(error)}` });
+    }
   });
 
   const beginEdit = (item: QueueItem) => {
@@ -348,6 +409,18 @@ const QueuePage = () => {
           Nothing queued right now. Switch to <span className="font-medium">Sent</span> to see delivery history.
         </div>
       )}
+
+      {actionNotice ? (
+        <div
+          className={`rounded-md border px-3 py-2 text-sm ${
+            actionNotice.type === 'success'
+              ? 'border-emerald-300/70 bg-emerald-50 text-emerald-900'
+              : 'border-red-300/70 bg-red-50 text-red-900'
+          }`}
+        >
+          {actionNotice.message}
+        </div>
+      ) : null}
 
       <Card>
         <CardHeader>

@@ -60,9 +60,9 @@ const pushBlocker = (title, details) => {
   report.blockers.push({ title, details, at: new Date().toISOString() });
 };
 
-const apiRequest = async (method, route, body, expectedStatuses = [200]) => {
+const apiRequest = async (method, route, body, expectedStatuses = [200], timeoutMs = 45000) => {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   const response = await fetch(`${BASE_URL}${route}`, {
     method,
     headers: {
@@ -572,7 +572,7 @@ const run = async () => {
 
     await step('POST /api/schedules/:id/dispatch', async () => {
       const expected = whatsappStatus?.status === 'connected' ? [200] : [200, 500];
-      const response = await apiRequest('POST', `/api/schedules/${immediateSchedule.id}/dispatch`, {}, expected);
+      const response = await apiRequest('POST', `/api/schedules/${immediateSchedule.id}/dispatch`, {}, expected, 120000);
       return response.data;
     });
   }

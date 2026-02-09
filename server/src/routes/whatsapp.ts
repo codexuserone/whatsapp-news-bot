@@ -9,6 +9,7 @@ const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { getErrorMessage } = require('../utils/errorUtils');
 const { getSupabaseClient } = require('../db/supabase');
 const { normalizeMessageText } = require('../utils/messageText');
+const { ensureWhatsAppConnected } = require('../services/whatsappConnection');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const DEFAULT_USER_AGENT =
@@ -303,7 +304,14 @@ const whatsappRoutes = () => {
       throw badRequest('message, linkUrl, imageUrl, imageDataUrl, or videoDataUrl is required');
     }
 
-    if (whatsapp?.getStatus()?.status !== 'connected') {
+    const connected = await ensureWhatsAppConnected(whatsapp, {
+      attempts: 8,
+      delayMs: 900,
+      triggerReconnect: true,
+      triggerTakeover: true,
+      logContext: 'send-test route'
+    });
+    if (!connected) {
       throw badRequest('WhatsApp is not connected');
     }
 

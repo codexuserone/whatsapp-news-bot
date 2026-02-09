@@ -12,6 +12,7 @@ const { getErrorMessage } = require('../utils/errorUtils');
 const { computeNextRunAt } = require('../utils/cron');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { normalizeMessageText } = require('../utils/messageText');
+const { ensureWhatsAppConnected } = require('./whatsappConnection');
 
 type Target = {
   id?: string;
@@ -127,48 +128,6 @@ const sendMutex = new SendMutex();
 // Replaces withGlobalSendLock
 const withGlobalSendLock = async <T>(fn: () => Promise<T>): Promise<T> => {
   return sendMutex.run(fn, 120000); // 2 minute max wait to acquire lock
-};
-
-const ensureWhatsAppConnected = async (
-  whatsappClient?: WhatsAppClient | null,
-  options?: { attempts?: number; delayMs?: number; triggerReconnect?: boolean; triggerTakeover?: boolean }
-) => {
-  if (!whatsappClient) return false;
-
-  const attempts = Math.max(Number(options?.attempts || 1), 1);
-  const delayMs = Math.max(Number(options?.delayMs || 1000), 250);
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const status = String(whatsappClient.getStatus?.().status || 'unknown');
-    if (status === 'connected') {
-      return true;
-    }
-
-    if (options?.triggerTakeover && status === 'conflict' && whatsappClient.takeoverLease && attempt <= 2) {
-      try {
-        const takeover = await whatsappClient.takeoverLease(90_000);
-        if (takeover.ok) {
-          logger.info({ ownerId: takeover.ownerId, expiresAt: takeover.expiresAt }, 'Acquired WhatsApp lease during send-now recovery');
-        }
-      } catch (error) {
-        logger.warn({ error, status }, 'Failed to take over WhatsApp lease while waiting for connected state');
-      }
-    }
-
-    if (options?.triggerReconnect && attempt === 1 && (status === 'conflict' || status === 'disconnected')) {
-      try {
-        await Promise.resolve(whatsappClient.reconnect?.());
-      } catch (error) {
-        logger.warn({ error, status }, 'Failed to trigger WhatsApp reconnect while waiting for connected state');
-      }
-    }
-
-    if (attempt < attempts) {
-      await sleep(delayMs);
-    }
-  }
-
-  return false;
 };
 
 const waitForDelays = async (
@@ -1356,8 +1315,15 @@ const sendQueuedForSchedule = async (
         return { sent: 0, queued: 0, skipped: true, reason: 'WhatsApp not connected' };
       }
 
-      const whatsappStatus = whatsappClient.getStatus();
-      if (!whatsappStatus || whatsappStatus.status !== 'connected') {
+      const connectedForManualDispatch = await ensureWhatsAppConnected(whatsappClient, {
+        attempts: 6,
+        delayMs: 1000,
+        triggerReconnect: true,
+        triggerTakeover: true,
+        logContext: `schedule ${scheduleId} manual dispatch`
+      });
+      if (!connectedForManualDispatch) {
+        const whatsappStatus = whatsappClient.getStatus();
         logger.warn({ scheduleId, whatsappStatus: whatsappStatus?.status || 'unknown' },
           'Skipping send - WhatsApp not connected');
         return { sent: 0, queued: 0, skipped: true, reason: 'WhatsApp not connected' };
@@ -1499,8 +1465,15 @@ const sendQueuedForSchedule = async (
       return { sent: 0, queued: queuedCount, skipped: true, reason: 'WhatsApp not connected' };
     }
 
-    const whatsappStatus = whatsappClient.getStatus();
-    if (!whatsappStatus || whatsappStatus.status !== 'connected') {
+    const connectedForDispatch = await ensureWhatsAppConnected(whatsappClient, {
+      attempts: 6,
+      delayMs: 1000,
+      triggerReconnect: true,
+      triggerTakeover: true,
+      logContext: `schedule ${scheduleId} dispatch`
+    });
+    if (!connectedForDispatch) {
+      const whatsappStatus = whatsappClient.getStatus();
       logger.warn({ scheduleId, whatsappStatus: whatsappStatus?.status || 'unknown' },
         'Skipping send - WhatsApp not connected');
       return { sent: 0, queued: queuedCount, skipped: true, reason: 'WhatsApp not connected' };
@@ -1845,7 +1818,8 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
     attempts: 12,
     delayMs: 1200,
     triggerReconnect: true,
-    triggerTakeover: true
+    triggerTakeover: true,
+    logContext: `send-now ${logId}`
   });
 
   if (!connected) {

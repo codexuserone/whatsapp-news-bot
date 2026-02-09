@@ -721,6 +721,7 @@ class WhatsAppClient {
                   this.status = 'conflict';
                   this.lastError = 'Another instance currently holds the WhatsApp lease.';
                   await authStore.updateStatus('conflict');
+                  this.isConnecting = false;
                   this.scheduleReconnect(15000 + Math.random() * 5000);
                   return;
                 }
@@ -729,6 +730,7 @@ class WhatsAppClient {
                 this.status = 'conflict';
                 this.lastError = 'Another instance currently holds the WhatsApp lease.';
                 await authStore.updateStatus('conflict');
+                this.isConnecting = false;
                 this.scheduleReconnect(15000 + Math.random() * 5000);
                 return;
               }
@@ -737,6 +739,7 @@ class WhatsAppClient {
               this.status = 'conflict';
               this.lastError = 'Failed to acquire WhatsApp lease.';
               await authStore.updateStatus('conflict');
+              this.isConnecting = false;
               this.scheduleReconnect(15000 + Math.random() * 5000);
               return;
             }
@@ -750,6 +753,7 @@ class WhatsAppClient {
           this.status = 'conflict';
           this.lastError = 'Unable to acquire WhatsApp lease; retrying.';
           await authStore.updateStatus('conflict');
+          this.isConnecting = false;
           this.scheduleReconnect(15000 + Math.random() * 5000);
           return;
         }

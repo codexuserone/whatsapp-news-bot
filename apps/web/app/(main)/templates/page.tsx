@@ -152,14 +152,22 @@ const TemplatesPage = () => {
   }, [active, form]);
 
   const saveTemplate = useMutation({
-    mutationFn: (payload: TemplateFormValues) => {
-      const templateId = active?.id || null;
-      return templateId ? api.put(`/api/templates/${templateId}`, payload) : api.post('/api/templates', payload);
+    mutationFn: ({ templateId, payload }: { templateId: string | null; payload: TemplateFormValues }) => {
+      return templateId
+        ? api.put<Template>(`/api/templates/${templateId}`, payload)
+        : api.post<Template>('/api/templates', payload);
     },
-    onSuccess: () => {
+    onSuccess: (savedTemplate: Template) => {
       queryClient.invalidateQueries({ queryKey: ['templates'] });
-      setActive(null);
-      form.reset({ name: '', content: '', description: '', active: true, send_mode: 'image' });
+      queryClient.invalidateQueries({ queryKey: ['available-variables'] });
+      setActive(savedTemplate);
+      form.reset({
+        name: savedTemplate.name || '',
+        content: savedTemplate.content || '',
+        description: savedTemplate.description || '',
+        active: savedTemplate.active ?? true,
+        send_mode: resolveSendMode(savedTemplate)
+      });
     },
     onError: (error: unknown) => alert(`Failed to save template: ${getErrorMessage(error)}`)
   });
@@ -194,12 +202,16 @@ const TemplatesPage = () => {
   });
 
   const onSubmit = (values: TemplateFormValues) => {
+    const templateId = active?.id || null;
     saveTemplate.mutate({
-      name: values.name,
-      content: values.content,
-      description: values.description,
-      active: true,
-      send_mode: values.send_mode
+      templateId,
+      payload: {
+        name: values.name,
+        content: values.content,
+        description: values.description,
+        active: true,
+        send_mode: values.send_mode
+      }
     });
   };
 

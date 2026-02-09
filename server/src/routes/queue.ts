@@ -57,11 +57,10 @@ const queueRoutes = () => {
           feed_items (
             title,
             link,
-            image_url
+            image_url,
+            pub_date
           )
-        `)
-        .order('created_at', { ascending: false })
-        .limit(100);
+        `);
 
       if (statusFilter) {
         query = query.eq('status', statusFilter);
@@ -70,12 +69,25 @@ const queueRoutes = () => {
         query = query.not('schedule_id', 'is', null);
       }
 
+      if (statusFilter === 'pending' || statusFilter === 'processing') {
+        query = query.order('created_at', { ascending: true }).order('id', { ascending: true });
+      } else if (statusFilter === 'sent' || statusFilter === 'failed' || statusFilter === 'skipped') {
+        query = query
+          .order('sent_at', { ascending: false, nullsFirst: false })
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false });
+      } else {
+        query = query.order('created_at', { ascending: false }).order('id', { ascending: false });
+      }
+
+      query = query.limit(100);
+
       const { data: rows, error } = await query;
 
       if (error) throw error;
 
       const items = (rows || []).map((row: Record<string, unknown>) => {
-        const feedItems = row.feed_items as { title?: string; link?: string; image_url?: string } | undefined;
+        const feedItems = row.feed_items as { title?: string; link?: string; image_url?: string; pub_date?: string } | undefined;
         const schedule = row.schedule as {
           id?: string;
           name?: string;
@@ -97,6 +109,7 @@ const queueRoutes = () => {
           title: feedItems?.title || 'No title',
           url: feedItems?.link || null,
           image_url: feedItems?.image_url || null,
+          pub_date: feedItems?.pub_date || null,
           rendered_content: row.message_content,
           status: row.status,
           error_message: row.error_message,

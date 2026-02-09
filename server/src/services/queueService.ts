@@ -1550,13 +1550,69 @@ const sendQueuedForSchedule = async (
         continue;
       }
 
+      const feedItemIds = Array.from(
+        new Set(
+          (runnableLogs || [])
+            .map((entry: { feed_item_id?: string | null }) => String(entry.feed_item_id || '').trim())
+            .filter(Boolean)
+        )
+      );
+      const feedItemTimingById = new Map<string, { pub_date?: string | null; created_at?: string | null }>();
+      if (feedItemIds.length) {
+        const { data: feedTimingRows, error: feedTimingError } = await supabase
+          .from('feed_items')
+          .select('id,pub_date,created_at')
+          .in('id', feedItemIds);
+        if (feedTimingError) {
+          logger.warn({ scheduleId, targetId: target.id, error: feedTimingError }, 'Failed to load feed item timing metadata');
+        } else {
+          for (const row of (feedTimingRows || []) as Array<{ id?: string; pub_date?: string | null; created_at?: string | null }>) {
+            const id = String(row.id || '').trim();
+            if (!id) continue;
+            feedItemTimingById.set(id, {
+              pub_date: row.pub_date || null,
+              created_at: row.created_at || null
+            });
+          }
+        }
+      }
+
+      const toTs = (value?: string | null) => {
+        if (!value) return Number.NaN;
+        const ms = new Date(value).getTime();
+        return Number.isFinite(ms) ? ms : Number.NaN;
+      };
+
+      const sortedLogs = [...runnableLogs].sort((a: any, b: any) => {
+        const aFeedId = String(a?.feed_item_id || '').trim();
+        const bFeedId = String(b?.feed_item_id || '').trim();
+        const aTiming = feedItemTimingById.get(aFeedId);
+        const bTiming = feedItemTimingById.get(bFeedId);
+
+        const aPrimary = toTs(aTiming?.pub_date) || toTs(aTiming?.created_at) || toTs(a?.created_at);
+        const bPrimary = toTs(bTiming?.pub_date) || toTs(bTiming?.created_at) || toTs(b?.created_at);
+        if (Number.isFinite(aPrimary) && Number.isFinite(bPrimary) && aPrimary !== bPrimary) {
+          return aPrimary - bPrimary;
+        }
+
+        const aCreated = toTs(a?.created_at);
+        const bCreated = toTs(b?.created_at);
+        if (Number.isFinite(aCreated) && Number.isFinite(bCreated) && aCreated !== bCreated) {
+          return aCreated - bCreated;
+        }
+
+        const aId = String(a?.id || '');
+        const bId = String(b?.id || '');
+        return aId.localeCompare(bId);
+      });
+
       if (target.type === 'group' && whatsappClient.getGroupInfo) {
         try {
           const jid = normalizeTargetJid(target);
           const info = await whatsappClient.getGroupInfo(jid);
           if (info?.announce && !info?.me?.isAdmin) {
             const reason = 'Group is admin-only (announce mode) and this WhatsApp account is not an admin';
-            const ids = (runnableLogs || []).map((l: { id?: string }) => l.id).filter(Boolean) as string[];
+            const ids = (sortedLogs || []).map((l: { id?: string }) => l.id).filter(Boolean) as string[];
             if (ids.length) {
               await supabase
                 .from('message_logs')
@@ -1578,7 +1634,7 @@ const sendQueuedForSchedule = async (
         }
       }
 
-      for (const log of runnableLogs || []) {
+      for (const log of sortedLogs || []) {
         const { data: claimedRows, error: claimError } = await supabase
           .from('message_logs')
           .update({ status: 'processing', processing_started_at: new Date().toISOString() })

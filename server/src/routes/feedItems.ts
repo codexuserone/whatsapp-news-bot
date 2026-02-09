@@ -25,6 +25,7 @@ const feedItemRoutes = () => {
           *,
           feed:feeds(id, name, url, type)
         `)
+        .order('pub_date', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false })
         .limit(200);
       
@@ -133,7 +134,8 @@ const feedItemRoutes = () => {
         .from('feed_items')
         .select('*')
         .eq('feed_id', req.params.feedId)
-        .order('pub_date', { ascending: false })
+        .order('pub_date', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false })
         .limit(100);
       
       if (error) throw error;

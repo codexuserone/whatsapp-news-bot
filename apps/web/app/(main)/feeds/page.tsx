@@ -71,28 +71,43 @@ const FeedsPage = () => {
   };
 
   const saveFeed = useMutation({
-    mutationFn: (payload: FeedFormValues) => {
+    mutationFn: ({ feedId, payload }: { feedId: string | null; payload: FeedFormValues }) => {
       const body = {
         ...payload,
         active: active ? Boolean(active.active) : true
       };
-      return active ? api.put(`/api/feeds/${active.id}`, body) : api.post('/api/feeds', body);
+      return feedId ? api.put<Feed>(`/api/feeds/${feedId}`, body) : api.post<Feed>('/api/feeds', body);
     },
-    onSuccess: () => {
+    onSuccess: (savedFeed: Feed) => {
       queryClient.invalidateQueries({ queryKey: ['feeds'] });
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
-      setActive(null);
+      setActive(savedFeed);
       setTestResult(null);
-      form.reset();
+      form.reset({
+        name: savedFeed.name || '',
+        url: savedFeed.url || '',
+        type: savedFeed.type || undefined,
+        fetch_interval: savedFeed.fetch_interval || 900
+      });
     },
     onError: (error: unknown) => alert(`Failed to save feed: ${getErrorMessage(error)}`)
   });
 
   const deleteFeed = useMutation({
     mutationFn: (id: string) => api.delete(`/api/feeds/${id}`),
-    onSuccess: () => {
+    onSuccess: (_, id) => {
       queryClient.invalidateQueries({ queryKey: ['feeds'] });
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
+      if (active?.id === id) {
+        setActive(null);
+        setTestResult(null);
+        form.reset({
+          name: '',
+          url: '',
+          type: undefined,
+          fetch_interval: 900
+        });
+      }
     },
     onError: (error: unknown) => alert(`Failed to delete feed: ${getErrorMessage(error)}`)
   });
@@ -119,7 +134,12 @@ const FeedsPage = () => {
     setTestLoading(false);
   };
 
-  const onSubmit = (values: FeedFormValues) => saveFeed.mutate(values);
+  const onSubmit = (values: FeedFormValues) => {
+    saveFeed.mutate({
+      feedId: active?.id || null,
+      payload: values
+    });
+  };
 
   const activeAutomationCountByFeedId = React.useMemo(() => {
     const map = new Map<string, number>();

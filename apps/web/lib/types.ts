@@ -102,6 +102,7 @@ export type QueueItem = {
   batch_times?: string[] | null;
   title?: string | null;
   url?: string | null;
+  pub_date?: string | null;
   image_url?: string | null;
   rendered_content?: string | null;
   media_url?: string | null;

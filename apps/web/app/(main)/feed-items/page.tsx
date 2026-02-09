@@ -93,7 +93,7 @@ const FeedItemsPage = () => {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Feed Items</h1>
         <p className="text-muted-foreground">
-          Raw stories fetched from feeds. Queue is where editable outgoing messages live before they are sent.
+          Raw stories fetched from feeds (sorted by publish time). Queue is where editable outgoing messages live before they are sent.
         </p>
       </div>
 

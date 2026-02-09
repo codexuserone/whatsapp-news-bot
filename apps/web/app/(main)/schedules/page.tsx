@@ -72,7 +72,11 @@ const isRunning = (schedule?: Schedule | null) => getScheduleState(schedule) ===
 
 const SchedulesPage = () => {
   const queryClient = useQueryClient();
-  const { data: schedules = [] } = useQuery<Schedule[]>({ queryKey: ['schedules'], queryFn: () => api.get('/api/schedules') });
+  const { data: schedules = [] } = useQuery<Schedule[]>({
+    queryKey: ['schedules'],
+    queryFn: () => api.get('/api/schedules'),
+    refetchInterval: 5000
+  });
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
@@ -251,19 +255,34 @@ const SchedulesPage = () => {
   }, [active, defaultTimezone, form, localTimezone]);
 
   const saveSchedule = useMutation({
-    mutationFn: (payload: ScheduleApiPayload) =>
-      active ? api.put(`/api/schedules/${active.id}`, payload) : api.post('/api/schedules', payload),
-    onSuccess: () => {
+    mutationFn: ({ scheduleId, payload }: { scheduleId: string | null; payload: ScheduleApiPayload }) =>
+      scheduleId ? api.put<Schedule>(`/api/schedules/${scheduleId}`, payload) : api.post<Schedule>('/api/schedules', payload),
+    onSuccess: (savedSchedule: Schedule) => {
       queryClient.invalidateQueries({ queryKey: ['schedules'] });
-      setActive(null);
-      form.reset();
+      setActive(savedSchedule);
     },
     onError: (error: unknown) => alert(`Failed to save schedule: ${getErrorMessage(error)}`)
   });
 
   const deleteSchedule = useMutation({
     mutationFn: (id: string) => api.delete(`/api/schedules/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['schedules'] }),
+    onSuccess: (_, id) => {
+      queryClient.invalidateQueries({ queryKey: ['schedules'] });
+      if (active?.id === id) {
+        setActive(null);
+        form.reset({
+          name: '',
+          timing_mode: 'on_new',
+          schedule_preset: 'daily',
+          time_of_day: '09:00',
+          day_of_week: '1',
+          timezone: defaultTimezone,
+          feed_id: '',
+          target_ids: [],
+          template_id: ''
+        });
+      }
+    },
     onError: (error: unknown) => alert(`Failed to delete schedule: ${getErrorMessage(error)}`)
   });
 
@@ -387,7 +406,10 @@ const SchedulesPage = () => {
       state: nextState,
       active: nextState === 'active'
     };
-    saveSchedule.mutate(payload);
+    saveSchedule.mutate({
+      scheduleId: active?.id || null,
+      payload
+    });
   };
 
   const timingMode = form.watch('timing_mode');

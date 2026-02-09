@@ -322,12 +322,37 @@ const QueuePage = () => {
     return new Date(dateStr).toLocaleString();
   };
 
+  const getDeliveryPath = (item: QueueItem) => {
+    const mediaType = String(item.media_type || '').toLowerCase();
+    const mediaSent = Boolean(item.media_sent);
+
+    if (item.status === 'sent') {
+      if (mediaType === 'image' && mediaSent) {
+        return { label: 'Sent as image', tone: 'success' as const };
+      }
+      if (mediaType === 'video' && mediaSent) {
+        return { label: 'Sent as video', tone: 'success' as const };
+      }
+      if (mediaType && !mediaSent) {
+        return { label: 'Sent as text (media fallback)', tone: 'warning' as const };
+      }
+      return { label: 'Sent as text/link', tone: 'secondary' as const };
+    }
+
+    if (item.image_url) {
+      return { label: 'Will try image send', tone: 'secondary' as const };
+    }
+
+    return { label: 'Text/link send', tone: 'secondary' as const };
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Outgoing Queue</h1>
           <p className="text-muted-foreground">Review what is waiting to send, fix items, or send one right away.</p>
+          <p className="text-xs text-muted-foreground">Queued items are shown in send order (oldest publish time first).</p>
           <p className="text-xs text-muted-foreground mt-1">Feed Items = fetched stories, Queue = editable pending sends, Logs = sent history.</p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -441,10 +466,13 @@ const QueuePage = () => {
             </div>
           ) : viewMode === 'list' ? (
             <div className="space-y-3">
-              {queueItems.map((item) => {
-                const imagePreview = item.media_url || item.image_url || null;
+              {queueItems.map((item, index) => {
+                const mediaCandidate = item.media_url || item.image_url || null;
+                const sentWithImage = item.status === 'sent' && item.media_type === 'image' && Boolean(item.media_sent);
+                const imagePreview = mediaCandidate && (item.status !== 'sent' || sentWithImage) ? mediaCandidate : null;
                 const editing = editingId === item.id;
                 const receiptBadge = getReceiptBadge(item);
+                const deliveryPath = getDeliveryPath(item);
 
                 return (
                   <div key={item.id} className="space-y-3 rounded-lg border p-4">
@@ -455,11 +483,27 @@ const QueuePage = () => {
                           {item.delivery_mode === 'batch' || item.delivery_mode === 'batched' ? (
                             <Badge variant="outline">Scheduled time</Badge>
                           ) : null}
+                          {(effectiveStatusFilter === 'pending' || effectiveStatusFilter === 'processing') ? (
+                            <Badge variant="outline">#{index + 1} in send order</Badge>
+                          ) : null}
                           {item.target_name ? <Badge variant="outline">{item.target_name}</Badge> : null}
                           {item.target_type ? <Badge variant="secondary">{item.target_type}</Badge> : null}
                           <span className="text-xs text-muted-foreground">{item.schedule_name || 'Automation'}</span>
                         </div>
                         <p className="truncate font-medium">{item.title || 'No title'}</p>
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          <Badge
+                            variant={
+                              deliveryPath.tone === 'success'
+                                ? 'success'
+                                : deliveryPath.tone === 'warning'
+                                  ? 'warning'
+                                  : 'secondary'
+                            }
+                          >
+                            {deliveryPath.label}
+                          </Badge>
+                        </div>
                         {item.url ? (
                           <a
                             href={item.url}
@@ -570,6 +614,7 @@ const QueuePage = () => {
                     </div>
 
                     <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+                      {item.pub_date ? <span>Published: {formatDate(item.pub_date)}</span> : null}
                       <span>Created: {formatDate(item.created_at)}</span>
                       {item.batch_times && item.batch_times.length ? <span>Send windows: {item.batch_times.join(', ')}</span> : null}
                       {item.scheduled_for ? <span>Scheduled: {formatDate(item.scheduled_for)}</span> : null}
@@ -581,6 +626,9 @@ const QueuePage = () => {
                         </span>
                       ) : null}
                       {item.error_message ? <span className="text-destructive">Error: {item.error_message}</span> : null}
+                      {item.status === 'sent' && item.media_type === 'image' && !item.media_sent && item.media_error ? (
+                        <span className="text-warning-foreground">Sent as text fallback (image unavailable)</span>
+                      ) : null}
                       {item.media_error && !item.error_message ? <span className="text-destructive">Media: {item.media_error}</span> : null}
                     </div>
                   </div>
@@ -589,12 +637,17 @@ const QueuePage = () => {
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {queueItems.map((item) => (
+              {queueItems.map((item) => {
+                const deliveryPath = getDeliveryPath(item);
+                const mediaCandidate = item.media_url || item.image_url || null;
+                const sentWithImage = item.status === 'sent' && item.media_type === 'image' && Boolean(item.media_sent);
+                const showPreview = Boolean(mediaCandidate) && (item.status !== 'sent' || sentWithImage);
+                return (
                 <div key={item.id} className="relative flex flex-col rounded-lg border bg-card text-card-foreground shadow-sm overflow-hidden h-full">
                   <div className="relative aspect-video bg-muted/30">
-                    {item.media_url || item.image_url ? (
+                    {showPreview ? (
                         <Image
-                          src={item.media_url || item.image_url || ''}
+                          src={mediaCandidate || ''}
                           alt="Queue media"
                           fill
                           className="object-contain"
@@ -624,6 +677,8 @@ const QueuePage = () => {
                     <p className="text-xs text-muted-foreground line-clamp-3 flex-1">
                       {item.rendered_content || 'No content'}
                     </p>
+                    <p className="text-[11px] text-muted-foreground">{deliveryPath.label}</p>
+                    {item.pub_date ? <p className="text-[11px] text-muted-foreground">Published: {formatDate(item.pub_date)}</p> : null}
                     <div className="flex flex-wrap gap-1 mt-auto pt-2">
                       <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={() => beginEdit(item)} disabled={!canEdit(item)}>
                         <Pencil className="mr-1 h-3 w-3" /> Edit
@@ -664,7 +719,7 @@ const QueuePage = () => {
                     </div>
                   </div>
                 </div>
-              ))}
+              )})}
             </div>
           )}
         </CardContent>

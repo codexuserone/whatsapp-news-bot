@@ -34,21 +34,12 @@ const MainLayout = ({ children }: MainLayoutProps) => {
       <AppSidebar />
       <SidebarInset className="bg-background/80">
         <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 border-b bg-background/70 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-          <SidebarTrigger className="-ml-1" />
+          <SidebarTrigger className="-ml-1 h-10 w-10 rounded-md border border-border bg-background/80" />
           <Separator orientation="vertical" className="mr-2 h-4" />
           <div className="flex flex-1 items-center justify-between">
             <Breadcrumbs />
             <div className="flex items-center gap-3">
-              <div className="hidden text-right sm:block">
-                <p className="text-xs text-muted-foreground">WhatsApp</p>
-                <p className="text-xs font-medium">
-                  {status?.status === 'connected'
-                    ? 'Connected'
-                    : status?.lastError
-                      ? 'Error'
-                      : 'Not connected'}
-                </p>
-              </div>
+
               <Badge variant={statusVariant(status?.status)} className="capitalize">
                 {status?.status || 'unknown'}
               </Badge>

@@ -689,8 +689,8 @@ class WhatsAppClient {
 
       // Acquire a cross-instance lease so only one bot connects at a time.
       // This prevents WhatsApp "conflict/replaced" errors during rolling deploys.
-      const skipLease = process.env.SKIP_WHATSAPP_LEASE === 'true';
-      const allowAutoTakeover = process.env.WHATSAPP_LEASE_AUTO_TAKEOVER === 'true';
+      const skipLease = String(process.env.SKIP_WHATSAPP_LEASE || 'true').toLowerCase() !== 'false';
+      const allowAutoTakeover = process.env.WHATSAPP_LEASE_AUTO_TAKEOVER !== 'false'; // Default to true
       if (!skipLease && authStore.acquireLease) {
         try {
           const lease = await authStore.acquireLease(this.instanceId, 90_000);
@@ -1069,6 +1069,16 @@ class WhatsAppClient {
     instanceId: string;
     lease: { supported: boolean; held: boolean; ownerId: string | null; expiresAt: string | null };
   } {
+    if (this.status === 'conflict' && this.leaseSupported && !this.leaseHeld && this.leaseExpiresAt) {
+      const expiryMs = Date.parse(this.leaseExpiresAt);
+      const isExpired = Number.isFinite(expiryMs) && expiryMs < Date.now() - 5000;
+      if (isExpired && !this.isConnecting && !this.reconnectTimer) {
+        this.status = 'connecting';
+        this.lastError = 'Lease expired. Retrying connection...';
+        this.scheduleReconnect(250);
+      }
+    }
+
     return {
       status: this.status,
       lastError: this.lastError,
@@ -1349,7 +1359,7 @@ class WhatsAppClient {
     // Method 1: Try newsletter-specific API methods
     const methodCandidates = [
       'newsletterGetSubscribed',
-      'newsletterList', 
+      'newsletterList',
       'newsletterGetAdmin',
       'newsletterGetOwned',
       'newsletterGetAll',
@@ -1383,10 +1393,10 @@ class WhatsAppClient {
     try {
       const chats = socket.store?.chats?.all() || socket.store?.chats || [];
       const chatArray = Array.isArray(chats) ? chats : Object.values(chats);
-      
+
       for (const chat of chatArray) {
         if (!chat || typeof chat !== 'object') continue;
-        
+
         const chatId = (chat as any).id || (chat as any).jid || '';
         if (typeof chatId === 'string' && chatId.endsWith('@newsletter')) {
           const name = (chat as any).name || (chat as any).subject || chatId;

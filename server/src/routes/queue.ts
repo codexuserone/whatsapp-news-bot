@@ -189,11 +189,19 @@ const queueRoutes = () => {
     try {
       const supabase = getDb();
       const includeManual = String(req.query.include_manual || '').toLowerCase() === 'true';
+      const rawWindowHours = Number(req.query.window_hours);
+      const windowHours = Number.isFinite(rawWindowHours) && rawWindowHours > 0
+        ? Math.min(Math.round(rawWindowHours), 168)
+        : 24;
+      const windowStartIso = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
 
-      const countByStatus = (status: string) => {
+      const countByStatus = (status: string, recentOnly = false) => {
         let query = supabase.from('message_logs').select('*', { count: 'exact', head: true }).eq('status', status);
         if (!includeManual) {
           query = query.not('schedule_id', 'is', null);
+        }
+        if (recentOnly) {
+          query = query.gte('created_at', windowStartIso);
         }
         return query;
       };
@@ -201,6 +209,12 @@ const queueRoutes = () => {
       const [pendingRes, processingRes, sentRes, failedRes, skippedRes] = await Promise.all([
         countByStatus('pending'),
         countByStatus('processing'),
+        countByStatus('sent', true),
+        countByStatus('failed', true),
+        countByStatus('skipped', true)
+      ]);
+
+      const [sentAllTimeRes, failedAllTimeRes, skippedAllTimeRes] = await Promise.all([
         countByStatus('sent'),
         countByStatus('failed'),
         countByStatus('skipped')
@@ -208,17 +222,25 @@ const queueRoutes = () => {
 
       const pCount = pendingRes.count ?? 0;
       const prCount = processingRes.count ?? 0;
-      const sCount = sentRes.count ?? 0;
-      const fCount = failedRes.count ?? 0;
-      const skCount = skippedRes.count ?? 0;
+      const sRecentCount = sentRes.count ?? 0;
+      const fRecentCount = failedRes.count ?? 0;
+      const skRecentCount = skippedRes.count ?? 0;
+      const sAllCount = sentAllTimeRes.count ?? 0;
+      const fAllCount = failedAllTimeRes.count ?? 0;
+      const skAllCount = skippedAllTimeRes.count ?? 0;
 
       res.json({
         pending: pCount,
         processing: prCount,
-        sent: sCount,
-        failed: fCount,
-        skipped: skCount,
-        total: pCount + prCount + sCount + fCount + skCount
+        sent: sRecentCount,
+        failed: fRecentCount,
+        skipped: skRecentCount,
+        total: pCount + prCount + sRecentCount + fRecentCount + skRecentCount,
+        sent_all_time: sAllCount,
+        failed_all_time: fAllCount,
+        skipped_all_time: skAllCount,
+        window_hours: windowHours,
+        window_start: windowStartIso
       });
     } catch (error) {
       console.error('Error fetching queue stats:', error);

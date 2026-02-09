@@ -21,7 +21,8 @@ import {
   Pencil,
   Save,
   X,
-  Send
+  Send,
+  LayoutGrid
 } from 'lucide-react';
 
 type QueueStats = {
@@ -58,6 +59,7 @@ const QueuePage = () => {
   const [statusFilter, setStatusFilter] = useState('pending');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftMessage, setDraftMessage] = useState('');
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
 
   const refreshQueueViews = () => {
     queryClient.invalidateQueries({ queryKey: ['queue'] });
@@ -68,7 +70,7 @@ const QueuePage = () => {
 
   const { data: queueStats } = useQuery<QueueStats>({
     queryKey: ['queue-stats'],
-    queryFn: () => api.get('/api/queue/stats'),
+    queryFn: () => api.get('/api/queue/stats?window_hours=24'),
     refetchInterval: 10000
   });
 
@@ -280,6 +282,26 @@ const QueuePage = () => {
       )}
 
       <div className="flex items-center gap-4">
+        <div className="flex bg-muted rounded-lg p-1">
+          <Button
+            variant={viewMode === 'list' ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => setViewMode('list')}
+            className="h-8"
+          >
+            <ListOrdered className="h-4 w-4 mr-2" />
+            List
+          </Button>
+          <Button
+            variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => setViewMode('grid')}
+            className="h-8"
+          >
+            <LayoutGrid className="h-4 w-4 mr-2" />
+            Grid
+          </Button>
+        </div>
         <Select value={effectiveStatusFilter === '' ? 'all' : effectiveStatusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger className="w-44">
             <SelectValue placeholder="Select status" />
@@ -305,8 +327,8 @@ const QueuePage = () => {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <ListOrdered className="h-5 w-5" />
-            Queued messages
+            {viewMode === 'list' ? <ListOrdered className="h-5 w-5" /> : <LayoutGrid className="h-5 w-5" />}
+            {viewMode === 'list' ? 'Queued messages (List)' : 'Queued messages (Grid)'}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -318,11 +340,12 @@ const QueuePage = () => {
             <div className="py-8 text-center text-muted-foreground">
               No messages in queue with status &quot;{effectiveStatusFilter === 'all' ? 'any' : effectiveStatusFilter}&quot;
             </div>
-          ) : (
+          ) : viewMode === 'list' ? (
             <div className="space-y-3">
               {queueItems.map((item) => {
                 const imagePreview = item.media_url || item.image_url || null;
                 const editing = editingId === item.id;
+                const receiptBadge = getReceiptBadge(item);
 
                 return (
                   <div key={item.id} className="space-y-3 rounded-lg border p-4">
@@ -365,15 +388,15 @@ const QueuePage = () => {
                         href={imagePreview}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="block overflow-hidden rounded-md border bg-muted/30"
+                        className="block overflow-hidden rounded-md border bg-muted/30 relative"
+                        style={{ height: '200px' }}
                       >
                         <Image
                           src={imagePreview}
                           alt="Queue media"
-                          width={960}
-                          height={540}
+                          fill
+                          className="object-contain"
                           unoptimized
-                          className="h-36 w-full object-cover"
                         />
                       </a>
                     ) : null}
@@ -431,10 +454,10 @@ const QueuePage = () => {
                       {item.batch_times && item.batch_times.length ? <span>Send windows: {item.batch_times.join(', ')}</span> : null}
                       {item.scheduled_for ? <span>Scheduled: {formatDate(item.scheduled_for)}</span> : null}
                       {item.sent_at ? <span>Sent: {formatDate(item.sent_at)}</span> : null}
-                      {item.sent_at ? (
+                      {item.sent_at && receiptBadge ? (
                         <span className="inline-flex items-center gap-1">
                           <span>Receipt:</span>
-                          {getReceiptBadge(item) || <Badge variant="secondary">Unknown</Badge>}
+                          {receiptBadge}
                         </span>
                       ) : null}
                       {item.error_message ? <span className="text-destructive">Error: {item.error_message}</span> : null}
@@ -443,6 +466,65 @@ const QueuePage = () => {
                   </div>
                 );
               })}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {queueItems.map((item) => (
+                <div key={item.id} className="relative flex flex-col rounded-lg border bg-card text-card-foreground shadow-sm overflow-hidden h-full">
+                  <div className="relative aspect-video bg-muted/30">
+                    {item.media_url || item.image_url ? (
+                        <Image
+                          src={item.media_url || item.image_url || ''}
+                          alt="Queue media"
+                          fill
+                          className="object-contain"
+                          unoptimized
+                        />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-muted-foreground">
+                        <span className="text-xs">No media</span>
+                      </div>
+                    )}
+                    <div className="absolute top-2 right-2 flex gap-1">
+                      {getStatusBadge(item)}
+                    </div>
+                  </div>
+                  <div className="p-3 flex-1 flex flex-col gap-2">
+                    <div className="flex items-start justify-between">
+                      <p className="font-medium text-sm truncate flex-1">{item.title || 'No title'}</p>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-6 w-6 text-destructive hover:text-destructive shrink-0"
+                        onClick={() => deleteItem.mutate(item.id)}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground line-clamp-3 flex-1">
+                      {item.rendered_content || 'No content'}
+                    </p>
+                    <div className="flex flex-wrap gap-1 mt-auto pt-2">
+                      <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={() => beginEdit(item)} disabled={!canEdit(item)}>
+                        <Pencil className="mr-1 h-3 w-3" /> Edit
+                      </Button>
+                      {canPause(item) && (
+                        <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={() => pauseItem.mutate(item.id)}>
+                          <PauseCircle className="mr-1 h-3 w-3" /> Pause
+                        </Button>
+                      )}
+                      {canResume(item) && (
+                        <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={() => resumeItem.mutate(item.id)}>
+                          <PlayCircle className="mr-1 h-3 w-3" /> Resume
+                        </Button>
+                      )}
+                      <Button size="sm" variant="outline" className="h-7 text-xs px-2 ml-auto" onClick={() => sendNowItem.mutate(item.id)} disabled={!canSendNow(item)}>
+                        <Send className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </CardContent>

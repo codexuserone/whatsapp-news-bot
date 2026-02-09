@@ -5,11 +5,11 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Target, WhatsAppChannel, WhatsAppGroup, WhatsAppOutbox, WhatsAppOutboxStatus, WhatsAppStatus } from '@/lib/types';
+import type { Target, WhatsAppChannel, WhatsAppGroup, WhatsAppStatus } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RefreshCw, Power, CheckCircle, QrCode, Users, Loader2, Send, MessageSquare, Wrench, Radio, CheckCheck } from 'lucide-react';
+import { RefreshCw, Power, CheckCircle, QrCode, Users, Loader2, Send, MessageSquare } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -96,13 +96,6 @@ const WhatsAppPage = () => {
     queryFn: () => api.get('/api/targets')
   });
 
-  const { data: outbox } = useQuery<WhatsAppOutbox>({
-    queryKey: ['whatsapp-outbox'],
-    queryFn: () => api.get('/api/whatsapp/outbox'),
-    refetchInterval: 3000,
-    enabled: status?.status === 'connected'
-  });
-
   const disconnect = useMutation({
     mutationFn: () => api.post('/api/whatsapp/disconnect'),
     onSuccess: () => {
@@ -114,16 +107,6 @@ const WhatsAppPage = () => {
 
   const reconnect = useMutation({
     mutationFn: () => api.post('/api/whatsapp/hard-refresh'),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
-    }
-  });
-
-  const clearSenderKeys = useMutation({
-    mutationFn: () => api.post('/api/whatsapp/clear-sender-keys'),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
       queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
@@ -144,41 +127,6 @@ const WhatsAppPage = () => {
   const isConnected = status?.status === 'connected';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
   const activeTargets = existingTargets.filter((target) => target.active);
-  const statusByMessageId = React.useMemo(() => {
-    const map = new Map<string, WhatsAppOutboxStatus>();
-    for (const snap of outbox?.statuses || []) {
-      if (!snap?.id) continue;
-      map.set(String(snap.id), snap);
-    }
-    return map;
-  }, [outbox?.statuses]);
-
-  const recentOutboxMessages = React.useMemo(() => {
-    const list = [...(outbox?.messages || [])];
-    const getTs = (value?: number | string | null) => {
-      if (typeof value === 'number' && Number.isFinite(value)) return value;
-      const parsed = Number(value);
-      return Number.isFinite(parsed) ? parsed : 0;
-    };
-    list.sort((a, b) => getTs(b.timestamp) - getTs(a.timestamp));
-    return list.slice(0, 12);
-  }, [outbox?.messages]);
-
-  const getOutboxReceiptBadge = (messageId: string) => {
-    const snap = statusByMessageId.get(String(messageId));
-    if (!snap) {
-      return <Badge variant="warning">Not observed</Badge>;
-    }
-
-    const label = mapMessageStatusLabel(snap.status, snap.statusLabel);
-    if (!label) return <Badge variant="secondary">Observed</Badge>;
-    const lower = label.toLowerCase();
-    if (lower === 'error') return <Badge variant="destructive">{label}</Badge>;
-    if (lower === 'delivered' || lower === 'read' || lower === 'played') return <Badge variant="success">{label}</Badge>;
-    if (lower === 'pending' || lower === 'server') return <Badge variant="warning">{label}</Badge>;
-    return <Badge variant="secondary">{label}</Badge>;
-  };
-
   const getStatusBadge = () => {
     if (statusLoading) return <Badge variant="secondary">Loading...</Badge>;
     if (isConnected) return <Badge variant="success">Connected</Badge>;
@@ -275,7 +223,7 @@ const WhatsAppPage = () => {
           {!isConnected ? (
             <Button onClick={() => reconnect.mutate()} disabled={reconnect.isPending}>
               <RefreshCw className={`mr-2 h-4 w-4 ${reconnect.isPending ? 'animate-spin' : ''}`} />
-              {reconnect.isPending ? 'Refreshing...' : 'Refresh Connection'}
+              {reconnect.isPending ? 'Refreshing...' : 'Refresh QR Code'}
             </Button>
           ) : null}
         </div>
@@ -288,21 +236,13 @@ const WhatsAppPage = () => {
               <CardTitle>Connection Status</CardTitle>
               {getStatusBadge()}
             </div>
-            <CardDescription>Current account and connection health</CardDescription>
+            <CardDescription>Current connection health</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-3">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Status</span>
-                <span className="font-medium">{status?.status || 'Unknown'}</span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Connected account</span>
-                <span className="font-medium">{status?.me?.name || status?.me?.jid || 'Unknown'}</span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Last Connected</span>
-                <span className="font-medium">{status?.lastSeenAt ? new Date(status.lastSeenAt).toLocaleString() : 'Never'}</span>
+                <span className="font-medium">{status?.me?.name || status?.me?.jid?.split('@')[0] || 'Not connected'}</span>
               </div>
             </div>
 
@@ -314,7 +254,7 @@ const WhatsAppPage = () => {
 
             {!isConnected && !isQrReady ? (
               <div className="rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
-                Click <strong>Refresh Connection</strong> to request a fresh QR code.
+                Click <strong>Refresh QR Code</strong> to request a fresh QR code.
               </div>
             ) : null}
 
@@ -480,115 +420,36 @@ const WhatsAppPage = () => {
         </Card>
       ) : null}
 
-      {isConnected ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Radio className="h-5 w-5" />
-              Live Delivery Stream
-            </CardTitle>
-            <CardDescription>Real-time local send/receipt snapshots from this connected client session.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {recentOutboxMessages.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No recent outgoing messages observed yet.</p>
-            ) : (
-              <div className="space-y-2">
-                {recentOutboxMessages.map((message) => (
-                  <div key={message.id} className="flex flex-wrap items-center gap-2 rounded-md border p-2 text-xs">
-                    <Badge variant="outline" className="max-w-[180px] truncate" title={message.id}>
-                      {message.id}
-                    </Badge>
-                    {getOutboxReceiptBadge(message.id)}
-                    {message.hasImage ? <Badge variant="secondary">image</Badge> : null}
-                    {message.hasText ? <Badge variant="secondary">text</Badge> : null}
-                    {message.hasCaption ? <Badge variant="secondary">caption</Badge> : null}
-                    <span className="truncate text-muted-foreground" title={String(message.remoteJid || '')}>
-                      {message.remoteJid || 'unknown jid'}
-                    </span>
-                    <span className="ml-auto inline-flex items-center gap-1 text-muted-foreground">
-                      <CheckCheck className="h-3.5 w-3.5" />
-                      {(() => {
-                        const raw = typeof message.timestamp === 'number' ? message.timestamp : Number(message.timestamp);
-                        if (!Number.isFinite(raw)) return 'now';
-                        const ms = raw > 1_000_000_000_000 ? raw : raw * 1000;
-                        return new Date(ms).toLocaleTimeString();
-                      })()}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      ) : null}
-
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Users className="h-5 w-5" />
             Available destinations
           </CardTitle>
-          <CardDescription>Loaded from your connected account.</CardDescription>
+          <CardDescription>Groups and channels loaded from your connected account.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="rounded-lg border p-3">
-              <div className="mb-1 flex items-center justify-between">
+              <div className="flex items-center justify-between">
                 <span className="font-medium">Groups</span>
                 <Badge variant="secondary">{groups.length}</Badge>
               </div>
-              {!isConnected ? (
-                <p className="text-sm text-muted-foreground">Connect WhatsApp to load groups.</p>
-              ) : groupsLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-              ) : groups.length ? (
-                <p className="text-sm text-muted-foreground">{groups[0]?.name || 'First group available'} and more</p>
-              ) : (
-                <p className="text-sm text-muted-foreground">No groups detected.</p>
-              )}
             </div>
 
             <div className="rounded-lg border p-3">
-              <div className="mb-1 flex items-center justify-between">
+              <div className="flex items-center justify-between">
                 <span className="font-medium">Channels</span>
                 <Badge variant="secondary">{channels.length}</Badge>
               </div>
-              {!isConnected ? (
-                <p className="text-sm text-muted-foreground">Connect WhatsApp to load channels.</p>
-              ) : channelsLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-              ) : channels.length ? (
-                <p className="text-sm text-muted-foreground">{channels[0]?.name || 'First channel available'} and more</p>
-              ) : (
-                <p className="text-sm text-muted-foreground">No channels detected.</p>
-              )}
             </div>
           </div>
 
-          <Button asChild variant="outline">
-            <Link href="/targets">Open Targets</Link>
+          <Button asChild variant="outline" className="w-full">
+            <Link href="/targets">Manage Targets</Link>
           </Button>
         </CardContent>
       </Card>
-
-      <details className="rounded-lg border bg-muted/20 p-4">
-        <summary className="cursor-pointer list-none font-medium">
-          <span className="inline-flex items-center gap-2">
-            <Wrench className="h-4 w-4" />
-            Maintenance (rare)
-          </span>
-        </summary>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => clearSenderKeys.mutate()} disabled={clearSenderKeys.isPending}>
-            {clearSenderKeys.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Reset encryption cache
-          </Button>
-          <Button variant="outline" onClick={() => reconnect.mutate()} disabled={reconnect.isPending}>
-            Refresh QR
-          </Button>
-        </div>
-      </details>
     </div>
   );
 };

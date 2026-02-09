@@ -119,6 +119,11 @@ export type QueueStats = {
   failed: number;
   skipped: number;
   total: number;
+  sent_all_time?: number;
+  failed_all_time?: number;
+  skipped_all_time?: number;
+  window_hours?: number;
+  window_start?: string;
 };
 
 export type WhatsAppStatus = {

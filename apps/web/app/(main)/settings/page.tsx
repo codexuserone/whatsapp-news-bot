@@ -150,10 +150,7 @@ const SettingsPage = () => {
             <CardDescription>Basic application settings</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="app_name">App Name</Label>
-              <Input id="app_name" {...form.register('app_name')} />
-            </div>
+
             <div className="space-y-2">
               <Label htmlFor="default_timezone">Default Timezone</Label>
               <Controller

@@ -24,7 +24,7 @@ const OverviewPage = () => {
   const { data: logs = [] } = useQuery<LogEntry[]>({ queryKey: ['logs'], queryFn: () => api.get('/api/logs') });
   const { data: queueStats } = useQuery<QueueStats>({
     queryKey: ['queue-stats'],
-    queryFn: () => api.get('/api/queue/stats'),
+    queryFn: () => api.get('/api/queue/stats?window_hours=24'),
     refetchInterval: 10000
   });
 
@@ -99,46 +99,6 @@ const OverviewPage = () => {
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>WhatsApp Connection</CardTitle>
-              <Badge variant={statusVariant}>{status?.status || 'unknown'}</Badge>
-            </div>
-            <CardDescription>Current connection state and recent activity</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center gap-4">
-              <div
-                className={`flex h-12 w-12 items-center justify-center rounded-full ${
-                  status?.status === 'connected' ? 'bg-success/10' : 'bg-muted'
-                }`}
-              >
-                {status?.status === 'connected' ? (
-                  <CheckCircle className="h-6 w-6 text-success" />
-                ) : (
-                  <AlertCircle className="h-6 w-6 text-muted-foreground" />
-                )}
-              </div>
-              <div>
-                <p className="font-medium">
-                  {status?.status === 'connected'
-                    ? 'Connected'
-                    : status?.status === 'qr' || status?.status === 'qr_ready'
-                      ? 'Waiting for QR scan'
-                      : status?.status === 'connecting'
-                        ? 'Connecting...'
-                        : 'Disconnected'}
-                </p>
-                <p className="text-sm text-muted-foreground">{status?.lastError || 'No recent errors'}</p>
-              </div>
-            </div>
-            <Button asChild variant="outline" className="w-full">
-              <Link href="/whatsapp">Manage Connection</Link>
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
             <CardTitle>Quick Actions</CardTitle>
             <CardDescription>Common tasks and shortcuts</CardDescription>
           </CardHeader>
@@ -188,16 +148,17 @@ const OverviewPage = () => {
               <span className="font-medium">{queueStats?.processing ?? 0}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Sent</span>
+              <span className="text-muted-foreground">Sent ({queueStats?.window_hours ?? 24}h)</span>
               <span className="font-medium">{queueStats?.sent ?? 0}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Failed</span>
+              <span className="text-muted-foreground">Failed ({queueStats?.window_hours ?? 24}h)</span>
               <span className="font-medium">{queueStats?.failed ?? 0}</span>
             </div>
             <div className="text-xs text-muted-foreground">
-              {lastFetched ? `Last feed fetch: ${new Date(lastFetched).toLocaleString()}` : 'No feed fetch yet.'}
-              {feedErrors > 0 ? ` · ${feedErrors} feed error${feedErrors !== 1 ? 's' : ''}` : ''}
+              {feedErrors > 0 ? `${feedErrors} feed error${feedErrors !== 1 ? 's' : ''}` : ''}
+              {feedErrors > 0 && (queueStats?.sent_all_time || 0) > 0 ? ' • ' : ''}
+              {(queueStats?.sent_all_time || 0) > 0 ? `All-time sent: ${queueStats?.sent_all_time}` : ''}
             </div>
             <Button asChild variant="outline" size="sm" className="w-full">
               <Link href="/queue">View Queue</Link>
@@ -264,7 +225,7 @@ const OverviewPage = () => {
           )}
         </CardContent>
       </Card>
-    </div>
+    </div >
   );
 };
 

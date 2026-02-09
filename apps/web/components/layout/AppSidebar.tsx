@@ -15,7 +15,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem
 } from '@/components/ui/sidebar';
-import { HelpCircle } from 'lucide-react';
 
 const isRouteActive = (pathname: string, to: string) => {
   if (to === '/') return pathname === '/';
@@ -91,17 +90,7 @@ const AppSidebar = () => {
         ))}
       </SidebarContent>
 
-      <SidebarFooter className="border-t border-sidebar-border">
-        <div className="p-2">
-          <div className="rounded-lg bg-sidebar-accent/60 p-3">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <HelpCircle className="h-4 w-4" />
-              <span>Tip: edit or send out of order from Queue</span>
-            </div>
-          </div>
-        </div>
-      </SidebarFooter>
-
+      <SidebarFooter className="border-t border-sidebar-border" />
     </Sidebar>
   );
 };

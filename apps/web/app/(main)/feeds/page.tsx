@@ -14,11 +14,13 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2, RefreshCw, PauseCircle, PlayCircle } from 'lucide-react';
+import { Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2, PauseCircle, PlayCircle } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 
 const schema = z.object({
   name: z.string().min(1),
   url: z.string().url(),
+  type: z.enum(['rss', 'atom', 'json']).optional(),
   active: z.boolean().default(true),
   fetch_interval: z.coerce.number().min(300)
 });
@@ -62,6 +64,7 @@ const FeedsPage = () => {
       form.reset({
         name: active.name,
         url: active.url,
+        type: active.type,
         active: Boolean(active.active),
         fetch_interval: active.fetch_interval || 900
       });
@@ -95,16 +98,6 @@ const FeedsPage = () => {
     onError: (error: unknown) => alert(`Failed to delete feed: ${getErrorMessage(error)}`)
   });
 
-  const refreshFeed = useMutation({
-    mutationFn: (id: string) => api.post(`/api/feeds/${id}/refresh`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['feeds'] });
-      queryClient.invalidateQueries({ queryKey: ['feed-items'] });
-      queryClient.invalidateQueries({ queryKey: ['available-variables'] });
-    },
-    onError: (error: unknown) => alert(`Failed to refresh feed: ${getErrorMessage(error)}`)
-  });
-
   const toggleFeedActive = useMutation({
     mutationFn: (feed: Feed) =>
       api.put(`/api/feeds/${feed.id}`, {
@@ -134,6 +127,9 @@ const FeedsPage = () => {
       setTestResult(result);
       if (!form.getValues('name') && result.feedTitle) {
         form.setValue('name', result.feedTitle);
+      }
+      if (result.detectedType) {
+        form.setValue('type', result.detectedType as any);
       }
     } catch (error: unknown) {
       setTestResult({ error: getErrorMessage(error) || 'Failed to test feed' });
@@ -197,54 +193,44 @@ const FeedsPage = () => {
                   <div className="space-y-2">
                     <Label>Type</Label>
                     <div className="flex h-10 items-center justify-between rounded-md border bg-muted/30 px-3 text-sm">
-                      <span className="text-muted-foreground">Auto-detect</span>
+                      <span className="text-muted-foreground">
+                        {form.getValues('type') ? 'Detected' : 'Auto-detect'}
+                      </span>
                       <Badge variant="secondary" className="capitalize">
-                        {testResult?.detectedType || active?.type || 'rss'}
+                        {form.getValues('type') || testResult?.detectedType || active?.type || 'rss'}
                       </Badge>
                     </div>
+                    <input type="hidden" {...form.register('type')} />
                   </div>
                 </div>
 
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="fetch_interval">Check cadence</Label>
-                    <Controller
-                      control={form.control}
-                      name="fetch_interval"
-                      render={({ field }) => {
-                        const value = String(field.value || 900);
-                        return (
-                          <Select value={value} onValueChange={(next) => field.onChange(Number(next))}>
-                            <SelectTrigger id="fetch_interval">
-                              <SelectValue placeholder="Select interval" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="300">Every 5 minutes</SelectItem>
-                              <SelectItem value="900">Every 15 minutes</SelectItem>
-                              <SelectItem value="1800">Every 30 minutes</SelectItem>
-                              <SelectItem value="3600">Every 60 minutes</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        );
-                      }}
-                    />
-                    <p className="text-xs text-muted-foreground">Applied only when this feed is attached to a running automation.</p>
-                  </div>
+                <div className="space-y-2">
                   <Controller
                     control={form.control}
                     name="active"
                     render={({ field }) => (
-                      <div className="flex items-center gap-2 pt-8">
-                        <Checkbox
+                      <div className="flex items-center space-x-2 rounded-md border p-4">
+                        <Switch
                           id="active"
                           checked={field.value}
-                          onCheckedChange={(checked) => field.onChange(checked === true)}
+                          onCheckedChange={field.onChange}
                         />
-                        <Label htmlFor="active" className="cursor-pointer">Run this feed</Label>
+                        <div className="flex-1 space-y-1">
+                           <Label htmlFor="active" className="cursor-pointer font-medium leading-none">
+                            Enable Feed
+                          </Label>
+                          <p className="text-sm text-muted-foreground">
+                            {field.value
+                              ? 'Automations using this feed can fetch and send new items.'
+                              : 'Feed is paused and ignored by automations.'}
+                          </p>
+                        </div>
                       </div>
                     )}
                   />
                 </div>
+
+                <input type="hidden" {...form.register('fetch_interval')} value={900} />
 
                 <div className="flex flex-wrap gap-2 pt-2">
                   <Button type="submit" disabled={saveFeed.isPending}>
@@ -381,10 +367,6 @@ const FeedsPage = () => {
                     >
                       {feed.active ? <PauseCircle className="mr-1 h-3 w-3" /> : <PlayCircle className="mr-1 h-3 w-3" />}
                       {feed.active ? 'Pause feed' : 'Resume feed'}
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => refreshFeed.mutate(feed.id)} disabled={refreshFeed.isPending}>
-                      {refreshFeed.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-1 h-3 w-3" />}
-                      Check now
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => deleteFeed.mutate(feed.id)} className="text-destructive hover:text-destructive">
                       <Trash2 className="h-3 w-3" />

@@ -109,10 +109,10 @@ const TargetsPage = () => {
   // Auto-sync: runs immediately when connected, then every 60 seconds
   useEffect(() => {
     if (!isConnected) return;
-    
+
     // Use a ref to track if component is mounted
     const mounted = { current: true };
-    
+
     const runAutoSync = async () => {
       if (!mounted.current || syncInFlightRef.current) return;
       syncInFlightRef.current = true;
@@ -124,15 +124,15 @@ const TargetsPage = () => {
         syncInFlightRef.current = false;
       }
     };
-    
+
     // Run immediately
     void runAutoSync();
-    
+
     // Then every 60 seconds
     const timer = setInterval(() => {
       void runAutoSync();
     }, 60_000);
-    
+
     return () => {
       mounted.current = false;
       clearInterval(timer);
@@ -231,49 +231,13 @@ const TargetsPage = () => {
 
       <Card>
         <CardHeader>
-          <CardTitle>Add individual contact</CardTitle>
-          <CardDescription>Optional: add a direct number target for one-to-one testing or alerts.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Input
-              value={individualName}
-              onChange={(event) => setIndividualName(event.target.value)}
-              placeholder="Contact name"
-            />
-            <Input
-              value={individualPhone}
-              onChange={(event) => setIndividualPhone(event.target.value)}
-              placeholder="Phone number (e.g. +1 555 123 4567)"
-            />
-          </div>
-          <Button
-            onClick={() =>
-              addTarget.mutate({
-                name: individualName.trim(),
-                phone_number: individualPhone.trim(),
-                type: 'individual',
-                active: true,
-                notes: null
-              })
-            }
-            disabled={addTarget.isPending || !individualName.trim() || !individualPhone.trim()}
-          >
-            {addTarget.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Add contact
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <CardTitle className="flex items-center gap-2">
                 <TargetIcon className="h-5 w-5" />
-                Saved Targets
+                Synced Targets
               </CardTitle>
-              <CardDescription>{targets.length} target{targets.length !== 1 ? 's' : ''} configured</CardDescription>
+              <CardDescription>{targets.length} target{targets.length !== 1 ? 's' : ''} available</CardDescription>
             </div>
             <Input
               placeholder="Search targets..."

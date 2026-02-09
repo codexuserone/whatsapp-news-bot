@@ -82,29 +82,29 @@ const TemplatesPage = () => {
 
   const sampleData = feedItems[0]
     ? {
-        title: feedItems[0].title || 'Sample Title',
-        description: feedItems[0].description || 'Sample description text',
-        content: feedItems[0].content || feedItems[0].description || 'Full content here',
-        link: feedItems[0].link || 'https://example.com/article',
-        url: feedItems[0].link || 'https://example.com/article',
-        author: feedItems[0].author || 'Author Name',
-        pub_date: feedItems[0].pub_date || new Date().toISOString(),
-        image_url: feedItems[0].image_url || '',
-        imageUrl: feedItems[0].image_url || '',
-        categories: feedItems[0].categories || 'News'
-      }
+      title: feedItems[0].title || 'Sample Title',
+      description: feedItems[0].description || 'Sample description text',
+      content: feedItems[0].content || feedItems[0].description || 'Full content here',
+      link: feedItems[0].link || 'https://example.com/article',
+      url: feedItems[0].link || 'https://example.com/article',
+      author: feedItems[0].author || 'Author Name',
+      pub_date: feedItems[0].pub_date || new Date().toISOString(),
+      image_url: feedItems[0].image_url || '',
+      imageUrl: feedItems[0].image_url || '',
+      categories: feedItems[0].categories || 'News'
+    }
     : {
-        title: 'Sample Article Title',
-        description: 'This is a sample description for preview purposes.',
-        content: 'Full article content would appear here.',
-        link: 'https://example.com/article',
-        url: 'https://example.com/article',
-        author: 'John Doe',
-        pub_date: new Date().toISOString(),
-        image_url: '',
-        imageUrl: '',
-        categories: 'News, Technology'
-      };
+      title: 'Sample Article Title',
+      description: 'This is a sample description for preview purposes.',
+      content: 'Full article content would appear here.',
+      link: 'https://example.com/article',
+      url: 'https://example.com/article',
+      author: 'John Doe',
+      pub_date: new Date().toISOString(),
+      image_url: '',
+      imageUrl: '',
+      categories: 'News, Technology'
+    };
 
   const form = useForm<TemplateFormValues>({
     resolver: zodResolver(schema),
@@ -132,7 +132,8 @@ const TemplatesPage = () => {
   const saveTemplate = useMutation({
     mutationFn: (payload: TemplateFormValues) => {
       const { id, ...body } = payload;
-      return id ? api.put(`/api/templates/${id}`, body) : api.post('/api/templates', body);
+      const resolvedId = id || active?.id;
+      return resolvedId ? api.put(`/api/templates/${resolvedId}`, body) : api.post('/api/templates', body);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['templates'] });
@@ -250,70 +251,72 @@ const TemplatesPage = () => {
                   </div>
                 </div>
 
+
                 <div className="space-y-2">
                   <Label htmlFor="description">Description (optional)</Label>
                   <Input id="description" {...form.register('description')} placeholder="Template for daily news updates" />
                 </div>
 
-                <Controller
-                  control={form.control}
-                  name="send_mode"
-                  render={({ field }) => (
-                    <div className="space-y-2">
-                      <Label>Message format</Label>
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        <Button
-                          type="button"
-                          variant={field.value === 'image' ? 'default' : 'outline'}
-                          onClick={() => field.onChange('image')}
-                        >
-                          Image + caption
-                        </Button>
-                        <Button
-                          type="button"
-                          variant={field.value === 'image_only' ? 'default' : 'outline'}
-                          onClick={() => field.onChange('image_only')}
-                        >
-                          Image only
-                        </Button>
-                        <Button
-                          type="button"
-                          variant={field.value === 'link_preview' ? 'default' : 'outline'}
-                          onClick={() => field.onChange('link_preview')}
-                        >
-                          Link preview
-                        </Button>
-                        <Button
-                          type="button"
-                          variant={field.value === 'text_only' ? 'default' : 'outline'}
-                          onClick={() => field.onChange('text_only')}
-                        >
-                          Text only
-                        </Button>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        Choose how this template sends: image with caption, image only, link preview, or plain text.
-                      </p>
-                    </div>
-                  )}
-                />
+                <input type="hidden" {...form.register('id')} />
 
-                <Controller
-                  control={form.control}
-                  name="active"
-                  render={({ field }) => (
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        id="active"
-                        checked={field.value}
-                        onCheckedChange={(checked) => field.onChange(checked === true)}
-                      />
-                      <Label htmlFor="active" className="cursor-pointer">
-                        Use this template
-                      </Label>
-                    </div>
-                  )}
-                />
+                <div className="space-y-4 rounded-lg border p-4">
+                  <Controller
+                    control={form.control}
+                    name="send_mode"
+                    render={({ field }) => (
+                      <div className="space-y-3">
+                        <Label>Message Format</Label>
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                          {[
+                            { value: 'image', label: 'Image + Caption', icon: '🖼️' },
+                            { value: 'image_only', label: 'Image Only', icon: '📷' },
+                            { value: 'link_preview', label: 'Link Preview', icon: '🔗' },
+                            { value: 'text_only', label: 'Text Only', icon: '📝' },
+                          ].map((mode) => (
+                            <div
+                              key={mode.value}
+                              onClick={() => field.onChange(mode.value)}
+                              className={`cursor-pointer rounded-lg border p-3 text-center transition-all hover:bg-accent ${field.value === mode.value
+                                ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                                : 'bg-background'
+                                }`}
+                            >
+                              <div className="mb-1 text-2xl">{mode.icon}</div>
+                              <div className="text-xs font-medium">{mode.label}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Select how the message will appear in WhatsApp.
+                        </p>
+                      </div>
+                    )}
+                  />
+
+                  <div className="flex items-center gap-4 border-t pt-4">
+                    <Controller
+                      control={form.control}
+                      name="active"
+                      render={({ field }) => (
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            id="active"
+                            checked={field.value}
+                            onCheckedChange={(checked) => field.onChange(checked === true)}
+                          />
+                          <div>
+                            <Label htmlFor="active" className="cursor-pointer font-medium">
+                              Enabled
+                            </Label>
+                            <p className="text-[0.7rem] text-muted-foreground">
+                              Keep this template available for automations
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    />
+                  </div>
+                </div>
 
                 <div className="flex gap-2">
                   <Button type="submit" disabled={saveTemplate.isPending}>
@@ -354,33 +357,33 @@ const TemplatesPage = () => {
               </div>
             </CardHeader>
             <CardContent>
-                <div className="rounded-lg bg-emerald-50/70 p-4 dark:bg-emerald-950/40">
-                  <div className="max-w-[85%] rounded-lg bg-white/80 px-3 py-2 shadow-sm ring-1 ring-emerald-200/60 dark:bg-emerald-900/50 dark:ring-emerald-800/60">
-                    {previewWithData && (watchedSendMode === 'image' || watchedSendMode === 'image_only') && sampleData.image_url ? (
-                      <div className="mb-2 overflow-hidden rounded-md border border-black/5 bg-white">
-                        <Image
-                          src={sampleData.image_url}
-                          alt="Template preview"
-                          width={640}
-                          height={360}
-                          unoptimized
-                          loader={({ src }) => src}
-                          className="block h-40 w-full object-cover"
-                        />
-                      </div>
-                    ) : null}
-                      <div
-                        className="text-sm text-foreground/90 whitespace-pre-wrap"
-                        dangerouslySetInnerHTML={{
-                          __html: formatWhatsAppMarkdown(
+              <div className="rounded-lg bg-emerald-50/70 p-4 dark:bg-emerald-950/40">
+                <div className="max-w-[85%] rounded-lg bg-white/80 px-3 py-2 shadow-sm ring-1 ring-emerald-200/60 dark:bg-emerald-900/50 dark:ring-emerald-800/60">
+                  {previewWithData && (watchedSendMode === 'image' || watchedSendMode === 'image_only') && sampleData.image_url ? (
+                    <div className="mb-2 overflow-hidden rounded-md border border-black/5 bg-white">
+                      <Image
+                        src={sampleData.image_url}
+                        alt="Template preview"
+                        width={640}
+                        height={360}
+                        unoptimized
+                        loader={({ src }) => src}
+                        className="block h-40 w-full object-cover"
+                      />
+                    </div>
+                  ) : null}
+                  <div
+                    className="text-sm text-foreground/90 whitespace-pre-wrap [&_strong]:font-bold [&_em]:italic [&_del]:line-through [&_code]:bg-muted [&_code]:px-1 [&_code]:rounded [&_code]:font-mono"
+                    dangerouslySetInnerHTML={{
+                      __html: formatWhatsAppMarkdown(
                         previewWithData
                           ? (() => {
-                              const base = applyTemplate(watchedContent || '', sampleData);
-                              if (watchedSendMode !== 'link_preview') return base;
-                              const link = String(sampleData.link || sampleData.url || '').trim();
-                              if (!link || /https?:\/\//i.test(base)) return base;
-                              return `${base}\n${link}`.trim();
-                            })()
+                            const base = applyTemplate(watchedContent || '', sampleData);
+                            if (watchedSendMode !== 'link_preview') return base;
+                            const link = String(sampleData.link || sampleData.url || '').trim();
+                            if (!link || /https?:\/\//i.test(base)) return base;
+                            return `${base}\n${link}`.trim();
+                          })()
                           : watchedContent || 'Start typing to preview...'
                       )
                     }}

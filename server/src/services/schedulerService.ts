@@ -7,7 +7,18 @@ const { computeNextRunAt } = require('../utils/cron');
 const { withScheduleLock, cleanupStaleLocks } = require('./scheduleLockService');
 const logger = require('../utils/logger');
 
-type WhatsAppClient = { getStatus?: () => { status: string } };
+type WhatsAppClient = {
+  getStatus?: () => {
+    status: string;
+    instanceId?: string;
+    lease?: {
+      supported?: boolean;
+      held?: boolean;
+      ownerId?: string | null;
+      expiresAt?: string | null;
+    };
+  };
+};
 
 type ScheduleRow = {
   id: string;
@@ -29,6 +40,37 @@ const feedInFlight = new Map<string, boolean>();
 const scheduleInFlight = new Map<string, boolean>();
 
 const schedulersDisabled = () => process.env.DISABLE_SCHEDULERS === 'true';
+
+const canRunSchedulers = (whatsappClient?: WhatsAppClient) => {
+  const status = whatsappClient?.getStatus?.();
+  const lease = status?.lease;
+
+  if (lease?.supported && lease.held === false) {
+    logger.warn(
+      {
+        whatsappStatus: status?.status,
+        instanceId: status?.instanceId,
+        lease
+      },
+      'Skipping schedulers: WhatsApp lease not held (another instance is active)'
+    );
+    return false;
+  }
+
+  if (status?.status === 'conflict') {
+    logger.warn(
+      {
+        whatsappStatus: status.status,
+        instanceId: status?.instanceId,
+        lease
+      },
+      'Skipping schedulers: WhatsApp is currently in conflict state'
+    );
+    return false;
+  }
+
+  return true;
+};
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -212,6 +254,10 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
 };
 
 const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
+  if (!canRunSchedulers(whatsappClient)) {
+    return;
+  }
+
   const supabase = getSupabaseClient();
   if (!supabase) {
     logger.warn('Supabase not available, skipping feed polling');
@@ -295,6 +341,10 @@ const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
 };
 
 const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
+  if (!canRunSchedulers(whatsappClient)) {
+    return;
+  }
+
   const supabase = getSupabaseClient();
   if (!supabase) {
     logger.warn('Supabase not available, skipping scheduled senders');
@@ -377,6 +427,10 @@ const initSchedulers = async (whatsappClient?: WhatsAppClient) => {
   clearAll();
   if (schedulersDisabled()) {
     logger.warn('Schedulers are disabled via DISABLE_SCHEDULERS');
+    return;
+  }
+
+  if (!canRunSchedulers(whatsappClient)) {
     return;
   }
 

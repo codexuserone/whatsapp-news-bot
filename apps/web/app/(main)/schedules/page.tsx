@@ -629,34 +629,53 @@ const SchedulesPage = () => {
                 <Controller
                   control={form.control}
                   name="target_ids"
-                  render={({ field }) => (
-                    <div className="rounded-lg border p-3 max-h-48 overflow-y-auto space-y-2">
-                      {activeTargets.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No targets available. Add targets first.</p>
-                      ) : (
-                        activeTargets.map((target) => (
-                          <label key={target.id} className="flex items-center gap-2 text-sm cursor-pointer">
-                            <Checkbox
-                              checked={field.value.includes(target.id)}
-                              onCheckedChange={(checked) => {
-                                const next = new Set(field.value);
-                                if (checked === true) {
-                                  next.add(target.id);
-                                } else {
-                                  next.delete(target.id);
-                                }
-                                field.onChange(Array.from(next));
-                              }}
-                            />
-                            <span>{target.name}</span>
-                            <Badge variant="secondary" className="ml-auto">
-                              {target.type}
-                            </Badge>
-                          </label>
-                        ))
-                      )}
-                    </div>
-                  )}
+                  render={({ field }) => {
+                    const all = activeTargets;
+                    const groups = all.filter(t => t.type === 'group');
+                    const channels = all.filter(t => t.type === 'channel');
+                    const others = all.filter(t => t.type !== 'group' && t.type !== 'channel');
+
+                    const renderGroup = (title: string, items: Target[]) => {
+                      if (!items.length) return null;
+                      return (
+                        <div className="space-y-1">
+                          <p className="text-xs font-semibold text-muted-foreground px-2 pt-1">{title}</p>
+                          {items.map(target => (
+                            <label key={target.id} className="flex items-center gap-2 text-sm cursor-pointer px-2 py-1 rounded hover:bg-muted/50">
+                              <Checkbox
+                                checked={field.value.includes(target.id)}
+                                onCheckedChange={(checked) => {
+                                  const next = new Set(field.value);
+                                  if (checked === true) {
+                                    next.add(target.id);
+                                  } else {
+                                    next.delete(target.id);
+                                  }
+                                  field.onChange(Array.from(next));
+                                }}
+                              />
+                              <span>{target.name}</span>
+                              {target.type === 'status' && <Badge variant="warning" className="ml-auto text-[10px] h-5">Status</Badge>}
+                            </label>
+                          ))}
+                        </div>
+                      );
+                    };
+
+                    return (
+                      <div className="rounded-lg border p-2 max-h-60 overflow-y-auto space-y-3">
+                        {all.length === 0 ? (
+                          <p className="text-sm text-muted-foreground p-2">No active targets found.</p>
+                        ) : (
+                          <>
+                            {renderGroup('Channels', channels)}
+                            {renderGroup('Groups', groups)}
+                            {renderGroup('Other', others)}
+                          </>
+                        )}
+                      </div>
+                    );
+                  }}
                 />
               </div>
 

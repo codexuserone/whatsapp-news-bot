@@ -41,7 +41,7 @@ const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | nu
 };
 
 const LogsPage = () => {
-  const [status, setStatus] = useState('all');
+  const [status, setStatus] = useState('sent');
   const { data: logs = [], isLoading } = useQuery<LogEntry[]>({
     queryKey: ['logs', status],
     queryFn: () => api.get(status === 'all' ? '/api/logs' : `/api/logs?status=${status}`),

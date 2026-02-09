@@ -105,17 +105,60 @@ const whatsappRoutes = () => {
 
   router.get('/groups', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
+    const supabase = getSupabaseClient();
+    // Try to get from WhatsApp first
     const groups = await whatsapp?.getGroups() || [];
+    
+    // If no groups returned and WhatsApp is not connected, fallback to database
+    if (!groups.length && whatsapp?.getStatus?.().status !== 'connected' && supabase) {
+      const { data: dbGroups } = await supabase
+        .from('targets')
+        .select('*')
+        .eq('type', 'group')
+        .eq('active', true);
+      
+      const fallbackGroups = (dbGroups || []).map((t: { id?: string; name?: string; phone_number?: string; notes?: string }) => ({
+        id: t.phone_number,
+        jid: t.phone_number,
+        name: t.name,
+        size: Number(String(t.notes || '').match(/\d+/)?.[0] || 0)
+      }));
+      
+      return res.json(fallbackGroups);
+    }
+    
     res.json(groups);
   }));
 
   router.get('/channels', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
-    const enriched =
-      whatsapp && typeof whatsapp.getChannelsWithDiagnostics === 'function'
-        ? await whatsapp.getChannelsWithDiagnostics()
-        : null;
-    const channels = enriched?.channels || await whatsapp?.getChannels() || [];
+    const supabase = getSupabaseClient();
+    let channels: Array<{ id: string; jid: string; name: string; subscribers: number }> = [];
+    
+    if (whatsapp && whatsapp.getStatus?.().status === 'connected') {
+      const enriched =
+        typeof whatsapp.getChannelsWithDiagnostics === 'function'
+          ? await whatsapp.getChannelsWithDiagnostics()
+          : null;
+      channels = enriched?.channels || await whatsapp.getChannels?.() || [];
+    }
+    
+    // If no channels returned, fallback to database
+    if (!channels.length && supabase) {
+      const { data: dbChannels } = await supabase
+        .from('targets')
+        .select('*')
+        .eq('type', 'channel')
+        .eq('active', true);
+      
+      channels = (dbChannels || []).map((t: { id?: string; name?: string; phone_number?: string; notes?: string }) => ({
+        id: t.phone_number || t.id || '',
+        jid: t.phone_number || '',
+        name: t.name || '',
+        subscribers: Number(String(t.notes || '').match(/\d+/)?.[0] || 0)
+      }));
+    }
+    
     res.json(channels);
   }));
 

@@ -47,6 +47,7 @@ type WhatsAppClient = {
   getStatus: () => { status: string };
   sendMessage: (jid: string, content: Record<string, unknown>, options?: Record<string, unknown>) => Promise<any>;
   sendStatusBroadcast: (content: Record<string, unknown>, options?: Record<string, unknown>) => Promise<any>;
+  reconnect?: () => Promise<void> | void;
   waitForMessage?: (messageId: string, timeoutMs?: number) => Promise<any>;
   confirmSend?: (
     messageId: string,
@@ -123,6 +124,37 @@ const sendMutex = new SendMutex();
 // Replaces withGlobalSendLock
 const withGlobalSendLock = async <T>(fn: () => Promise<T>): Promise<T> => {
   return sendMutex.run(fn, 120000); // 2 minute max wait to acquire lock
+};
+
+const ensureWhatsAppConnected = async (
+  whatsappClient?: WhatsAppClient | null,
+  options?: { attempts?: number; delayMs?: number; triggerReconnect?: boolean }
+) => {
+  if (!whatsappClient) return false;
+
+  const attempts = Math.max(Number(options?.attempts || 1), 1);
+  const delayMs = Math.max(Number(options?.delayMs || 1000), 250);
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const status = String(whatsappClient.getStatus?.().status || 'unknown');
+    if (status === 'connected') {
+      return true;
+    }
+
+    if (options?.triggerReconnect && attempt === 1 && (status === 'conflict' || status === 'disconnected')) {
+      try {
+        await Promise.resolve(whatsappClient.reconnect?.());
+      } catch (error) {
+        logger.warn({ error, status }, 'Failed to trigger WhatsApp reconnect while waiting for connected state');
+      }
+    }
+
+    if (attempt < attempts) {
+      await sleep(delayMs);
+    }
+  }
+
+  return false;
 };
 
 const waitForDelays = async (
@@ -1795,7 +1827,18 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
     return { ok: false, error: 'Database not available' };
   }
 
-  if (!whatsappClient || whatsappClient.getStatus().status !== 'connected') {
+  const connected = await ensureWhatsAppConnected(whatsappClient, {
+    attempts: 8,
+    delayMs: 1200,
+    triggerReconnect: true
+  });
+
+  if (!connected) {
+    return { ok: false, error: 'WhatsApp not connected' };
+  }
+
+  const activeWhatsappClient = whatsappClient;
+  if (!activeWhatsappClient) {
     return { ok: false, error: 'WhatsApp not connected' };
   }
 
@@ -1925,7 +1968,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       const sendResult = await withGlobalSendLock(async () => {
         await waitForDelays(String(targetRes.data.id), settings);
         const result = await sendMessageWithTemplate(
-          whatsappClient,
+          activeWhatsappClient,
           targetRes.data as Target,
           template as Template,
           feedItemRes.data as FeedItem,
@@ -1948,9 +1991,9 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
 
       const messageId = sendResult?.response?.key?.id;
       if (messageId) {
-        if (whatsappClient.confirmSend) {
+        if (activeWhatsappClient.confirmSend) {
           const isImage = sendResult?.media?.type === 'image' && Boolean(sendResult?.media?.sent);
-          const confirmation = await whatsappClient.confirmSend(
+          const confirmation = await activeWhatsappClient.confirmSend(
             messageId,
             isImage
               ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
@@ -1959,8 +2002,8 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           if (!confirmation?.ok) {
             throw new Error('Message send not confirmed (no upsert/ack)');
           }
-        } else if (whatsappClient.waitForMessage) {
-          const observed = await whatsappClient.waitForMessage(messageId, 15000);
+        } else if (activeWhatsappClient.waitForMessage) {
+          const observed = await activeWhatsappClient.waitForMessage(messageId, 15000);
           if (!observed) {
             throw new Error('Message send not confirmed (no local upsert)');
           }

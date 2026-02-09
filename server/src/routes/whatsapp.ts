@@ -270,6 +270,36 @@ const whatsappRoutes = () => {
 
   const isStatusBroadcast = (jid: string) => jid === 'status@broadcast';
 
+  const ensureConnectedForSend = async (
+    whatsapp: {
+      hardRefresh?: () => Promise<void> | void;
+    } | null | undefined,
+    context: string
+  ) => {
+    const fastPath = await ensureWhatsAppConnected(whatsapp, {
+      attempts: 8,
+      delayMs: 900,
+      triggerReconnect: true,
+      triggerTakeover: true,
+      logContext: context
+    });
+    if (fastPath) return true;
+
+    try {
+      await Promise.resolve(whatsapp?.hardRefresh?.());
+    } catch {
+      // Best effort only.
+    }
+
+    return ensureWhatsAppConnected(whatsapp, {
+      attempts: 20,
+      delayMs: 1000,
+      triggerReconnect: true,
+      triggerTakeover: true,
+      logContext: `${context} (post hard-refresh)`
+    });
+  };
+
   // Send a test message
   router.post('/send-test', validate(schemas.testMessage), asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
@@ -304,13 +334,7 @@ const whatsappRoutes = () => {
       throw badRequest('message, linkUrl, imageUrl, imageDataUrl, or videoDataUrl is required');
     }
 
-    const connected = await ensureWhatsAppConnected(whatsapp, {
-      attempts: 8,
-      delayMs: 900,
-      triggerReconnect: true,
-      triggerTakeover: true,
-      logContext: 'send-test route'
-    });
+    const connected = await ensureConnectedForSend(whatsapp, 'send-test route');
     if (!connected) {
       throw badRequest('WhatsApp is not connected');
     }
@@ -415,13 +439,7 @@ const whatsappRoutes = () => {
       throw badRequest('message or imageUrl is required');
     }
 
-    const connected = await ensureWhatsAppConnected(whatsapp, {
-      attempts: 8,
-      delayMs: 900,
-      triggerReconnect: true,
-      triggerTakeover: true,
-      logContext: 'send-status route'
-    });
+    const connected = await ensureConnectedForSend(whatsapp, 'send-status route');
 
     if (!connected) {
       throw badRequest('WhatsApp is not connected');

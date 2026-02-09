@@ -38,8 +38,8 @@ const ensureWhatsAppConnected = async (
     const takeoverLease = whatsappClient.takeoverLease;
     const shouldAttemptTakeover =
       options?.triggerTakeover &&
-      status === 'conflict' &&
       typeof takeoverLease === 'function' &&
+      (status === 'conflict' || status === 'disconnected' || status === 'error' || status === 'unknown') &&
       (attempt === 1 || attempt % 3 === 0);
 
     if (shouldAttemptTakeover) {

@@ -396,6 +396,29 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     }
 
     const current = await getCurrentLeaseRow();
+
+    // Some PostgREST/Supabase edge-cases can return 0 updated rows even when
+    // the lease row is still owned by this instance. Treat that as success to
+    // avoid false "lost lease" conflicts.
+    if (current?.ownerId === ownerId) {
+      return {
+        ok: true,
+        supported: true,
+        ownerId,
+        expiresAt: current.expiresAt || expiresAt
+      };
+    }
+
+    // If the lease looks free/expired, try to recover ownership in one step.
+    const currentExpiryMs = current?.expiresAt ? Date.parse(current.expiresAt) : Number.NaN;
+    const leaseExpired = Number.isFinite(currentExpiryMs) ? currentExpiryMs <= Date.now() : true;
+    if (!current?.ownerId || leaseExpired) {
+      const recovered = await forceAcquireLease(ownerId, ttlMs);
+      if (recovered.ok || !recovered.supported) {
+        return recovered;
+      }
+    }
+
     return {
       ok: false,
       supported: true,

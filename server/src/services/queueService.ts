@@ -48,6 +48,9 @@ type WhatsAppClient = {
   sendMessage: (jid: string, content: Record<string, unknown>, options?: Record<string, unknown>) => Promise<any>;
   sendStatusBroadcast: (content: Record<string, unknown>, options?: Record<string, unknown>) => Promise<any>;
   reconnect?: () => Promise<void> | void;
+  takeoverLease?: (
+    ttlMs?: number
+  ) => Promise<{ ok: boolean; supported: boolean; ownerId: string | null; expiresAt: string | null; reason?: string }>;
   waitForMessage?: (messageId: string, timeoutMs?: number) => Promise<any>;
   confirmSend?: (
     messageId: string,
@@ -128,7 +131,7 @@ const withGlobalSendLock = async <T>(fn: () => Promise<T>): Promise<T> => {
 
 const ensureWhatsAppConnected = async (
   whatsappClient?: WhatsAppClient | null,
-  options?: { attempts?: number; delayMs?: number; triggerReconnect?: boolean }
+  options?: { attempts?: number; delayMs?: number; triggerReconnect?: boolean; triggerTakeover?: boolean }
 ) => {
   if (!whatsappClient) return false;
 
@@ -139,6 +142,17 @@ const ensureWhatsAppConnected = async (
     const status = String(whatsappClient.getStatus?.().status || 'unknown');
     if (status === 'connected') {
       return true;
+    }
+
+    if (options?.triggerTakeover && status === 'conflict' && whatsappClient.takeoverLease && attempt <= 2) {
+      try {
+        const takeover = await whatsappClient.takeoverLease(90_000);
+        if (takeover.ok) {
+          logger.info({ ownerId: takeover.ownerId, expiresAt: takeover.expiresAt }, 'Acquired WhatsApp lease during send-now recovery');
+        }
+      } catch (error) {
+        logger.warn({ error, status }, 'Failed to take over WhatsApp lease while waiting for connected state');
+      }
     }
 
     if (options?.triggerReconnect && attempt === 1 && (status === 'conflict' || status === 'disconnected')) {
@@ -1828,9 +1842,10 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
   }
 
   const connected = await ensureWhatsAppConnected(whatsappClient, {
-    attempts: 8,
+    attempts: 12,
     delayMs: 1200,
-    triggerReconnect: true
+    triggerReconnect: true,
+    triggerTakeover: true
   });
 
   if (!connected) {

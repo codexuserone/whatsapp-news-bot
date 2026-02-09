@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Feed, FeedItem, Template } from '@/lib/types';
+import type { Feed, FeedItem, Target, Template } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Layers, Pencil, Trash2, Eye, Loader2 } from 'lucide-react';
+import { Layers, Pencil, Trash2, Eye, Loader2, Send } from 'lucide-react';
 
 const schema = z.object({
   id: z.string().uuid().optional(),
@@ -62,7 +62,10 @@ const TemplatesPage = () => {
   const queryClient = useQueryClient();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [sampleFeedId, setSampleFeedId] = useState<string>('__all');
+  const [previewTargetJid, setPreviewTargetJid] = useState<string>('');
+  const [previewSendNotice, setPreviewSendNotice] = useState<string>('');
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
+  const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
   const { data: availableVariables = [] } = useQuery<Array<{ name: string }>>({
     queryKey: ['available-variables', sampleFeedId],
@@ -80,6 +83,8 @@ const TemplatesPage = () => {
   });
   const [active, setActive] = useState<Template | null>(null);
   const [previewWithData, setPreviewWithData] = useState(true);
+  const activeTargets = targets.filter((target) => target.active);
+  const effectivePreviewTargetJid = previewTargetJid || activeTargets[0]?.phone_number || '';
 
   const resolveSendMode = (template?: Template | null): 'image' | 'image_only' | 'link_preview' | 'text_only' => {
     if (template?.send_mode === 'image_only') return 'image_only';
@@ -123,6 +128,16 @@ const TemplatesPage = () => {
   const watchedContent = useWatch({ control: form.control, name: 'content' });
   const watchedSendMode = useWatch({ control: form.control, name: 'send_mode' });
 
+  const renderedPreviewText = previewWithData
+    ? (() => {
+      const base = applyTemplate(watchedContent || '', sampleData);
+      if (watchedSendMode !== 'link_preview') return base;
+      const link = String(sampleData.link || sampleData.url || '').trim();
+      if (!link || /https?:\/\//i.test(base)) return base;
+      return `${base}\n${link}`.trim();
+    })()
+    : watchedContent || 'Start typing to preview...';
+
   const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Unknown error');
 
   useEffect(() => {
@@ -165,6 +180,22 @@ const TemplatesPage = () => {
     onError: (error: unknown) => alert(`Failed to delete template: ${getErrorMessage(error)}`)
   });
 
+  const sendPreview = useMutation({
+    mutationFn: (payload: {
+      jid: string;
+      message: string;
+      imageUrl?: string;
+      includeCaption?: boolean;
+      disableLinkPreview?: boolean;
+    }) => api.post<{ messageId?: string }>('/api/whatsapp/send-test', payload),
+    onSuccess: (result: { messageId?: string }) => {
+      setPreviewSendNotice(result?.messageId ? `Sent (${result.messageId})` : 'Sent');
+    },
+    onError: (error: unknown) => {
+      setPreviewSendNotice(`Failed: ${getErrorMessage(error)}`);
+    }
+  });
+
   const onSubmit = (values: TemplateFormValues) => {
     saveTemplate.mutate({
       id: values.id,
@@ -173,6 +204,67 @@ const TemplatesPage = () => {
       description: values.description,
       active: values.active,
       send_mode: values.send_mode
+    });
+  };
+
+  const submitPreviewSend = () => {
+    setPreviewSendNotice('');
+
+    const jid = String(effectivePreviewTargetJid || '').trim();
+    if (!jid) {
+      setPreviewSendNotice('Pick a target first.');
+      return;
+    }
+
+    const message = String(renderedPreviewText || '').trim();
+    const imageUrl = String(sampleData.image_url || sampleData.imageUrl || '').trim();
+
+    if (watchedSendMode === 'image_only') {
+      if (!imageUrl) {
+        setPreviewSendNotice('Image only needs a sample item with an image URL.');
+        return;
+      }
+      sendPreview.mutate({
+        jid,
+        message: message || ' ',
+        imageUrl,
+        includeCaption: false
+      });
+      return;
+    }
+
+    if (watchedSendMode === 'image') {
+      if (!imageUrl) {
+        setPreviewSendNotice('No sample image found. Preview send will use text only.');
+        sendPreview.mutate({
+          jid,
+          message,
+          disableLinkPreview: true
+        });
+        return;
+      }
+      sendPreview.mutate({
+        jid,
+        message,
+        imageUrl,
+        includeCaption: true
+      });
+      return;
+    }
+
+    if (watchedSendMode === 'link_preview') {
+      sendPreview.mutate({
+        jid,
+        message,
+        disableLinkPreview: false
+      });
+      return;
+    }
+
+    sendPreview.mutate({
+      jid,
+      message,
+      disableLinkPreview: true
     });
   };
 
@@ -195,11 +287,35 @@ const TemplatesPage = () => {
     }
   };
 
+  const wrapSelection = (left: string, right?: string) => {
+    const textarea = textareaRef.current;
+    const currentContent = form.getValues('content') || '';
+    const endToken = right ?? left;
+
+    if (!textarea) {
+      form.setValue('content', `${currentContent}${left}${endToken}`);
+      return;
+    }
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selected = currentContent.slice(start, end);
+    const next = `${currentContent.slice(0, start)}${left}${selected}${endToken}${currentContent.slice(end)}`;
+    form.setValue('content', next);
+
+    setTimeout(() => {
+      textarea.focus();
+      const cursorStart = start + left.length;
+      const cursorEnd = cursorStart + selected.length;
+      textarea.setSelectionRange(cursorStart, cursorEnd);
+    }, 0);
+  };
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Templates</h1>
-        <p className="text-muted-foreground">Compose WhatsApp messages with markdown and variables.</p>
+        <p className="text-muted-foreground">Write normal WhatsApp-style messages with variables and test exactly what will send.</p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_400px]">
@@ -238,6 +354,23 @@ const TemplatesPage = () => {
 
                 <div className="space-y-2">
                   <Label htmlFor="content">Content</Label>
+                  <div className="flex flex-wrap gap-2 rounded-lg border p-2">
+                    <Button type="button" size="sm" variant="outline" onClick={() => wrapSelection('*')}>
+                      Bold
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => wrapSelection('_')}>
+                      Italic
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => wrapSelection('~')}>
+                      Strike
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => wrapSelection('```', '```')}>
+                      Code
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => insertVariable('link')}>
+                      Insert link
+                    </Button>
+                  </div>
                   <Textarea
                     id="content"
                     {...form.register('content')}
@@ -291,7 +424,7 @@ const TemplatesPage = () => {
                     name="send_mode"
                     render={({ field }) => (
                       <div className="space-y-3">
-                        <Label>Message Format</Label>
+                        <Label>What gets sent</Label>
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                           {[
                             { value: 'image', label: 'Image + Text', icon: '🖼️' },
@@ -314,7 +447,7 @@ const TemplatesPage = () => {
                         </div>
                         <p className="text-xs text-muted-foreground">
                           {field.value === 'image' && 'Sends an image with your template text under it.'}
-                          {field.value === 'image_only' && 'Sends image only. Template text is kept for fallback if image fails.'}
+                          {field.value === 'image_only' && 'Sends image only. If image is missing, sending is blocked.'}
                           {field.value === 'link_preview' && 'Sends text and ensures a link preview is included.'}
                           {field.value === 'text_only' && 'Sends plain text only (no media, no preview).'}
                         </p>
@@ -371,6 +504,52 @@ const TemplatesPage = () => {
 
           <Card>
             <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Send className="h-5 w-5" />
+                Send Preview
+              </CardTitle>
+              <CardDescription>Test this template to yourself, your test group, or your test channel before enabling it in automations.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="space-y-2">
+                <Label>Target</Label>
+                <Select value={effectivePreviewTargetJid || '__none'} onValueChange={(value) => setPreviewTargetJid(value === '__none' ? '' : value)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select target" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {activeTargets.length > 0 ? (
+                      activeTargets.map((target) => (
+                        <SelectItem key={target.id} value={target.phone_number}>
+                          {target.name} ({target.type})
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem value="__none" disabled>
+                        No active targets
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="rounded-md border p-3 text-xs text-muted-foreground">
+                Mode: <span className="font-medium text-foreground">{watchedSendMode}</span>
+                {watchedSendMode === 'image_only' ? ' (requires sample image)' : ''}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button type="button" onClick={submitPreviewSend} disabled={sendPreview.isPending || !effectivePreviewTargetJid}>
+                  {sendPreview.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+                  Send Preview
+                </Button>
+                {previewSendNotice ? <span className="text-sm text-muted-foreground">{previewSendNotice}</span> : null}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle className="flex items-center gap-2">
                   <Eye className="h-5 w-5" />
@@ -404,17 +583,7 @@ const TemplatesPage = () => {
                   <div
                     className="text-sm text-foreground/90 whitespace-pre-wrap [&_strong]:font-bold [&_em]:italic [&_del]:line-through [&_code]:bg-muted [&_code]:px-1 [&_code]:rounded [&_code]:font-mono"
                     dangerouslySetInnerHTML={{
-                      __html: formatWhatsAppMarkdown(
-                        previewWithData
-                          ? (() => {
-                            const base = applyTemplate(watchedContent || '', sampleData);
-                            if (watchedSendMode !== 'link_preview') return base;
-                            const link = String(sampleData.link || sampleData.url || '').trim();
-                            if (!link || /https?:\/\//i.test(base)) return base;
-                            return `${base}\n${link}`.trim();
-                          })()
-                          : watchedContent || 'Start typing to preview...'
-                      )
+                      __html: formatWhatsAppMarkdown(renderedPreviewText)
                     }}
                   />
                   <div className="text-right mt-1">

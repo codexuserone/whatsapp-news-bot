@@ -33,6 +33,7 @@ const normalizePhoneForKey = (type: string, phoneNumber: string) => {
 };
 
 const isPlaceholderChannelName = (name: unknown) => /^channel\s+\d+$/i.test(String(name || '').trim());
+const isRawChannelJidLabel = (name: unknown) => String(name || '').trim().toLowerCase().includes('@newsletter');
 
 const scoreTargetForResponse = (target: { active?: boolean; type?: string; name?: string; updated_at?: string | null; created_at?: string | null }) => {
   const activeScore = target.active ? 1000 : 0;
@@ -50,6 +51,9 @@ const dedupeTargetsForResponse = (rows: TargetRow[]) => {
 
   for (const row of rows || []) {
     const type = String(row.type || '').trim();
+    if (type === 'channel' && row.active !== true && (isPlaceholderChannelName(row.name) || isRawChannelJidLabel(row.name))) {
+      continue;
+    }
     const phone = normalizePhoneForKey(type, String(row.phone_number || ''));
     if (!type || !phone) continue;
     const key = `${type}:${phone}`;

@@ -140,19 +140,7 @@ const normalizeChannelJid = (value: string) => {
 const buildFriendlyChannelName = (name: string, jid: string) => {
   const normalizedJid = normalizeChannelJid(jid);
   const rawName = String(name || '').trim();
-  if (rawName && rawName !== normalizedJid) return rawName;
-
-  const [firstPart = ''] = String(normalizedJid || '').split('@');
-  const localPart = firstPart
-    .replace(/^true_/i, '')
-    .replace(/_[A-F0-9]{8,}$/i, '')
-    .trim();
-
-  if (!localPart) return normalizedJid || 'Channel';
-  if (/^\d{6,}$/.test(localPart)) {
-    return `Channel ${localPart.slice(-6)}`;
-  }
-  return localPart.replace(/[_-]+/g, ' ').trim() || normalizedJid || 'Channel';
+  return rawName && rawName !== normalizedJid ? rawName : normalizedJid;
 };
 
 type DiscoveredTargetCandidate = {
@@ -165,13 +153,16 @@ type DiscoveredTargetCandidate = {
 
 const upsertDiscoveredTargets = async (
   supabase: ReturnType<typeof getSupabaseClient> | null,
-  candidates: DiscoveredTargetCandidate[]
+  candidates: DiscoveredTargetCandidate[],
+  options?: { deactivateMissingTypes?: Array<'group' | 'channel' | 'status'> }
 ) => {
-  if (!supabase || !Array.isArray(candidates) || !candidates.length) return;
+  if (!supabase || !Array.isArray(candidates)) return;
 
   const deduped = new Map<string, DiscoveredTargetCandidate>();
   for (const candidate of candidates) {
-    const phone = String(candidate?.phone_number || '').trim();
+    const type = candidate?.type;
+    const rawPhone = String(candidate?.phone_number || '').trim();
+    const phone = type === 'channel' ? normalizeChannelJid(rawPhone) : rawPhone;
     if (!phone) continue;
     deduped.set(phone, {
       ...candidate,
@@ -183,56 +174,111 @@ const upsertDiscoveredTargets = async (
   }
 
   const phoneNumbers = Array.from(deduped.keys());
-  if (!phoneNumbers.length) return;
+  if (phoneNumbers.length) {
+    const { data: existingRows, error: existingError } = await supabase
+      .from('targets')
+      .select('id,name,phone_number,type,active,notes')
+      .in('phone_number', phoneNumbers);
 
-  const { data: existingRows, error: existingError } = await supabase
-    .from('targets')
-    .select('id,name,phone_number,type,active,notes')
-    .in('phone_number', phoneNumbers);
-
-  if (existingError) {
-    return;
-  }
-
-  const existingByPhone = new Map<string, {
-    id: string;
-    name?: string;
-    phone_number?: string;
-    type?: string;
-    active?: boolean;
-    notes?: string | null;
-  }>();
-
-  for (const row of (existingRows || []) as Array<{
-    id?: string;
-    name?: string;
-    phone_number?: string;
-    type?: string;
-    active?: boolean;
-    notes?: string | null;
-  }>) {
-    const phone = String(row.phone_number || '').trim();
-    const id = String(row.id || '').trim();
-    if (!phone || !id) continue;
-    existingByPhone.set(phone, { ...row, id, phone_number: phone });
-  }
-
-  for (const candidate of deduped.values()) {
-    const current = existingByPhone.get(candidate.phone_number);
-    if (!current) {
-      await supabase.from('targets').insert(candidate);
-      continue;
+    if (existingError) {
+      return;
     }
 
-    const patch: Record<string, unknown> = {};
-    if (String(current.name || '') !== String(candidate.name || '')) patch.name = candidate.name;
-    if (String(current.type || '') !== String(candidate.type || '')) patch.type = candidate.type;
-    if (current.active !== true) patch.active = true;
-    if (String(current.notes || '') !== String(candidate.notes || '')) patch.notes = candidate.notes || null;
+    const existingByPhone = new Map<string, {
+      id: string;
+      name?: string;
+      phone_number?: string;
+      type?: string;
+      active?: boolean;
+      notes?: string | null;
+    }>();
 
-    if (!Object.keys(patch).length) continue;
-    await supabase.from('targets').update(patch).eq('id', current.id);
+    for (const row of (existingRows || []) as Array<{
+      id?: string;
+      name?: string;
+      phone_number?: string;
+      type?: string;
+      active?: boolean;
+      notes?: string | null;
+    }>) {
+      const phone = String(row.phone_number || '').trim();
+      const id = String(row.id || '').trim();
+      if (!phone || !id) continue;
+      existingByPhone.set(phone, { ...row, id, phone_number: phone });
+    }
+
+    for (const candidate of deduped.values()) {
+      const current = existingByPhone.get(candidate.phone_number);
+      if (!current) {
+        await supabase.from('targets').insert(candidate);
+        continue;
+      }
+
+      const patch: Record<string, unknown> = {};
+      if (String(current.name || '') !== String(candidate.name || '')) patch.name = candidate.name;
+      if (String(current.type || '') !== String(candidate.type || '')) patch.type = candidate.type;
+      if (current.active !== true) patch.active = true;
+      if (String(current.notes || '') !== String(candidate.notes || '')) patch.notes = candidate.notes || null;
+
+      if (!Object.keys(patch).length) continue;
+      await supabase.from('targets').update(patch).eq('id', current.id);
+    }
   }
+
+  const deactivateTypes = Array.isArray(options?.deactivateMissingTypes)
+    ? options?.deactivateMissingTypes || []
+    : [];
+
+  if (!deactivateTypes.length) return;
+
+  const { data: activeRows, error: activeRowsError } = await supabase
+    .from('targets')
+    .select('id,phone_number,type')
+    .eq('active', true)
+    .in('type', deactivateTypes);
+
+  if (activeRowsError || !Array.isArray(activeRows)) return;
+
+  const discoveredByType = new Map<'group' | 'channel' | 'status', Set<string>>([
+    ['group', new Set<string>()],
+    ['channel', new Set<string>()],
+    ['status', new Set<string>()]
+  ]);
+  for (const candidate of deduped.values()) {
+    const key =
+      candidate.type === 'channel'
+        ? normalizeChannelJid(String(candidate.phone_number || '').trim())
+        : String(candidate.phone_number || '').trim();
+    if (!key || !discoveredByType.has(candidate.type)) continue;
+    discoveredByType.get(candidate.type)?.add(key);
+  }
+
+  const idsToDeactivate: string[] = [];
+  for (const row of activeRows as Array<{ id?: string; phone_number?: string; type?: string }>) {
+    const id = String(row.id || '').trim();
+    if (!id) continue;
+    const type = String(row.type || '').trim();
+    if (type !== 'group' && type !== 'channel' && type !== 'status') continue;
+    const jidRaw = String(row.phone_number || '').trim();
+    const jid = type === 'channel' ? normalizeChannelJid(jidRaw) : jidRaw;
+    if (!jid) continue;
+    const discovered = discoveredByType.get(type);
+    if (discovered?.has(jid)) continue;
+    idsToDeactivate.push(id);
+  }
+
+  if (!idsToDeactivate.length) return;
+  await supabase.from('targets').update({ active: false }).in('id', idsToDeactivate);
+};
+
+const dedupeTargets = <T extends { jid?: string; id?: string }>(targets: T[]) => {
+  const byJid = new Map<string, T>();
+  for (const item of targets || []) {
+    const jid = String(item?.jid || item?.id || '').trim().toLowerCase();
+    if (!jid) continue;
+    if (!byJid.has(jid)) byJid.set(jid, item);
+  }
+  return Array.from(byJid.values());
 };
 
 const whatsappRoutes = () => {
@@ -252,28 +298,12 @@ const whatsappRoutes = () => {
     const whatsapp = req.app.locals.whatsapp;
     const supabase = getSupabaseClient();
     const isConnected = whatsapp?.getStatus?.().status === 'connected';
-    // Try to get from WhatsApp first
-    const groups = await whatsapp?.getGroups() || [];
-
-    // If no groups returned and WhatsApp is not connected, fallback to database
-    if (!groups.length && !isConnected && supabase) {
-      const { data: dbGroups } = await supabase
-        .from('targets')
-        .select('*')
-        .eq('type', 'group')
-        .eq('active', true);
-      
-      const fallbackGroups = (dbGroups || []).map((t: { id?: string; name?: string; phone_number?: string; notes?: string }) => ({
-        id: t.phone_number,
-        jid: t.phone_number,
-        name: t.name,
-        size: Number(String(t.notes || '').match(/\d+/)?.[0] || 0)
-      }));
-      
-      return res.json(fallbackGroups);
+    if (!isConnected) {
+      return res.json([]);
     }
 
-    if (groups.length && isConnected && supabase) {
+    const groups = dedupeTargets(await whatsapp?.getGroups() || []);
+    if (supabase) {
       await upsertDiscoveredTargets(
         supabase,
         groups.map((group: { jid?: string; name?: string; size?: number }) => ({
@@ -282,7 +312,8 @@ const whatsappRoutes = () => {
           type: 'group',
           active: true,
           notes: Number.isFinite(group?.size) ? `${Number(group?.size || 0)} members` : null
-        }))
+        })),
+        { deactivateMissingTypes: ['group'] }
       );
     }
     
@@ -297,85 +328,44 @@ const whatsappRoutes = () => {
       jid: string;
       name: string;
       subscribers: number;
-      source: 'live' | 'saved';
+      source: 'live';
     }>();
     const discoveredChannelCandidates: DiscoveredTargetCandidate[] = [];
     const isConnected = whatsapp?.getStatus?.().status === 'connected';
-
-    let savedChannelTargets: Array<{ id?: string; name?: string; phone_number?: string; notes?: string }> = [];
-    if (supabase) {
-      const { data: dbChannels } = await supabase
-        .from('targets')
-        .select('*')
-        .eq('type', 'channel')
-        .eq('active', true);
-      savedChannelTargets = (dbChannels || []) as Array<{ id?: string; name?: string; phone_number?: string; notes?: string }>;
+    if (!isConnected) {
+      return res.json([]);
     }
-
-    const seedChannelJids = Array.from(
-      new Set(
-        savedChannelTargets
-          .map((target) => normalizeChannelJid(String(target.phone_number || target.id || '').trim()))
-          .filter(Boolean)
-      )
-    );
     
-    if (whatsapp && isConnected) {
+    if (whatsapp) {
       const enriched =
         typeof whatsapp.getChannelsWithDiagnostics === 'function'
-          ? await whatsapp.getChannelsWithDiagnostics(seedChannelJids)
+          ? await whatsapp.getChannelsWithDiagnostics()
           : null;
       const liveChannels = enriched?.channels || await whatsapp.getChannels?.() || [];
       for (const channel of liveChannels) {
         const jid = normalizeChannelJid(String(channel?.jid || '').trim());
         if (!jid) continue;
         const sourceTag = String((channel as { source?: string })?.source || '').toLowerCase();
-        const isSeedOnly = sourceTag === 'seed';
+        if (sourceTag === 'seed') continue;
         const friendlyName = buildFriendlyChannelName(String(channel?.name || ''), jid);
         channelsByJid.set(jid.toLowerCase(), {
           id: jid,
           jid,
           name: friendlyName,
           subscribers: Number(channel?.subscribers || 0),
-          source: isSeedOnly ? 'saved' : 'live'
+          source: 'live'
         });
-        if (!isSeedOnly) {
-          discoveredChannelCandidates.push({
-            name: friendlyName,
-            phone_number: jid,
-            type: 'channel',
-            active: true,
-            notes: Number.isFinite(channel?.subscribers) ? `${Number(channel?.subscribers || 0)} subscribers` : null
-          });
-        }
-      }
-
-      if (supabase && discoveredChannelCandidates.length) {
-        await upsertDiscoveredTargets(supabase, discoveredChannelCandidates);
-      }
-    }
-    
-    // Always merge saved channel targets as a fallback source.
-    // This keeps channels selectable even when live channel discovery is unavailable.
-    for (const target of savedChannelTargets) {
-      const jid = normalizeChannelJid(String(target.phone_number || target.id || '').trim());
-      if (!jid) continue;
-      const key = jid.toLowerCase();
-      const friendlyName = buildFriendlyChannelName(String(target.name || ''), jid);
-      const existing = channelsByJid.get(key);
-      if (!existing) {
-        channelsByJid.set(key, {
-          id: jid,
-          jid,
+        discoveredChannelCandidates.push({
           name: friendlyName,
-          subscribers: Number(String(target.notes || '').match(/\d+/)?.[0] || 0),
-          source: 'saved'
+          phone_number: jid,
+          type: 'channel',
+          active: true,
+          notes: Number.isFinite(channel?.subscribers) ? `${Number(channel?.subscribers || 0)} subscribers` : null
         });
-        continue;
       }
 
-      if (existing.name === existing.jid && friendlyName !== existing.jid) {
-        existing.name = friendlyName;
+      if (supabase) {
+        await upsertDiscoveredTargets(supabase, discoveredChannelCandidates, { deactivateMissingTypes: ['channel'] });
       }
     }
 
@@ -391,7 +381,7 @@ const whatsappRoutes = () => {
         diagnostics: {
           methodsTried: [],
           methodErrors: [],
-          sourceCounts: { api: 0, cache: 0, metadata: 0 },
+          sourceCounts: { api: 0, cache: 0, metadata: 0, store: 0 },
           limitation: 'WhatsApp is not connected.'
         }
       });
@@ -408,7 +398,7 @@ const whatsappRoutes = () => {
       diagnostics: {
         methodsTried: [],
         methodErrors: [],
-        sourceCounts: { api: 0, cache: 0, metadata: 0 },
+        sourceCounts: { api: 0, cache: 0, metadata: 0, store: 0 },
         limitation: channels.length ? null : 'Channel diagnostics are unavailable in this server build.'
       }
     });

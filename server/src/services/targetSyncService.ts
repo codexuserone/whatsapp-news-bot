@@ -32,6 +32,7 @@ type SyncTargetsResult = {
   inserted: number;
   updated: number;
   unchanged: number;
+  deactivated: number;
   diagnostics: SyncDiagnostics;
   reason?: string;
 };
@@ -64,17 +65,7 @@ const normalizeChannelJid = (value: string) => {
 const buildFriendlyChannelName = (name: string, jid: string) => {
   const normalizedJid = normalizeChannelJid(jid);
   const rawName = String(name || '').trim();
-  if (rawName && rawName !== normalizedJid) return rawName;
-
-  const [firstPart = ''] = String(normalizedJid || '').split('@');
-  const localPart = firstPart
-    .replace(/^true_/i, '')
-    .replace(/_[A-F0-9]{8,}$/i, '')
-    .trim();
-
-  if (!localPart) return normalizedJid || 'Channel';
-  if (/^\d{6,}$/.test(localPart)) return `Channel ${localPart.slice(-6)}`;
-  return localPart.replace(/[_-]+/g, ' ').trim() || normalizedJid || 'Channel';
+  return rawName && rawName !== normalizedJid ? rawName : normalizedJid;
 };
 
 let syncTimer: NodeJS.Timeout | null = null;
@@ -82,7 +73,7 @@ let syncInFlight = false;
 
 const syncTargetsFromWhatsApp = async (
   whatsapp: WhatsAppSyncClient | null | undefined,
-  options?: { includeStatus?: boolean; skipIfDisconnected?: boolean }
+  options?: { includeStatus?: boolean; skipIfDisconnected?: boolean; strict?: boolean }
 ): Promise<SyncTargetsResult> => {
   const disconnectedResult = {
     ok: false,
@@ -92,6 +83,7 @@ const syncTargetsFromWhatsApp = async (
     inserted: 0,
     updated: 0,
     unchanged: 0,
+    deactivated: 0,
     diagnostics: null
   };
 
@@ -114,6 +106,7 @@ const syncTargetsFromWhatsApp = async (
       : null;
   const channelsRaw = channelsWithDiagnostics?.channels || (await (whatsapp.getChannels?.() || []));
   const includeStatus = options?.includeStatus !== false;
+  const strict = options?.strict !== false;
 
   const candidates: SyncCandidate[] = [];
   const usedJids = new Set<string>();
@@ -169,6 +162,7 @@ const syncTargetsFromWhatsApp = async (
   let inserted = 0;
   let updated = 0;
   let unchanged = 0;
+  let deactivated = 0;
 
   for (const candidate of candidates) {
     const current = existingByJid.get(candidate.phone_number);
@@ -182,6 +176,7 @@ const syncTargetsFromWhatsApp = async (
     const patch: Partial<SyncCandidate> = {};
     if (current.name !== candidate.name) patch.name = candidate.name;
     if (current.type !== candidate.type) patch.type = candidate.type;
+    if (current.active !== true) patch.active = true;
     if (String(current.notes || '') !== String(candidate.notes || '')) patch.notes = candidate.notes || null;
 
     if (!Object.keys(patch).length) {
@@ -197,6 +192,51 @@ const syncTargetsFromWhatsApp = async (
     updated += 1;
   }
 
+  if (strict) {
+    const discoveredGroups = new Set(
+      candidates
+        .filter((candidate) => candidate.type === 'group')
+        .map((candidate) => String(candidate.phone_number || '').trim())
+        .filter(Boolean)
+    );
+    const discoveredChannels = new Set(
+      candidates
+        .filter((candidate) => candidate.type === 'channel')
+        .map((candidate) => normalizeChannelJid(String(candidate.phone_number || '').trim()))
+        .filter(Boolean)
+    );
+    const discoveredStatus = new Set(
+      candidates
+        .filter((candidate) => candidate.type === 'status')
+        .map((candidate) => String(candidate.phone_number || '').trim())
+        .filter(Boolean)
+    );
+
+    for (const row of existing) {
+      if (!row.active) continue;
+      const jid = String(row.phone_number || '').trim();
+      if (!jid) continue;
+
+      let shouldDeactivate = false;
+      if (row.type === 'group') {
+        shouldDeactivate = !discoveredGroups.has(jid);
+      } else if (row.type === 'channel') {
+        shouldDeactivate = !discoveredChannels.has(normalizeChannelJid(jid));
+      } else if (row.type === 'status' && includeStatus) {
+        shouldDeactivate = !discoveredStatus.has(jid);
+      }
+
+      if (!shouldDeactivate) continue;
+
+      const { error: deactivateError } = await supabase
+        .from('targets')
+        .update({ active: false })
+        .eq('id', row.id);
+      if (deactivateError) throw deactivateError;
+      deactivated += 1;
+    }
+  }
+
   return {
     ok: true,
     discovered: {
@@ -208,6 +248,7 @@ const syncTargetsFromWhatsApp = async (
     inserted,
     updated,
     unchanged,
+    deactivated,
     diagnostics: channelsWithDiagnostics?.diagnostics || null
   };
 };
@@ -225,7 +266,11 @@ const runTargetAutoSyncPass = async (
 
   syncInFlight = true;
   try {
-    const result = await syncTargetsFromWhatsApp(whatsapp, { includeStatus: true, skipIfDisconnected: true });
+    const result = await syncTargetsFromWhatsApp(whatsapp, {
+      includeStatus: true,
+      skipIfDisconnected: true,
+      strict: true
+    });
     if (!options?.silent && result.ok && (result.inserted > 0 || result.updated > 0)) {
       logger.info(
         { inserted: result.inserted, updated: result.updated, unchanged: result.unchanged },

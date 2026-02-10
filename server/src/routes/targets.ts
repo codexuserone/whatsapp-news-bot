@@ -15,8 +15,21 @@ const targetRoutes = () => {
     return supabase;
   };
 
-  router.get('/', async (_req: Request, res: Response) => {
+  router.get('/', async (req: Request, res: Response) => {
     try {
+      const whatsapp = req.app.locals.whatsapp as {
+        getStatus?: () => { status?: string };
+      } | null;
+      try {
+        await syncTargetsFromWhatsApp(whatsapp, {
+          includeStatus: true,
+          skipIfDisconnected: true,
+          strict: true
+        });
+      } catch {
+        // Best-effort sync only; list endpoint should still respond.
+      }
+
       const { data: targets, error } = await getDb()
         .from('targets')
         .select('*')
@@ -79,8 +92,10 @@ const targetRoutes = () => {
       const includeStatus =
         String((req.body as { includeStatus?: unknown })?.includeStatus ?? req.query.includeStatus ?? 'true').toLowerCase() !==
         'false';
+      const strict =
+        String((req.body as { strict?: unknown })?.strict ?? req.query.strict ?? 'true').toLowerCase() !== 'false';
 
-      const result = await syncTargetsFromWhatsApp(whatsapp, { includeStatus });
+      const result = await syncTargetsFromWhatsApp(whatsapp, { includeStatus, strict });
       if (!result.ok) {
         return res.status(400).json({ error: result.reason || 'WhatsApp is not connected' });
       }

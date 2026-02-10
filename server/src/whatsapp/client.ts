@@ -25,7 +25,7 @@ type ChannelSummary = {
   jid: string;
   name: string;
   subscribers: number;
-  source?: 'api' | 'cache' | 'metadata' | 'store' | 'seed';
+  source?: 'api' | 'cache' | 'metadata' | 'store';
 };
 
 type GroupSummary = {
@@ -152,33 +152,6 @@ const extractChannelSummary = (input: unknown, options?: { allowNumeric?: boolea
     name,
     subscribers
   };
-};
-
-const extractChannelArray = (input: unknown): unknown[] => {
-  if (Array.isArray(input)) return input;
-  if (!input || typeof input !== 'object') return [];
-
-  const record = input as Record<string, unknown>;
-  const directKeys = ['channels', 'newsletters', 'items', 'data'];
-  for (const key of directKeys) {
-    const value = record[key];
-    if (Array.isArray(value)) return value;
-  }
-
-  const result = record.result;
-  if (Array.isArray(result)) return result;
-  if (result && typeof result === 'object') {
-    const resultRecord = result as Record<string, unknown>;
-    for (const key of directKeys) {
-      const value = resultRecord[key];
-      if (Array.isArray(value)) return value;
-    }
-    const maybeSingle = extractChannelSummary(resultRecord, { allowNumeric: true });
-    if (maybeSingle) return [resultRecord];
-  }
-
-  const maybeSingle = extractChannelSummary(record, { allowNumeric: true });
-  return maybeSingle ? [record] : [];
 };
 
 class WhatsAppClient {
@@ -998,6 +971,15 @@ class WhatsAppClient {
               }
             }
           }
+
+          const remoteJid = normalizeNewsletterJid(message?.key?.remoteJid, { allowNumeric: false });
+          if (remoteJid) {
+            const hintName =
+              readTextValue(message?.pushName) ||
+              readTextValue(message?.message?.conversation) ||
+              remoteJid;
+            this.cacheNewsletterChat({ jid: remoteJid, name: hintName, subscribers: 0 });
+          }
         }
 
         const toSave =
@@ -1344,7 +1326,7 @@ class WhatsAppClient {
     }
   }
 
-  async getChannelsWithDiagnostics(seedJids: string[] = []): Promise<{ channels: ChannelSummary[]; diagnostics: ChannelDiagnostics }> {
+  async getChannelsWithDiagnostics(_seedJids: string[] = []): Promise<{ channels: ChannelSummary[]; diagnostics: ChannelDiagnostics }> {
     const socket = this.socket as any;
     const diagnostics: ChannelDiagnostics = {
       methodsTried: [],
@@ -1359,18 +1341,16 @@ class WhatsAppClient {
     }
 
     const channelMap = new Map<string, ChannelSummary>();
-    const mergeChannel = (candidate: ChannelSummary, source: 'api' | 'cache' | 'metadata' | 'store' | 'seed') => {
+    const mergeChannel = (candidate: ChannelSummary, source: 'api' | 'cache' | 'metadata' | 'store') => {
       const existing = channelMap.get(candidate.jid);
       const pickSource = () => {
         if (!existing?.source) return source;
         if (existing.source === source) return source;
-        if (existing.source !== 'seed' && source === 'seed') return existing.source;
-        const rank: Record<'api' | 'metadata' | 'cache' | 'store' | 'seed', number> = {
+        const rank: Record<'api' | 'metadata' | 'cache' | 'store', number> = {
           api: 5,
           metadata: 4,
           cache: 3,
-          store: 2,
-          seed: 1
+          store: 2
         };
         return rank[source] >= rank[existing.source] ? source : existing.source;
       };
@@ -1382,60 +1362,12 @@ class WhatsAppClient {
         source: pickSource()
       };
       channelMap.set(candidate.jid, merged);
-      if (source !== 'seed') {
-        diagnostics.sourceCounts[source] += 1;
-      }
-    };
-
-    for (const seedJidRaw of Array.isArray(seedJids) ? seedJids : []) {
-      const seedJid =
-        normalizeNewsletterJid(seedJidRaw, { allowNumeric: false }) ||
-        normalizeNewsletterJid(seedJidRaw, { allowNumeric: true });
-      if (!seedJid) continue;
-      mergeChannel(
-        {
-          id: seedJid,
-          jid: seedJid,
-          name: seedJid,
-          subscribers: 0
-        },
-        'seed'
-      );
+      diagnostics.sourceCounts[source] += 1;
     }
 
-    // Method 1: Try newsletter-specific API methods
-    const methodCandidates = [
-      'newsletterGetSubscribed',
-      'newsletterList',
-      'newsletterGetAdmin',
-      'newsletterGetOwned',
-      'newsletterGetAll',
-      'newsletterQuery'
-    ];
+    diagnostics.methodsTried.push('api:list-not-available-in-current-baileys');
 
-    for (const methodName of methodCandidates) {
-      const method = socket?.[methodName];
-      if (typeof method !== 'function') {
-        diagnostics.methodsTried.push(`${methodName}:missing`);
-        continue;
-      }
-
-      diagnostics.methodsTried.push(`${methodName}:called`);
-      try {
-        const result = await method.call(socket);
-        const entries = extractChannelArray(result);
-        for (const entry of entries) {
-          const normalized = extractChannelSummary(entry, { allowNumeric: true });
-          if (!normalized) continue;
-          mergeChannel(normalized, 'api');
-          this.cacheNewsletterChat(normalized);
-        }
-      } catch (error) {
-        diagnostics.methodErrors.push(`${methodName}: ${getErrorMessage(error)}`);
-      }
-    }
-
-    // Method 2: Scan chat store for newsletter JIDs
+    // Method 1: Scan chat store for newsletter JIDs
     diagnostics.methodsTried.push('store:scan');
     try {
       const chats = socket.store?.chats?.all() || socket.store?.chats || [];
@@ -1461,7 +1393,7 @@ class WhatsAppClient {
       diagnostics.methodErrors.push(`store: ${getErrorMessage(error)}`);
     }
 
-    // Method 3: Use cached newsletters
+    // Method 2: Use cached newsletters from events/messages
     for (const cached of this.newsletterChatCache.values()) {
       mergeChannel(
         {
@@ -1474,7 +1406,7 @@ class WhatsAppClient {
       );
     }
 
-    // Method 4: Enrich with metadata if available
+    // Method 3: Enrich with metadata if available
     if (typeof socket.newsletterMetadata === 'function' && channelMap.size > 0) {
       const toEnrich = Array.from(channelMap.values())
         .filter((channel) => channel.name === channel.jid || channel.subscribers <= 0)
@@ -1496,7 +1428,7 @@ class WhatsAppClient {
     const channels = Array.from(channelMap.values()).sort((a, b) => a.name.localeCompare(b.name));
 
     if (!channels.length) {
-      diagnostics.limitation = 'No channels discovered. To add channels: 1) Open the channel in WhatsApp on your phone, 2) Send a message to it, 3) Refresh this page.';
+      diagnostics.limitation = 'No channels discovered from this session yet. Open/view the channel in WhatsApp, then refresh.';
     }
 
     return { channels, diagnostics };

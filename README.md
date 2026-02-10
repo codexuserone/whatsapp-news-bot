@@ -100,6 +100,9 @@ Optional (production):
 BASIC_AUTH_USER=admin
 BASIC_AUTH_PASS=secure-password
 REQUIRE_BASIC_AUTH=true
+BASIC_AUTH_REALM=WhatsApp News Bot
+BASIC_AUTH_REQUIRE_HTTPS=true
+ALLOW_WEAK_BASIC_AUTH=false
 ACCESS_ALLOWLIST=203.0.113.10
 HSTS_MAX_AGE_SECONDS=15552000
 SKIP_WHATSAPP_LEASE=false
@@ -138,13 +141,16 @@ BASE_URL=https://your-app.onrender.com
 BASIC_AUTH_USER=admin
 BASIC_AUTH_PASS=secure-password
 REQUIRE_BASIC_AUTH=true
+BASIC_AUTH_REALM=WhatsApp News Bot
+BASIC_AUTH_REQUIRE_HTTPS=true
+ALLOW_WEAK_BASIC_AUTH=false
 ACCESS_ALLOWLIST=203.0.113.10
 HSTS_MAX_AGE_SECONDS=15552000
 CORS_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 ```
 
-When `REQUIRE_BASIC_AUTH=true`, all routes require authentication except health probes:
-`/health`, `/ping`, and `/ready`.
+When `REQUIRE_BASIC_AUTH=true`, all routes require authentication except uptime probes:
+`/health`, `/ping`, and `/ready` (GET/HEAD only).
 Optional `ACCESS_ALLOWLIST` further restricts access by source IP.
 
 **Deploy Steps**:

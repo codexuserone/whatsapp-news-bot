@@ -1,13 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-
-const HEALTH_PATHS = new Set([
-  '/health',
-  '/ping',
-  '/ready',
-  '/api/health',
-  '/api/ping',
-  '/api/ready'
-]);
+const { isPublicProbePath } = require('./publicProbePaths');
 
 const hasStaticFileExtension = (pathValue: string) => /\.[a-z0-9]{2,8}$/i.test(pathValue);
 
@@ -22,7 +14,7 @@ const isSecureRequest = (req: Request) => {
 
 const securityHeaders = (req: Request, res: Response, next: NextFunction) => {
   const pathValue = String(req.path || '').trim();
-  const isHealthPath = HEALTH_PATHS.has(pathValue);
+  const isHealthPath = isPublicProbePath(pathValue);
 
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');

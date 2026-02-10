@@ -30,8 +30,14 @@ services:
         sync: false
       - key: BASIC_AUTH_PASS
         sync: false
+      - key: BASIC_AUTH_REALM
+        value: "WhatsApp News Bot"
       - key: REQUIRE_BASIC_AUTH
         value: "true"
+      - key: BASIC_AUTH_REQUIRE_HTTPS
+        value: "true"
+      - key: ALLOW_WEAK_BASIC_AUTH
+        value: "false"
       - key: ACCESS_ALLOWLIST
         sync: false
       - key: BASIC_AUTH_MAX_ATTEMPTS

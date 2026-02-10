@@ -22,6 +22,7 @@ const errorHandler = require('./middleware/errorHandler');
 const notFoundHandler = require('./middleware/notFound');
 const requestLogger = require('./middleware/requestLogger');
 const securityHeaders = require('./middleware/securityHeaders');
+const { isPublicProbeRequest } = require('./middleware/publicProbePaths');
 
 // Global error handlers to prevent crashes
 process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
@@ -91,6 +92,22 @@ const normalizeClientIp = (req: Request) => {
   return ip.replace(/^::ffff:/, '').trim().toLowerCase();
 };
 
+const isSecureRequest = (req: Request) => {
+  if (req.secure) return true;
+  const proto = String(req.headers['x-forwarded-proto'] || '')
+    .split(',')[0]
+    ?.trim()
+    .toLowerCase();
+  return proto === 'https';
+};
+
+const toBoolean = (rawValue: unknown, defaultValue: boolean) => {
+  const normalized = String(rawValue || '').trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  return defaultValue;
+};
+
 const cleanupAuthAttempts = (nowMs: number) => {
   if (nowMs - authAttemptCleanupAtMs < 5 * 60 * 1000) return;
   authAttemptCleanupAtMs = nowMs;
@@ -132,23 +149,60 @@ const start = async () => {
       String(process.env.REQUIRE_BASIC_AUTH || '').toLowerCase() !== 'false');
   const basicUser = process.env.BASIC_AUTH_USER;
   const basicPass = process.env.BASIC_AUTH_PASS;
+  const basicAuthRealm = String(process.env.BASIC_AUTH_REALM || 'WhatsApp News Bot')
+    .replace(/"/g, '')
+    .trim() || 'WhatsApp News Bot';
+  const requireHttpsForAuth = toBoolean(
+    process.env.BASIC_AUTH_REQUIRE_HTTPS,
+    process.env.NODE_ENV === 'production'
+  );
+  const allowWeakBasicAuth = toBoolean(process.env.ALLOW_WEAK_BASIC_AUTH, false);
   const accessAllowlist = String(process.env.ACCESS_ALLOWLIST || '')
     .split(',')
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean);
   const authMaxAttempts = Math.max(Number(process.env.BASIC_AUTH_MAX_ATTEMPTS || 20), 1);
   const authBlockWindowMs = Math.max(Number(process.env.BASIC_AUTH_BLOCK_MINUTES || 15), 1) * 60 * 1000;
+  const weakPasswords = new Set([
+    'change-me',
+    'changeme',
+    'password',
+    'password123',
+    '123456',
+    '12345678',
+    'qwerty',
+    'letmein',
+    'admin'
+  ]);
   if (requireBasicAuth && (!basicUser || !basicPass)) {
     throw new Error('BASIC_AUTH_USER and BASIC_AUTH_PASS are required when basic auth is enabled');
   }
+  if (
+    requireBasicAuth &&
+    basicPass &&
+    process.env.NODE_ENV === 'production' &&
+    !allowWeakBasicAuth
+  ) {
+    const normalizedPass = String(basicPass).trim().toLowerCase();
+    const looksWeak = normalizedPass.length < 12 || weakPasswords.has(normalizedPass);
+    if (looksWeak) {
+      throw new Error(
+        'BASIC_AUTH_PASS is too weak for production. Use 12+ chars or set ALLOW_WEAK_BASIC_AUTH=true (not recommended).'
+      );
+    }
+  }
   if (requireBasicAuth && basicUser && basicPass) {
     app.use((req: Request, res: Response, next) => {
-      const openPaths = new Set(['/health', '/ping', '/ready', '/api/health', '/api/ping', '/api/ready']);
-      if (openPaths.has(req.path)) return next();
+      if (isPublicProbeRequest(req)) return next();
+
+      res.setHeader('Vary', 'Authorization');
+      res.setHeader('Cache-Control', 'no-store');
+      if (requireHttpsForAuth && !isSecureRequest(req)) {
+        return res.status(403).send('HTTPS is required');
+      }
 
       const clientIp = normalizeClientIp(req);
       if (accessAllowlist.length > 0 && !accessAllowlist.includes(clientIp)) {
-        res.setHeader('Cache-Control', 'no-store');
         return res.status(403).send('Access denied');
       }
 
@@ -157,15 +211,13 @@ const start = async () => {
       const currentAttempt = authAttemptsByIp.get(clientIp);
       if (currentAttempt && currentAttempt.blockedUntilMs > nowMs) {
         const retryAfterSec = Math.max(Math.ceil((currentAttempt.blockedUntilMs - nowMs) / 1000), 1);
-        res.setHeader('Cache-Control', 'no-store');
         res.setHeader('Retry-After', String(retryAfterSec));
         return res.status(429).send('Too many authentication attempts');
       }
 
       const header = String(req.headers.authorization || '');
       if (!header.startsWith('Basic ')) {
-        res.setHeader('WWW-Authenticate', 'Basic realm="WhatsApp News Bot"');
-        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('WWW-Authenticate', `Basic realm="${basicAuthRealm}"`);
         return res.status(401).send('Authentication required');
       }
       try {
@@ -175,7 +227,6 @@ const start = async () => {
         const pass = idx >= 0 ? raw.slice(idx + 1) : '';
         if (safeEquals(user, String(basicUser)) && safeEquals(pass, String(basicPass))) {
           authAttemptsByIp.delete(clientIp);
-          res.setHeader('Cache-Control', 'no-store');
           return next();
         }
       } catch {
@@ -196,8 +247,7 @@ const start = async () => {
       }
       authAttemptsByIp.set(clientIp, nextAttempt);
 
-      res.setHeader('WWW-Authenticate', 'Basic realm="WhatsApp News Bot"');
-      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('WWW-Authenticate', `Basic realm="${basicAuthRealm}"`);
       if (nextAttempt.blockedUntilMs > nowMs) {
         const retryAfterSec = Math.max(Math.ceil((nextAttempt.blockedUntilMs - nowMs) / 1000), 1);
         res.setHeader('Retry-After', String(retryAfterSec));

@@ -69,11 +69,14 @@ const waitForOkOrExit = async (child, url, timeoutMs = 20000) => {
   ]);
 };
 
-const fetchText = async (url) => {
-  const res = await fetch(url);
+const fetchText = async (url, init = undefined) => {
+  const res = await fetch(url, init);
   const text = await res.text();
   return { status: res.status, text };
 };
+
+const basicAuthHeader = (user, pass) =>
+  `Basic ${Buffer.from(`${user}:${pass}`, 'utf8').toString('base64')}`;
 
 const stopProcess = async (child) => {
   if (!child || child.pid === undefined) return;
@@ -159,6 +162,65 @@ const main = async () => {
     }
   } finally {
     await stopProcess(api);
+  }
+
+  // Auth lock smoke (production-like): health probes open, app/API locked.
+  const authPort = await findFreePort(10200);
+  const authUser = 'owner';
+  const authPass = 'Smoke-Auth-Password-123';
+  const authApi = spawn('node', ['server/dist/index.js'], {
+    env: {
+      ...process.env,
+      PORT: authPort,
+      NODE_ENV: 'production',
+      DISABLE_WHATSAPP: 'true',
+      DISABLE_SCHEDULERS: 'true',
+      REQUIRE_BASIC_AUTH: 'true',
+      BASIC_AUTH_USER: authUser,
+      BASIC_AUTH_PASS: authPass,
+      BASIC_AUTH_REQUIRE_HTTPS: 'false',
+      ALLOW_WEAK_BASIC_AUTH: 'false',
+      SUPABASE_URL: process.env.SUPABASE_URL || 'https://example.supabase.co',
+      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || 'smoke-test-key'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  authApi.stdout.on('data', (d) => process.stdout.write(d));
+  authApi.stderr.on('data', (d) => process.stderr.write(d));
+
+  try {
+    await waitForOkOrExit(authApi, `http://localhost:${authPort}/health`);
+
+    const openHealth = await fetchText(`http://localhost:${authPort}/health`);
+    if (openHealth.status !== 200) {
+      throw new Error(`Auth smoke failed: /health returned ${openHealth.status}`);
+    }
+
+    const lockedHealthMethod = await fetchText(`http://localhost:${authPort}/health`, { method: 'POST' });
+    if (lockedHealthMethod.status !== 401) {
+      throw new Error(`Auth smoke failed: POST /health returned ${lockedHealthMethod.status}, expected 401`);
+    }
+
+    const lockedNoAuth = await fetchText(`http://localhost:${authPort}/api/openapi.json`);
+    if (lockedNoAuth.status !== 401) {
+      throw new Error(`Auth smoke failed: /api/openapi.json without auth returned ${lockedNoAuth.status}`);
+    }
+
+    const lockedBadAuth = await fetchText(`http://localhost:${authPort}/api/openapi.json`, {
+      headers: { Authorization: basicAuthHeader(authUser, 'bad-password') }
+    });
+    if (lockedBadAuth.status !== 401) {
+      throw new Error(`Auth smoke failed: /api/openapi.json with bad auth returned ${lockedBadAuth.status}`);
+    }
+
+    const unlockedGoodAuth = await fetchText(`http://localhost:${authPort}/api/openapi.json`, {
+      headers: { Authorization: basicAuthHeader(authUser, authPass) }
+    });
+    if (unlockedGoodAuth.status < 200 || unlockedGoodAuth.status > 399) {
+      throw new Error(`Auth smoke failed: /api/openapi.json with good auth returned ${unlockedGoodAuth.status}`);
+    }
+  } finally {
+    await stopProcess(authApi);
   }
 
   // Static export smoke

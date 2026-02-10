@@ -329,21 +329,25 @@ const whatsappRoutes = () => {
       for (const channel of liveChannels) {
         const jid = normalizeChannelJid(String(channel?.jid || '').trim());
         if (!jid) continue;
+        const sourceTag = String((channel as { source?: string })?.source || '').toLowerCase();
+        const isSeedOnly = sourceTag === 'seed';
         const friendlyName = buildFriendlyChannelName(String(channel?.name || ''), jid);
         channelsByJid.set(jid.toLowerCase(), {
           id: jid,
           jid,
           name: friendlyName,
           subscribers: Number(channel?.subscribers || 0),
-          source: 'live'
+          source: isSeedOnly ? 'saved' : 'live'
         });
-        discoveredChannelCandidates.push({
-          name: friendlyName,
-          phone_number: jid,
-          type: 'channel',
-          active: true,
-          notes: Number.isFinite(channel?.subscribers) ? `${Number(channel?.subscribers || 0)} subscribers` : null
-        });
+        if (!isSeedOnly) {
+          discoveredChannelCandidates.push({
+            name: friendlyName,
+            phone_number: jid,
+            type: 'channel',
+            active: true,
+            notes: Number.isFinite(channel?.subscribers) ? `${Number(channel?.subscribers || 0)} subscribers` : null
+          });
+        }
       }
 
       if (supabase && discoveredChannelCandidates.length) {

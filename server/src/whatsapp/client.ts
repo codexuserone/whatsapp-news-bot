@@ -25,6 +25,7 @@ type ChannelSummary = {
   jid: string;
   name: string;
   subscribers: number;
+  source?: 'api' | 'cache' | 'metadata' | 'store' | 'seed';
 };
 
 type GroupSummary = {
@@ -1358,16 +1359,32 @@ class WhatsAppClient {
     }
 
     const channelMap = new Map<string, ChannelSummary>();
-    const mergeChannel = (candidate: ChannelSummary, source: 'api' | 'cache' | 'metadata' | 'store') => {
+    const mergeChannel = (candidate: ChannelSummary, source: 'api' | 'cache' | 'metadata' | 'store' | 'seed') => {
       const existing = channelMap.get(candidate.jid);
+      const pickSource = () => {
+        if (!existing?.source) return source;
+        if (existing.source === source) return source;
+        if (existing.source !== 'seed' && source === 'seed') return existing.source;
+        const rank: Record<'api' | 'metadata' | 'cache' | 'store' | 'seed', number> = {
+          api: 5,
+          metadata: 4,
+          cache: 3,
+          store: 2,
+          seed: 1
+        };
+        return rank[source] >= rank[existing.source] ? source : existing.source;
+      };
       const merged: ChannelSummary = {
         id: candidate.jid,
         jid: candidate.jid,
         name: candidate.name || existing?.name || candidate.jid,
-        subscribers: candidate.subscribers || existing?.subscribers || 0
+        subscribers: candidate.subscribers || existing?.subscribers || 0,
+        source: pickSource()
       };
       channelMap.set(candidate.jid, merged);
-      diagnostics.sourceCounts[source] += 1;
+      if (source !== 'seed') {
+        diagnostics.sourceCounts[source] += 1;
+      }
     };
 
     for (const seedJidRaw of Array.isArray(seedJids) ? seedJids : []) {
@@ -1382,7 +1399,7 @@ class WhatsAppClient {
           name: seedJid,
           subscribers: 0
         },
-        'store'
+        'seed'
       );
     }
 

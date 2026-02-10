@@ -122,6 +122,6 @@ export const apiRateLimit = rateLimit({
  */
 export const feedRateLimit = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  maxRequests: 10,
-  keyGenerator: (req) => `feed:${req.ip || 'unknown'}`
+  maxRequests: 60,
+  keyGenerator: (req) => `feed:${req.ip || 'unknown'}:${req.method}:${req.path}`
 });

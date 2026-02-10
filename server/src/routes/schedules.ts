@@ -254,6 +254,123 @@ const scheduleRoutes = () => {
     }
   });
 
+  router.post('/:id/state', async (req: Request, res: Response) => {
+    try {
+      const supabase = getDb();
+      const scheduleId = String(req.params.id || '').trim();
+      const requestedStateRaw = String((req.body as { state?: string })?.state || '').trim().toLowerCase();
+      if (!scheduleId) {
+        return res.status(400).json({ error: 'Schedule id is required' });
+      }
+      if (!['active', 'paused', 'stopped'].includes(requestedStateRaw)) {
+        return res.status(400).json({ error: 'state must be one of: active, paused, stopped' });
+      }
+
+      const requestedState = requestedStateRaw as 'active' | 'paused' | 'stopped';
+
+      const { data: currentSchedule, error: currentScheduleError } = await supabase
+        .from('schedules')
+        .select('*')
+        .eq('id', scheduleId)
+        .single();
+
+      if (currentScheduleError || !currentSchedule) {
+        return res.status(404).json({ error: 'Schedule not found' });
+      }
+
+      if (requestedState === 'active') {
+        const hasFeed = Boolean(currentSchedule.feed_id);
+        const hasTemplate = Boolean(currentSchedule.template_id);
+        const hasTargets = Array.isArray(currentSchedule.target_ids) && currentSchedule.target_ids.length > 0;
+        if (!hasFeed || !hasTemplate || !hasTargets) {
+          return res.status(400).json({
+            error: 'Automation is missing feed, template, or targets. Open Edit and save once.'
+          });
+        }
+      }
+
+      const nextState = applyScheduleStatePayload(
+        { state: requestedState, active: requestedState === 'active' },
+        currentSchedule as Record<string, unknown>
+      );
+
+      const updatePayload: Record<string, unknown> = {
+        state: nextState.state,
+        active: nextState.active
+      };
+      if (nextState.state !== 'active') {
+        updatePayload.next_run_at = null;
+      }
+
+      let warning: string | null = null;
+      if (nextState.state === 'active' && currentSchedule.feed_id) {
+        const { data: feed, error: feedError } = await supabase
+          .from('feeds')
+          .select('id,active')
+          .eq('id', currentSchedule.feed_id)
+          .single();
+
+        if (feedError || !feed) {
+          return res.status(400).json({ error: 'Feed not found for this automation' });
+        }
+
+        if (feed.active === false) {
+          updatePayload.state = 'paused';
+          updatePayload.active = false;
+          updatePayload.next_run_at = null;
+          warning = 'Feed is disabled, so this automation remains paused.';
+        }
+      }
+
+      const { data: schedule, error: updateError } = await supabase
+        .from('schedules')
+        .update(updatePayload)
+        .eq('id', scheduleId)
+        .select()
+        .single();
+      if (updateError || !schedule) throw updateError || new Error('Failed to update schedule state');
+
+      let pausedQueueItems = 0;
+      const turnedOff = isScheduleRunning(currentSchedule) && !isScheduleRunning(schedule);
+      if (turnedOff) {
+        const { data: pausedRows, error: pauseError } = await supabase
+          .from('message_logs')
+          .update({
+            status: 'skipped',
+            error_message: 'Automation paused',
+            processing_started_at: null
+          })
+          .eq('schedule_id', scheduleId)
+          .in('status', ['pending', 'processing'])
+          .select('id');
+
+        if (pauseError) throw pauseError;
+        pausedQueueItems = pausedRows?.length || 0;
+      }
+
+      refreshSchedulers(req.app.locals.whatsapp);
+      if (
+        isScheduleRunning(schedule) &&
+        !schedule?.cron_expression &&
+        schedule?.delivery_mode !== 'batched' &&
+        schedule?.delivery_mode !== 'batch'
+      ) {
+        dispatchImmediate(schedule.id, req.app.locals.whatsapp);
+      }
+
+      res.json({
+        ...schedule,
+        state: resolveScheduleState(schedule),
+        active: isScheduleRunning(schedule),
+        paused_queue_items: pausedQueueItems,
+        warning
+      });
+    } catch (error) {
+      console.error('Error updating schedule state:', error);
+      res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+    }
+  });
+
   router.delete('/:id', async (req: Request, res: Response) => {
     try {
       const scheduleId = req.params.id;

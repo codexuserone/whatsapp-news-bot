@@ -256,6 +256,31 @@ const QueuePage = () => {
 
   const canResumePost = (item: QueueItem) => Boolean(item.feed_item_id) && isPostPaused(item);
 
+  const canToggleItemPause = (item: QueueItem) => canPause(item) || canResume(item);
+
+  const canTogglePostPause = (item: QueueItem) => canPausePost(item) || canResumePost(item);
+
+  const toggleItemPause = (item: QueueItem) => {
+    if (canResume(item)) {
+      resumeItem.mutate(item.id);
+      return;
+    }
+    if (canPause(item)) {
+      pauseItem.mutate(item.id);
+    }
+  };
+
+  const togglePostPause = (item: QueueItem) => {
+    if (!item.feed_item_id) return;
+    if (canResumePost(item)) {
+      resumePost.mutate(item.feed_item_id);
+      return;
+    }
+    if (canPausePost(item)) {
+      pausePost.mutate(item.feed_item_id);
+    }
+  };
+
   const canSendNow = (item: QueueItem) => item.status !== 'sent' && item.status !== 'processing';
 
   const getStatusBadge = (item: QueueItem) => {
@@ -562,37 +587,35 @@ const QueuePage = () => {
                         <Pencil className="mr-1 h-3 w-3" /> Edit
                       </Button>
 
-                      {canPause(item) ? (
-                        <Button size="sm" variant="outline" onClick={() => pauseItem.mutate(item.id)} disabled={pauseItem.isPending}>
-                          <PauseCircle className="mr-1 h-3 w-3" /> Pause
-                        </Button>
-                      ) : null}
-
-                      {canPausePost(item) ? (
+                      {canToggleItemPause(item) ? (
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => item.feed_item_id && pausePost.mutate(item.feed_item_id)}
-                          disabled={pausePost.isPending}
+                          onClick={() => toggleItemPause(item)}
+                          disabled={pauseItem.isPending || resumeItem.isPending}
                         >
-                          <PauseCircle className="mr-1 h-3 w-3" /> Pause post
+                          {canResume(item) ? (
+                            <PlayCircle className="mr-1 h-3 w-3" />
+                          ) : (
+                            <PauseCircle className="mr-1 h-3 w-3" />
+                          )}
+                          {canResume(item) ? 'Resume item' : 'Pause item'}
                         </Button>
                       ) : null}
 
-                      {canResume(item) ? (
-                        <Button size="sm" variant="outline" onClick={() => resumeItem.mutate(item.id)} disabled={resumeItem.isPending}>
-                          <PlayCircle className="mr-1 h-3 w-3" /> Resume
-                        </Button>
-                      ) : null}
-
-                      {canResumePost(item) ? (
+                      {canTogglePostPause(item) ? (
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => item.feed_item_id && resumePost.mutate(item.feed_item_id)}
-                          disabled={resumePost.isPending}
+                          onClick={() => togglePostPause(item)}
+                          disabled={pausePost.isPending || resumePost.isPending}
                         >
-                          <PlayCircle className="mr-1 h-3 w-3" /> Resume post
+                          {canResumePost(item) ? (
+                            <PlayCircle className="mr-1 h-3 w-3" />
+                          ) : (
+                            <PauseCircle className="mr-1 h-3 w-3" />
+                          )}
+                          {canResumePost(item) ? 'Resume post' : 'Pause post'}
                         </Button>
                       ) : null}
 
@@ -672,34 +695,28 @@ const QueuePage = () => {
                       <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={() => beginEdit(item)} disabled={!canEdit(item)}>
                         <Pencil className="mr-1 h-3 w-3" /> Edit
                       </Button>
-                      {canPause(item) && (
-                        <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={() => pauseItem.mutate(item.id)}>
-                          <PauseCircle className="mr-1 h-3 w-3" /> Pause
-                        </Button>
-                      )}
-                      {canPausePost(item) && (
+                      {canToggleItemPause(item) && (
                         <Button
                           size="sm"
                           variant="outline"
                           className="h-7 text-xs px-2"
-                          onClick={() => item.feed_item_id && pausePost.mutate(item.feed_item_id)}
+                          onClick={() => toggleItemPause(item)}
+                          disabled={pauseItem.isPending || resumeItem.isPending}
                         >
-                          <PauseCircle className="mr-1 h-3 w-3" /> Pause post
+                          {canResume(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
+                          {canResume(item) ? 'Resume item' : 'Pause item'}
                         </Button>
                       )}
-                      {canResume(item) && (
-                        <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={() => resumeItem.mutate(item.id)}>
-                          <PlayCircle className="mr-1 h-3 w-3" /> Resume
-                        </Button>
-                      )}
-                      {canResumePost(item) && (
+                      {canTogglePostPause(item) && (
                         <Button
                           size="sm"
                           variant="outline"
                           className="h-7 text-xs px-2"
-                          onClick={() => item.feed_item_id && resumePost.mutate(item.feed_item_id)}
+                          onClick={() => togglePostPause(item)}
+                          disabled={pausePost.isPending || resumePost.isPending}
                         >
-                          <PlayCircle className="mr-1 h-3 w-3" /> Resume post
+                          {canResumePost(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
+                          {canResumePost(item) ? 'Resume post' : 'Pause post'}
                         </Button>
                       )}
                       <Button size="sm" variant="outline" className="h-7 text-xs px-2 ml-auto" onClick={() => sendNowItem.mutate(item.id)} disabled={!canSendNow(item)}>

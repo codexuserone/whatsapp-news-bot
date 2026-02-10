@@ -304,38 +304,9 @@ const SchedulesPage = () => {
     onError: (error: unknown) => alert(`Failed to delete schedule: ${getErrorMessage(error)}`)
   });
 
-  const toSchedulePayload = (schedule: Schedule): ScheduleApiPayload | null => {
-    if (!schedule.feed_id || !schedule.template_id || !Array.isArray(schedule.target_ids) || !schedule.target_ids.length) {
-      return null;
-    }
-
-    const state = getScheduleState(schedule);
-    return {
-      name: schedule.name,
-      cron_expression: schedule.cron_expression || null,
-      timezone: schedule.timezone || defaultTimezone,
-      feed_id: schedule.feed_id,
-      target_ids: schedule.target_ids,
-      template_id: schedule.template_id,
-      delivery_mode:
-        schedule.delivery_mode === 'batch' || schedule.delivery_mode === 'batched' ? 'batched' : 'immediate',
-      batch_times:
-        Array.isArray(schedule.batch_times) && schedule.batch_times.length
-          ? schedule.batch_times
-          : DEFAULT_BATCH_TIMES,
-      state,
-      active: state === 'active'
-    };
-  };
-
   const setScheduleState = useMutation({
-    mutationFn: ({ schedule, state }: { schedule: Schedule; state: 'active' | 'paused' | 'stopped' }) => {
-      const payload = toSchedulePayload(schedule);
-      if (!payload) {
-        throw new Error('Schedule is missing feed, template, or targets; open Edit and save once to normalize it.');
-      }
-      return api.put(`/api/schedules/${schedule.id}`, { ...payload, state, active: state === 'active' });
-    },
+    mutationFn: ({ scheduleId, state }: { scheduleId: string; state: 'active' | 'paused' | 'stopped' }) =>
+      api.post(`/api/schedules/${scheduleId}/state`, { state }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['schedules'] });
       queryClient.invalidateQueries({ queryKey: ['queue'] });
@@ -892,8 +863,8 @@ const SchedulesPage = () => {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => setScheduleState.mutate({ schedule, state: 'active' })}
-                        disabled={setScheduleState.isPending || !toSchedulePayload(schedule)}
+                        onClick={() => setScheduleState.mutate({ scheduleId: schedule.id, state: 'active' })}
+                        disabled={setScheduleState.isPending}
                       >
                         Start
                       </Button>
@@ -902,8 +873,8 @@ const SchedulesPage = () => {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => setScheduleState.mutate({ schedule, state: 'paused' })}
-                        disabled={setScheduleState.isPending || !toSchedulePayload(schedule)}
+                        onClick={() => setScheduleState.mutate({ scheduleId: schedule.id, state: 'paused' })}
+                        disabled={setScheduleState.isPending}
                       >
                         Pause
                       </Button>
@@ -912,8 +883,8 @@ const SchedulesPage = () => {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => setScheduleState.mutate({ schedule, state: 'stopped' })}
-                        disabled={setScheduleState.isPending || !toSchedulePayload(schedule)}
+                        onClick={() => setScheduleState.mutate({ scheduleId: schedule.id, state: 'stopped' })}
+                        disabled={setScheduleState.isPending}
                       >
                         Stop
                       </Button>

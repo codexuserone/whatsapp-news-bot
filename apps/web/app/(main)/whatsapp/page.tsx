@@ -66,22 +66,46 @@ const WhatsAppPage = () => {
     enabled: status?.status !== 'connected'
   });
 
-  const { data: groups = [] } = useQuery<WhatsAppGroup[]>({
+  const { data: groupsRaw } = useQuery<unknown>({
     queryKey: ['whatsapp-groups'],
     queryFn: () => api.get('/api/whatsapp/groups'),
     enabled: status?.status === 'connected'
   });
 
-  const { data: channels = [] } = useQuery<WhatsAppChannel[]>({
+  const { data: channelsRaw } = useQuery<unknown>({
     queryKey: ['whatsapp-channels'],
     queryFn: () => api.get('/api/whatsapp/channels'),
     enabled: status?.status === 'connected'
   });
 
-  const { data: existingTargets = [] } = useQuery<Target[]>({
+  const { data: existingTargetsRaw } = useQuery<unknown>({
     queryKey: ['targets'],
     queryFn: () => api.get('/api/targets')
   });
+
+  const groups = React.useMemo<WhatsAppGroup[]>(
+    () =>
+      Array.isArray(groupsRaw)
+        ? (groupsRaw.filter((entry): entry is WhatsAppGroup => Boolean(entry && typeof entry === 'object')) as WhatsAppGroup[])
+        : [],
+    [groupsRaw]
+  );
+
+  const channels = React.useMemo<WhatsAppChannel[]>(
+    () =>
+      Array.isArray(channelsRaw)
+        ? (channelsRaw.filter((entry): entry is WhatsAppChannel => Boolean(entry && typeof entry === 'object')) as WhatsAppChannel[])
+        : [],
+    [channelsRaw]
+  );
+
+  const existingTargets = React.useMemo<Target[]>(
+    () =>
+      Array.isArray(existingTargetsRaw)
+        ? (existingTargetsRaw.filter((entry): entry is Target => Boolean(entry && typeof entry === 'object')) as Target[])
+        : [],
+    [existingTargetsRaw]
+  );
 
   const disconnect = useMutation({
     mutationFn: () => api.post('/api/whatsapp/disconnect'),
@@ -113,8 +137,6 @@ const WhatsAppPage = () => {
 
   const isConnected = status?.status === 'connected';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
-  const liveChannelCount = channels.filter((channel) => channel.source === 'live').length;
-  const savedChannelCount = channels.filter((channel) => channel.source === 'saved').length;
   const activeTargets = existingTargets.filter((target) => target.active);
   const groupedTargets = React.useMemo(() => {
     const groups = activeTargets.filter((target) => target.type === 'group');
@@ -527,9 +549,6 @@ const WhatsAppPage = () => {
                 <span className="font-medium">Channels</span>
                 <Badge variant="secondary">{channels.length}</Badge>
               </div>
-              {savedChannelCount > 0 && liveChannelCount === 0 ? (
-                <p className="mt-1 text-xs text-muted-foreground">Using saved channel targets</p>
-              ) : null}
             </div>
           </div>
 

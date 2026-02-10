@@ -72,7 +72,6 @@ const TargetsPage = () => {
 
   const isConnected = waStatus?.status === 'connected';
   const liveChannelCount = waChannels.filter((channel) => channel.source === 'live').length;
-  const savedChannelCount = waChannels.filter((channel) => channel.source === 'saved').length;
 
   const updateTarget = useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: TargetPayload }) => api.put(`/api/targets/${id}`, payload),
@@ -158,11 +157,6 @@ const TargetsPage = () => {
             {isConnected && waChannels.length === 0 ? (
               <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                 No channels discovered yet. Open the channel in WhatsApp on your phone and send one message there.
-              </p>
-            ) : null}
-            {isConnected && liveChannelCount === 0 && savedChannelCount > 0 ? (
-              <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                Showing saved channels from your targets. Live channel discovery is not available in this WhatsApp session.
               </p>
             ) : null}
           </CardContent>

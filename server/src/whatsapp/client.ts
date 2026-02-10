@@ -1343,7 +1343,7 @@ class WhatsAppClient {
     }
   }
 
-  async getChannelsWithDiagnostics(): Promise<{ channels: ChannelSummary[]; diagnostics: ChannelDiagnostics }> {
+  async getChannelsWithDiagnostics(seedJids: string[] = []): Promise<{ channels: ChannelSummary[]; diagnostics: ChannelDiagnostics }> {
     const socket = this.socket as any;
     const diagnostics: ChannelDiagnostics = {
       methodsTried: [],
@@ -1369,6 +1369,22 @@ class WhatsAppClient {
       channelMap.set(candidate.jid, merged);
       diagnostics.sourceCounts[source] += 1;
     };
+
+    for (const seedJidRaw of Array.isArray(seedJids) ? seedJids : []) {
+      const seedJid =
+        normalizeNewsletterJid(seedJidRaw, { allowNumeric: false }) ||
+        normalizeNewsletterJid(seedJidRaw, { allowNumeric: true });
+      if (!seedJid) continue;
+      mergeChannel(
+        {
+          id: seedJid,
+          jid: seedJid,
+          name: seedJid,
+          subscribers: 0
+        },
+        'store'
+      );
+    }
 
     // Method 1: Try newsletter-specific API methods
     const methodCandidates = [

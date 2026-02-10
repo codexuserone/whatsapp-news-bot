@@ -137,6 +137,24 @@ const normalizeChannelJid = (value: string) => {
   return digits ? `${digits}@newsletter` : raw;
 };
 
+const buildFriendlyChannelName = (name: string, jid: string) => {
+  const normalizedJid = normalizeChannelJid(jid);
+  const rawName = String(name || '').trim();
+  if (rawName && rawName !== normalizedJid) return rawName;
+
+  const [firstPart = ''] = String(normalizedJid || '').split('@');
+  const localPart = firstPart
+    .replace(/^true_/i, '')
+    .replace(/_[A-F0-9]{8,}$/i, '')
+    .trim();
+
+  if (!localPart) return normalizedJid || 'Channel';
+  if (/^\d{6,}$/.test(localPart)) {
+    return `Channel ${localPart.slice(-6)}`;
+  }
+  return localPart.replace(/[_-]+/g, ' ').trim() || normalizedJid || 'Channel';
+};
+
 type DiscoveredTargetCandidate = {
   name: string;
   phone_number: string;
@@ -283,25 +301,44 @@ const whatsappRoutes = () => {
     }>();
     const discoveredChannelCandidates: DiscoveredTargetCandidate[] = [];
     const isConnected = whatsapp?.getStatus?.().status === 'connected';
+
+    let savedChannelTargets: Array<{ id?: string; name?: string; phone_number?: string; notes?: string }> = [];
+    if (supabase) {
+      const { data: dbChannels } = await supabase
+        .from('targets')
+        .select('*')
+        .eq('type', 'channel')
+        .eq('active', true);
+      savedChannelTargets = (dbChannels || []) as Array<{ id?: string; name?: string; phone_number?: string; notes?: string }>;
+    }
+
+    const seedChannelJids = Array.from(
+      new Set(
+        savedChannelTargets
+          .map((target) => normalizeChannelJid(String(target.phone_number || target.id || '').trim()))
+          .filter(Boolean)
+      )
+    );
     
     if (whatsapp && isConnected) {
       const enriched =
         typeof whatsapp.getChannelsWithDiagnostics === 'function'
-          ? await whatsapp.getChannelsWithDiagnostics()
+          ? await whatsapp.getChannelsWithDiagnostics(seedChannelJids)
           : null;
       const liveChannels = enriched?.channels || await whatsapp.getChannels?.() || [];
       for (const channel of liveChannels) {
         const jid = normalizeChannelJid(String(channel?.jid || '').trim());
         if (!jid) continue;
+        const friendlyName = buildFriendlyChannelName(String(channel?.name || ''), jid);
         channelsByJid.set(jid.toLowerCase(), {
           id: jid,
           jid,
-          name: String(channel?.name || jid),
+          name: friendlyName,
           subscribers: Number(channel?.subscribers || 0),
           source: 'live'
         });
         discoveredChannelCandidates.push({
-          name: String(channel?.name || jid).trim() || jid,
+          name: friendlyName,
           phone_number: jid,
           type: 'channel',
           active: true,
@@ -316,25 +353,25 @@ const whatsappRoutes = () => {
     
     // Always merge saved channel targets as a fallback source.
     // This keeps channels selectable even when live channel discovery is unavailable.
-    if (supabase) {
-      const { data: dbChannels } = await supabase
-        .from('targets')
-        .select('*')
-        .eq('type', 'channel')
-        .eq('active', true);
-      
-      for (const target of (dbChannels || []) as Array<{ id?: string; name?: string; phone_number?: string; notes?: string }>) {
-        const jid = normalizeChannelJid(String(target.phone_number || target.id || '').trim());
-        if (!jid) continue;
-        const key = jid.toLowerCase();
-        if (channelsByJid.has(key)) continue;
+    for (const target of savedChannelTargets) {
+      const jid = normalizeChannelJid(String(target.phone_number || target.id || '').trim());
+      if (!jid) continue;
+      const key = jid.toLowerCase();
+      const friendlyName = buildFriendlyChannelName(String(target.name || ''), jid);
+      const existing = channelsByJid.get(key);
+      if (!existing) {
         channelsByJid.set(key, {
           id: jid,
           jid,
-          name: String(target.name || jid),
+          name: friendlyName,
           subscribers: Number(String(target.notes || '').match(/\d+/)?.[0] || 0),
           source: 'saved'
         });
+        continue;
+      }
+
+      if (existing.name === existing.jid && friendlyName !== existing.jid) {
+        existing.name = friendlyName;
       }
     }
 

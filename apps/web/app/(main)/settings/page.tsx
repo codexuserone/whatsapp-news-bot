@@ -300,14 +300,14 @@ const SettingsPage = () => {
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="post_send_correction_window_minutes">Correction Follow-up Window (min)</Label>
+                  <Label htmlFor="post_send_correction_window_minutes">Correction Scan Window (min)</Label>
                   <Input
                     id="post_send_correction_window_minutes"
                     type="number"
                     {...form.register('post_send_correction_window_minutes', { valueAsNumber: true })}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Outside edit window but inside this window, the app sends corrected replacement message.
+                    Updated posts are checked in this window, but only true in-place edits are attempted.
                   </p>
                 </div>
               </div>

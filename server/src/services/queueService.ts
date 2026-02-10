@@ -1142,10 +1142,10 @@ const reconcileUpdatedFeedItems = async (
       String(log.whatsapp_message_id || '').trim()
     );
 
-    if (hasEditCandidate) {
-      try {
-        await withGlobalSendLock(async () => {
-          await waitForDelays(normalizedTargetId, settings);
+      if (hasEditCandidate) {
+        try {
+          await withGlobalSendLock(async () => {
+            await waitForDelays(normalizedTargetId, settings);
           await withTimeout(
             whatsappClient.editMessage!(
               jid,
@@ -1168,74 +1168,27 @@ const reconcileUpdatedFeedItems = async (
         result.edited += 1;
         continue;
       } catch (error) {
+        result.failed += 1;
         logger.warn(
           { error, logId: log.id, targetId, feedItemId },
-          'Failed to edit sent message; will attempt replacement send'
+          'Failed to edit sent message; skipping because replacement sends are disabled'
         );
+        continue;
       }
     }
-
-    try {
-      const sendResult = await withGlobalSendLock(async () => {
-        await waitForDelays(normalizedTargetId, settings);
-        return sendMessageWithTemplate(whatsappClient, target, template, feedItem, {
-          sendImages: template.send_images !== false,
-          supabase,
-          sendTimeoutMs,
-          overrideText: desiredText
-        });
-      });
-
-      const replacementMessageId = sendResult?.response?.key?.id
-        ? String(sendResult.response.key.id)
-        : null;
-
-      if (!replacementMessageId) {
-        throw new Error('Replacement message send returned no message id');
-      }
-
-      if (whatsappClient.confirmSend) {
-        const isImage = sendResult?.media?.type === 'image' && Boolean(sendResult?.media?.sent);
-        const confirmation = await whatsappClient.confirmSend(
-          replacementMessageId,
-          isImage
-            ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
-            : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 }
-        );
-        if (!confirmation?.ok) {
-          throw new Error('Replacement message send not confirmed (no upsert/ack)');
-        }
-      } else if (whatsappClient.waitForMessage) {
-        const observed = await whatsappClient.waitForMessage(replacementMessageId, 15000);
-        if (!observed) {
-          throw new Error('Replacement message send not confirmed (no local upsert)');
-        }
-      }
-
-      await supabase
-        .from('message_logs')
-        .update({
-          status: 'sent',
-          message_content: sendResult?.text || desiredText,
-          whatsapp_message_id: replacementMessageId,
-          error_message: null,
-          retry_count: 0,
-          processing_started_at: null,
-          media_url: sendResult?.media?.url || null,
-          media_type: sendResult?.media?.type || null,
-          media_sent: Boolean(sendResult?.media?.sent),
-          media_error: sendResult?.media?.error || null
-        })
-        .eq('id', log.id);
-
-      result.replaced += 1;
-    } catch (error) {
-      result.failed += 1;
-      logger.warn(
-        { error, logId: log.id, targetId, feedItemId },
-        'Failed to send replacement message for updated feed item'
-      );
-    }
+    result.skipped += 1;
+    logger.debug(
+      {
+        logId: log.id,
+        targetId,
+        feedItemId,
+        sentAgeMs,
+        editWindowMs,
+        hasEditMessageId: Boolean(String(log.whatsapp_message_id || '').trim()),
+        targetType: target.type
+      },
+      'Skipping correction because in-place edit is not possible and replacement sends are disabled'
+    );
   }
 
   return result;

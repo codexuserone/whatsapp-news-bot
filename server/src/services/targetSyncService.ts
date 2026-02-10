@@ -17,6 +17,7 @@ type ExistingTarget = {
   type: 'individual' | 'group' | 'channel' | 'status';
   active: boolean;
   notes?: string | null;
+  created_at?: string | null;
 };
 
 type SyncDiagnostics = Record<string, unknown> | null;
@@ -67,6 +68,14 @@ const buildFriendlyChannelName = (name: string, jid: string) => {
   const rawName = String(name || '').trim();
   return rawName && rawName !== normalizedJid ? rawName : normalizedJid;
 };
+
+const normalizePhoneByType = (type: string, phone: string) => {
+  const normalizedPhone = String(phone || '').trim();
+  if (type === 'channel') return normalizeChannelJid(normalizedPhone);
+  return normalizedPhone;
+};
+
+const buildTargetKey = (type: string, phone: string) => `${String(type || '').trim()}:${normalizePhoneByType(type, phone)}`;
 
 let syncTimer: NodeJS.Timeout | null = null;
 let syncInFlight = false;
@@ -148,15 +157,24 @@ const syncTargetsFromWhatsApp = async (
     });
   }
 
-  const { data: existingRows, error: existingError } = await supabase.from('targets').select('*');
+  const { data: existingRows, error: existingError } = await supabase
+    .from('targets')
+    .select('*')
+    .order('created_at', { ascending: true });
   if (existingError) throw existingError;
 
   const existing = (existingRows || []) as ExistingTarget[];
-  const existingByJid = new Map<string, ExistingTarget>();
+  const canonicalByKey = new Map<string, ExistingTarget>();
+  const duplicates: ExistingTarget[] = [];
   for (const row of existing) {
     const jid = String(row.phone_number || '').trim();
     if (!jid) continue;
-    existingByJid.set(jid, row);
+    const key = buildTargetKey(row.type, jid);
+    if (!canonicalByKey.has(key)) {
+      canonicalByKey.set(key, row);
+      continue;
+    }
+    duplicates.push(row);
   }
 
   let inserted = 0;
@@ -164,8 +182,19 @@ const syncTargetsFromWhatsApp = async (
   let unchanged = 0;
   let deactivated = 0;
 
+  for (const duplicate of duplicates) {
+    if (!duplicate.active) continue;
+    const { error: deactivateError } = await supabase
+      .from('targets')
+      .update({ active: false })
+      .eq('id', duplicate.id);
+    if (deactivateError) throw deactivateError;
+    deactivated += 1;
+  }
+
   for (const candidate of candidates) {
-    const current = existingByJid.get(candidate.phone_number);
+    const candidateKey = buildTargetKey(candidate.type, candidate.phone_number);
+    const current = canonicalByKey.get(candidateKey);
     if (!current) {
       const { error: insertError } = await supabase.from('targets').insert(candidate);
       if (insertError) throw insertError;
@@ -192,7 +221,7 @@ const syncTargetsFromWhatsApp = async (
     updated += 1;
   }
 
-  if (strict) {
+    if (strict) {
     const discoveredGroups = new Set(
       candidates
         .filter((candidate) => candidate.type === 'group')
@@ -212,7 +241,8 @@ const syncTargetsFromWhatsApp = async (
         .filter(Boolean)
     );
 
-    for (const row of existing) {
+    const canonicalRows = Array.from(canonicalByKey.values());
+    for (const row of canonicalRows) {
       if (!row.active) continue;
       const jid = String(row.phone_number || '').trim();
       if (!jid) continue;

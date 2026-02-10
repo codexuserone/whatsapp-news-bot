@@ -150,7 +150,7 @@ CORS_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 ```
 
 When `REQUIRE_BASIC_AUTH=true`, all routes require authentication except uptime probes:
-`/health`, `/ping`, and `/ready` (GET/HEAD only).
+`/health` and `/ping` (GET/HEAD only).
 Optional `ACCESS_ALLOWLIST` further restricts access by source IP.
 
 **Deploy Steps**:

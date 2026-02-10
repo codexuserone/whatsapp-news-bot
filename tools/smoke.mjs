@@ -196,6 +196,11 @@ const main = async () => {
       throw new Error(`Auth smoke failed: /health returned ${openHealth.status}`);
     }
 
+    const lockedReady = await fetchText(`http://localhost:${authPort}/ready`);
+    if (lockedReady.status !== 401) {
+      throw new Error(`Auth smoke failed: /ready without auth returned ${lockedReady.status}`);
+    }
+
     const lockedHealthMethod = await fetchText(`http://localhost:${authPort}/health`, { method: 'POST' });
     if (lockedHealthMethod.status !== 401) {
       throw new Error(`Auth smoke failed: POST /health returned ${lockedHealthMethod.status}, expected 401`);

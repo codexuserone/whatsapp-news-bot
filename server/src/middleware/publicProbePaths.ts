@@ -3,10 +3,8 @@ import type { Request } from 'express';
 const PUBLIC_PROBE_PATHS = new Set([
   '/health',
   '/ping',
-  '/ready',
   '/api/health',
-  '/api/ping',
-  '/api/ready'
+  '/api/ping'
 ]);
 
 const normalizePath = (pathValue: string) => {

@@ -61,6 +61,22 @@ const normalizeChannelJid = (value: string) => {
   return cleaned ? `${cleaned}@newsletter` : trimmed;
 };
 
+const buildFriendlyChannelName = (name: string, jid: string) => {
+  const normalizedJid = normalizeChannelJid(jid);
+  const rawName = String(name || '').trim();
+  if (rawName && rawName !== normalizedJid) return rawName;
+
+  const [firstPart = ''] = String(normalizedJid || '').split('@');
+  const localPart = firstPart
+    .replace(/^true_/i, '')
+    .replace(/_[A-F0-9]{8,}$/i, '')
+    .trim();
+
+  if (!localPart) return normalizedJid || 'Channel';
+  if (/^\d{6,}$/.test(localPart)) return `Channel ${localPart.slice(-6)}`;
+  return localPart.replace(/[_-]+/g, ' ').trim() || normalizedJid || 'Channel';
+};
+
 let syncTimer: NodeJS.Timeout | null = null;
 let syncInFlight = false;
 
@@ -119,8 +135,9 @@ const syncTargetsFromWhatsApp = async (
     const jid = normalizeChannelJid(String(channel?.jid || '').trim());
     if (!jid || usedJids.has(jid)) continue;
     usedJids.add(jid);
+    const friendlyName = buildFriendlyChannelName(String(channel?.name || ''), jid);
     candidates.push({
-      name: String(channel?.name || jid).trim() || jid,
+      name: friendlyName,
       phone_number: jid,
       type: 'channel',
       active: true,

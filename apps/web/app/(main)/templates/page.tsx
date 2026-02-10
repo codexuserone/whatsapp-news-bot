@@ -509,7 +509,7 @@ const TemplatesPage = () => {
                 <Send className="h-5 w-5" />
                 Send Preview
               </CardTitle>
-              <CardDescription>Test this template to yourself, your test group, or your test channel before enabling it in automations.</CardDescription>
+              <CardDescription>Send this template to any active destination before enabling it in automations.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="space-y-2">

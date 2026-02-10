@@ -413,8 +413,8 @@ const QueuePage = () => {
         </Card>
       )}
 
-      <div className="flex items-center gap-4">
-        <div className="flex bg-muted rounded-lg p-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex shrink-0 bg-muted rounded-lg p-1">
           <Button
             variant={viewMode === 'list' ? 'secondary' : 'ghost'}
             size="sm"
@@ -435,7 +435,7 @@ const QueuePage = () => {
           </Button>
         </div>
         <Select value={statusFilter || 'all'} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-44">
+          <SelectTrigger className="w-full max-w-full sm:w-44">
             <SelectValue placeholder="Select status" />
           </SelectTrigger>
           <SelectContent>
@@ -447,7 +447,9 @@ const QueuePage = () => {
             <SelectItem value="all">All ({queueStats?.total ?? 0})</SelectItem>
           </SelectContent>
         </Select>
-        <span className="text-sm text-muted-foreground">{queueItems.length} item{queueItems.length !== 1 ? 's' : ''}</span>
+        <span className="w-full text-sm text-muted-foreground sm:w-auto">
+          {queueItems.length} item{queueItems.length !== 1 ? 's' : ''}
+        </span>
       </div>
 
       {actionNotice ? (

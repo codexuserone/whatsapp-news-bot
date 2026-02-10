@@ -61,7 +61,7 @@ const TemplatesPage = () => {
   const queryClient = useQueryClient();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [sampleFeedId, setSampleFeedId] = useState<string>('__all');
-  const [previewTargetJid, setPreviewTargetJid] = useState<string>('');
+  const [previewTargetId, setPreviewTargetId] = useState<string>('');
   const [previewSendNotice, setPreviewSendNotice] = useState<string>('');
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
@@ -82,8 +82,38 @@ const TemplatesPage = () => {
   });
   const [active, setActive] = useState<Template | null>(null);
   const [previewWithData, setPreviewWithData] = useState(true);
-  const activeTargets = targets.filter((target) => target.active);
-  const effectivePreviewTargetJid = previewTargetJid || activeTargets[0]?.phone_number || '';
+  const activeTargets = React.useMemo(() => {
+    const isPlaceholderChannel = (target: Target) =>
+      target.type === 'channel' &&
+      (/^channel\s+\d+$/i.test(String(target.name || '').trim()) ||
+        String(target.name || '').toLowerCase().includes('@newsletter'));
+
+    const uniqueByDestination = new Map<string, Target>();
+
+    for (const target of targets) {
+      if (!target.active) continue;
+      if (isPlaceholderChannel(target)) continue;
+      const type = String(target.type || '').trim().toLowerCase();
+      const phone = String(target.phone_number || '').trim().toLowerCase();
+      if (!type || !phone) continue;
+      const key = `${type}:${phone}`;
+      if (!uniqueByDestination.has(key)) {
+        uniqueByDestination.set(key, target);
+      }
+    }
+
+    return Array.from(uniqueByDestination.values());
+  }, [targets]);
+
+  const effectivePreviewTargetId = React.useMemo(() => {
+    if (!activeTargets.length) return '';
+    const hasExplicitSelection = activeTargets.some((target) => target.id === previewTargetId);
+    if (hasExplicitSelection) return previewTargetId;
+    return activeTargets[0]?.id || '';
+  }, [activeTargets, previewTargetId]);
+
+  const selectedPreviewTarget =
+    activeTargets.find((target) => target.id === effectivePreviewTargetId) || null;
 
   const resolveSendMode = (template?: Template | null): 'image' | 'image_only' | 'link_preview' | 'text_only' => {
     if (template?.send_mode === 'image_only') return 'image_only';
@@ -233,7 +263,7 @@ const TemplatesPage = () => {
   const submitPreviewSend = () => {
     setPreviewSendNotice('');
 
-    const jid = String(effectivePreviewTargetJid || '').trim();
+    const jid = String(selectedPreviewTarget?.phone_number || '').trim();
     if (!jid) {
       setPreviewSendNotice('Pick a target first.');
       return;
@@ -514,14 +544,14 @@ const TemplatesPage = () => {
             <CardContent className="space-y-3">
               <div className="space-y-2">
                 <Label>Target</Label>
-                <Select value={effectivePreviewTargetJid || '__none'} onValueChange={(value) => setPreviewTargetJid(value === '__none' ? '' : value)}>
+                <Select value={effectivePreviewTargetId || '__none'} onValueChange={(value) => setPreviewTargetId(value === '__none' ? '' : value)}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select target" />
                   </SelectTrigger>
                   <SelectContent>
                     {activeTargets.length > 0 ? (
                       activeTargets.map((target) => (
-                        <SelectItem key={target.id} value={target.phone_number}>
+                        <SelectItem key={target.id} value={target.id}>
                           {target.name} ({target.type})
                         </SelectItem>
                       ))
@@ -540,7 +570,7 @@ const TemplatesPage = () => {
               </div>
 
               <div className="flex items-center gap-2">
-                <Button type="button" onClick={submitPreviewSend} disabled={sendPreview.isPending || !effectivePreviewTargetJid}>
+                <Button type="button" onClick={submitPreviewSend} disabled={sendPreview.isPending || !effectivePreviewTargetId}>
                   {sendPreview.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
                   Send Preview
                 </Button>

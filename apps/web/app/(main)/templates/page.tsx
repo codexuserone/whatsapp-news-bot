@@ -57,11 +57,38 @@ const formatWhatsAppMarkdown = (text: string) => {
     .replace(/\n/g, '<br/>');
 };
 
+const normalizeDisplayText = (value: unknown) => String(value || '').replace(/\s+/g, ' ').trim();
+
+const inferTargetType = (type: unknown, phoneNumber: unknown): Target['type'] => {
+  const rawType = String(type || '').trim().toLowerCase();
+  const phone = String(phoneNumber || '').trim().toLowerCase();
+  if (phone === 'status@broadcast') return 'status';
+  if (phone.includes('@newsletter')) return 'channel';
+  if (phone.endsWith('@g.us')) return 'group';
+  if (phone.endsWith('@s.whatsapp.net') || phone.endsWith('@lid')) return 'individual';
+  if (rawType === 'status' || rawType === 'channel' || rawType === 'group' || rawType === 'individual') {
+    return rawType as Target['type'];
+  }
+  return 'individual';
+};
+
+const scoreTargetName = (name: string, type: Target['type'], phoneNumber: string) => {
+  const normalized = normalizeDisplayText(name);
+  if (!normalized) return -1000;
+  let score = normalized.length;
+  if (type === 'channel' && /^channel\s+\d+$/i.test(normalized)) score -= 500;
+  if (normalized.toLowerCase().includes('@newsletter') || normalized.toLowerCase().includes('@g.us')) score -= 300;
+  if (normalized.toLowerCase() === String(phoneNumber || '').trim().toLowerCase()) score -= 250;
+  const repeatedTypeMentions = (normalized.match(/\((group|channel|status|individual)\)/gi) || []).length;
+  if (repeatedTypeMentions > 1) score -= 160;
+  return score;
+};
+
 const TemplatesPage = () => {
   const queryClient = useQueryClient();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [sampleFeedId, setSampleFeedId] = useState<string>('__all');
-  const [previewTargetId, setPreviewTargetId] = useState<string>('');
+  const [previewTargetPhone, setPreviewTargetPhone] = useState<string>('');
   const [previewSendNotice, setPreviewSendNotice] = useState<string>('');
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
@@ -83,22 +110,34 @@ const TemplatesPage = () => {
   const [active, setActive] = useState<Template | null>(null);
   const [previewWithData, setPreviewWithData] = useState(true);
   const activeTargets = React.useMemo(() => {
-    const isPlaceholderChannel = (target: Target) =>
-      target.type === 'channel' &&
-      (/^channel\s+\d+$/i.test(String(target.name || '').trim()) ||
-        String(target.name || '').toLowerCase().includes('@newsletter'));
-
     const uniqueByDestination = new Map<string, Target>();
 
     for (const target of targets) {
-      if (!target.active) continue;
-      if (isPlaceholderChannel(target)) continue;
-      const type = String(target.type || '').trim().toLowerCase();
-      const phone = String(target.phone_number || '').trim().toLowerCase();
-      if (!type || !phone) continue;
+      if (target?.active !== true) continue;
+      const phone = normalizeDisplayText(target?.phone_number).toLowerCase();
+      if (!phone) continue;
+      const type = inferTargetType(target?.type, phone);
+      const name = normalizeDisplayText(target?.name);
+      if (type === 'channel' && (/^channel\s+\d+$/i.test(name) || name.toLowerCase().includes('@newsletter'))) {
+        continue;
+      }
+
       const key = `${type}:${phone}`;
-      if (!uniqueByDestination.has(key)) {
-        uniqueByDestination.set(key, target);
+      const normalized: Target = {
+        id: String(target?.id || key),
+        name: name || phone,
+        phone_number: phone,
+        type,
+        active: true,
+        notes: target?.notes || null
+      };
+      const existing = uniqueByDestination.get(key);
+      if (!existing) {
+        uniqueByDestination.set(key, normalized);
+        continue;
+      }
+      if (scoreTargetName(normalized.name, normalized.type, normalized.phone_number) > scoreTargetName(existing.name, existing.type, existing.phone_number)) {
+        uniqueByDestination.set(key, normalized);
       }
     }
 
@@ -109,15 +148,15 @@ const TemplatesPage = () => {
     });
   }, [targets]);
 
-  const effectivePreviewTargetId = React.useMemo(() => {
+  const effectivePreviewTargetPhone = React.useMemo(() => {
     if (!activeTargets.length) return '';
-    const hasExplicitSelection = activeTargets.some((target) => target.id === previewTargetId);
-    if (hasExplicitSelection) return previewTargetId;
-    return activeTargets[0]?.id || '';
-  }, [activeTargets, previewTargetId]);
+    const hasExplicitSelection = activeTargets.some((target) => target.phone_number === previewTargetPhone);
+    if (hasExplicitSelection) return previewTargetPhone;
+    return activeTargets[0]?.phone_number || '';
+  }, [activeTargets, previewTargetPhone]);
 
   const selectedPreviewTarget =
-    activeTargets.find((target) => target.id === effectivePreviewTargetId) || null;
+    activeTargets.find((target) => target.phone_number === effectivePreviewTargetPhone) || null;
 
   const resolveSendMode = (template?: Template | null): 'image' | 'image_only' | 'link_preview' | 'text_only' => {
     if (template?.send_mode === 'image_only') return 'image_only';
@@ -548,14 +587,14 @@ const TemplatesPage = () => {
             <CardContent className="space-y-3">
               <div className="space-y-2">
                 <Label>Target</Label>
-                <Select value={effectivePreviewTargetId || '__none'} onValueChange={(value) => setPreviewTargetId(value === '__none' ? '' : value)}>
+                <Select value={effectivePreviewTargetPhone || '__none'} onValueChange={(value) => setPreviewTargetPhone(value === '__none' ? '' : value)}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select target" />
                   </SelectTrigger>
                   <SelectContent>
                     {activeTargets.length > 0 ? (
                       activeTargets.map((target) => (
-                        <SelectItem key={target.id} value={target.id}>
+                        <SelectItem key={`${target.type}:${target.phone_number}`} value={target.phone_number}>
                           {target.name} ({target.type})
                         </SelectItem>
                       ))
@@ -574,7 +613,7 @@ const TemplatesPage = () => {
               </div>
 
               <div className="flex items-center gap-2">
-                <Button type="button" onClick={submitPreviewSend} disabled={sendPreview.isPending || !effectivePreviewTargetId}>
+                <Button type="button" onClick={submitPreviewSend} disabled={sendPreview.isPending || !effectivePreviewTargetPhone}>
                   {sendPreview.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
                   Send Preview
                 </Button>

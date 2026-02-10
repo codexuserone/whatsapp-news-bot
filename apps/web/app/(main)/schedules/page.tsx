@@ -328,7 +328,7 @@ const SchedulesPage = () => {
         const reason = String(reconcile.reason || '').trim();
 
         if (processed > 0 || edited > 0 || replaced > 0 || failed > 0) {
-          return `Corrections: ${edited} edited, ${replaced} resent, ${failed} failed.`;
+          return `Corrections: ${edited} in-place edits, ${failed} failed${replaced > 0 ? `, ${replaced} replacement sends blocked` : ''}.`;
         }
         if (reason) {
           return `Corrections: ${reason}.`;
@@ -866,7 +866,7 @@ const SchedulesPage = () => {
                         onClick={() => setScheduleState.mutate({ scheduleId: schedule.id, state: 'active' })}
                         disabled={setScheduleState.isPending}
                       >
-                        Start
+                        {getScheduleState(schedule) === 'paused' ? 'Resume' : 'Start'}
                       </Button>
                     ) : null}
                     {getScheduleState(schedule) === 'active' ? (

@@ -42,6 +42,41 @@ type SendTestResponse = {
   } | null;
 };
 
+const normalizeDisplayText = (value: unknown) => String(value || '').replace(/\s+/g, ' ').trim();
+
+const inferTargetType = (type: unknown, phoneNumber: unknown): Target['type'] => {
+  const rawType = String(type || '').trim().toLowerCase();
+  const phone = String(phoneNumber || '').trim().toLowerCase();
+  if (phone === 'status@broadcast') return 'status';
+  if (phone.includes('@newsletter')) return 'channel';
+  if (phone.endsWith('@g.us')) return 'group';
+  if (phone.endsWith('@s.whatsapp.net') || phone.endsWith('@lid')) return 'individual';
+  if (rawType === 'status' || rawType === 'channel' || rawType === 'group' || rawType === 'individual') {
+    return rawType as Target['type'];
+  }
+  return 'individual';
+};
+
+const scoreTargetName = (name: string, type: Target['type'], phoneNumber: string) => {
+  const normalized = normalizeDisplayText(name);
+  if (!normalized) return -1000;
+  let score = normalized.length;
+  if (type === 'channel' && /^channel\s+\d+$/i.test(normalized)) score -= 500;
+  if (normalized.toLowerCase().includes('@newsletter') || normalized.toLowerCase().includes('@g.us')) score -= 300;
+  if (normalized.toLowerCase() === String(phoneNumber || '').trim().toLowerCase()) score -= 250;
+  const repeatedTypeMentions = (normalized.match(/\((group|channel|status|individual)\)/gi) || []).length;
+  if (repeatedTypeMentions > 1) score -= 160;
+  return score;
+};
+
+const isSafeImageSrc = (value: unknown) => {
+  const src = String(value || '').trim();
+  if (!src) return false;
+  if (src.startsWith('data:image/')) return true;
+  if (src.startsWith('/')) return true;
+  return src.startsWith('http://') || src.startsWith('https://');
+};
+
 const WhatsAppPage = () => {
   const queryClient = useQueryClient();
   const [selectedTargets, setSelectedTargets] = React.useState<string[]>([]);
@@ -83,29 +118,85 @@ const WhatsAppPage = () => {
     queryFn: () => api.get('/api/targets')
   });
 
-  const groups = React.useMemo<WhatsAppGroup[]>(
-    () =>
-      Array.isArray(groupsRaw)
-        ? (groupsRaw.filter((entry): entry is WhatsAppGroup => Boolean(entry && typeof entry === 'object')) as WhatsAppGroup[])
-        : [],
-    [groupsRaw]
-  );
+  const groups = React.useMemo<WhatsAppGroup[]>(() => {
+    if (!Array.isArray(groupsRaw)) return [];
+    return groupsRaw
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
+      .map((entry) => {
+        const jid = normalizeDisplayText(entry.jid || entry.id);
+        const name = normalizeDisplayText(entry.name || jid);
+        return {
+          id: String(entry.id || jid),
+          jid,
+          name: name || jid,
+          size: Number(entry.size || 0),
+          announce: entry.announce === true,
+          restrict: entry.restrict === true,
+          participantCount: Number(entry.participantCount || entry.size || 0),
+          me: {
+            jid: normalizeDisplayText((entry.me as { jid?: unknown } | undefined)?.jid) || null,
+            isAdmin: (entry.me as { isAdmin?: unknown } | undefined)?.isAdmin === true,
+            admin: normalizeDisplayText((entry.me as { admin?: unknown } | undefined)?.admin) || null
+          }
+        };
+      })
+      .filter((group) => Boolean(group.jid));
+  }, [groupsRaw]);
 
-  const channels = React.useMemo<WhatsAppChannel[]>(
-    () =>
-      Array.isArray(channelsRaw)
-        ? (channelsRaw.filter((entry): entry is WhatsAppChannel => Boolean(entry && typeof entry === 'object')) as WhatsAppChannel[])
-        : [],
-    [channelsRaw]
-  );
+  const channels = React.useMemo<WhatsAppChannel[]>(() => {
+    if (!Array.isArray(channelsRaw)) return [];
+    return channelsRaw
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
+      .map((entry) => {
+        const jid = normalizeDisplayText(entry.jid || entry.id);
+        const name = normalizeDisplayText(entry.name || jid);
+        const baseChannel: WhatsAppChannel = {
+          id: String(entry.id || jid),
+          jid,
+          name: name || jid,
+          subscribers: Number(entry.subscribers || 0),
+          role: normalizeDisplayText(entry.role) || null,
+          canPost: entry.canPost === true
+        };
+        const sourceRaw = entry.source;
+        if (sourceRaw === 'verified_target' || sourceRaw === 'saved' || sourceRaw === 'live') {
+          return { ...baseChannel, source: sourceRaw as 'live' | 'saved' | 'verified_target' };
+        }
+        return baseChannel;
+      })
+      .filter((channel) => Boolean(channel.jid));
+  }, [channelsRaw]);
 
-  const existingTargets = React.useMemo<Target[]>(
-    () =>
-      Array.isArray(existingTargetsRaw)
-        ? (existingTargetsRaw.filter((entry): entry is Target => Boolean(entry && typeof entry === 'object')) as Target[])
-        : [],
-    [existingTargetsRaw]
-  );
+  const existingTargets = React.useMemo<Target[]>(() => {
+    if (!Array.isArray(existingTargetsRaw)) return [];
+    const byDestination = new Map<string, Target>();
+    for (const entry of existingTargetsRaw) {
+      if (!entry || typeof entry !== 'object') continue;
+      const row = entry as Record<string, unknown>;
+      const phone = normalizeDisplayText(row.phone_number).toLowerCase();
+      if (!phone) continue;
+      const type = inferTargetType(row.type, phone);
+      const name = normalizeDisplayText(row.name) || phone;
+      const key = `${type}:${phone}`;
+      const candidate: Target = {
+        id: String(row.id || key),
+        name,
+        phone_number: phone,
+        type,
+        active: row.active === true,
+        notes: normalizeDisplayText(row.notes) || null
+      };
+      const existing = byDestination.get(key);
+      if (!existing) {
+        byDestination.set(key, candidate);
+        continue;
+      }
+      if (scoreTargetName(candidate.name, candidate.type, candidate.phone_number) > scoreTargetName(existing.name, existing.type, existing.phone_number)) {
+        byDestination.set(key, candidate);
+      }
+    }
+    return Array.from(byDestination.values());
+  }, [existingTargetsRaw]);
 
   const disconnect = useMutation({
     mutationFn: () => api.post('/api/whatsapp/disconnect'),
@@ -324,7 +415,7 @@ const WhatsAppPage = () => {
                 </div>
                 <p className="text-sm text-muted-foreground">Session is active</p>
               </div>
-            ) : qr?.qr ? (
+            ) : qr?.qr && isSafeImageSrc(qr.qr) ? (
               <div className="space-y-3 text-center">
                 <Image
                   src={qr.qr}
@@ -335,6 +426,12 @@ const WhatsAppPage = () => {
                   className="h-56 w-56 rounded-lg border bg-white p-2"
                 />
                 <p className="text-sm text-muted-foreground">Scan with your phone</p>
+              </div>
+            ) : qr?.qr ? (
+              <div className="space-y-3 text-center">
+                <p className="text-sm text-muted-foreground break-all">
+                  QR payload received but could not render as image. Click Get QR code again.
+                </p>
               </div>
             ) : (
               <div className="space-y-3 text-center">

@@ -17,6 +17,21 @@ type TargetRow = {
   notes?: string | null;
 };
 
+const normalizeDisplayText = (value: unknown) => String(value || '').replace(/\s+/g, ' ').trim();
+
+const normalizeTargetType = (type: unknown, phoneNumber: unknown) => {
+  const rawType = String(type || '').trim().toLowerCase();
+  const rawPhone = String(phoneNumber || '').trim().toLowerCase();
+  if (rawPhone === 'status@broadcast') return 'status';
+  if (rawPhone.includes('@newsletter')) return 'channel';
+  if (rawPhone.endsWith('@g.us')) return 'group';
+  if (rawPhone.endsWith('@s.whatsapp.net') || rawPhone.endsWith('@lid')) return 'individual';
+  if (rawType === 'status' || rawType === 'channel' || rawType === 'group' || rawType === 'individual') {
+    return rawType;
+  }
+  return 'individual';
+};
+
 const normalizeChannelJidForKey = (phoneNumber: string) => {
   const trimmed = String(phoneNumber || '').trim();
   if (!trimmed) return '';
@@ -36,36 +51,58 @@ const isPlaceholderChannelName = (name: unknown) => /^channel\s+\d+$/i.test(Stri
 const isRawChannelJidLabel = (name: unknown) => String(name || '').trim().toLowerCase().includes('@newsletter');
 
 const scoreTargetForResponse = (target: { active?: boolean; type?: string; name?: string; updated_at?: string | null; created_at?: string | null }) => {
+  const normalizedName = normalizeDisplayText(target.name);
+  const typeMentions = (normalizedName.match(/\((group|channel|status|individual)\)/gi) || []).length;
   const activeScore = target.active ? 1000 : 0;
   const placeholderPenalty =
-    target.type === 'channel' && isPlaceholderChannelName(target.name)
+    target.type === 'channel' && isPlaceholderChannelName(normalizedName)
       ? -200
       : 0;
+  const rawJidPenalty = /@(g\.us|newsletter|s\.whatsapp\.net|lid)/i.test(normalizedName) ? -220 : 0;
+  const repeatedLabelPenalty = typeMentions > 1 ? -120 : 0;
+  const missingNamePenalty = !normalizedName ? -240 : 0;
   const updated = Date.parse(String(target.updated_at || target.created_at || 0));
   const freshness = Number.isFinite(updated) ? updated / 1_000_000_000_000 : 0;
-  return activeScore + placeholderPenalty + freshness;
+  return activeScore + placeholderPenalty + rawJidPenalty + repeatedLabelPenalty + missingNamePenalty + freshness;
 };
 
 const dedupeTargetsForResponse = (rows: TargetRow[]) => {
   const byKey = new Map<string, TargetRow>();
 
   for (const row of rows || []) {
-    const type = String(row.type || '').trim();
+    const type = normalizeTargetType(row.type, row.phone_number);
     if (type === 'channel' && (isPlaceholderChannelName(row.name) || isRawChannelJidLabel(row.name))) {
       continue;
     }
     const phone = normalizePhoneForKey(type, String(row.phone_number || ''));
     if (!type || !phone) continue;
     const key = `${type}:${phone}`;
+    const normalizedRow: TargetRow = {
+      ...row,
+      type,
+      phone_number: phone,
+      name: normalizeDisplayText(row.name)
+    };
     const current = byKey.get(key);
-    if (!current || scoreTargetForResponse(row) > scoreTargetForResponse(current)) {
-      byKey.set(key, row);
+    if (!current || scoreTargetForResponse(normalizedRow) > scoreTargetForResponse(current)) {
+      byKey.set(key, normalizedRow);
     }
   }
 
-  return Array.from(byKey.values()).sort((a, b) =>
-    String(b.created_at || '').localeCompare(String(a.created_at || ''))
-  );
+  return Array.from(byKey.values())
+    .map((row) => {
+      const type = normalizeTargetType(row.type, row.phone_number);
+      const phone = String(row.phone_number || '').trim();
+      const name = normalizeDisplayText(row.name);
+      const fallbackName = type === 'status' ? 'My Status' : phone;
+      return {
+        ...row,
+        type,
+        phone_number: phone,
+        name: name || fallbackName
+      };
+    })
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
 };
 
 const targetRoutes = () => {

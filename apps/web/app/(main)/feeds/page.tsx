@@ -34,6 +34,8 @@ type FeedTestResult = {
   sampleItem?: Record<string, unknown>;
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 
 const FeedsPage = () => {
   const queryClient = useQueryClient();
@@ -96,7 +98,21 @@ const FeedsPage = () => {
   });
 
   const deleteFeed = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/feeds/${id}`),
+    mutationFn: async (id: string) => {
+      let delayMs = 250;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          return await api.delete(`/api/feeds/${id}`);
+        } catch (error) {
+          const message = getErrorMessage(error).toLowerCase();
+          const isRateLimited = message.includes('too many requests') || message.includes('rate limit');
+          if (!isRateLimited || attempt === 3) throw error;
+          await sleep(delayMs);
+          delayMs *= 2;
+        }
+      }
+      return null;
+    },
     onSuccess: (_, id) => {
       queryClient.invalidateQueries({ queryKey: ['feeds'] });
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });

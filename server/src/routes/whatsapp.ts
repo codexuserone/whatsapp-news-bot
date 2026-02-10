@@ -355,6 +355,15 @@ const whatsappRoutes = () => {
     const whatsapp = req.app.locals.whatsapp;
     const supabase = getSupabaseClient();
     const seededChannelJids = new Set<string>();
+    const savedChannelFallbacks = new Map<string, {
+      id: string;
+      jid: string;
+      name: string;
+      subscribers: number;
+      role: string | null;
+      canPost: boolean;
+      source: 'saved';
+    }>();
     const channelsByJid = new Map<string, {
       id: string;
       jid: string;
@@ -362,7 +371,7 @@ const whatsappRoutes = () => {
       subscribers: number;
       role: string | null;
       canPost: boolean;
-      source: 'live' | 'verified_target';
+      source: 'live' | 'verified_target' | 'saved';
     }>();
     const discoveredChannelCandidates: DiscoveredTargetCandidate[] = [];
     const isConnected = whatsapp?.getStatus?.().status === 'connected';
@@ -373,13 +382,29 @@ const whatsappRoutes = () => {
     if (supabase) {
       const { data: savedChannelRows } = await supabase
         .from('targets')
-        .select('phone_number')
+        .select('phone_number,name,active')
         .eq('type', 'channel');
-      for (const row of (savedChannelRows || []) as Array<{ phone_number?: string }>) {
+      for (const row of (savedChannelRows || []) as Array<{ phone_number?: string; name?: string; active?: boolean }>) {
         const jid = normalizeChannelJid(String(row?.phone_number || '').trim());
         if (!jid) continue;
         seededChannelJids.add(jid);
+        if (row?.active !== true) continue;
+        const friendlyName = buildFriendlyChannelName(String(row?.name || ''), jid);
+        if (!friendlyName) continue;
+        savedChannelFallbacks.set(jid.toLowerCase(), {
+          id: jid,
+          jid,
+          name: friendlyName,
+          subscribers: 0,
+          role: null,
+          canPost: false,
+          source: 'saved'
+        });
       }
+    }
+
+    for (const [key, channel] of savedChannelFallbacks.entries()) {
+      channelsByJid.set(key, channel);
     }
     
     if (whatsapp) {

@@ -20,6 +20,36 @@ const FEED_PAUSED_ERROR = 'Feed paused';
 const feedsRoutes = () => {
   const router = express.Router();
 
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const isRateLimitError = (error: unknown) => {
+    const status = (error as { status?: unknown })?.status;
+    if (typeof status === 'number' && status === 429) return true;
+    const message = String((error as { message?: unknown })?.message || '').toLowerCase();
+    return message.includes('too many requests') || message.includes('rate limit');
+  };
+
+  const withRateLimitRetry = async <T>(
+    operation: () => Promise<T>,
+    label: string,
+    maxAttempts = 4
+  ): Promise<T> => {
+    let delayMs = 250;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await operation();
+      } catch (error) {
+        if (!isRateLimitError(error) || attempt >= maxAttempts) {
+          throw error;
+        }
+        console.warn(`${label} hit rate-limit, retrying`, { attempt, delayMs, message: getErrorMessage(error) });
+        await sleep(delayMs);
+        delayMs = Math.min(delayMs * 2, 2000);
+      }
+    }
+    throw new Error(`${label} failed after retries`);
+  };
+
   const runAsync = (label: string, work: () => Promise<void>) => {
     setImmediate(() => {
       work().catch((error) => {
@@ -224,10 +254,15 @@ const feedsRoutes = () => {
       }
 
       // Mark feed inactive first so scheduler refresh can stop polling it.
-      const { error: deactivateError } = await getDb()
-        .from('feeds')
-        .update({ active: false })
-        .eq('id', feedId);
+      const deactivateResponse = await withRateLimitRetry<{ error?: unknown }>(
+        () =>
+          getDb()
+            .from('feeds')
+            .update({ active: false })
+            .eq('id', feedId),
+        'Feed deactivate'
+      );
+      const deactivateError = deactivateResponse?.error;
 
       if (deactivateError) throw deactivateError;
 
@@ -241,10 +276,15 @@ const feedsRoutes = () => {
         console.warn('Feed remained in-flight during delete timeout; proceeding with delete', { feedId });
       }
 
-      const { error } = await getDb()
-        .from('feeds')
-        .delete()
-        .eq('id', feedId);
+      const deleteResponse = await withRateLimitRetry<{ error?: unknown }>(
+        () =>
+          getDb()
+            .from('feeds')
+            .delete()
+            .eq('id', feedId),
+        'Feed delete'
+      );
+      const error = deleteResponse?.error;
       
       if (error) throw error;
 

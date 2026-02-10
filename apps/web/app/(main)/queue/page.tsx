@@ -601,7 +601,7 @@ const QueuePage = () => {
                           ) : (
                             <PauseCircle className="mr-1 h-3 w-3" />
                           )}
-                          {canResume(item) ? 'Resume item' : 'Pause item'}
+                          {canResume(item) ? 'Resume this delivery' : 'Pause this delivery'}
                         </Button>
                       ) : null}
 
@@ -617,7 +617,7 @@ const QueuePage = () => {
                           ) : (
                             <PauseCircle className="mr-1 h-3 w-3" />
                           )}
-                          {canResumePost(item) ? 'Resume story' : 'Pause story'}
+                          {canResumePost(item) ? 'Resume this story (all deliveries)' : 'Pause this story (all deliveries)'}
                         </Button>
                       ) : null}
 
@@ -706,7 +706,7 @@ const QueuePage = () => {
                           disabled={pauseItem.isPending || resumeItem.isPending}
                         >
                           {canResume(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
-                          {canResume(item) ? 'Resume item' : 'Pause item'}
+                          {canResume(item) ? 'Resume delivery' : 'Pause delivery'}
                         </Button>
                       )}
                       {canTogglePostPause(item) && (
@@ -718,7 +718,7 @@ const QueuePage = () => {
                           disabled={pausePost.isPending || resumePost.isPending}
                         >
                           {canResumePost(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
-                          {canResumePost(item) ? 'Resume story' : 'Pause story'}
+                          {canResumePost(item) ? 'Resume story' : 'Pause story (all)'}
                         </Button>
                       )}
                       <Button size="sm" variant="outline" className="h-7 text-xs px-2 ml-auto" onClick={() => sendNowItem.mutate(item.id)} disabled={!canSendNow(item)}>

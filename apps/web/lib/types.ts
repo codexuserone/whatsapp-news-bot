@@ -201,7 +201,7 @@ export type WhatsAppChannel = {
   subscribers: number;
   role?: string | null;
   canPost?: boolean;
-  source?: 'live' | 'saved';
+  source?: 'live' | 'saved' | 'verified_target';
 };
 
 export type ShabbosStatus = {

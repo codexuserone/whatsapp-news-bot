@@ -1104,11 +1104,11 @@ class WhatsAppClient {
 
           const remoteJid = normalizeNewsletterJid(message?.key?.remoteJid, { allowNumeric: false });
           if (remoteJid) {
-            const hintName =
-              readTextValue(message?.pushName) ||
-              readTextValue(message?.message?.conversation) ||
-              remoteJid;
-            this.cacheNewsletterChat({ jid: remoteJid, name: hintName, subscribers: 0 });
+            // Never infer channel names from message body text.
+            // Only use push/display names that can represent the chat title.
+            const hintName = readTextValue(message?.pushName) || remoteJid;
+            const safeName = hintName.replace(/\s+/g, ' ').trim() || remoteJid;
+            this.cacheNewsletterChat({ jid: remoteJid, name: safeName, subscribers: 0 });
           }
         }
 
@@ -1481,7 +1481,7 @@ class WhatsAppClient {
     }
   }
 
-  async getChannelsWithDiagnostics(_seedJids: string[] = []): Promise<{ channels: ChannelSummary[]; diagnostics: ChannelDiagnostics }> {
+  async getChannelsWithDiagnostics(seedJids: string[] = []): Promise<{ channels: ChannelSummary[]; diagnostics: ChannelDiagnostics }> {
     const socket = this.socket as any;
     const diagnostics: ChannelDiagnostics = {
       methodsTried: [],
@@ -1494,6 +1494,14 @@ class WhatsAppClient {
       diagnostics.limitation = 'WhatsApp is not connected.';
       return { channels: [], diagnostics };
     }
+
+    const normalizedSeedJids = Array.from(
+      new Set(
+        (Array.isArray(seedJids) ? seedJids : [])
+          .map((value) => normalizeNewsletterJid(value, { allowNumeric: true }))
+          .filter(Boolean)
+      )
+    );
 
     const channelMap = new Map<string, ChannelSummary>();
     const mergeChannel = (candidate: ChannelSummary, source: 'api' | 'cache' | 'metadata' | 'store') => {
@@ -1523,6 +1531,22 @@ class WhatsAppClient {
       };
       channelMap.set(candidate.jid, merged);
       diagnostics.sourceCounts[source] += 1;
+    }
+
+    // Method 0: Verify known/saved channel JIDs through metadata
+    if (normalizedSeedJids.length && typeof socket.newsletterMetadata === 'function') {
+      diagnostics.methodsTried.push('seed:metadata-verify');
+      for (const seedJid of normalizedSeedJids.slice(0, 100)) {
+        try {
+          const metadata = await socket.newsletterMetadata('jid', seedJid);
+          const normalized = extractChannelSummary(metadata, { allowNumeric: true });
+          if (!normalized?.jid) continue;
+          mergeChannel(normalized, 'metadata');
+          this.cacheNewsletterChat(normalized);
+        } catch (error) {
+          diagnostics.methodErrors.push(`seed:${seedJid}:${getErrorMessage(error)}`);
+        }
+      }
     }
 
     diagnostics.methodsTried.push('api:list-not-available-in-current-baileys');
@@ -1594,8 +1618,8 @@ class WhatsAppClient {
     return { channels, diagnostics };
   }
 
-  async getChannels(): Promise<Array<{ id: string; jid: string; name: string; subscribers: number }>> {
-    const result = await this.getChannelsWithDiagnostics();
+  async getChannels(seedJids: string[] = []): Promise<Array<{ id: string; jid: string; name: string; subscribers: number }>> {
+    const result = await this.getChannelsWithDiagnostics(seedJids);
     return result.channels;
   }
 

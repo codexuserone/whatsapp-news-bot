@@ -354,6 +354,7 @@ const whatsappRoutes = () => {
   router.get('/channels', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
     const supabase = getSupabaseClient();
+    const seededChannelJids = new Set<string>();
     const channelsByJid = new Map<string, {
       id: string;
       jid: string;
@@ -361,20 +362,32 @@ const whatsappRoutes = () => {
       subscribers: number;
       role: string | null;
       canPost: boolean;
-      source: 'live';
+      source: 'live' | 'verified_target';
     }>();
     const discoveredChannelCandidates: DiscoveredTargetCandidate[] = [];
     const isConnected = whatsapp?.getStatus?.().status === 'connected';
     if (!isConnected) {
       return res.json([]);
     }
+
+    if (supabase) {
+      const { data: savedChannelRows } = await supabase
+        .from('targets')
+        .select('phone_number')
+        .eq('type', 'channel');
+      for (const row of (savedChannelRows || []) as Array<{ phone_number?: string }>) {
+        const jid = normalizeChannelJid(String(row?.phone_number || '').trim());
+        if (!jid) continue;
+        seededChannelJids.add(jid);
+      }
+    }
     
     if (whatsapp) {
       const enriched =
         typeof whatsapp.getChannelsWithDiagnostics === 'function'
-          ? await whatsapp.getChannelsWithDiagnostics()
+          ? await whatsapp.getChannelsWithDiagnostics(Array.from(seededChannelJids))
           : null;
-      const liveChannels = enriched?.channels || await whatsapp.getChannels?.() || [];
+      const liveChannels = enriched?.channels || await whatsapp.getChannels?.(Array.from(seededChannelJids)) || [];
       for (const channel of liveChannels) {
         const jid = normalizeChannelJid(String(channel?.jid || '').trim());
         if (!jid) continue;
@@ -384,6 +397,7 @@ const whatsappRoutes = () => {
         if (!friendlyName) continue;
         const role = String((channel as { role?: string | null })?.role || '').trim() || null;
         const canPost = (channel as { canPost?: boolean })?.canPost === true;
+        const isSeeded = seededChannelJids.has(jid);
         channelsByJid.set(jid.toLowerCase(), {
           id: jid,
           jid,
@@ -391,7 +405,7 @@ const whatsappRoutes = () => {
           subscribers: Number(channel?.subscribers || 0),
           role,
           canPost,
-          source: 'live'
+          source: isSeeded && sourceTag === 'metadata' ? 'verified_target' : 'live'
         });
         const noteParts: string[] = [];
         if (Number.isFinite(channel?.subscribers)) {

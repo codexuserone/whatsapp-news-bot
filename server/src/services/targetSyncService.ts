@@ -41,8 +41,8 @@ type SyncTargetsResult = {
 type WhatsAppSyncClient = {
   getStatus?: () => { status?: string };
   getGroups?: () => Promise<Array<{ jid?: string; name?: string; size?: number }>>;
-  getChannels?: () => Promise<Array<{ jid?: string; name?: string; subscribers?: number }>>;
-  getChannelsWithDiagnostics?: () => Promise<{
+  getChannels?: (seedJids?: string[]) => Promise<Array<{ jid?: string; name?: string; subscribers?: number }>>;
+  getChannelsWithDiagnostics?: (seedJids?: string[]) => Promise<{
     channels: Array<{ jid?: string; name?: string; subscribers?: number }>;
     diagnostics?: Record<string, unknown>;
   }>;
@@ -110,12 +110,28 @@ const syncTargetsFromWhatsApp = async (
     throw new Error('Database not available');
   }
 
+  const { data: existingRows, error: existingError } = await supabase
+    .from('targets')
+    .select('*')
+    .order('created_at', { ascending: true });
+  if (existingError) throw existingError;
+
+  const existing = (existingRows || []) as ExistingTarget[];
+  const seededChannelJids = Array.from(
+    new Set(
+      existing
+        .filter((row) => row.type === 'channel')
+        .map((row) => normalizeChannelJid(String(row.phone_number || '').trim()))
+        .filter(Boolean)
+    )
+  );
+
   const groupsRaw = await (whatsapp.getGroups?.() || []);
   const channelsWithDiagnostics =
     typeof whatsapp.getChannelsWithDiagnostics === 'function'
-      ? await whatsapp.getChannelsWithDiagnostics()
+      ? await whatsapp.getChannelsWithDiagnostics(seededChannelJids)
       : null;
-  const channelsRaw = channelsWithDiagnostics?.channels || (await (whatsapp.getChannels?.() || []));
+  const channelsRaw = channelsWithDiagnostics?.channels || (await (whatsapp.getChannels?.(seededChannelJids) || []));
   const includeStatus = options?.includeStatus !== false;
   const strict = options?.strict !== false;
 
@@ -160,13 +176,6 @@ const syncTargetsFromWhatsApp = async (
     });
   }
 
-  const { data: existingRows, error: existingError } = await supabase
-    .from('targets')
-    .select('*')
-    .order('created_at', { ascending: true });
-  if (existingError) throw existingError;
-
-  const existing = (existingRows || []) as ExistingTarget[];
   const canonicalByKey = new Map<string, ExistingTarget>();
   const duplicates: ExistingTarget[] = [];
   for (const row of existing) {

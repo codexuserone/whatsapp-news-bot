@@ -102,7 +102,11 @@ const TemplatesPage = () => {
       }
     }
 
-    return Array.from(uniqueByDestination.values());
+    return Array.from(uniqueByDestination.values()).sort((a, b) => {
+      const aKey = `${String(a.type || '')}:${String(a.name || '')}:${String(a.phone_number || '')}`.toLowerCase();
+      const bKey = `${String(b.type || '')}:${String(b.name || '')}:${String(b.phone_number || '')}`.toLowerCase();
+      return aKey.localeCompare(bKey);
+    });
   }, [targets]);
 
   const effectivePreviewTargetId = React.useMemo(() => {

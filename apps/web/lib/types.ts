@@ -136,6 +136,15 @@ export type QueueStats = {
   window_start?: string;
 };
 
+export type ReconcileResult = {
+  processed: number;
+  edited: number;
+  replaced: number;
+  skipped: number;
+  failed: number;
+  reason?: string;
+};
+
 export type WhatsAppStatus = {
   status: string;
   lastError?: string | null;

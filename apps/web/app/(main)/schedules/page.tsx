@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Feed, Schedule, Target, Template } from '@/lib/types';
+import type { Feed, ReconcileResult, Schedule, Target, Template } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -54,6 +54,7 @@ type DispatchResult = {
   reason?: string;
   resumeAt?: string | null;
   error?: string | null;
+  reconcile?: ReconcileResult | null;
 };
 
 type DispatchDiagnostics = {
@@ -347,6 +348,23 @@ const SchedulesPage = () => {
     onSuccess: async (data: DispatchResult, scheduleId: string) => {
       queryClient.invalidateQueries({ queryKey: ['logs'] });
       queryClient.invalidateQueries({ queryKey: ['queue'] });
+      const summarizeReconcile = (reconcile?: ReconcileResult | null) => {
+        if (!reconcile) return '';
+        const processed = Number(reconcile.processed || 0);
+        const edited = Number(reconcile.edited || 0);
+        const replaced = Number(reconcile.replaced || 0);
+        const failed = Number(reconcile.failed || 0);
+        const reason = String(reconcile.reason || '').trim();
+
+        if (processed > 0 || edited > 0 || replaced > 0 || failed > 0) {
+          return `Corrections: ${edited} edited, ${replaced} resent, ${failed} failed.`;
+        }
+        if (reason) {
+          return `Corrections: ${reason}.`;
+        }
+        return '';
+      };
+
       let message;
       if ((data?.sent || 0) > 0) {
         const sentCount = data?.sent || 0;
@@ -354,6 +372,10 @@ const SchedulesPage = () => {
         message = `Successfully sent ${sentCount} message${sentCount !== 1 ? 's' : ''}`;
         if (queuedCount > 0) {
           message += ` (queued ${queuedCount} more)`;
+        }
+        const reconcileSummary = summarizeReconcile(data?.reconcile);
+        if (reconcileSummary) {
+          message += `\n\n${reconcileSummary}`;
         }
       } else if ((data?.queued || 0) > 0) {
         const queuedCount = data?.queued || 0;
@@ -363,8 +385,16 @@ const SchedulesPage = () => {
         } else {
           message += ' Connect WhatsApp and dispatch again to send.';
         }
+        const reconcileSummary = summarizeReconcile(data?.reconcile);
+        if (reconcileSummary) {
+          message += `\n\n${reconcileSummary}`;
+        }
       } else if (data?.skipped && data?.reason) {
         message = `Skipped: ${data.reason}`;
+        const reconcileSummary = summarizeReconcile(data?.reconcile);
+        if (reconcileSummary) {
+          message += `\n\n${reconcileSummary}`;
+        }
       } else {
         try {
           const diagnostics = await api.get<DispatchDiagnostics>(`/api/schedules/${scheduleId}/diagnostics`);
@@ -380,8 +410,16 @@ const SchedulesPage = () => {
           if (!blocking.length && !warnings.length) {
             message += '\n\nNo new items were queued since the last run.';
           }
+          const reconcileSummary = summarizeReconcile(data?.reconcile);
+          if (reconcileSummary) {
+            message += `\n\n${reconcileSummary}`;
+          }
         } catch {
           message = 'No messages were sent. No new items were queued.';
+          const reconcileSummary = summarizeReconcile(data?.reconcile);
+          if (reconcileSummary) {
+            message += `\n\n${reconcileSummary}`;
+          }
         }
       }
       alert(message);

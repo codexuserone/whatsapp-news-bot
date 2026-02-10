@@ -26,8 +26,18 @@ const schema = z.object({
   max_retries: z.coerce.number().min(0).max(25),
   defaultInterTargetDelaySec: z.coerce.number().min(0),
   defaultIntraTargetDelaySec: z.coerce.number().min(0),
+  post_send_edit_window_minutes: z.coerce.number().min(1).max(720),
+  post_send_correction_window_minutes: z.coerce.number().min(1).max(720),
   processingTimeoutMinutes: z.coerce.number().min(1),
   dedupeThreshold: z.coerce.number().min(0).max(1).optional()
+}).superRefine((value, ctx) => {
+  if (value.post_send_correction_window_minutes < value.post_send_edit_window_minutes) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['post_send_correction_window_minutes'],
+      message: 'Correction window must be >= edit window'
+    });
+  }
 });
 
 type SettingsFormValues = z.infer<typeof schema>;
@@ -83,6 +93,8 @@ const SettingsPage = () => {
       max_retries: 3,
       defaultInterTargetDelaySec: 8,
       defaultIntraTargetDelaySec: 3,
+      post_send_edit_window_minutes: 15,
+      post_send_correction_window_minutes: 120,
       processingTimeoutMinutes: 30,
       dedupeThreshold: 0.88
     }
@@ -137,6 +149,20 @@ const SettingsPage = () => {
     }
   };
 
+  const submitSettings = (values: SettingsFormValues) => {
+    const editWindow = Math.max(1, Math.min(720, Number(values.post_send_edit_window_minutes || 15)));
+    const correctionWindow = Math.max(
+      editWindow,
+      Math.min(720, Number(values.post_send_correction_window_minutes || 120))
+    );
+
+    saveSettings.mutate({
+      ...values,
+      post_send_edit_window_minutes: editWindow,
+      post_send_correction_window_minutes: correctionWindow
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -144,7 +170,7 @@ const SettingsPage = () => {
         <p className="text-muted-foreground">Configure global defaults and safety controls.</p>
       </div>
 
-      <form onSubmit={form.handleSubmit((values) => saveSettings.mutate(values))} className="space-y-6">
+      <form onSubmit={form.handleSubmit(submitSettings)} className="space-y-6">
         <Card id="general">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -261,6 +287,28 @@ const SettingsPage = () => {
                     type="number"
                     {...form.register('processingTimeoutMinutes', { valueAsNumber: true })}
                   />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="post_send_edit_window_minutes">In-place Edit Window (min)</Label>
+                  <Input
+                    id="post_send_edit_window_minutes"
+                    type="number"
+                    {...form.register('post_send_edit_window_minutes', { valueAsNumber: true })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Within this window, the app attempts true WhatsApp message edit.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="post_send_correction_window_minutes">Correction Follow-up Window (min)</Label>
+                  <Input
+                    id="post_send_correction_window_minutes"
+                    type="number"
+                    {...form.register('post_send_correction_window_minutes', { valueAsNumber: true })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Outside edit window but inside this window, the app sends corrected replacement message.
+                  </p>
                 </div>
               </div>
             </details>

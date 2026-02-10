@@ -343,6 +343,31 @@ class WhatsAppClient {
     return groups.sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  getGroupsFromChatStore(): GroupSummary[] {
+    const socket = this.socket as any;
+    if (!socket) return [];
+
+    try {
+      const chats = socket.store?.chats?.all?.() || socket.store?.chats || [];
+      const chatArray = Array.isArray(chats) ? chats : Object.values(chats || {});
+      const map = new Map<string, GroupSummary>();
+
+      for (const chat of chatArray as Array<Record<string, unknown>>) {
+        const jid = String(chat?.id || chat?.jid || '').trim();
+        if (!jid || !jid.endsWith('@g.us')) continue;
+        const name = String(chat?.name || chat?.subject || jid).trim() || jid;
+        const sizeRaw = Number(chat?.size);
+        const participants = Array.isArray(chat?.participants) ? chat.participants : [];
+        const size = Number.isFinite(sizeRaw) ? sizeRaw : participants.length;
+        map.set(jid, { id: jid, jid, name, size });
+      }
+
+      return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+    } catch {
+      return [];
+    }
+  }
+
   async handleCorruptedAuthState(err: unknown): Promise<void> {
     if (this.isHandlingAuthCorruption) return;
     this.isHandlingAuthCorruption = true;
@@ -1239,7 +1264,10 @@ class WhatsAppClient {
     }
 
     if (!socket) {
-      return this.groupsListCache.length ? this.groupsListCache : this.getGroupsFromMetadataCache();
+      if (this.groupsListCache.length) return this.groupsListCache;
+      const fallbackFromMetadata = this.getGroupsFromMetadataCache();
+      if (fallbackFromMetadata.length) return fallbackFromMetadata;
+      return this.getGroupsFromChatStore();
     }
 
     if (this.groupsListFetchInFlight) {
@@ -1274,7 +1302,13 @@ class WhatsAppClient {
         this.groupsListFetchedAtMs = Date.now();
         return normalized;
       } catch (err) {
-        const fallback = this.groupsListCache.length ? this.groupsListCache : this.getGroupsFromMetadataCache();
+        const fallback = this.groupsListCache.length
+          ? this.groupsListCache
+          : (() => {
+            const metadataFallback = this.getGroupsFromMetadataCache();
+            if (metadataFallback.length) return metadataFallback;
+            return this.getGroupsFromChatStore();
+          })();
         if (this.isRateOverLimitError(err)) {
           logger.warn({ err, cachedCount: fallback.length }, 'WhatsApp group fetch rate-limited; using cached groups');
           return fallback;

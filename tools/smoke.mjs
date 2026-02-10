@@ -228,6 +228,42 @@ const main = async () => {
     await stopProcess(authApi);
   }
 
+  // Allowlist smoke: valid credentials but non-matching IP should be denied.
+  const allowlistPort = await findFreePort(10300);
+  const allowlistApi = spawn('node', ['server/dist/index.js'], {
+    env: {
+      ...process.env,
+      PORT: allowlistPort,
+      NODE_ENV: 'production',
+      DISABLE_WHATSAPP: 'true',
+      DISABLE_SCHEDULERS: 'true',
+      REQUIRE_BASIC_AUTH: 'true',
+      BASIC_AUTH_USER: authUser,
+      BASIC_AUTH_PASS: authPass,
+      BASIC_AUTH_REQUIRE_HTTPS: 'false',
+      ACCESS_ALLOWLIST: '203.0.113.10',
+      TRUST_PROXY_HOPS: '0',
+      ALLOW_WEAK_BASIC_AUTH: 'false',
+      SUPABASE_URL: process.env.SUPABASE_URL || 'https://example.supabase.co',
+      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || 'smoke-test-key'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  allowlistApi.stdout.on('data', (d) => process.stdout.write(d));
+  allowlistApi.stderr.on('data', (d) => process.stderr.write(d));
+
+  try {
+    await waitForOkOrExit(allowlistApi, `http://localhost:${allowlistPort}/health`);
+    const denied = await fetchText(`http://localhost:${allowlistPort}/api/openapi.json`, {
+      headers: { Authorization: basicAuthHeader(authUser, authPass) }
+    });
+    if (denied.status !== 403) {
+      throw new Error(`Allowlist smoke failed: expected 403, got ${denied.status}`);
+    }
+  } finally {
+    await stopProcess(allowlistApi);
+  }
+
   // Static export smoke
   const staticIndexPath = path.join(process.cwd(), 'server', 'public', 'index.html');
   const staticHtml = await fs.readFile(staticIndexPath, 'utf8');

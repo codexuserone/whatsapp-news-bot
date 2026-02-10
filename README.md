@@ -104,6 +104,7 @@ BASIC_AUTH_REALM=WhatsApp News Bot
 BASIC_AUTH_REQUIRE_HTTPS=true
 ALLOW_WEAK_BASIC_AUTH=false
 ACCESS_ALLOWLIST=203.0.113.10
+TRUST_PROXY_HOPS=1
 HSTS_MAX_AGE_SECONDS=15552000
 SKIP_WHATSAPP_LEASE=false
 ```
@@ -145,6 +146,7 @@ BASIC_AUTH_REALM=WhatsApp News Bot
 BASIC_AUTH_REQUIRE_HTTPS=true
 ALLOW_WEAK_BASIC_AUTH=false
 ACCESS_ALLOWLIST=203.0.113.10
+TRUST_PROXY_HOPS=1
 HSTS_MAX_AGE_SECONDS=15552000
 CORS_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 ```
@@ -152,6 +154,7 @@ CORS_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 When `REQUIRE_BASIC_AUTH=true`, all routes require authentication except uptime probes:
 `/health` and `/ping` (GET/HEAD only).
 Optional `ACCESS_ALLOWLIST` further restricts access by source IP.
+`ACCESS_ALLOWLIST` supports exact IPs and IPv4 CIDR entries (for example `198.51.100.0/24`).
 
 **Deploy Steps**:
 1. Push to GitHub

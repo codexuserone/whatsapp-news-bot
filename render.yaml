@@ -40,6 +40,8 @@ services:
         value: "false"
       - key: ACCESS_ALLOWLIST
         sync: false
+      - key: TRUST_PROXY_HOPS
+        value: "1"
       - key: BASIC_AUTH_MAX_ATTEMPTS
         value: "20"
       - key: BASIC_AUTH_BLOCK_MINUTES

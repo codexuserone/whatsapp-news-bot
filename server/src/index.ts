@@ -86,9 +86,7 @@ const authAttemptsByIp = new Map<string, AuthAttemptState>();
 let authAttemptCleanupAtMs = 0;
 
 const normalizeClientIp = (req: Request) => {
-  const forwarded = String(req.headers['x-forwarded-for'] || '').trim();
-  const firstForwarded = forwarded.split(',')[0]?.trim();
-  const ip = firstForwarded || String(req.ip || '').trim() || 'unknown';
+  const ip = String(req.ip || req.socket?.remoteAddress || '').trim() || 'unknown';
   return ip.replace(/^::ffff:/, '').trim().toLowerCase();
 };
 
@@ -108,6 +106,49 @@ const toBoolean = (rawValue: unknown, defaultValue: boolean) => {
   return defaultValue;
 };
 
+const toIpv4Int = (value: string): number | null => {
+  const parts = String(value || '').trim().split('.');
+  if (parts.length !== 4) return null;
+  let acc = 0;
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) return null;
+    const octet = Number(part);
+    if (!Number.isInteger(octet) || octet < 0 || octet > 255) return null;
+    acc = (acc << 8) | octet;
+  }
+  return acc >>> 0;
+};
+
+const ipMatchesAllowlistEntry = (clientIp: string, rawEntry: string) => {
+  const entry = String(rawEntry || '').trim().toLowerCase();
+  if (!entry) return false;
+
+  const cidrParts = entry.split('/');
+  if (cidrParts.length === 2) {
+    const cidrBase = cidrParts[0] || '';
+    const cidrBits = cidrParts[1] || '';
+    const baseInt = toIpv4Int(cidrBase);
+    const clientInt = toIpv4Int(clientIp);
+    const bits = Number(cidrBits);
+    if (
+      baseInt === null ||
+      clientInt === null ||
+      !Number.isInteger(bits) ||
+      bits < 0 ||
+      bits > 32
+    ) {
+      return false;
+    }
+    const mask = bits === 0 ? 0 : ((0xffffffff << (32 - bits)) >>> 0);
+    return (baseInt & mask) === (clientInt & mask);
+  }
+
+  return entry === clientIp;
+};
+
+const ipMatchesAllowlist = (clientIp: string, allowlist: string[]) =>
+  allowlist.some((entry) => ipMatchesAllowlistEntry(clientIp, entry));
+
 const cleanupAuthAttempts = (nowMs: number) => {
   if (nowMs - authAttemptCleanupAtMs < 5 * 60 * 1000) return;
   authAttemptCleanupAtMs = nowMs;
@@ -124,7 +165,13 @@ const cleanupAuthAttempts = (nowMs: number) => {
 const start = async () => {
   const app: Express = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', 1);
+  const defaultTrustProxyHops = process.env.NODE_ENV === 'production' ? 1 : 0;
+  const parsedTrustProxyHops = Number(process.env.TRUST_PROXY_HOPS ?? defaultTrustProxyHops);
+  const trustProxyHops =
+    Number.isFinite(parsedTrustProxyHops) && parsedTrustProxyHops >= 0
+      ? Math.floor(parsedTrustProxyHops)
+      : defaultTrustProxyHops;
+  app.set('trust proxy', trustProxyHops);
   app.use(requestLogger);
   app.use(securityHeaders);
 
@@ -202,7 +249,7 @@ const start = async () => {
       }
 
       const clientIp = normalizeClientIp(req);
-      if (accessAllowlist.length > 0 && !accessAllowlist.includes(clientIp)) {
+      if (accessAllowlist.length > 0 && !ipMatchesAllowlist(clientIp, accessAllowlist)) {
         return res.status(403).send('Access denied');
       }
 

@@ -68,6 +68,12 @@ type ChannelDiagnostics = {
     metadata: number;
     store: number;
   };
+  seeded: {
+    provided: number;
+    verified: number;
+    failed: number;
+    failedJids: string[];
+  };
   limitation: string | null;
 };
 
@@ -131,7 +137,10 @@ const readNumericValue = (value: unknown) => {
 
 const readTextValue = (value: unknown) => {
   if (typeof value !== 'string') return '';
-  return value.trim();
+  return value
+    .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2060\uFEFF]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 };
 
 const extractGroupInviteCode = (value: unknown) => {
@@ -167,6 +176,47 @@ const normalizeIndividualJid = (value: unknown) => {
   return `${digits}@s.whatsapp.net`;
 };
 
+const stripTargetTypeTags = (value: string) =>
+  String(value || '')
+    .replace(/\((group|channel|status|individual)\)/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const hasRawJidLabel = (value: string) =>
+  /@(g\.us|newsletter(?:_[a-z0-9_-]+)?|s\.whatsapp\.net|lid)\b/i.test(String(value || '').trim());
+
+const isLikelyPlaceholderChannelName = (value: string) => {
+  const normalized = readTextValue(value).toLowerCase();
+  if (!normalized) return true;
+  if (/^channel[\s_-]*\d+$/i.test(normalized)) return true;
+  if (/^[\d\s._-]{6,}$/.test(normalized)) return true;
+  return false;
+};
+
+const sanitizeChannelDisplayName = (name: unknown, jid: string) => {
+  const normalizedJid = String(jid || '').trim();
+  let cleaned = readTextValue(name);
+  if (!cleaned) return '';
+
+  if (/\btarget\b/i.test(cleaned)) {
+    const beforeTarget = readTextValue(cleaned.split(/\btarget\b/i)[0]);
+    if (beforeTarget.length >= 3) cleaned = beforeTarget;
+  }
+
+  const repeatedTypeMentions = (cleaned.match(/\((group|channel|status|individual)\)/gi) || []).length;
+  if (repeatedTypeMentions > 1) {
+    const firstSegment = readTextValue(cleaned.split(/\((group|channel|status|individual)\)/i)[0]);
+    if (firstSegment) cleaned = firstSegment;
+  }
+
+  cleaned = stripTargetTypeTags(cleaned);
+  if (!cleaned) return '';
+  if (isLikelyPlaceholderChannelName(cleaned)) return '';
+  if (hasRawJidLabel(cleaned)) return '';
+  if (normalizedJid && cleaned.toLowerCase() === normalizedJid.toLowerCase()) return '';
+  return cleaned;
+};
+
 const extractChannelSummary = (input: unknown, options?: { allowNumeric?: boolean }): ChannelSummary | null => {
   if (typeof input === 'string') {
     const jid = normalizeNewsletterJid(input, options);
@@ -191,12 +241,13 @@ const extractChannelSummary = (input: unknown, options?: { allowNumeric?: boolea
       ? (threadMetadata.name as Record<string, unknown>)
       : null;
 
-  const name =
+  const rawName =
     readTextValue(record.name) ||
     readTextValue(record.subject) ||
     readTextValue(threadName?.text) ||
     readTextValue(threadMetadata?.name) ||
     jid;
+  const name = sanitizeChannelDisplayName(rawName, jid) || jid;
 
   const subscribers =
     readNumericValue(record.subscribers) ||
@@ -929,11 +980,12 @@ class WhatsAppClient {
 
       const browser =
         Browsers?.windows?.('Chrome') || ['Windows', 'Chrome', '120.0.0'];
+      const syncFullHistory = String(process.env.WHATSAPP_SYNC_FULL_HISTORY || 'true').toLowerCase() !== 'false';
 
       const socketConfig: Record<string, unknown> = {
         auth: state,
         printQRInTerminal: false,
-        syncFullHistory: false,
+        syncFullHistory,
         markOnlineOnConnect: false,
         emitOwnEvents: true,
         browser,
@@ -1102,14 +1154,7 @@ class WhatsAppClient {
             }
           }
 
-          const remoteJid = normalizeNewsletterJid(message?.key?.remoteJid, { allowNumeric: false });
-          if (remoteJid) {
-            // Never infer channel names from message body text.
-            // Only use push/display names that can represent the chat title.
-            const hintName = readTextValue(message?.pushName) || remoteJid;
-            const safeName = hintName.replace(/\s+/g, ' ').trim() || remoteJid;
-            this.cacheNewsletterChat({ jid: remoteJid, name: safeName, subscribers: 0 });
-          }
+          this.cacheNewsletterFromMessageLike(message);
         }
 
         const toSave =
@@ -1171,6 +1216,16 @@ class WhatsAppClient {
 
       (socket.ev as any).on('chats.delete', (deletes: unknown) => {
         this.removeNewsletterChats(deletes);
+      });
+
+      (socket.ev as any).on('messaging-history.set', (payload: unknown) => {
+        const safePayload = payload && typeof payload === 'object' ? (payload as { chats?: unknown[]; messages?: unknown[] }) : {};
+        const chats = Array.isArray(safePayload.chats) ? safePayload.chats : [];
+        const messages = Array.isArray(safePayload.messages) ? safePayload.messages : [];
+        this.cacheNewsletterChats(chats);
+        for (const message of messages) {
+          this.cacheNewsletterFromMessageLike(message);
+        }
       });
     } catch (error) {
       this.isConnecting = false;
@@ -1450,7 +1505,9 @@ class WhatsAppClient {
     if (!channel) return;
     const existing = this.newsletterChatCache.get(channel.jid);
     const subscribers = channel.subscribers || existing?.subscribers || 0;
-    const name = channel.name || existing?.name || channel.jid;
+    const nextName = sanitizeChannelDisplayName(channel.name, channel.jid);
+    const existingName = sanitizeChannelDisplayName(existing?.name, channel.jid);
+    const name = nextName || existingName || channel.jid;
     this.newsletterChatCache.set(channel.jid, {
       jid: channel.jid,
       name,
@@ -1472,6 +1529,21 @@ class WhatsAppClient {
     }
   }
 
+  cacheNewsletterFromMessageLike(messageLike: unknown): void {
+    const message = messageLike as { key?: { remoteJid?: unknown }; remoteJid?: unknown; jid?: unknown; pushName?: unknown; name?: unknown; subject?: unknown };
+    const remoteJid =
+      normalizeNewsletterJid(message?.key?.remoteJid, { allowNumeric: false }) ||
+      normalizeNewsletterJid(message?.remoteJid, { allowNumeric: false }) ||
+      normalizeNewsletterJid(message?.jid, { allowNumeric: false });
+    if (!remoteJid) return;
+    const safeName =
+      sanitizeChannelDisplayName(message?.name, remoteJid) ||
+      sanitizeChannelDisplayName(message?.subject, remoteJid) ||
+      sanitizeChannelDisplayName(message?.pushName, remoteJid) ||
+      remoteJid;
+    this.cacheNewsletterChat({ jid: remoteJid, name: safeName, subscribers: 0 });
+  }
+
   removeNewsletterChats(jidsLike: unknown): void {
     const list = Array.isArray(jidsLike) ? jidsLike : [];
     for (const jidValue of list) {
@@ -1487,6 +1559,7 @@ class WhatsAppClient {
       methodsTried: [],
       methodErrors: [],
       sourceCounts: { api: 0, cache: 0, metadata: 0, store: 0 },
+      seeded: { provided: 0, verified: 0, failed: 0, failedJids: [] },
       limitation: null
     };
 
@@ -1499,13 +1572,16 @@ class WhatsAppClient {
       new Set(
         (Array.isArray(seedJids) ? seedJids : [])
           .map((value) => normalizeNewsletterJid(value, { allowNumeric: true }))
-          .filter(Boolean)
+        .filter(Boolean)
       )
     );
+    diagnostics.seeded.provided = normalizedSeedJids.length;
 
     const channelMap = new Map<string, ChannelSummary>();
     const mergeChannel = (candidate: ChannelSummary, source: 'api' | 'cache' | 'metadata' | 'store') => {
       const existing = channelMap.get(candidate.jid);
+      const candidateName = sanitizeChannelDisplayName(candidate.name, candidate.jid);
+      const existingName = sanitizeChannelDisplayName(existing?.name, candidate.jid);
       const pickSource = () => {
         if (!existing?.source) return source;
         if (existing.source === source) return source;
@@ -1520,7 +1596,7 @@ class WhatsAppClient {
       const merged: ChannelSummary = {
         id: candidate.jid,
         jid: candidate.jid,
-        name: candidate.name || existing?.name || candidate.jid,
+        name: candidateName || existingName || candidate.jid,
         subscribers: candidate.subscribers || existing?.subscribers || 0,
         role: candidate.role || existing?.role || null,
         canPost:
@@ -1543,8 +1619,11 @@ class WhatsAppClient {
           if (!normalized?.jid) continue;
           mergeChannel(normalized, 'metadata');
           this.cacheNewsletterChat(normalized);
+          diagnostics.seeded.verified += 1;
         } catch (error) {
           diagnostics.methodErrors.push(`seed:${seedJid}:${getErrorMessage(error)}`);
+          diagnostics.seeded.failed += 1;
+          diagnostics.seeded.failedJids.push(seedJid);
         }
       }
     }
@@ -1748,23 +1827,31 @@ class WhatsAppClient {
           normalized = null;
         }
       }
+      if (!normalized) {
+        try {
+          const discovered = await this.getChannelsWithDiagnostics([explicitChannelJid]);
+          normalized =
+            discovered.channels.find(
+              (channel) => String(channel?.jid || '').toLowerCase() === explicitChannelJid.toLowerCase()
+            ) || null;
+        } catch {
+          normalized = null;
+        }
+      }
 
-      const fallback = normalized || {
-        id: explicitChannelJid,
-        jid: explicitChannelJid,
-        name: explicitChannelJid,
-        subscribers: 0
-      };
+      if (!normalized?.jid) {
+        return null;
+      }
 
       return {
         input: rawInput,
         type: 'channel',
-        jid: fallback.jid,
-        name: fallback.name || fallback.jid,
+        jid: normalized.jid,
+        name: normalized.name || normalized.jid,
         source: 'channel_jid',
-        subscribers: Number(fallback.subscribers || 0),
-        role: fallback.role || null,
-        canPost: Boolean(fallback.canPost)
+        subscribers: Number(normalized.subscribers || 0),
+        role: normalized.role || null,
+        canPost: Boolean(normalized.canPost)
       };
     }
 

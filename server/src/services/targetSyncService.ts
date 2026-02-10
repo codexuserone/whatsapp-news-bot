@@ -53,21 +53,49 @@ const DEFAULT_SYNC_INTERVAL_MS = Math.max(
   15_000
 );
 
+const normalizeDisplayText = (value: unknown) => String(value || '').replace(/\s+/g, ' ').trim();
+
+const stripTargetTypeTags = (value: string) =>
+  String(value || '')
+    .replace(/\((group|channel|status|individual)\)/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const hasRawJidLabel = (value: string) =>
+  /@(g\.us|newsletter(?:_[a-z0-9_-]+)?|s\.whatsapp\.net|lid)\b/i.test(String(value || '').trim());
+const isNumericOnlyLabel = (value: string) => /^\d{6,}$/.test(String(value || '').trim());
+const hasOnlyDigitsAndSeparators = (value: string) => /^[\d\s._-]{6,}$/.test(String(value || '').trim());
+const isPlaceholderChannelName = (value: string) => /^channel[\s_-]*\d+$/i.test(String(value || '').trim());
+
 const normalizeChannelJid = (value: string) => {
   const trimmed = String(value || '').trim();
   if (!trimmed) return trimmed;
   if (trimmed.toLowerCase().includes('@newsletter')) {
-    return trimmed;
+    const tokenMatch = trimmed.match(/[a-z0-9._-]+@newsletter(?:_[a-z0-9_-]+)?/i);
+    return tokenMatch?.[0] || trimmed;
   }
-  const cleaned = trimmed.replace(/[^0-9]/g, '');
-  return cleaned ? `${cleaned}@newsletter` : trimmed;
+  const compact = trimmed.replace(/\s+/g, '');
+  if (/^[a-z0-9._-]{6,}$/i.test(compact)) {
+    return `${compact.toLowerCase()}@newsletter`;
+  }
+  const digits = trimmed.replace(/[^0-9]/g, '');
+  return digits ? `${digits}@newsletter` : trimmed;
 };
 
 const buildFriendlyChannelName = (name: string, jid: string) => {
   const normalizedJid = normalizeChannelJid(jid);
-  const rawName = String(name || '').trim();
-  if (!rawName || rawName === normalizedJid) return '';
-  if (/^channel\s+\d+$/i.test(rawName)) return '';
+  let rawName = normalizeDisplayText(name);
+  if (!rawName || rawName.toLowerCase() === normalizedJid.toLowerCase()) return '';
+  const repeatedTypeMentions = (rawName.match(/\((group|channel|status|individual)\)/gi) || []).length;
+  if (repeatedTypeMentions > 1) {
+    const firstSegment = normalizeDisplayText(rawName.split(/\((group|channel|status|individual)\)/i)[0]);
+    if (firstSegment) rawName = firstSegment;
+  }
+  rawName = stripTargetTypeTags(rawName);
+  if (!rawName || isPlaceholderChannelName(rawName)) return '';
+  if (isNumericOnlyLabel(rawName)) return '';
+  if (hasOnlyDigitsAndSeparators(rawName)) return '';
+  if (hasRawJidLabel(rawName)) return '';
   return rawName;
 };
 
@@ -78,6 +106,21 @@ const normalizePhoneByType = (type: string, phone: string) => {
 };
 
 const buildTargetKey = (type: string, phone: string) => `${String(type || '').trim()}:${normalizePhoneByType(type, phone)}`;
+
+const normalizeGroupName = (name: unknown, jid: string) => {
+  const fallback = normalizeDisplayText(jid);
+  let cleaned = normalizeDisplayText(name);
+  if (!cleaned) return fallback;
+  const repeatedTypeMentions = (cleaned.match(/\((group|channel|status|individual)\)/gi) || []).length;
+  if (repeatedTypeMentions > 1) {
+    const firstSegment = normalizeDisplayText(cleaned.split(/\((group|channel|status|individual)\)/i)[0]);
+    if (firstSegment) cleaned = firstSegment;
+  }
+  cleaned = stripTargetTypeTags(cleaned);
+  if (!cleaned) return fallback;
+  if (hasRawJidLabel(cleaned) && cleaned.toLowerCase() === fallback.toLowerCase()) return fallback;
+  return cleaned;
+};
 
 let syncTimer: NodeJS.Timeout | null = null;
 let syncInFlight = false;
@@ -143,7 +186,7 @@ const syncTargetsFromWhatsApp = async (
     if (!jid || usedJids.has(jid)) continue;
     usedJids.add(jid);
     candidates.push({
-      name: String(group?.name || jid).trim() || jid,
+      name: normalizeGroupName(group?.name, jid),
       phone_number: jid,
       type: 'group',
       active: true,
@@ -204,6 +247,23 @@ const syncTargetsFromWhatsApp = async (
     deactivated += 1;
   }
 
+  // Clean up channel rows that are clearly placeholders or malformed JIDs.
+  // These are usually stale artifacts from previous fake/manual entries.
+  for (const row of Array.from(canonicalByKey.values())) {
+    if (row.type !== 'channel' || row.active !== true) continue;
+    const normalizedJid = normalizeChannelJid(String(row.phone_number || '').trim());
+    const friendlyName = buildFriendlyChannelName(String(row.name || ''), normalizedJid);
+    if (!normalizedJid || !normalizedJid.toLowerCase().includes('@newsletter') || !friendlyName) {
+      const { error: deactivateError } = await supabase
+        .from('targets')
+        .update({ active: false })
+        .eq('id', row.id);
+      if (deactivateError) throw deactivateError;
+      row.active = false;
+      deactivated += 1;
+    }
+  }
+
   for (const candidate of candidates) {
     const candidateKey = buildTargetKey(candidate.type, candidate.phone_number);
     const current = canonicalByKey.get(candidateKey);
@@ -246,6 +306,21 @@ const syncTargetsFromWhatsApp = async (
         .map((candidate) => normalizeChannelJid(String(candidate.phone_number || '').trim()))
         .filter(Boolean)
     );
+    const failedSeededChannels = new Set(
+      (
+        Array.isArray(
+          (channelsWithDiagnostics?.diagnostics as { seeded?: { failedJids?: unknown[] } } | undefined)?.seeded
+            ?.failedJids
+        )
+          ? (
+              (channelsWithDiagnostics?.diagnostics as { seeded?: { failedJids?: unknown[] } } | undefined)?.seeded
+                ?.failedJids || []
+            )
+          : []
+      )
+        .map((jid) => normalizeChannelJid(String(jid || '').trim()))
+        .filter(Boolean)
+    );
     const canStrictDeactivateChannels = discoveredChannels.size > 0;
     const discoveredStatus = new Set(
       candidates
@@ -264,9 +339,10 @@ const syncTargetsFromWhatsApp = async (
       if (row.type === 'group') {
         shouldDeactivate = !discoveredGroups.has(jid);
       } else if (row.type === 'channel') {
+        const normalizedChannelJid = normalizeChannelJid(jid);
         shouldDeactivate = canStrictDeactivateChannels
-          ? !discoveredChannels.has(normalizeChannelJid(jid))
-          : false;
+          ? !discoveredChannels.has(normalizedChannelJid)
+          : failedSeededChannels.has(normalizedChannelJid);
       } else if (row.type === 'status' && includeStatus) {
         shouldDeactivate = !discoveredStatus.has(jid);
       }

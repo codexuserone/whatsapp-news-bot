@@ -30,6 +30,16 @@ services:
         sync: false
       - key: BASIC_AUTH_PASS
         sync: false
+      - key: REQUIRE_BASIC_AUTH
+        value: "true"
+      - key: ACCESS_ALLOWLIST
+        sync: false
+      - key: BASIC_AUTH_MAX_ATTEMPTS
+        value: "20"
+      - key: BASIC_AUTH_BLOCK_MINUTES
+        value: "15"
+      - key: HSTS_MAX_AGE_SECONDS
+        value: "15552000"
       - key: CORS_ORIGINS
         sync: false
       - key: ALLOW_PRIVATE_URLS

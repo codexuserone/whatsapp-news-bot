@@ -17,7 +17,19 @@ type TargetRow = {
   notes?: string | null;
 };
 
+const ON_DEMAND_TARGET_SYNC_MIN_INTERVAL_MS = Math.max(
+  Number(process.env.TARGET_ON_DEMAND_SYNC_MIN_INTERVAL_MS || 30_000),
+  5_000
+);
+let lastOnDemandTargetSyncAtMs = 0;
+
 const normalizeDisplayText = (value: unknown) => String(value || '').replace(/\s+/g, ' ').trim();
+const stripTargetTypeTags = (value: string) =>
+  String(value || '')
+    .replace(/\((group|channel|status|individual)\)/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+const isNumericOnlyLabel = (value: unknown) => /^\d{6,}$/.test(String(value || '').trim());
 
 const normalizeTargetType = (type: unknown, phoneNumber: unknown) => {
   const rawType = String(type || '').trim().toLowerCase();
@@ -35,20 +47,114 @@ const normalizeTargetType = (type: unknown, phoneNumber: unknown) => {
 const normalizeChannelJidForKey = (phoneNumber: string) => {
   const trimmed = String(phoneNumber || '').trim();
   if (!trimmed) return '';
-  if (trimmed.toLowerCase().includes('@newsletter')) return trimmed.toLowerCase();
+  if (trimmed.toLowerCase().includes('@newsletter')) {
+    const tokenMatch = trimmed.match(/[a-z0-9._-]+@newsletter(?:_[a-z0-9_-]+)?/i);
+    return (tokenMatch?.[0] || trimmed).toLowerCase();
+  }
+  const compact = trimmed.replace(/\s+/g, '');
+  if (/^[a-z0-9._-]{6,}$/i.test(compact)) {
+    return `${compact.toLowerCase()}@newsletter`;
+  }
   const digits = trimmed.replace(/[^0-9]/g, '');
   return digits ? `${digits}@newsletter` : trimmed.toLowerCase();
+};
+
+const normalizeGroupJidForKey = (phoneNumber: string) => {
+  const trimmed = String(phoneNumber || '').trim();
+  if (!trimmed) return '';
+  if (trimmed.toLowerCase().endsWith('@g.us')) return trimmed.toLowerCase();
+  const cleaned = trimmed.replace(/[^0-9-]/g, '');
+  return cleaned ? `${cleaned}@g.us` : trimmed.toLowerCase();
+};
+
+const normalizeIndividualJidForKey = (phoneNumber: string) => {
+  const trimmed = String(phoneNumber || '').trim();
+  if (!trimmed) return '';
+  if (trimmed.includes('@')) return trimmed.toLowerCase();
+  const cleaned = sanitizePhoneNumber(trimmed).replace(/[^0-9]/g, '');
+  return cleaned ? `${cleaned}@s.whatsapp.net` : trimmed.toLowerCase();
 };
 
 const normalizePhoneForKey = (type: string, phoneNumber: string) => {
   const raw = String(phoneNumber || '').trim();
   if (!raw) return '';
+  if (type === 'status') return 'status@broadcast';
+  if (type === 'group') return normalizeGroupJidForKey(raw);
   if (type === 'channel') return normalizeChannelJidForKey(raw);
-  return raw.toLowerCase();
+  return normalizeIndividualJidForKey(raw);
 };
 
-const isPlaceholderChannelName = (name: unknown) => /^channel\s+\d+$/i.test(String(name || '').trim());
+const isPlaceholderChannelName = (name: unknown) => /^channel[\s_-]*\d+$/i.test(String(name || '').trim());
 const isRawChannelJidLabel = (name: unknown) => String(name || '').trim().toLowerCase().includes('@newsletter');
+const hasOnlyDigitsAndSeparators = (name: unknown) => /^[\d\s._-]{6,}$/.test(String(name || '').trim());
+const isValidPhoneForType = (type: string, phoneNumber: string) => {
+  const phone = String(phoneNumber || '').trim().toLowerCase();
+  if (!phone) return false;
+  if (type === 'status') return phone === 'status@broadcast';
+  if (type === 'group') return /^[0-9-]{6,}@g\.us$/.test(phone);
+  if (type === 'channel') return /^[a-z0-9._-]+@newsletter(?:_[a-z0-9_-]+)?$/.test(phone);
+  return /^[0-9]{6,}@s\.whatsapp\.net$/.test(phone) || phone.endsWith('@lid');
+};
+
+const cleanupDisplayName = (value: unknown, type: string) => {
+  let cleaned = normalizeDisplayText(value);
+  if (!cleaned) return '';
+
+  if (/\btarget\b/i.test(cleaned)) {
+    const beforeTarget = normalizeDisplayText(cleaned.split(/\btarget\b/i)[0]);
+    if (beforeTarget.length >= 3) {
+      cleaned = beforeTarget;
+    }
+  }
+
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  if (words.length >= 4) {
+    const first = words[0]?.toLowerCase();
+    const last = words[words.length - 1]?.toLowerCase();
+    if (first && first === last) {
+      cleaned = words.slice(0, -1).join(' ');
+    }
+  }
+
+  if (cleaned.length > 96) {
+    cleaned = cleaned.slice(0, 96).trim();
+  }
+
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  if (tokens.length >= 6) {
+    const half = Math.floor(tokens.length / 2);
+    const left = tokens.slice(0, half).join(' ').toLowerCase();
+    const right = tokens.slice(half).join(' ').toLowerCase();
+    if (left && left === right) {
+      cleaned = tokens.slice(0, half).join(' ');
+    }
+  }
+
+  return cleaned;
+};
+
+const normalizeTargetName = (name: unknown, type: string, phone: string) => {
+  const fallback = String(phone || '').trim();
+  let cleaned = normalizeDisplayText(name);
+  if (!cleaned) return type === 'status' ? 'My Status' : fallback;
+  const repeatedTypeMentions = (cleaned.match(/\((group|channel|status|individual)\)/gi) || []).length;
+  if (repeatedTypeMentions > 1) {
+    const firstSegment = normalizeDisplayText(cleaned.split(/\((group|channel|status|individual)\)/i)[0]);
+    if (firstSegment) cleaned = firstSegment;
+  }
+  cleaned = stripTargetTypeTags(cleaned);
+  cleaned = cleanupDisplayName(cleaned, type);
+  if (!cleaned) return type === 'status' ? 'My Status' : fallback;
+  if (
+    type === 'channel' &&
+    (isPlaceholderChannelName(cleaned) ||
+      isRawChannelJidLabel(cleaned) ||
+      isNumericOnlyLabel(cleaned) ||
+      hasOnlyDigitsAndSeparators(cleaned))
+  )
+    return '';
+  return cleaned;
+};
 
 const scoreTargetForResponse = (target: { active?: boolean; type?: string; name?: string; updated_at?: string | null; created_at?: string | null }) => {
   const normalizedName = normalizeDisplayText(target.name);
@@ -58,7 +164,9 @@ const scoreTargetForResponse = (target: { active?: boolean; type?: string; name?
     target.type === 'channel' && isPlaceholderChannelName(normalizedName)
       ? -200
       : 0;
-  const rawJidPenalty = /@(g\.us|newsletter|s\.whatsapp\.net|lid)/i.test(normalizedName) ? -220 : 0;
+  const rawJidPenalty = /@(g\.us|newsletter(?:_[a-z0-9_-]+)?|s\.whatsapp\.net|lid)/i.test(normalizedName)
+    ? -220
+    : 0;
   const repeatedLabelPenalty = typeMentions > 1 ? -120 : 0;
   const missingNamePenalty = !normalizedName ? -240 : 0;
   const updated = Date.parse(String(target.updated_at || target.created_at || 0));
@@ -81,8 +189,11 @@ const dedupeTargetsForResponse = (rows: TargetRow[]) => {
       ...row,
       type,
       phone_number: phone,
-      name: normalizeDisplayText(row.name)
+      name: normalizeTargetName(row.name, type, phone)
     };
+    if (type === 'channel' && !normalizeDisplayText(normalizedRow.name)) {
+      continue;
+    }
     const current = byKey.get(key);
     if (!current || scoreTargetForResponse(normalizedRow) > scoreTargetForResponse(current)) {
       byKey.set(key, normalizedRow);
@@ -93,7 +204,7 @@ const dedupeTargetsForResponse = (rows: TargetRow[]) => {
     .map((row) => {
       const type = normalizeTargetType(row.type, row.phone_number);
       const phone = String(row.phone_number || '').trim();
-      const name = normalizeDisplayText(row.name);
+      const name = normalizeTargetName(row.name, type, phone);
       const fallbackName = type === 'status' ? 'My Status' : phone;
       return {
         ...row,
@@ -103,6 +214,54 @@ const dedupeTargetsForResponse = (rows: TargetRow[]) => {
       };
     })
     .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+};
+
+const sanitizeStoredTargets = async (supabase: ReturnType<typeof getSupabaseClient>, rows: TargetRow[]) => {
+  if (!supabase || !Array.isArray(rows) || !rows.length) return;
+
+  for (const row of rows) {
+    const id = String(row?.id || '').trim();
+    if (!id) continue;
+
+    const computedType = normalizeTargetType(row.type, row.phone_number);
+    const normalizedPhone = normalizePhoneForKey(computedType, String(row.phone_number || ''));
+    const normalizedName = normalizeTargetName(row.name, computedType, normalizedPhone);
+
+    const patch: Record<string, unknown> = {};
+    if (String(row.type || '').trim() !== computedType) patch.type = computedType;
+    if (String(row.phone_number || '').trim().toLowerCase() !== normalizedPhone) {
+      patch.phone_number = normalizedPhone;
+    }
+
+    const shouldDeactivate =
+      !normalizedPhone ||
+      !isValidPhoneForType(computedType, normalizedPhone) ||
+      (computedType === 'channel' && !normalizedName) ||
+      (computedType === 'status' && normalizedPhone !== 'status@broadcast');
+
+    if (shouldDeactivate) {
+      if (row.active === true) patch.active = false;
+    } else {
+      const fallbackName = computedType === 'status' ? 'My Status' : normalizedPhone;
+      const safeName = normalizedName || fallbackName;
+      if (normalizeDisplayText(row.name) !== safeName) patch.name = safeName;
+    }
+
+    if (Object.keys(patch).length) {
+      await supabase.from('targets').update(patch).eq('id', id);
+    }
+
+    // Keep response rows in sync with normalization applied above so callers
+    // do not need a second refresh to see cleaned names/jids/active state.
+    row.type = computedType;
+    row.phone_number = normalizedPhone;
+    if (shouldDeactivate) {
+      row.active = false;
+    } else {
+      const fallbackName = computedType === 'status' ? 'My Status' : normalizedPhone;
+      row.name = normalizedName || fallbackName;
+    }
+  }
 };
 
 const targetRoutes = () => {
@@ -116,26 +275,38 @@ const targetRoutes = () => {
 
   router.get('/', async (req: Request, res: Response) => {
     try {
+      const supabase = getDb();
       const whatsapp = req.app.locals.whatsapp as {
         getStatus?: () => { status?: string };
       } | null;
-      try {
-        await syncTargetsFromWhatsApp(whatsapp, {
-          includeStatus: true,
-          skipIfDisconnected: true,
-          strict: true
-        });
-      } catch {
-        // Best-effort sync only; list endpoint should still respond.
+      const forceSync =
+        String((req.query.sync ?? req.query.refresh ?? 'false')).toLowerCase() === 'true';
+      const now = Date.now();
+      const shouldSyncNow =
+        forceSync || now - lastOnDemandTargetSyncAtMs >= ON_DEMAND_TARGET_SYNC_MIN_INTERVAL_MS;
+
+      if (shouldSyncNow) {
+        lastOnDemandTargetSyncAtMs = now;
+        try {
+          await syncTargetsFromWhatsApp(whatsapp, {
+            includeStatus: true,
+            skipIfDisconnected: true,
+            strict: true
+          });
+        } catch {
+          // Best-effort sync only; list endpoint should still respond.
+        }
       }
 
-      const { data: targets, error } = await getDb()
+      const { data: targets, error } = await supabase
         .from('targets')
         .select('*')
         .order('created_at', { ascending: false });
       
       if (error) throw error;
-      res.json(dedupeTargetsForResponse(targets || []));
+      const rows = (targets || []) as TargetRow[];
+      await sanitizeStoredTargets(supabase, rows);
+      res.json(dedupeTargetsForResponse(rows));
     } catch (error) {
       console.error('Error fetching targets:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
@@ -151,7 +322,12 @@ const targetRoutes = () => {
     const trimmed = String(phoneNumber || '').trim();
     if (!trimmed) return trimmed;
     if (trimmed.toLowerCase().includes('@newsletter')) {
-      return trimmed;
+      const tokenMatch = trimmed.match(/[a-z0-9._-]+@newsletter(?:_[a-z0-9_-]+)?/i);
+      return tokenMatch?.[0] || trimmed;
+    }
+    const compact = trimmed.replace(/\s+/g, '');
+    if (/^[a-z0-9._-]{6,}$/i.test(compact)) {
+      return `${compact.toLowerCase()}@newsletter`;
     }
     const cleaned = trimmed.replace(/[^0-9]/g, '');
     return cleaned ? `${cleaned}@newsletter` : trimmed;

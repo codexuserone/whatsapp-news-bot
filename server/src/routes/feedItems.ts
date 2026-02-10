@@ -27,16 +27,35 @@ const feedItemRoutes = () => {
 
       const { data: schedules, error: schedulesError } = await supabase
         .from('schedules')
-        .select('feed_id,active,state');
+        .select('feed_id,active,state,template_id,target_ids,last_queued_at,last_run_at,created_at');
 
       if (schedulesError) throw schedulesError;
 
       const runningAutomationCountByFeedId = new Map<string, number>();
+      const dispatchableAutomationCountByFeedId = new Map<string, number>();
+      const queueCursorByFeedId = new Map<string, number>();
       for (const schedule of (schedules || []) as Array<{ feed_id?: string | null; active?: boolean | null; state?: string | null }>) {
         const feedId = String(schedule.feed_id || '').trim();
         if (!feedId) continue;
         if (!isScheduleRunning(schedule)) continue;
         runningAutomationCountByFeedId.set(feedId, (runningAutomationCountByFeedId.get(feedId) || 0) + 1);
+        const cursorCandidates = [
+          Date.parse(String((schedule as { last_queued_at?: string | null }).last_queued_at || '')),
+          Date.parse(String((schedule as { last_run_at?: string | null }).last_run_at || '')),
+          Date.parse(String((schedule as { created_at?: string | null }).created_at || ''))
+        ].filter((value) => Number.isFinite(value)) as number[];
+        if (cursorCandidates.length) {
+          const current = queueCursorByFeedId.get(feedId) || 0;
+          const nextCursor = Math.max(current, ...cursorCandidates);
+          if (nextCursor > 0) queueCursorByFeedId.set(feedId, nextCursor);
+        }
+        const hasTemplate = Boolean((schedule as { template_id?: string | null }).template_id);
+        const hasTargets =
+          Array.isArray((schedule as { target_ids?: unknown[] }).target_ids) &&
+          ((schedule as { target_ids?: unknown[] }).target_ids || []).length > 0;
+        if (hasTemplate && hasTargets) {
+          dispatchableAutomationCountByFeedId.set(feedId, (dispatchableAutomationCountByFeedId.get(feedId) || 0) + 1);
+        }
       }
 
       const activeAutomationFeedIds = Array.from(runningAutomationCountByFeedId.keys());
@@ -139,6 +158,13 @@ const feedItemRoutes = () => {
         const hasManualPause = delivery.manual_paused > 0;
         const feedId = String(item.feed_id || '').trim();
         const activeAutomationCount = runningAutomationCountByFeedId.get(feedId) || 0;
+        const dispatchableAutomationCount = dispatchableAutomationCountByFeedId.get(feedId) || 0;
+        const queueCursorMs = queueCursorByFeedId.get(feedId) || 0;
+        const itemCreatedMs = Date.parse(String(item.created_at || item.pub_date || ''));
+        const outsideCursorWindow =
+          Number.isFinite(itemCreatedMs) &&
+          queueCursorMs > 0 &&
+          itemCreatedMs < queueCursorMs;
         const delivery_status =
           hasManualPause && hasQueued
             ? 'paused_with_queue'
@@ -158,8 +184,12 @@ const feedItemRoutes = () => {
                       ? 'sent'
                       : hasFailed
                         ? 'failed'
-                        : activeAutomationCount > 0
-                          ? 'not_queued'
+                        : dispatchableAutomationCount > 0
+                          ? outsideCursorWindow
+                            ? 'not_queued_old'
+                            : 'not_queued'
+                          : activeAutomationCount > 0
+                            ? 'automation_incomplete'
                           : 'no_automation';
         return {
           ...item,
@@ -167,7 +197,9 @@ const feedItemRoutes = () => {
           delivery: { ...delivery, total },
           delivery_status,
           routing: {
-            active_automations: activeAutomationCount
+            active_automations: activeAutomationCount,
+            dispatchable_automations: dispatchableAutomationCount,
+            queue_cursor_at: queueCursorMs ? new Date(queueCursorMs).toISOString() : null
           }
         };
       });

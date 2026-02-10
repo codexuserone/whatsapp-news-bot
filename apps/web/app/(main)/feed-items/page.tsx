@@ -42,6 +42,15 @@ const FeedItemsPage = () => {
     if (item.delivery_status === 'no_automation') {
       return { label: 'No active automation', variant: 'secondary' as const };
     }
+    if (item.delivery_status === 'automation_incomplete') {
+      return { label: 'Automation incomplete', variant: 'warning' as const };
+    }
+    if (item.delivery_status === 'not_queued') {
+      return { label: 'Waiting for next send window', variant: 'secondary' as const };
+    }
+    if (item.delivery_status === 'not_queued_old') {
+      return { label: 'Older than automation queue window', variant: 'secondary' as const };
+    }
 
     const delivery = item.delivery || {
       pending: 0,
@@ -88,9 +97,15 @@ const FeedItemsPage = () => {
     }
     // Item exists in feed history but no queue rows were created yet.
     if (total === 0) {
-      return { label: 'Not queued yet', variant: 'secondary' as const };
+      return { label: 'Waiting for next send window', variant: 'secondary' as const };
     }
     return { label: 'Waiting', variant: 'secondary' as const };
+  };
+
+  const isStoryPaused = (item: FeedItem) => {
+    const manualPaused = Number(item.delivery?.manual_paused || 0);
+    if (manualPaused > 0) return true;
+    return item.delivery_status === 'paused' || item.delivery_status === 'paused_with_queue';
   };
 
   return (
@@ -150,7 +165,9 @@ const FeedItemsPage = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {items.map((item) => (
+                  {items.map((item) => {
+                    const paused = isStoryPaused(item);
+                    return (
                     <TableRow key={item.id}>
                       <TableCell className="max-w-xs truncate font-medium" title={item.title || undefined}>
                         {item.title || 'Untitled'}
@@ -214,25 +231,16 @@ const FeedItemsPage = () => {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => pausePost.mutate(item.id)}
+                            onClick={() => (paused ? resumePost.mutate(item.id) : pausePost.mutate(item.id))}
                             disabled={pausePost.isPending || resumePost.isPending}
                           >
-                            <PauseCircle className="mr-1 h-3 w-3" />
-                            Pause story
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => resumePost.mutate(item.id)}
-                            disabled={pausePost.isPending || resumePost.isPending}
-                          >
-                            <PlayCircle className="mr-1 h-3 w-3" />
-                            Resume story
+                            {paused ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
+                            {paused ? 'Resume story' : 'Pause story'}
                           </Button>
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))}
+                  )})}
                   {items.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">

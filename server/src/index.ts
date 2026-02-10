@@ -2,6 +2,7 @@ import type { Express, Request, Response } from 'express';
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const { timingSafeEqual } = require('crypto');
 const env = require('./config/env');
 const logger = require('./utils/logger');
 const { testConnection } = require('./db/supabase');
@@ -20,6 +21,7 @@ const { runMigrations } = require('./scripts/migrate');
 const errorHandler = require('./middleware/errorHandler');
 const notFoundHandler = require('./middleware/notFound');
 const requestLogger = require('./middleware/requestLogger');
+const securityHeaders = require('./middleware/securityHeaders');
 
 // Global error handlers to prevent crashes
 process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
@@ -62,10 +64,52 @@ const handleSignal = (signal: string) => {
 process.once('SIGTERM', () => handleSignal('SIGTERM'));
 process.once('SIGINT', () => handleSignal('SIGINT'));
 
+const safeEquals = (left: string, right: string) => {
+  const a = Buffer.from(String(left || ''), 'utf8');
+  const b = Buffer.from(String(right || ''), 'utf8');
+  if (a.length !== b.length) return false;
+  try {
+    return timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+};
+
+type AuthAttemptState = {
+  failures: number;
+  firstFailureAtMs: number;
+  blockedUntilMs: number;
+};
+
+const authAttemptsByIp = new Map<string, AuthAttemptState>();
+let authAttemptCleanupAtMs = 0;
+
+const normalizeClientIp = (req: Request) => {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').trim();
+  const firstForwarded = forwarded.split(',')[0]?.trim();
+  const ip = firstForwarded || String(req.ip || '').trim() || 'unknown';
+  return ip.replace(/^::ffff:/, '').trim().toLowerCase();
+};
+
+const cleanupAuthAttempts = (nowMs: number) => {
+  if (nowMs - authAttemptCleanupAtMs < 5 * 60 * 1000) return;
+  authAttemptCleanupAtMs = nowMs;
+  for (const [ip, state] of authAttemptsByIp.entries()) {
+    const stale =
+      state.blockedUntilMs <= nowMs &&
+      (state.failures <= 0 || nowMs - state.firstFailureAtMs > 60 * 60 * 1000);
+    if (stale) {
+      authAttemptsByIp.delete(ip);
+    }
+  }
+};
+
 const start = async () => {
   const app: Express = express();
+  app.disable('x-powered-by');
   app.set('trust proxy', 1);
   app.use(requestLogger);
+  app.use(securityHeaders);
 
   // Render environments can lack IPv6 egress; prefer IPv4 to avoid ENETUNREACH on DNS results.
   try {
@@ -78,18 +122,50 @@ const start = async () => {
     // ignore
   }
 
-  // Optional Basic Auth (recommended for public deployments).
-  // Enable by setting BASIC_AUTH_USER and BASIC_AUTH_PASS.
+  // Basic Auth gate for all app/API routes except health probes.
+  // Defaults:
+  // - production: required unless REQUIRE_BASIC_AUTH=false
+  // - non-production: disabled unless REQUIRE_BASIC_AUTH=true
+  const requireBasicAuth =
+    String(process.env.REQUIRE_BASIC_AUTH || '').toLowerCase() === 'true' ||
+    (process.env.NODE_ENV === 'production' &&
+      String(process.env.REQUIRE_BASIC_AUTH || '').toLowerCase() !== 'false');
   const basicUser = process.env.BASIC_AUTH_USER;
   const basicPass = process.env.BASIC_AUTH_PASS;
-  if (basicUser && basicPass) {
+  const accessAllowlist = String(process.env.ACCESS_ALLOWLIST || '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  const authMaxAttempts = Math.max(Number(process.env.BASIC_AUTH_MAX_ATTEMPTS || 20), 1);
+  const authBlockWindowMs = Math.max(Number(process.env.BASIC_AUTH_BLOCK_MINUTES || 15), 1) * 60 * 1000;
+  if (requireBasicAuth && (!basicUser || !basicPass)) {
+    throw new Error('BASIC_AUTH_USER and BASIC_AUTH_PASS are required when basic auth is enabled');
+  }
+  if (requireBasicAuth && basicUser && basicPass) {
     app.use((req: Request, res: Response, next) => {
-      const openPaths = new Set(['/health', '/ping', '/ready']);
+      const openPaths = new Set(['/health', '/ping', '/ready', '/api/health', '/api/ping', '/api/ready']);
       if (openPaths.has(req.path)) return next();
+
+      const clientIp = normalizeClientIp(req);
+      if (accessAllowlist.length > 0 && !accessAllowlist.includes(clientIp)) {
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(403).send('Access denied');
+      }
+
+      const nowMs = Date.now();
+      cleanupAuthAttempts(nowMs);
+      const currentAttempt = authAttemptsByIp.get(clientIp);
+      if (currentAttempt && currentAttempt.blockedUntilMs > nowMs) {
+        const retryAfterSec = Math.max(Math.ceil((currentAttempt.blockedUntilMs - nowMs) / 1000), 1);
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Retry-After', String(retryAfterSec));
+        return res.status(429).send('Too many authentication attempts');
+      }
 
       const header = String(req.headers.authorization || '');
       if (!header.startsWith('Basic ')) {
         res.setHeader('WWW-Authenticate', 'Basic realm="WhatsApp News Bot"');
+        res.setHeader('Cache-Control', 'no-store');
         return res.status(401).send('Authentication required');
       }
       try {
@@ -97,14 +173,35 @@ const start = async () => {
         const idx = raw.indexOf(':');
         const user = idx >= 0 ? raw.slice(0, idx) : raw;
         const pass = idx >= 0 ? raw.slice(idx + 1) : '';
-        if (user === basicUser && pass === basicPass) {
+        if (safeEquals(user, String(basicUser)) && safeEquals(pass, String(basicPass))) {
+          authAttemptsByIp.delete(clientIp);
+          res.setHeader('Cache-Control', 'no-store');
           return next();
         }
       } catch {
         // ignore
       }
 
+      const nextAttempt: AuthAttemptState = currentAttempt
+        ? { ...currentAttempt }
+        : { failures: 0, firstFailureAtMs: nowMs, blockedUntilMs: 0 };
+      if (nowMs - nextAttempt.firstFailureAtMs > authBlockWindowMs) {
+        nextAttempt.failures = 0;
+        nextAttempt.firstFailureAtMs = nowMs;
+        nextAttempt.blockedUntilMs = 0;
+      }
+      nextAttempt.failures += 1;
+      if (nextAttempt.failures >= authMaxAttempts) {
+        nextAttempt.blockedUntilMs = nowMs + authBlockWindowMs;
+      }
+      authAttemptsByIp.set(clientIp, nextAttempt);
+
       res.setHeader('WWW-Authenticate', 'Basic realm="WhatsApp News Bot"');
+      res.setHeader('Cache-Control', 'no-store');
+      if (nextAttempt.blockedUntilMs > nowMs) {
+        const retryAfterSec = Math.max(Math.ceil((nextAttempt.blockedUntilMs - nowMs) / 1000), 1);
+        res.setHeader('Retry-After', String(retryAfterSec));
+      }
       return res.status(401).send('Invalid credentials');
     });
   }

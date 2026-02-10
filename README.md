@@ -99,6 +99,9 @@ Optional (production):
 ```bash
 BASIC_AUTH_USER=admin
 BASIC_AUTH_PASS=secure-password
+REQUIRE_BASIC_AUTH=true
+ACCESS_ALLOWLIST=203.0.113.10
+HSTS_MAX_AGE_SECONDS=15552000
 SKIP_WHATSAPP_LEASE=false
 ```
 ### Environment URLs
@@ -134,8 +137,15 @@ BASE_URL=https://your-app.onrender.com
 ```bash
 BASIC_AUTH_USER=admin
 BASIC_AUTH_PASS=secure-password
+REQUIRE_BASIC_AUTH=true
+ACCESS_ALLOWLIST=203.0.113.10
+HSTS_MAX_AGE_SECONDS=15552000
 CORS_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 ```
+
+When `REQUIRE_BASIC_AUTH=true`, all routes require authentication except health probes:
+`/health`, `/ping`, and `/ready`.
+Optional `ACCESS_ALLOWLIST` further restricts access by source IP.
 
 **Deploy Steps**:
 1. Push to GitHub

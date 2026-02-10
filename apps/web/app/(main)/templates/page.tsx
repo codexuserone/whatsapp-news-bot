@@ -8,6 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { Feed, FeedItem, Target, Template } from '@/lib/types';
+import { dedupeTargets, formatTargetLabel } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -57,38 +58,19 @@ const formatWhatsAppMarkdown = (text: string) => {
     .replace(/\n/g, '<br/>');
 };
 
-const normalizeDisplayText = (value: unknown) => String(value || '').replace(/\s+/g, ' ').trim();
-
-const inferTargetType = (type: unknown, phoneNumber: unknown): Target['type'] => {
-  const rawType = String(type || '').trim().toLowerCase();
-  const phone = String(phoneNumber || '').trim().toLowerCase();
-  if (phone === 'status@broadcast') return 'status';
-  if (phone.includes('@newsletter')) return 'channel';
-  if (phone.endsWith('@g.us')) return 'group';
-  if (phone.endsWith('@s.whatsapp.net') || phone.endsWith('@lid')) return 'individual';
-  if (rawType === 'status' || rawType === 'channel' || rawType === 'group' || rawType === 'individual') {
-    return rawType as Target['type'];
-  }
-  return 'individual';
-};
-
-const scoreTargetName = (name: string, type: Target['type'], phoneNumber: string) => {
-  const normalized = normalizeDisplayText(name);
-  if (!normalized) return -1000;
-  let score = normalized.length;
-  if (type === 'channel' && /^channel\s+\d+$/i.test(normalized)) score -= 500;
-  if (normalized.toLowerCase().includes('@newsletter') || normalized.toLowerCase().includes('@g.us')) score -= 300;
-  if (normalized.toLowerCase() === String(phoneNumber || '').trim().toLowerCase()) score -= 250;
-  const repeatedTypeMentions = (normalized.match(/\((group|channel|status|individual)\)/gi) || []).length;
-  if (repeatedTypeMentions > 1) score -= 160;
-  return score;
+const isSafeImageSrc = (value: unknown) => {
+  const src = String(value || '').trim();
+  if (!src) return false;
+  if (src.startsWith('data:image/')) return true;
+  if (src.startsWith('/')) return true;
+  return src.startsWith('http://') || src.startsWith('https://');
 };
 
 const TemplatesPage = () => {
   const queryClient = useQueryClient();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [sampleFeedId, setSampleFeedId] = useState<string>('__all');
-  const [previewTargetPhone, setPreviewTargetPhone] = useState<string>('');
+  const [previewTargetId, setPreviewTargetId] = useState<string>('');
   const [previewSendNotice, setPreviewSendNotice] = useState<string>('');
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
@@ -110,53 +92,27 @@ const TemplatesPage = () => {
   const [active, setActive] = useState<Template | null>(null);
   const [previewWithData, setPreviewWithData] = useState(true);
   const activeTargets = React.useMemo(() => {
-    const uniqueByDestination = new Map<string, Target>();
-
-    for (const target of targets) {
-      if (target?.active !== true) continue;
-      const phone = normalizeDisplayText(target?.phone_number).toLowerCase();
-      if (!phone) continue;
-      const type = inferTargetType(target?.type, phone);
-      const name = normalizeDisplayText(target?.name);
-      if (type === 'channel' && (/^channel\s+\d+$/i.test(name) || name.toLowerCase().includes('@newsletter'))) {
-        continue;
-      }
-
-      const key = `${type}:${phone}`;
-      const normalized: Target = {
-        id: String(target?.id || key),
-        name: name || phone,
-        phone_number: phone,
-        type,
-        active: true,
-        notes: target?.notes || null
-      };
-      const existing = uniqueByDestination.get(key);
-      if (!existing) {
-        uniqueByDestination.set(key, normalized);
-        continue;
-      }
-      if (scoreTargetName(normalized.name, normalized.type, normalized.phone_number) > scoreTargetName(existing.name, existing.type, existing.phone_number)) {
-        uniqueByDestination.set(key, normalized);
-      }
-    }
-
-    return Array.from(uniqueByDestination.values()).sort((a, b) => {
-      const aKey = `${String(a.type || '')}:${String(a.name || '')}:${String(a.phone_number || '')}`.toLowerCase();
-      const bKey = `${String(b.type || '')}:${String(b.name || '')}:${String(b.phone_number || '')}`.toLowerCase();
-      return aKey.localeCompare(bKey);
-    });
+    return dedupeTargets(targets, { activeOnly: true });
   }, [targets]);
+  const previewTargets = React.useMemo(() => {
+    const byKey = new Map<string, Target>();
+    for (const target of activeTargets) {
+      const type = String(target.type || '').trim().toLowerCase();
+      const phone = String(target.phone_number || '').trim().toLowerCase();
+      const key = `${type}:${phone}`;
+      if (!target.id || !phone || byKey.has(key)) continue;
+      byKey.set(key, target);
+    }
+    return Array.from(byKey.values());
+  }, [activeTargets]);
 
-  const effectivePreviewTargetPhone = React.useMemo(() => {
-    if (!activeTargets.length) return '';
-    const hasExplicitSelection = activeTargets.some((target) => target.phone_number === previewTargetPhone);
-    if (hasExplicitSelection) return previewTargetPhone;
-    return activeTargets[0]?.phone_number || '';
-  }, [activeTargets, previewTargetPhone]);
+  React.useEffect(() => {
+    if (!previewTargetId) return;
+    const stillExists = previewTargets.some((target) => String(target.id) === previewTargetId);
+    if (!stillExists) setPreviewTargetId('');
+  }, [previewTargetId, previewTargets]);
 
-  const selectedPreviewTarget =
-    activeTargets.find((target) => target.phone_number === effectivePreviewTargetPhone) || null;
+  const selectedPreviewTarget = previewTargets.find((target) => String(target.id) === previewTargetId) || null;
 
   const resolveSendMode = (template?: Template | null): 'image' | 'image_only' | 'link_preview' | 'text_only' => {
     if (template?.send_mode === 'image_only') return 'image_only';
@@ -587,19 +543,25 @@ const TemplatesPage = () => {
             <CardContent className="space-y-3">
               <div className="space-y-2">
                 <Label>Target</Label>
-                <Select value={effectivePreviewTargetPhone || '__none'} onValueChange={(value) => setPreviewTargetPhone(value === '__none' ? '' : value)}>
-                  <SelectTrigger>
+                <Select
+                  value={previewTargetId || '__none'}
+                  onValueChange={(value) => setPreviewTargetId(value === '__none' ? '' : String(value || '').trim())}
+                >
+                  <SelectTrigger className="w-full min-w-0">
                     <SelectValue placeholder="Select target" />
                   </SelectTrigger>
                   <SelectContent>
-                    {activeTargets.length > 0 ? (
-                      activeTargets.map((target) => (
-                        <SelectItem key={`${target.type}:${target.phone_number}`} value={target.phone_number}>
-                          {target.name} ({target.type})
+                    <SelectItem value="__none" disabled>
+                      Select target
+                    </SelectItem>
+                    {previewTargets.length > 0 ? (
+                      previewTargets.map((target) => (
+                        <SelectItem key={target.id} value={String(target.id)}>
+                          {formatTargetLabel(target)}
                         </SelectItem>
                       ))
                     ) : (
-                      <SelectItem value="__none" disabled>
+                      <SelectItem value="__empty" disabled>
                         No active targets
                       </SelectItem>
                     )}
@@ -613,7 +575,7 @@ const TemplatesPage = () => {
               </div>
 
               <div className="flex items-center gap-2">
-                <Button type="button" onClick={submitPreviewSend} disabled={sendPreview.isPending || !effectivePreviewTargetPhone}>
+                <Button type="button" onClick={submitPreviewSend} disabled={sendPreview.isPending || !selectedPreviewTarget}>
                   {sendPreview.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
                   Send Preview
                 </Button>
@@ -641,10 +603,12 @@ const TemplatesPage = () => {
             <CardContent>
               <div className="rounded-lg bg-emerald-50/70 p-4 dark:bg-emerald-950/40">
                 <div className="max-w-[85%] rounded-lg bg-white/80 px-3 py-2 shadow-sm ring-1 ring-emerald-200/60 dark:bg-emerald-900/50 dark:ring-emerald-800/60">
-                  {previewWithData && (watchedSendMode === 'image' || watchedSendMode === 'image_only') && sampleData.image_url ? (
+                  {previewWithData &&
+                  (watchedSendMode === 'image' || watchedSendMode === 'image_only') &&
+                  isSafeImageSrc(sampleData.image_url) ? (
                     <div className="mb-2 overflow-hidden rounded-md border border-black/5 bg-white">
                       <Image
-                        src={sampleData.image_url}
+                        src={String(sampleData.image_url)}
                         alt="Template preview"
                         width={640}
                         height={360}

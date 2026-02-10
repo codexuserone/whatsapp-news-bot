@@ -2,6 +2,8 @@ const { getSupabaseClient } = require('../db/supabase');
 const env = require('../config/env');
 const { serviceUnavailable } = require('../core/errors');
 
+const WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES = 15;
+
 const DEFAULTS = {
   retentionDays: env.RETENTION_DAYS,
   log_retention_days: Number(process.env.LOG_RETENTION_DAYS || env.RETENTION_DAYS || 30),
@@ -15,8 +17,14 @@ const DEFAULTS = {
   initial_fetch_limit: Number(process.env.INITIAL_FETCH_LIMIT || 1),
   max_pending_age_hours: Number(process.env.MAX_PENDING_AGE_HOURS || 48),
   send_timeout_ms: Number(process.env.SEND_TIMEOUT_MS || 45000),
-  post_send_edit_window_minutes: Number(process.env.POST_SEND_EDIT_WINDOW_MINUTES || 15),
-  post_send_correction_window_minutes: Number(process.env.POST_SEND_CORRECTION_WINDOW_MINUTES || 120),
+  post_send_edit_window_minutes: Math.min(
+    Number(process.env.POST_SEND_EDIT_WINDOW_MINUTES || 15),
+    WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES
+  ),
+  post_send_correction_window_minutes: Math.min(
+    Number(process.env.POST_SEND_CORRECTION_WINDOW_MINUTES || 15),
+    WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES
+  ),
   reconcile_queue_lookback_hours: Number(process.env.RECONCILE_QUEUE_LOOKBACK_HOURS || 12),
   dedupeThreshold: 0.88,
   processingTimeoutMinutes: Number(process.env.PROCESSING_TIMEOUT_MINUTES || 30),
@@ -37,7 +45,7 @@ const normalizeSettingsPatch = (updates: Record<string, unknown>) => {
       next.post_send_edit_window_minutes,
       DEFAULTS.post_send_edit_window_minutes,
       1,
-      15
+      WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES
     );
   }
 
@@ -46,7 +54,7 @@ const normalizeSettingsPatch = (updates: Record<string, unknown>) => {
       next.post_send_correction_window_minutes,
       DEFAULTS.post_send_correction_window_minutes,
       1,
-      120
+      WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES
     );
   }
 
@@ -123,6 +131,16 @@ const getSettings = async () => {
     if ('send_images' in data) {
       delete data.send_images;
     }
+
+    Object.assign(
+      data,
+      normalizeSettingsPatch({
+        post_send_edit_window_minutes: data.post_send_edit_window_minutes,
+        post_send_correction_window_minutes: data.post_send_correction_window_minutes,
+        app_paused: data.app_paused
+      })
+    );
+
     return data;
   } catch (error) {
     console.error('Error getting settings:', error);

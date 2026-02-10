@@ -34,8 +34,12 @@ type FeedTestResult = {
   sampleItem?: Record<string, unknown>;
 };
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
+type DeleteFeedResponse = {
+  ok?: boolean;
+  rateLimited?: boolean;
+  deactivated?: boolean;
+  message?: string;
+};
 
 const FeedsPage = () => {
   const queryClient = useQueryClient();
@@ -46,6 +50,10 @@ const FeedsPage = () => {
   const [testLoading, setTestLoading] = useState(false);
 
   const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Unknown error');
+  const isRateLimitedError = (error: unknown) => {
+    const message = getErrorMessage(error).toLowerCase();
+    return message.includes('too many requests') || message.includes('rate limit') || message.includes('rate limited');
+  };
 
   const form = useForm<FeedFormValues>({
     resolver: zodResolver(schema),
@@ -99,23 +107,27 @@ const FeedsPage = () => {
 
   const deleteFeed = useMutation({
     mutationFn: async (id: string) => {
-      let delayMs = 250;
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
-        try {
-          return await api.delete(`/api/feeds/${id}`);
-        } catch (error) {
-          const message = getErrorMessage(error).toLowerCase();
-          const isRateLimited = message.includes('too many requests') || message.includes('rate limit');
-          if (!isRateLimited || attempt === 3) throw error;
-          await sleep(delayMs);
-          delayMs *= 2;
+      try {
+        return await api.delete<DeleteFeedResponse>(`/api/feeds/${id}`);
+      } catch (error) {
+        if (!isRateLimitedError(error)) {
+          throw error;
         }
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        return api.delete<DeleteFeedResponse>(`/api/feeds/${id}`);
       }
-      return null;
     },
-    onSuccess: (_, id) => {
+    onSuccess: (result, id) => {
       queryClient.invalidateQueries({ queryKey: ['feeds'] });
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
+      if (result?.rateLimited) {
+        alert(
+          result.message ||
+            (result?.deactivated
+              ? 'Feed is paused for now. Delete again in a few seconds to remove it fully.'
+              : 'Delete is rate-limited right now. Retry in a few seconds.')
+        );
+      }
       if (active?.id === id) {
         setActive(null);
         setTestResult(null);
@@ -127,7 +139,14 @@ const FeedsPage = () => {
         });
       }
     },
-    onError: (error: unknown) => alert(`Failed to delete feed: ${getErrorMessage(error)}`)
+    onError: (error: unknown) => {
+      const message = getErrorMessage(error);
+      if (isRateLimitedError(error)) {
+        alert('Delete is temporarily rate-limited. Wait a few seconds and try once more.');
+        return;
+      }
+      alert(`Failed to delete feed: ${message}`);
+    }
   });
 
 

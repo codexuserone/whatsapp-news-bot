@@ -44,7 +44,7 @@ const MainLayout = ({ children }: MainLayoutProps) => {
     <SidebarProvider className="max-w-full overflow-x-clip">
       <AppSidebar />
       <SidebarInset className="min-w-0 bg-background/80">
-        <header className="sticky top-0 z-30 flex h-16 min-w-0 shrink-0 items-center gap-2 border-b bg-background/70 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <header className="sticky top-0 z-30 flex h-16 min-w-0 max-w-full shrink-0 items-center gap-2 border-b bg-background/70 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
           <SidebarTrigger className="-ml-1 h-11 w-11 rounded-md border border-border bg-background/80" />
           <span className="md:hidden text-sm font-medium">{mobileTitle}</span>
           <Separator orientation="vertical" className="mr-2 h-4" />
@@ -57,14 +57,14 @@ const MainLayout = ({ children }: MainLayoutProps) => {
             </div>
           </div>
         </header>
-        <main className="relative min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 pb-24 pt-6 md:px-8 md:pb-8">
+        <main className="relative min-w-0 max-w-full flex-1 overflow-y-auto overflow-x-hidden px-4 pb-24 pt-6 md:px-8 md:pb-8">
           <div className="mx-auto min-w-0 w-full max-w-6xl">
             <div key={pathname} className="animate-in fade-in-0 slide-in-from-bottom-2 duration-300">
               {children}
             </div>
           </div>
         </main>
-        <nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 backdrop-blur md:hidden">
+        <nav className="fixed inset-x-0 bottom-0 z-40 max-w-full border-t bg-background/95 backdrop-blur md:hidden">
           <div className="mx-auto grid max-w-3xl grid-cols-5">
             {mobileNavItems.map((item) => {
               const Icon = item.icon;

@@ -167,34 +167,37 @@ const getScheduleDiagnostics = async (scheduleId: string, whatsappClient?: Whats
       diagnostics.blockingReasons.push('No active targets on schedule');
     }
 
-    const { data: pendingLogs } = await supabase
-      .from('message_logs')
-      .select('id', { count: 'exact' })
-      .eq('schedule_id', scheduleId)
-      .eq('status', 'pending');
+    const countLogsByStatus = async (status: string) => {
+      const { count, error } = await supabase
+        .from('message_logs')
+        .select('id', { count: 'exact', head: true })
+        .eq('schedule_id', scheduleId)
+        .eq('status', status);
+      if (error) throw error;
+      return Number(count || 0);
+    };
 
-    const { data: sentLogs } = await supabase
-      .from('message_logs')
-      .select('id', { count: 'exact' })
-      .eq('schedule_id', scheduleId)
-      .eq('status', 'sent');
-
-    const { data: failedLogs } = await supabase
-      .from('message_logs')
-      .select('id', { count: 'exact' })
-      .eq('schedule_id', scheduleId)
-      .eq('status', 'failed');
+    const [pendingCount, processingCount, sentCount, failedCount, skippedCount] = await Promise.all([
+      countLogsByStatus('pending'),
+      countLogsByStatus('processing'),
+      countLogsByStatus('sent'),
+      countLogsByStatus('failed'),
+      countLogsByStatus('skipped')
+    ]);
 
     const logsSummary = {
-      pending: pendingLogs?.length || 0,
-      sent: sentLogs?.length || 0,
-      failed: failedLogs?.length || 0
+      pending: pendingCount,
+      processing: processingCount,
+      queued: pendingCount + processingCount,
+      sent: sentCount,
+      failed: failedCount,
+      skipped: skippedCount
     };
 
     diagnostics.logs = logsSummary;
 
-    if (logsSummary.pending === 0) {
-      diagnostics.warnings.push('No pending message logs for schedule');
+    if (logsSummary.queued === 0 && logsSummary.sent === 0 && logsSummary.failed === 0 && logsSummary.skipped === 0) {
+      diagnostics.warnings.push('No queue rows yet for this automation (normal before first matching feed item)');
     }
 
     if (schedule.feed_id) {

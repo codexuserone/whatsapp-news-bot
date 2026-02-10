@@ -88,6 +88,8 @@ export type FeedItem = {
   delivery_status?: string | null;
   routing?: {
     active_automations?: number;
+    dispatchable_automations?: number;
+    queue_cursor_at?: string | null;
   } | null;
   feed?: { name?: string | null } | null;
 };

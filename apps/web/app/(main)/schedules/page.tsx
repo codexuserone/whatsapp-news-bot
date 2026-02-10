@@ -7,6 +7,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { Feed, ReconcileResult, Schedule, Target, Template } from '@/lib/types';
+import { dedupeTargets, formatTargetLabel } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -80,6 +81,7 @@ const BATCH_TIME_PRESETS = ['07:00', '09:00', '12:00', '15:00', '18:00', '20:00'
 const SchedulesPage = () => {
   const queryClient = useQueryClient();
   const [batchTimeInput, setBatchTimeInput] = React.useState('09:00');
+  const [automationNotice, setAutomationNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const { data: schedules = [] } = useQuery<Schedule[]>({
     queryKey: ['schedules'],
     queryFn: () => api.get('/api/schedules'),
@@ -93,7 +95,7 @@ const SchedulesPage = () => {
     queryFn: () => api.get('/api/settings')
   });
   const [active, setActive] = useState<Schedule | null>(null);
-  const activeTargets = targets.filter((target) => target.active);
+  const activeTargets = React.useMemo(() => dedupeTargets(targets, { activeOnly: true }), [targets]);
 
   const formatDateTime = (value?: string | null) => {
     if (!value) return '-';
@@ -306,10 +308,25 @@ const SchedulesPage = () => {
 
   const setScheduleState = useMutation({
     mutationFn: ({ scheduleId, state }: { scheduleId: string; state: 'active' | 'paused' | 'stopped' }) =>
-      api.post(`/api/schedules/${scheduleId}/state`, { state }),
-    onSuccess: () => {
+      api.post<{ warning?: string | null; state?: string | null }>(`/api/schedules/${scheduleId}/state`, { state }),
+    onSuccess: (result: { warning?: string | null; state?: string | null }) => {
       queryClient.invalidateQueries({ queryKey: ['schedules'] });
       queryClient.invalidateQueries({ queryKey: ['queue'] });
+      const warning = String(result?.warning || '').trim();
+      if (warning) {
+        setAutomationNotice({ type: 'error', message: warning });
+        return;
+      }
+      const nextState = String(result?.state || '').trim().toLowerCase();
+      if (nextState === 'active') {
+        setAutomationNotice({ type: 'success', message: 'Automation running.' });
+      } else if (nextState === 'paused') {
+        setAutomationNotice({ type: 'success', message: 'Automation paused.' });
+      } else if (nextState === 'stopped') {
+        setAutomationNotice({ type: 'success', message: 'Automation stopped.' });
+      } else {
+        setAutomationNotice({ type: 'success', message: 'Automation updated.' });
+      }
     },
     onError: (error: unknown) => alert(`Failed to update automation state: ${getErrorMessage(error)}`)
   });
@@ -748,7 +765,7 @@ const SchedulesPage = () => {
                                   field.onChange(Array.from(next));
                                 }}
                               />
-                              <span>{target.name}</span>
+                              <span className="min-w-0 flex-1 truncate">{formatTargetLabel(target)}</span>
                               {target.type === 'status' && <Badge variant="warning" className="ml-auto text-[10px] h-5">Status</Badge>}
                             </label>
                           ))}
@@ -828,8 +845,30 @@ const SchedulesPage = () => {
             <CardDescription>Use &quot;Send once&quot; for an immediate one-time send, or let automations run on their own.</CardDescription>
           </CardHeader>
           <CardContent>
+            {automationNotice ? (
+              <div
+                className={`mb-3 rounded-md border px-3 py-2 text-sm ${
+                  automationNotice.type === 'success'
+                    ? 'border-emerald-300/70 bg-emerald-50 text-emerald-900'
+                    : 'border-red-300/70 bg-red-50 text-red-900'
+                }`}
+              >
+                {automationNotice.message}
+              </div>
+            ) : null}
             <div className="space-y-3">
-              {schedules.map((schedule) => (
+              {schedules.map((schedule) => {
+                const feedRow = feeds.find((feed) => feed.id === schedule.feed_id);
+                const feedDisabled = feedRow?.active === false;
+                const hasTargets = Array.isArray(schedule.target_ids) && schedule.target_ids.length > 0;
+                const canActivate = Boolean(schedule.feed_id && schedule.template_id && hasTargets && !feedDisabled);
+                const activateBlockedReason = !canActivate
+                  ? feedDisabled
+                    ? 'Enable this feed first to run this automation.'
+                    : 'Automation is missing feed, template, or targets.'
+                  : null;
+
+                return (
                 <div key={schedule.id} className="rounded-lg border p-3">
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <div className="min-w-0 flex-1">
@@ -842,6 +881,9 @@ const SchedulesPage = () => {
                           <span>Runs on new items</span>
                         )}
                         <span>Last: {formatDateTime(schedule.last_run_at)}</span>
+                        {feedDisabled ? (
+                          <span className="text-warning-foreground">Feed disabled</span>
+                        ) : null}
                       </div>
                     </div>
                     <Badge variant={isRunning(schedule) ? 'success' : 'secondary'}>
@@ -864,7 +906,8 @@ const SchedulesPage = () => {
                         size="sm"
                         variant="outline"
                         onClick={() => setScheduleState.mutate({ scheduleId: schedule.id, state: 'active' })}
-                        disabled={setScheduleState.isPending}
+                        disabled={setScheduleState.isPending || !canActivate}
+                        title={activateBlockedReason || undefined}
                       >
                         {getScheduleState(schedule) === 'paused' ? 'Resume' : 'Start'}
                       </Button>
@@ -893,8 +936,11 @@ const SchedulesPage = () => {
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
+                  {activateBlockedReason && getScheduleState(schedule) !== 'active' ? (
+                    <p className="mt-2 text-xs text-warning-foreground">{activateBlockedReason}</p>
+                  ) : null}
                 </div>
-              ))}
+              )})}
               {schedules.length === 0 && (
                 <div className="text-center py-12 px-4">
                   <CalendarClock className="h-12 w-12 text-muted-foreground/50 mx-auto mb-4" />

@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Fraunces, Manrope } from 'next/font/google';
 import './globals.css';
 import Providers from './providers';
@@ -18,6 +18,12 @@ const fraunces = Fraunces({
 export const metadata: Metadata = {
   title: 'WhatsApp News Bot',
   description: 'WhatsApp News Bot Automation Suite'
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover'
 };
 
 export default function RootLayout({

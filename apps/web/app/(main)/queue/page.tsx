@@ -54,6 +54,14 @@ const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | nu
   }
 };
 
+const isSafeImageSrc = (value: unknown) => {
+  const src = String(value || '').trim();
+  if (!src) return false;
+  if (src.startsWith('data:image/')) return true;
+  if (src.startsWith('/')) return true;
+  return src.startsWith('http://') || src.startsWith('https://');
+};
+
 const QueuePage = () => {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState('all');
@@ -166,7 +174,7 @@ const QueuePage = () => {
   const pauseItem = useMutation({
     mutationFn: (id: string) => api.post(`/api/queue/${id}/pause`),
     onSuccess: () => {
-      setActionNotice({ type: 'success', message: 'Item paused.' });
+      setActionNotice({ type: 'success', message: 'Delivery paused.' });
       refreshQueueViews();
     },
     onError: (error: unknown) => {
@@ -177,7 +185,7 @@ const QueuePage = () => {
   const resumeItem = useMutation({
     mutationFn: (id: string) => api.post(`/api/queue/${id}/resume`),
     onSuccess: () => {
-      setActionNotice({ type: 'success', message: 'Item resumed.' });
+      setActionNotice({ type: 'success', message: 'Delivery resumed.' });
       refreshQueueViews();
     },
     onError: (error: unknown) => {
@@ -199,7 +207,7 @@ const QueuePage = () => {
   const pausePost = useMutation({
     mutationFn: (feedItemId: string) => api.post(`/api/feed-items/${feedItemId}/pause`),
     onSuccess: () => {
-      setActionNotice({ type: 'success', message: 'This post was paused for all queued targets.' });
+      setActionNotice({ type: 'success', message: 'Story queue paused.' });
       refreshQueueViews();
     },
     onError: (error: unknown) => {
@@ -210,7 +218,7 @@ const QueuePage = () => {
   const resumePost = useMutation({
     mutationFn: (feedItemId: string) => api.post(`/api/feed-items/${feedItemId}/resume`),
     onSuccess: () => {
-      setActionNotice({ type: 'success', message: 'Post resumed for queued targets.' });
+      setActionNotice({ type: 'success', message: 'Story queue resumed.' });
       refreshQueueViews();
     },
     onError: (error: unknown) => {
@@ -246,7 +254,8 @@ const QueuePage = () => {
 
   const isPaused = (item: QueueItem) => isItemPaused(item) || isPostPaused(item);
 
-  const canEdit = (item: QueueItem) => item.status === 'pending' || item.status === 'failed' || isPaused(item);
+  // Keep edit behavior aligned with API: everything except sent/processing can be edited.
+  const canEdit = (item: QueueItem) => item.status !== 'sent' && item.status !== 'processing';
 
   const canPause = (item: QueueItem) => item.status === 'pending' || item.status === 'failed';
 
@@ -485,7 +494,10 @@ const QueuePage = () => {
               {queueItems.map((item, index) => {
                 const mediaCandidate = item.media_url || item.image_url || null;
                 const sentWithImage = item.status === 'sent' && item.media_type === 'image' && Boolean(item.media_sent);
-                const imagePreview = mediaCandidate && (item.status !== 'sent' || sentWithImage) ? mediaCandidate : null;
+                const imagePreview =
+                  mediaCandidate && isSafeImageSrc(mediaCandidate) && (item.status !== 'sent' || sentWithImage)
+                    ? mediaCandidate
+                    : null;
                 const editing = editingId === item.id;
                 const receiptBadge = getReceiptBadge(item);
                 const deliveryPath = getDeliveryPath(item);
@@ -585,7 +597,13 @@ const QueuePage = () => {
                     ) : null}
 
                     <div className="flex flex-wrap gap-2">
-                      <Button size="sm" variant="outline" onClick={() => beginEdit(item)} disabled={!canEdit(item)}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => beginEdit(item)}
+                        disabled={!canEdit(item)}
+                        title={canEdit(item) ? 'Edit message text before send' : 'Can only edit queued/failed/skipped items before send'}
+                      >
                         <Pencil className="mr-1 h-3 w-3" /> Edit
                       </Button>
 
@@ -601,7 +619,7 @@ const QueuePage = () => {
                           ) : (
                             <PauseCircle className="mr-1 h-3 w-3" />
                           )}
-                          {canResume(item) ? 'Resume this delivery' : 'Pause this delivery'}
+                          {canResume(item) ? 'Resume destination' : 'Pause destination'}
                         </Button>
                       ) : null}
 
@@ -617,7 +635,7 @@ const QueuePage = () => {
                           ) : (
                             <PauseCircle className="mr-1 h-3 w-3" />
                           )}
-                          {canResumePost(item) ? 'Resume this story (all deliveries)' : 'Pause this story (all deliveries)'}
+                          {canResumePost(item) ? 'Resume story' : 'Pause story'}
                         </Button>
                       ) : null}
 
@@ -626,6 +644,11 @@ const QueuePage = () => {
                         Send now
                       </Button>
                     </div>
+                    {(canToggleItemPause(item) || canTogglePostPause(item)) ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        Destination pause affects only this target. Story pause affects all targets for this story.
+                      </p>
+                    ) : null}
 
                     <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
                       {item.pub_date ? <span>Published: {formatDate(item.pub_date)}</span> : null}
@@ -652,10 +675,14 @@ const QueuePage = () => {
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {queueItems.map((item) => {
+                const editing = editingId === item.id;
                 const deliveryPath = getDeliveryPath(item);
                 const mediaCandidate = item.media_url || item.image_url || null;
                 const sentWithImage = item.status === 'sent' && item.media_type === 'image' && Boolean(item.media_sent);
-                const showPreview = Boolean(mediaCandidate) && (item.status !== 'sent' || sentWithImage);
+                const showPreview =
+                  Boolean(mediaCandidate) &&
+                  isSafeImageSrc(mediaCandidate) &&
+                  (item.status !== 'sent' || sentWithImage);
                 return (
                 <div key={item.id} className="relative flex flex-col rounded-lg border bg-card text-card-foreground shadow-sm overflow-hidden h-full">
                   <div className="relative aspect-video bg-muted/30">
@@ -693,10 +720,39 @@ const QueuePage = () => {
                     </p>
                     <p className="text-[11px] text-muted-foreground">{deliveryPath.label}</p>
                     {item.pub_date ? <p className="text-[11px] text-muted-foreground">Published: {formatDate(item.pub_date)}</p> : null}
+                    {editing ? (
+                      <div className="rounded-md border bg-muted/30 p-2 space-y-2">
+                        <p className="text-[11px] text-muted-foreground">Edit message text before sending</p>
+                        <Textarea
+                          value={draftMessage}
+                          onChange={(event) => setDraftMessage(event.target.value)}
+                          className="min-h-[88px] text-xs"
+                        />
+                        <div className="flex flex-wrap gap-1">
+                          <Button size="sm" className="h-7 text-xs px-2" onClick={saveEdit} disabled={updateItem.isPending}>
+                            {updateItem.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Save className="mr-1 h-3 w-3" />}
+                            Save
+                          </Button>
+                          <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={cancelEdit}>
+                            <X className="mr-1 h-3 w-3" />
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="flex flex-wrap gap-1 mt-auto pt-2">
-                      <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={() => beginEdit(item)} disabled={!canEdit(item)}>
-                        <Pencil className="mr-1 h-3 w-3" /> Edit
-                      </Button>
+                      {editing ? null : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs px-2"
+                          onClick={() => beginEdit(item)}
+                          disabled={!canEdit(item)}
+                          title={canEdit(item) ? 'Edit message text before send' : 'Can only edit queued/failed/skipped items before send'}
+                        >
+                          <Pencil className="mr-1 h-3 w-3" /> Edit
+                        </Button>
+                      )}
                       {canToggleItemPause(item) && (
                         <Button
                           size="sm"
@@ -706,7 +762,7 @@ const QueuePage = () => {
                           disabled={pauseItem.isPending || resumeItem.isPending}
                         >
                           {canResume(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
-                          {canResume(item) ? 'Resume delivery' : 'Pause delivery'}
+                          {canResume(item) ? 'Resume destination' : 'Pause destination'}
                         </Button>
                       )}
                       {canTogglePostPause(item) && (
@@ -716,9 +772,10 @@ const QueuePage = () => {
                           className="h-7 text-xs px-2"
                           onClick={() => togglePostPause(item)}
                           disabled={pausePost.isPending || resumePost.isPending}
+                          title={canResumePost(item) ? 'Resume this story for all targets' : 'Pause this story for all targets'}
                         >
                           {canResumePost(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
-                          {canResumePost(item) ? 'Resume story' : 'Pause story (all)'}
+                          {canResumePost(item) ? 'Resume story' : 'Pause story'}
                         </Button>
                       )}
                       <Button size="sm" variant="outline" className="h-7 text-xs px-2 ml-auto" onClick={() => sendNowItem.mutate(item.id)} disabled={!canSendNow(item)}>

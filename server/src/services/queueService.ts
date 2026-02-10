@@ -67,9 +67,9 @@ type WhatsAppClient = {
 
 const DEFAULT_SEND_TIMEOUT_MS = 45000;
 const DEFAULT_POST_SEND_EDIT_WINDOW_MINUTES = 15;
-const DEFAULT_POST_SEND_CORRECTION_WINDOW_MINUTES = 120;
+const DEFAULT_POST_SEND_CORRECTION_WINDOW_MINUTES = 15;
 const MAX_POST_SEND_EDIT_WINDOW_MINUTES = 15;
-const MAX_POST_SEND_CORRECTION_WINDOW_MINUTES = 120;
+const MAX_POST_SEND_CORRECTION_WINDOW_MINUTES = 15;
 const AUTH_ERROR_HINT = 'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
 const MANUAL_POST_PAUSE_ERROR = 'Paused for this post';
 const FEED_PAUSED_ERROR = 'Feed paused';
@@ -788,6 +788,26 @@ const sendMessageWithTemplate = async (
     };
   }
 
+  // Channel/newsletter media delivery is unreliable in current Baileys builds.
+  // Use text/link mode for channels to avoid fake-success media sends.
+  if (target.type === 'channel') {
+    const channelText = textWithPreview || renderedText;
+    if (!channelText) {
+      throw new Error('Channel send requires text content in this build');
+    }
+    const response = await sendText(channelText);
+    return {
+      response,
+      text: channelText,
+      media: {
+        type: sendMode === 'image_only' || sendMode === 'image' ? 'image' : null,
+        url: null,
+        sent: false,
+        error: 'Channel media disabled: sent text/link only'
+      }
+    };
+  }
+
   const resolved = await resolveImageUrlForFeedItem(options?.supabase, feedItem, allowImages);
   if (sendMode === 'image_only' && !resolved.url) {
     throw new Error('Image-only mode requires an available image for this feed item');
@@ -1142,6 +1162,7 @@ const reconcileUpdatedFeedItems = async (
     const hasEditCandidate = Boolean(
       whatsappClient.editMessage &&
       target.type !== 'status' &&
+      target.type !== 'channel' &&
       sentAgeMs <= editWindowMs &&
       String(log.whatsapp_message_id || '').trim()
     );
@@ -1679,13 +1700,13 @@ const sendQueuedForSchedule = async (
 
       if (!manualLogs || manualLogs.length === 0) {
         logger.info({ scheduleId }, 'No pending manual messages to send');
-        return { sent: 0, queued: 0 };
+        return { sent: 0, queued: 0, skipped: true, reason: 'No pending messages queued for this automation yet' };
       }
 
       // For manual dispatch, we can't proceed without feed items
       logger.warn({ scheduleId, count: manualLogs.length },
         'Pending manual logs found but no feed items - cannot send');
-      return { sent: 0, queued: 0, error: 'Manual dispatch requires feed items' };
+      return { sent: 0, queued: 0, skipped: true, reason: 'No sendable feed items are queued for this automation yet' };
     }
 
     // Get targets
@@ -2205,7 +2226,18 @@ const sendQueuedForSchedule = async (
       }
     }
 
-    logger.info({ scheduleId, sentCount, reconcileResult }, 'Dispatch completed successfully');
+    if (sentCount === 0 && queuedCount === 0) {
+      logger.info({ scheduleId }, 'Dispatch finished with no queue entries to send');
+      return {
+        sent: 0,
+        queued: 0,
+        skipped: true,
+        reason: 'No pending messages queued for this automation yet',
+        reconcile: reconcileResult
+      };
+    }
+
+    logger.info({ scheduleId, sentCount, queuedCount, reconcileResult }, 'Dispatch completed successfully');
     return { sent: sentCount, queued: queuedCount, reconcile: reconcileResult };
   } catch (error) {
     logger.error({ error, scheduleId }, 'Failed to send queued messages');

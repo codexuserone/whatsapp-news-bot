@@ -1,11 +1,11 @@
 'use client';
 
 import React from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { Target, WhatsAppChannel, WhatsAppGroup, WhatsAppStatus } from '@/lib/types';
+import { dedupeTargets, formatTargetLabel, normalizeDisplayText, normalizeTargetName } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -40,33 +40,6 @@ type SendTestResponse = {
     status?: number | null;
     statusLabel?: string | null;
   } | null;
-};
-
-const normalizeDisplayText = (value: unknown) => String(value || '').replace(/\s+/g, ' ').trim();
-
-const inferTargetType = (type: unknown, phoneNumber: unknown): Target['type'] => {
-  const rawType = String(type || '').trim().toLowerCase();
-  const phone = String(phoneNumber || '').trim().toLowerCase();
-  if (phone === 'status@broadcast') return 'status';
-  if (phone.includes('@newsletter')) return 'channel';
-  if (phone.endsWith('@g.us')) return 'group';
-  if (phone.endsWith('@s.whatsapp.net') || phone.endsWith('@lid')) return 'individual';
-  if (rawType === 'status' || rawType === 'channel' || rawType === 'group' || rawType === 'individual') {
-    return rawType as Target['type'];
-  }
-  return 'individual';
-};
-
-const scoreTargetName = (name: string, type: Target['type'], phoneNumber: string) => {
-  const normalized = normalizeDisplayText(name);
-  if (!normalized) return -1000;
-  let score = normalized.length;
-  if (type === 'channel' && /^channel\s+\d+$/i.test(normalized)) score -= 500;
-  if (normalized.toLowerCase().includes('@newsletter') || normalized.toLowerCase().includes('@g.us')) score -= 300;
-  if (normalized.toLowerCase() === String(phoneNumber || '').trim().toLowerCase()) score -= 250;
-  const repeatedTypeMentions = (normalized.match(/\((group|channel|status|individual)\)/gi) || []).length;
-  if (repeatedTypeMentions > 1) score -= 160;
-  return score;
 };
 
 const isSafeImageSrc = (value: unknown) => {
@@ -119,83 +92,69 @@ const WhatsAppPage = () => {
   });
 
   const groups = React.useMemo<WhatsAppGroup[]>(() => {
-    if (!Array.isArray(groupsRaw)) return [];
-    return groupsRaw
-      .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
-      .map((entry) => {
-        const jid = normalizeDisplayText(entry.jid || entry.id);
-        const name = normalizeDisplayText(entry.name || jid);
-        return {
-          id: String(entry.id || jid),
-          jid,
-          name: name || jid,
-          size: Number(entry.size || 0),
-          announce: entry.announce === true,
-          restrict: entry.restrict === true,
-          participantCount: Number(entry.participantCount || entry.size || 0),
-          me: {
-            jid: normalizeDisplayText((entry.me as { jid?: unknown } | undefined)?.jid) || null,
-            isAdmin: (entry.me as { isAdmin?: unknown } | undefined)?.isAdmin === true,
-            admin: normalizeDisplayText((entry.me as { admin?: unknown } | undefined)?.admin) || null
-          }
-        };
-      })
-      .filter((group) => Boolean(group.jid));
+    try {
+      if (!Array.isArray(groupsRaw)) return [];
+      return groupsRaw
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
+        .map((entry) => {
+          const jid = normalizeDisplayText(entry.jid || entry.id);
+          const name =
+            normalizeTargetName(entry.name || entry.subject || jid, 'group', jid) ||
+            normalizeDisplayText(jid);
+          return {
+            id: String(entry.id || jid),
+            jid,
+            name: name || jid,
+            size: Number(entry.size || 0),
+            announce: entry.announce === true,
+            restrict: entry.restrict === true,
+            participantCount: Number(entry.participantCount || entry.size || 0),
+            me: {
+              jid: normalizeDisplayText((entry.me as { jid?: unknown } | undefined)?.jid) || null,
+              isAdmin: (entry.me as { isAdmin?: unknown } | undefined)?.isAdmin === true,
+              admin: normalizeDisplayText((entry.me as { admin?: unknown } | undefined)?.admin) || null
+            }
+          };
+        })
+        .filter((group) => Boolean(group.jid));
+    } catch {
+      return [];
+    }
   }, [groupsRaw]);
 
   const channels = React.useMemo<WhatsAppChannel[]>(() => {
-    if (!Array.isArray(channelsRaw)) return [];
-    return channelsRaw
-      .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
-      .map((entry) => {
-        const jid = normalizeDisplayText(entry.jid || entry.id);
-        const name = normalizeDisplayText(entry.name || jid);
-        const baseChannel: WhatsAppChannel = {
-          id: String(entry.id || jid),
-          jid,
-          name: name || jid,
-          subscribers: Number(entry.subscribers || 0),
-          role: normalizeDisplayText(entry.role) || null,
-          canPost: entry.canPost === true
-        };
-        const sourceRaw = entry.source;
-        if (sourceRaw === 'verified_target' || sourceRaw === 'saved' || sourceRaw === 'live') {
-          return { ...baseChannel, source: sourceRaw as 'live' | 'saved' | 'verified_target' };
-        }
-        return baseChannel;
-      })
-      .filter((channel) => Boolean(channel.jid));
+    try {
+      if (!Array.isArray(channelsRaw)) return [];
+      return channelsRaw
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
+        .map((entry) => {
+          const jid = normalizeDisplayText(entry.jid || entry.id);
+          const name =
+            normalizeTargetName(entry.name || entry.subject || jid, 'channel', jid) ||
+            '';
+          const baseChannel: WhatsAppChannel = {
+            id: String(entry.id || jid),
+            jid,
+            name,
+            subscribers: Number(entry.subscribers || 0),
+            role: normalizeDisplayText(entry.role) || null,
+            canPost: entry.canPost === true
+          };
+          const sourceRaw = entry.source;
+          if (sourceRaw === 'verified_target' || sourceRaw === 'saved' || sourceRaw === 'live') {
+            return { ...baseChannel, source: sourceRaw as 'live' | 'saved' | 'verified_target' };
+          }
+          return baseChannel;
+        })
+        .filter((channel) => Boolean(channel.jid) && Boolean(channel.name));
+    } catch {
+      return [];
+    }
   }, [channelsRaw]);
 
   const existingTargets = React.useMemo<Target[]>(() => {
     if (!Array.isArray(existingTargetsRaw)) return [];
-    const byDestination = new Map<string, Target>();
-    for (const entry of existingTargetsRaw) {
-      if (!entry || typeof entry !== 'object') continue;
-      const row = entry as Record<string, unknown>;
-      const phone = normalizeDisplayText(row.phone_number).toLowerCase();
-      if (!phone) continue;
-      const type = inferTargetType(row.type, phone);
-      const name = normalizeDisplayText(row.name) || phone;
-      const key = `${type}:${phone}`;
-      const candidate: Target = {
-        id: String(row.id || key),
-        name,
-        phone_number: phone,
-        type,
-        active: row.active === true,
-        notes: normalizeDisplayText(row.notes) || null
-      };
-      const existing = byDestination.get(key);
-      if (!existing) {
-        byDestination.set(key, candidate);
-        continue;
-      }
-      if (scoreTargetName(candidate.name, candidate.type, candidate.phone_number) > scoreTargetName(existing.name, existing.type, existing.phone_number)) {
-        byDestination.set(key, candidate);
-      }
-    }
-    return Array.from(byDestination.values());
+    return dedupeTargets(existingTargetsRaw as Array<Partial<Target>>, { activeOnly: false });
   }, [existingTargetsRaw]);
 
   const disconnect = useMutation({
@@ -229,11 +188,7 @@ const WhatsAppPage = () => {
   const isConnected = status?.status === 'connected';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
   const activeTargets = React.useMemo(() => {
-    const isPlaceholderChannel = (target: Target) =>
-      target.type === 'channel' &&
-      (/^channel\s+\d+$/i.test(String(target.name || '').trim()) ||
-        String(target.name || '').toLowerCase().includes('@newsletter'));
-    return existingTargets.filter((target) => target.active && !isPlaceholderChannel(target));
+    return existingTargets.filter((target) => target.active);
   }, [existingTargets]);
   const groupedTargets = React.useMemo(() => {
     const groups = activeTargets.filter((target) => target.type === 'group');
@@ -252,6 +207,12 @@ const WhatsAppPage = () => {
     }),
     [activeTargets, groupedTargets]
   );
+
+  const selectedChannelCount = React.useMemo(() => {
+    if (!selectedTargets.length) return 0;
+    const selected = new Set(selectedTargets);
+    return groupedTargets.channels.filter((target) => selected.has(target.phone_number)).length;
+  }, [groupedTargets.channels, selectedTargets]);
 
   React.useEffect(() => {
     setSelectedTargets((current) => {
@@ -417,14 +378,8 @@ const WhatsAppPage = () => {
               </div>
             ) : qr?.qr && isSafeImageSrc(qr.qr) ? (
               <div className="space-y-3 text-center">
-                <Image
-                  src={qr.qr}
-                  alt="WhatsApp QR Code"
-                  width={224}
-                  height={224}
-                  unoptimized
-                  className="h-56 w-56 rounded-lg border bg-white p-2"
-                />
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={qr.qr} alt="WhatsApp QR Code" className="h-56 w-56 rounded-lg border bg-white p-2 object-contain" />
                 <p className="text-sm text-muted-foreground">Scan with your phone</p>
               </div>
             ) : qr?.qr ? (
@@ -548,7 +503,7 @@ const WhatsAppPage = () => {
                                     });
                                   }}
                                 />
-                                <span>{target.name}</span>
+                                <span className="min-w-0 flex-1 truncate">{formatTargetLabel(target)}</span>
                                 <span className="ml-auto text-xs text-muted-foreground">{target.type}</span>
                               </label>
                             );
@@ -608,6 +563,11 @@ const WhatsAppPage = () => {
                 <Label htmlFor="attachmentUpload">Attachment</Label>
                 <Input id="attachmentUpload" type="file" accept="image/*,video/*" onChange={onPickAttachmentFile} />
                 {attachmentName ? <p className="text-xs text-muted-foreground">Selected: {attachmentName}</p> : null}
+                {selectedChannelCount > 0 ? (
+                  <p className="text-xs text-warning-foreground">
+                    Channel targets currently send text/link only in this build; media is not sent to channels.
+                  </p>
+                ) : null}
               </div>
             ) : null}
 

@@ -18,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Settings, Clock, MapPin, Loader2, Copy } from 'lucide-react';
 
 const WHATSAPP_EDIT_MAX_MINUTES = 15;
-const CORRECTION_SCAN_MAX_MINUTES = 120;
+const CORRECTION_SCAN_MAX_MINUTES = 15;
 
 const schema = z.object({
   app_name: z.string().min(1),
@@ -97,7 +97,7 @@ const SettingsPage = () => {
       defaultInterTargetDelaySec: 8,
       defaultIntraTargetDelaySec: 3,
       post_send_edit_window_minutes: 15,
-      post_send_correction_window_minutes: 120,
+      post_send_correction_window_minutes: 15,
       processingTimeoutMinutes: 30,
       dedupeThreshold: 0.88
     }
@@ -310,11 +310,11 @@ const SettingsPage = () => {
                     {...form.register('post_send_edit_window_minutes', { valueAsNumber: true })}
                   />
                   <p className="text-xs text-muted-foreground">
-                    True WhatsApp edit only. Max {WHATSAPP_EDIT_MAX_MINUTES} minutes (real WhatsApp limit). If you enter more, it is saved as {WHATSAPP_EDIT_MAX_MINUTES}.
+                    True WhatsApp edit only. Max {WHATSAPP_EDIT_MAX_MINUTES} minutes (real WhatsApp limit). No resend fallback.
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="post_send_correction_window_minutes">Correction Scan Window (min)</Label>
+                  <Label htmlFor="post_send_correction_window_minutes">Correction Attempt Window (min)</Label>
                   <Input
                     id="post_send_correction_window_minutes"
                     type="number"
@@ -323,7 +323,7 @@ const SettingsPage = () => {
                     {...form.register('post_send_correction_window_minutes', { valueAsNumber: true })}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Feed changes are monitored in this window (max {CORRECTION_SCAN_MAX_MINUTES} min). This does not bypass WhatsApp&rsquo;s {WHATSAPP_EDIT_MAX_MINUTES}-minute edit limit.
+                    Must match WhatsApp edit support (max {CORRECTION_SCAN_MAX_MINUTES} min). No delete-and-resend.
                   </p>
                 </div>
               </div>

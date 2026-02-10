@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { Target, WhatsAppChannel, WhatsAppGroup, WhatsAppStatus } from '@/lib/types';
+import { normalizeDisplayText, normalizeTargetName } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -41,12 +42,46 @@ type TargetPayload = {
   notes?: string | null;
 };
 
+type ChannelDiagnostics = {
+  methodsTried?: string[];
+  methodErrors?: string[];
+  sourceCounts?: {
+    api?: number;
+    cache?: number;
+    metadata?: number;
+    store?: number;
+  };
+  seeded?: {
+    provided?: number;
+    verified?: number;
+    failed?: number;
+    failedJids?: string[];
+  };
+  limitation?: string | null;
+};
+
+type ChannelDiagnosticsResponse = {
+  channels?: WhatsAppChannel[];
+  diagnostics?: ChannelDiagnostics;
+};
+
+type DiscoverChannelsResponse = {
+  ok?: boolean;
+  discovered?: number;
+  channels?: WhatsAppChannel[];
+  diagnostics?: ChannelDiagnostics;
+  persisted?: {
+    candidates?: number;
+  };
+};
+
 const TargetsPage = () => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | Target['type']>('all');
   const [addValue, setAddValue] = useState('');
   const [addNotice, setAddNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [discoveryNotice, setDiscoveryNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Target | null>(null);
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
@@ -59,21 +94,53 @@ const TargetsPage = () => {
     queryFn: () => api.get('/api/whatsapp/status'),
     refetchInterval: 5000
   });
+  const isConnected = waStatus?.status === 'connected';
 
-  const { data: waGroups = [] } = useQuery<WhatsAppGroup[]>({
+  const { data: waGroupsRaw } = useQuery<unknown>({
     queryKey: ['whatsapp-groups'],
     queryFn: () => api.get('/api/whatsapp/groups'),
-    enabled: waStatus?.status === 'connected'
+    enabled: isConnected
   });
 
-  const { data: waChannels = [] } = useQuery<WhatsAppChannel[]>({
+  const { data: waChannelsRaw } = useQuery<unknown>({
     queryKey: ['whatsapp-channels'],
     queryFn: () => api.get('/api/whatsapp/channels'),
-    enabled: waStatus?.status === 'connected'
+    enabled: isConnected
   });
 
-  const isConnected = waStatus?.status === 'connected';
+  const { data: channelDiagnosticsRaw, refetch: refetchChannelDiagnostics } = useQuery<ChannelDiagnosticsResponse>({
+    queryKey: ['whatsapp-channels-diagnostics'],
+    queryFn: () => api.get('/api/whatsapp/channels/diagnostics'),
+    enabled: isConnected
+  });
+
+  const waGroups = React.useMemo<WhatsAppGroup[]>(() => {
+    if (!Array.isArray(waGroupsRaw)) return [];
+    return waGroupsRaw.filter((entry): entry is WhatsAppGroup => Boolean(entry && typeof entry === 'object' && (entry as WhatsAppGroup).jid));
+  }, [waGroupsRaw]);
+
+  const waChannels = React.useMemo<WhatsAppChannel[]>(() => {
+    if (!Array.isArray(waChannelsRaw)) return [];
+    return waChannelsRaw
+      .filter((entry): entry is WhatsAppChannel => Boolean(entry && typeof entry === 'object' && (entry as WhatsAppChannel).jid))
+      .map((channel) => {
+        const jid = normalizeDisplayText(channel.jid);
+        const cleanName = normalizeTargetName(channel.name, 'channel', jid);
+        return {
+          ...channel,
+          jid,
+          name: cleanName || ''
+        };
+      })
+      .filter((channel) => Boolean(channel.name));
+  }, [waChannelsRaw]);
+
   const liveChannelCount = waChannels.filter((channel) => channel.source === 'live').length;
+  const channelDiagnostics = channelDiagnosticsRaw?.diagnostics;
+  const channelSeedSummary = channelDiagnostics?.seeded || {};
+  const channelMethodErrors = Array.isArray(channelDiagnostics?.methodErrors)
+    ? channelDiagnostics?.methodErrors?.slice(0, 3)
+    : [];
 
   const updateTarget = useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: TargetPayload }) => api.put(`/api/targets/${id}`, payload),
@@ -100,6 +167,27 @@ const TargetsPage = () => {
     onError: (error: unknown) => {
       const message = error instanceof Error ? error.message : 'Could not resolve this destination';
       setAddNotice({ type: 'error', message });
+    }
+  });
+
+  const discoverChannels = useMutation({
+    mutationFn: () => api.post<DiscoverChannelsResponse>('/api/whatsapp/channels/discover'),
+    onSuccess: async (result) => {
+      setDiscoveryNotice({
+        type: 'success',
+        message: `Discovery complete: ${Number(result?.discovered || 0)} channels found.`
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['targets'] }),
+        queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] }),
+        queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] }),
+        queryClient.invalidateQueries({ queryKey: ['whatsapp-channels-diagnostics'] })
+      ]);
+      await refetchChannelDiagnostics();
+    },
+    onError: (error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Channel discovery failed';
+      setDiscoveryNotice({ type: 'error', message });
     }
   });
 
@@ -147,11 +235,25 @@ const TargetsPage = () => {
       ) : (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <RefreshCw className="h-5 w-5" />
-              Connected Destinations
-            </CardTitle>
-            <CardDescription>Groups and channels appear here automatically.</CardDescription>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <RefreshCw className="h-5 w-5" />
+                  Connected Destinations
+                </CardTitle>
+                <CardDescription>Groups and channels are discovered from your live WhatsApp session.</CardDescription>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => discoverChannels.mutate()}
+                disabled={discoverChannels.isPending}
+              >
+                {discoverChannels.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Discover channels now
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-3">
@@ -165,16 +267,35 @@ const TargetsPage = () => {
                 {liveChannelCount > 0 ? (
                   <p className="text-[11px] text-muted-foreground">Live: {liveChannelCount}</p>
                 ) : null}
+                {Number(channelSeedSummary?.verified || 0) > 0 ? (
+                  <p className="text-[11px] text-muted-foreground">Verified from saved: {Number(channelSeedSummary?.verified || 0)}</p>
+                ) : null}
               </div>
               <div className="rounded-lg border p-3">
                 <p className="text-xs text-muted-foreground">Saved targets</p>
                 <p className="text-xl font-semibold">{targets.length}</p>
               </div>
             </div>
+            {discoveryNotice ? (
+              <p className={discoveryNotice.type === 'success' ? 'rounded-md bg-success/10 px-3 py-2 text-xs text-success' : 'rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive'}>
+                {discoveryNotice.message}
+              </p>
+            ) : null}
             {isConnected && waChannels.length === 0 ? (
               <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                No channels discovered yet in this session. Paste a group/channel link below to add one directly.
+                No channels discovered yet. Open the channel in WhatsApp mobile/web, then click Discover channels now.
               </p>
+            ) : null}
+            {channelDiagnostics?.limitation && waChannels.length === 0 ? (
+              <p className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning-foreground">
+                {channelDiagnostics.limitation}
+              </p>
+            ) : null}
+            {channelMethodErrors.length ? (
+              <div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning-foreground">
+                <p className="font-medium">Discovery warnings</p>
+                <p className="mt-1">{channelMethodErrors.join(' | ')}</p>
+              </div>
             ) : null}
             <div className="space-y-2 rounded-lg border p-3">
               <p className="text-sm font-medium">Add from WhatsApp link or JID</p>

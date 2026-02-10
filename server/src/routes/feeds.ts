@@ -32,19 +32,35 @@ const feedsRoutes = () => {
   const withRateLimitRetry = async <T>(
     operation: () => Promise<T>,
     label: string,
-    maxAttempts = 4
+    maxAttempts = 8
   ): Promise<T> => {
-    let delayMs = 250;
+    let delayMs = 400;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        return await operation();
+        const result = await operation();
+        const operationError = (result as { error?: unknown } | null | undefined)?.error;
+        if (!operationError) {
+          return result;
+        }
+
+        if (!isRateLimitError(operationError) || attempt >= maxAttempts) {
+          throw operationError;
+        }
+
+        console.warn(`${label} hit rate-limit, retrying`, {
+          attempt,
+          delayMs,
+          message: getErrorMessage(operationError)
+        });
+        await sleep(delayMs);
+        delayMs = Math.min(delayMs * 2, 5000);
       } catch (error) {
         if (!isRateLimitError(error) || attempt >= maxAttempts) {
           throw error;
         }
         console.warn(`${label} hit rate-limit, retrying`, { attempt, delayMs, message: getErrorMessage(error) });
         await sleep(delayMs);
-        delayMs = Math.min(delayMs * 2, 2000);
+        delayMs = Math.min(delayMs * 2, 5000);
       }
     }
     throw new Error(`${label} failed after retries`);
@@ -293,6 +309,31 @@ const feedsRoutes = () => {
 
       res.json({ ok: true, waitedForIdle: idle });
     } catch (error) {
+      if (isRateLimitError(error)) {
+        try {
+          const { data: feedRow } = await getDb()
+            .from('feeds')
+            .select('id,active')
+            .eq('id', req.params.id)
+            .single();
+          const deactivated = Boolean(feedRow && (feedRow as { active?: boolean }).active === false);
+          return res.json({
+            ok: false,
+            rateLimited: true,
+            deactivated,
+            message: deactivated
+              ? 'Feed is paused, but full delete is rate-limited right now. Retry shortly to remove it completely.'
+              : 'Delete is rate-limited right now. Retry in a few seconds.'
+          });
+        } catch {
+          return res.json({
+            ok: false,
+            rateLimited: true,
+            deactivated: false,
+            message: 'Delete is rate-limited right now. Retry in a few seconds.'
+          });
+        }
+      }
       console.error('Error deleting feed:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
     }

@@ -23,6 +23,48 @@ const DEFAULTS = {
   app_paused: false
 };
 
+const clampNumber = (value: unknown, fallback: number, min: number, max: number) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(Math.floor(parsed), min), max);
+};
+
+const normalizeSettingsPatch = (updates: Record<string, unknown>) => {
+  const next = { ...updates };
+
+  if (Object.prototype.hasOwnProperty.call(next, 'post_send_edit_window_minutes')) {
+    next.post_send_edit_window_minutes = clampNumber(
+      next.post_send_edit_window_minutes,
+      DEFAULTS.post_send_edit_window_minutes,
+      1,
+      15
+    );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'post_send_correction_window_minutes')) {
+    next.post_send_correction_window_minutes = clampNumber(
+      next.post_send_correction_window_minutes,
+      DEFAULTS.post_send_correction_window_minutes,
+      1,
+      120
+    );
+  }
+
+  if (
+    typeof next.post_send_edit_window_minutes === 'number' &&
+    typeof next.post_send_correction_window_minutes === 'number' &&
+    next.post_send_correction_window_minutes < next.post_send_edit_window_minutes
+  ) {
+    next.post_send_correction_window_minutes = next.post_send_edit_window_minutes;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'app_paused')) {
+    next.app_paused = next.app_paused === true;
+  }
+
+  return next;
+};
+
 const ensureDefaults = async () => {
   const supabase = getSupabaseClient();
   if (!supabase) return;
@@ -91,16 +133,17 @@ const getSettings = async () => {
 const updateSettings = async (updates: Record<string, unknown>) => {
   const supabase = getSupabaseClient();
   if (!supabase) throw serviceUnavailable('Database not available');
+  const normalizedUpdates = normalizeSettingsPatch(updates || {});
   
   try {
-    const keys = Object.keys(updates || {});
+    const keys = Object.keys(normalizedUpdates || {});
     await Promise.all(
       keys.map(async (key) => {
         const { error } = await supabase
           .from('settings')
           .upsert({ 
             key, 
-            value: JSON.stringify(updates[key]),
+            value: JSON.stringify(normalizedUpdates[key]),
             description: `Setting for ${key}`
           }, { 
             onConflict: 'key' 

@@ -140,7 +140,9 @@ const normalizeChannelJid = (value: string) => {
 const buildFriendlyChannelName = (name: string, jid: string) => {
   const normalizedJid = normalizeChannelJid(jid);
   const rawName = String(name || '').trim();
-  return rawName && rawName !== normalizedJid ? rawName : normalizedJid;
+  if (!rawName || rawName === normalizedJid) return '';
+  if (/^channel\s+\d+$/i.test(rawName)) return '';
+  return rawName;
 };
 
 type DiscoveredTargetCandidate = {
@@ -348,6 +350,7 @@ const whatsappRoutes = () => {
         const sourceTag = String((channel as { source?: string })?.source || '').toLowerCase();
         if (sourceTag === 'seed') continue;
         const friendlyName = buildFriendlyChannelName(String(channel?.name || ''), jid);
+        if (!friendlyName) continue;
         channelsByJid.set(jid.toLowerCase(), {
           id: jid,
           jid,
@@ -365,7 +368,7 @@ const whatsappRoutes = () => {
       }
 
       if (supabase) {
-        await upsertDiscoveredTargets(supabase, discoveredChannelCandidates, { deactivateMissingTypes: ['channel'] });
+        await upsertDiscoveredTargets(supabase, discoveredChannelCandidates);
       }
     }
 

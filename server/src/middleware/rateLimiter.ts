@@ -17,6 +17,15 @@ interface RateLimitOptions {
 // In-memory store (consider Redis for multi-instance deployments)
 const store = new Map<string, RateLimitEntry>();
 
+const resolveClientIp = (req: Request) => {
+  const forwardedFor = String(req.headers['x-forwarded-for'] || '')
+    .split(',')[0]
+    ?.trim() || '';
+  const cloudflareIp = String(req.headers['cf-connecting-ip'] || '').trim();
+  const realIp = String(req.headers['x-real-ip'] || '').trim();
+  return forwardedFor || cloudflareIp || realIp || req.ip || 'unknown';
+};
+
 // Cleanup expired entries every 5 minutes
 setInterval(() => {
   const now = Date.now();
@@ -36,9 +45,10 @@ export const rateLimit = (options: RateLimitOptions = {}) => {
   const maxRequests = options.maxRequests || 100;
   
   return (req: Request, res: Response, next: NextFunction) => {
+    const clientIp = resolveClientIp(req);
     const key = options.keyGenerator 
       ? options.keyGenerator(req)
-      : `${req.ip || 'unknown'}:${req.path}`;
+      : `${clientIp}:${req.path}`;
     
     const now = Date.now();
     const entry = store.get(key);
@@ -95,7 +105,7 @@ export const rateLimit = (options: RateLimitOptions = {}) => {
 export const qrCodeRateLimit = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   maxRequests: 5,
-  keyGenerator: (req) => `qr:${req.ip || 'unknown'}`
+  keyGenerator: (req) => `qr:${resolveClientIp(req)}`
 });
 
 /**
@@ -104,7 +114,7 @@ export const qrCodeRateLimit = rateLimit({
 export const authRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   maxRequests: 10,
-  keyGenerator: (req) => `auth:${req.ip || 'unknown'}`
+  keyGenerator: (req) => `auth:${resolveClientIp(req)}`
 });
 
 /**
@@ -112,8 +122,8 @@ export const authRateLimit = rateLimit({
  */
 export const apiRateLimit = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  maxRequests: 100,
-  keyGenerator: (req) => `api:${req.ip || 'unknown'}:${req.path}`
+  maxRequests: 300,
+  keyGenerator: (req) => `api:${resolveClientIp(req)}:${req.path}`
 });
 
 /**
@@ -122,6 +132,6 @@ export const apiRateLimit = rateLimit({
  */
 export const feedRateLimit = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  maxRequests: 300,
-  keyGenerator: (req) => `feed:${req.ip || 'unknown'}:${req.method}:${req.path}`
+  maxRequests: 1000,
+  keyGenerator: (req) => `feed:${resolveClientIp(req)}:${req.method}:${req.path}`
 });

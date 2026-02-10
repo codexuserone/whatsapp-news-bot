@@ -26,8 +26,8 @@ const schema = z.object({
   max_retries: z.coerce.number().min(0).max(25),
   defaultInterTargetDelaySec: z.coerce.number().min(0),
   defaultIntraTargetDelaySec: z.coerce.number().min(0),
-  post_send_edit_window_minutes: z.coerce.number().min(1).max(720),
-  post_send_correction_window_minutes: z.coerce.number().min(1).max(720),
+  post_send_edit_window_minutes: z.coerce.number().min(1).max(15),
+  post_send_correction_window_minutes: z.coerce.number().min(1).max(120),
   processingTimeoutMinutes: z.coerce.number().min(1),
   dedupeThreshold: z.coerce.number().min(0).max(1).optional()
 }).superRefine((value, ctx) => {
@@ -150,10 +150,10 @@ const SettingsPage = () => {
   };
 
   const submitSettings = (values: SettingsFormValues) => {
-    const editWindow = Math.max(1, Math.min(720, Number(values.post_send_edit_window_minutes || 15)));
+    const editWindow = Math.max(1, Math.min(15, Number(values.post_send_edit_window_minutes || 15)));
     const correctionWindow = Math.max(
       editWindow,
-      Math.min(720, Number(values.post_send_correction_window_minutes || 120))
+      Math.min(120, Number(values.post_send_correction_window_minutes || 120))
     );
 
     saveSettings.mutate({
@@ -296,7 +296,7 @@ const SettingsPage = () => {
                     {...form.register('post_send_edit_window_minutes', { valueAsNumber: true })}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Within this window, the app attempts true WhatsApp message edit.
+                    True WhatsApp edit only; WhatsApp currently allows up to 15 minutes.
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -307,7 +307,7 @@ const SettingsPage = () => {
                     {...form.register('post_send_correction_window_minutes', { valueAsNumber: true })}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Updated posts are checked in this window, but only true in-place edits are attempted.
+                    Feed changes are monitored in this window (up to 120 minutes); no resend fallback is used.
                   </p>
                 </div>
               </div>

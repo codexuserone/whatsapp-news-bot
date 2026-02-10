@@ -68,6 +68,8 @@ type WhatsAppClient = {
 const DEFAULT_SEND_TIMEOUT_MS = 45000;
 const DEFAULT_POST_SEND_EDIT_WINDOW_MINUTES = 15;
 const DEFAULT_POST_SEND_CORRECTION_WINDOW_MINUTES = 120;
+const MAX_POST_SEND_EDIT_WINDOW_MINUTES = 15;
+const MAX_POST_SEND_CORRECTION_WINDOW_MINUTES = 120;
 const AUTH_ERROR_HINT = 'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
 const MANUAL_POST_PAUSE_ERROR = 'Paused for this post';
 const FEED_PAUSED_ERROR = 'Feed paused';
@@ -930,22 +932,24 @@ type ReconcileUpdatedFeedItemsResult = {
   reason?: string;
 };
 
-const parseWindowMinutes = (value: unknown, fallbackMinutes: number) => {
+const parseWindowMinutes = (value: unknown, fallbackMinutes: number, maxMinutes = 720) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallbackMinutes;
-  return Math.min(Math.max(Math.floor(parsed), 1), 720);
+  return Math.min(Math.max(Math.floor(parsed), 1), maxMinutes);
 };
 
 const getPostSendWindows = (settings: Record<string, unknown>) => {
   const editMinutes = parseWindowMinutes(
     settings.post_send_edit_window_minutes,
-    DEFAULT_POST_SEND_EDIT_WINDOW_MINUTES
+    DEFAULT_POST_SEND_EDIT_WINDOW_MINUTES,
+    MAX_POST_SEND_EDIT_WINDOW_MINUTES
   );
   const correctionMinutes = Math.max(
     editMinutes,
     parseWindowMinutes(
       settings.post_send_correction_window_minutes,
-      DEFAULT_POST_SEND_CORRECTION_WINDOW_MINUTES
+      DEFAULT_POST_SEND_CORRECTION_WINDOW_MINUTES,
+      MAX_POST_SEND_CORRECTION_WINDOW_MINUTES
     )
   );
   return {

@@ -64,6 +64,7 @@ process.once('SIGINT', () => handleSignal('SIGINT'));
 
 const start = async () => {
   const app: Express = express();
+  app.set('trust proxy', 1);
   app.use(requestLogger);
 
   // Render environments can lack IPv6 egress; prefer IPv4 to avoid ENETUNREACH on DNS results.

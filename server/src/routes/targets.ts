@@ -6,6 +6,64 @@ const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const { syncTargetsFromWhatsApp } = require('../services/targetSyncService');
 
+type TargetRow = {
+  id?: string;
+  name?: string;
+  phone_number?: string;
+  type?: string;
+  active?: boolean;
+  updated_at?: string | null;
+  created_at?: string | null;
+  notes?: string | null;
+};
+
+const normalizeChannelJidForKey = (phoneNumber: string) => {
+  const trimmed = String(phoneNumber || '').trim();
+  if (!trimmed) return '';
+  if (trimmed.toLowerCase().includes('@newsletter')) return trimmed.toLowerCase();
+  const digits = trimmed.replace(/[^0-9]/g, '');
+  return digits ? `${digits}@newsletter` : trimmed.toLowerCase();
+};
+
+const normalizePhoneForKey = (type: string, phoneNumber: string) => {
+  const raw = String(phoneNumber || '').trim();
+  if (!raw) return '';
+  if (type === 'channel') return normalizeChannelJidForKey(raw);
+  return raw.toLowerCase();
+};
+
+const isPlaceholderChannelName = (name: unknown) => /^channel\s+\d+$/i.test(String(name || '').trim());
+
+const scoreTargetForResponse = (target: { active?: boolean; type?: string; name?: string; updated_at?: string | null; created_at?: string | null }) => {
+  const activeScore = target.active ? 1000 : 0;
+  const placeholderPenalty =
+    target.type === 'channel' && isPlaceholderChannelName(target.name)
+      ? -200
+      : 0;
+  const updated = Date.parse(String(target.updated_at || target.created_at || 0));
+  const freshness = Number.isFinite(updated) ? updated / 1_000_000_000_000 : 0;
+  return activeScore + placeholderPenalty + freshness;
+};
+
+const dedupeTargetsForResponse = (rows: TargetRow[]) => {
+  const byKey = new Map<string, TargetRow>();
+
+  for (const row of rows || []) {
+    const type = String(row.type || '').trim();
+    const phone = normalizePhoneForKey(type, String(row.phone_number || ''));
+    if (!type || !phone) continue;
+    const key = `${type}:${phone}`;
+    const current = byKey.get(key);
+    if (!current || scoreTargetForResponse(row) > scoreTargetForResponse(current)) {
+      byKey.set(key, row);
+    }
+  }
+
+  return Array.from(byKey.values()).sort((a, b) =>
+    String(b.created_at || '').localeCompare(String(a.created_at || ''))
+  );
+};
+
 const targetRoutes = () => {
   const router = express.Router();
   
@@ -36,7 +94,7 @@ const targetRoutes = () => {
         .order('created_at', { ascending: false });
       
       if (error) throw error;
-      res.json(targets);
+      res.json(dedupeTargetsForResponse(targets || []));
     } catch (error) {
       console.error('Error fetching targets:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });

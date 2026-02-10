@@ -218,7 +218,7 @@ const FeedItemsPage = () => {
                             disabled={pausePost.isPending || resumePost.isPending}
                           >
                             <PauseCircle className="mr-1 h-3 w-3" />
-                            Pause post
+                            Pause story
                           </Button>
                           <Button
                             size="sm"
@@ -227,7 +227,7 @@ const FeedItemsPage = () => {
                             disabled={pausePost.isPending || resumePost.isPending}
                           >
                             <PlayCircle className="mr-1 h-3 w-3" />
-                            Resume post
+                            Resume story
                           </Button>
                         </div>
                       </TableCell>

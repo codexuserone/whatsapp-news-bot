@@ -617,7 +617,7 @@ const QueuePage = () => {
                           ) : (
                             <PauseCircle className="mr-1 h-3 w-3" />
                           )}
-                          {canResumePost(item) ? 'Resume post' : 'Pause post'}
+                          {canResumePost(item) ? 'Resume story' : 'Pause story'}
                         </Button>
                       ) : null}
 
@@ -718,7 +718,7 @@ const QueuePage = () => {
                           disabled={pausePost.isPending || resumePost.isPending}
                         >
                           {canResumePost(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
-                          {canResumePost(item) ? 'Resume post' : 'Pause post'}
+                          {canResumePost(item) ? 'Resume story' : 'Pause story'}
                         </Button>
                       )}
                       <Button size="sm" variant="outline" className="h-7 text-xs px-2 ml-auto" onClick={() => sendNowItem.mutate(item.id)} disabled={!canSendNow(item)}>

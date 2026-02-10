@@ -23,7 +23,9 @@ const resolveClientIp = (req: Request) => {
     ?.trim() || '';
   const cloudflareIp = String(req.headers['cf-connecting-ip'] || '').trim();
   const realIp = String(req.headers['x-real-ip'] || '').trim();
-  return forwardedFor || cloudflareIp || realIp || req.ip || 'unknown';
+  const socketIp = String((req.socket as { remoteAddress?: string } | undefined)?.remoteAddress || '').trim();
+  const connectionIp = String((req.connection as { remoteAddress?: string } | undefined)?.remoteAddress || '').trim();
+  return forwardedFor || cloudflareIp || realIp || socketIp || connectionIp || req.ip || 'unknown';
 };
 
 // Cleanup expired entries every 5 minutes
@@ -122,7 +124,7 @@ export const authRateLimit = rateLimit({
  */
 export const apiRateLimit = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  maxRequests: 300,
+  maxRequests: 1000,
   keyGenerator: (req) => `api:${resolveClientIp(req)}:${req.path}`
 });
 
@@ -132,6 +134,6 @@ export const apiRateLimit = rateLimit({
  */
 export const feedRateLimit = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  maxRequests: 1000,
+  maxRequests: 5000,
   keyGenerator: (req) => `feed:${resolveClientIp(req)}:${req.method}:${req.path}`
 });

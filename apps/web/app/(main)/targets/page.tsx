@@ -21,7 +21,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from '@/components/ui/alert-dialog';
-import { Target as TargetIcon, Users, Radio, MessageSquare, Trash2, AlertTriangle, Loader2, RefreshCw, Pencil } from 'lucide-react';
+import { Target as TargetIcon, Users, Radio, MessageSquare, Trash2, AlertTriangle, Loader2, RefreshCw, Plus } from 'lucide-react';
 
 const TYPE_BADGES: Record<
   Target['type'],
@@ -45,6 +45,8 @@ const TargetsPage = () => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | Target['type']>('all');
+  const [addValue, setAddValue] = useState('');
+  const [addNotice, setAddNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Target | null>(null);
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
@@ -86,21 +88,20 @@ const TargetsPage = () => {
     }
   });
 
-  const renameTarget = (target: Target) => {
-    const nextNameRaw = window.prompt('Set display name', target.name || '') || '';
-    const nextName = String(nextNameRaw || '').trim();
-    if (!nextName || nextName === target.name) return;
-    updateTarget.mutate({
-      id: target.id,
-      payload: {
-        name: nextName,
-        phone_number: target.phone_number,
-        type: target.type,
-        active: target.active,
-        notes: target.notes || null
-      }
-    });
-  };
+  const addResolvedTarget = useMutation({
+    mutationFn: (value: string) => api.post('/api/whatsapp/resolve-target', { value, type: 'auto' }),
+    onSuccess: () => {
+      setAddNotice({ type: 'success', message: 'Destination added from WhatsApp.' });
+      setAddValue('');
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+    },
+    onError: (error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Could not resolve this destination';
+      setAddNotice({ type: 'error', message });
+    }
+  });
 
   const filteredTargets = targets.filter((target) => {
     const matchesSearch =
@@ -172,9 +173,41 @@ const TargetsPage = () => {
             </div>
             {isConnected && waChannels.length === 0 ? (
               <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                No channels discovered yet. Open the channel in WhatsApp on your phone and send one message there.
+                No channels discovered yet in this session. Paste a group/channel link below to add one directly.
               </p>
             ) : null}
+            <div className="space-y-2 rounded-lg border p-3">
+              <p className="text-sm font-medium">Add from WhatsApp link or JID</p>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Input
+                  placeholder="Paste link/JID: chat.whatsapp.com/... or whatsapp.com/channel/..."
+                  value={addValue}
+                  onChange={(event) => setAddValue(event.target.value)}
+                  className="min-w-0 flex-1"
+                />
+                <Button
+                  type="button"
+                  onClick={() => {
+                    const value = String(addValue || '').trim();
+                    if (!value) return;
+                    addResolvedTarget.mutate(value);
+                  }}
+                  disabled={addResolvedTarget.isPending || !String(addValue || '').trim()}
+                >
+                  {addResolvedTarget.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
+                  Add
+                </Button>
+              </div>
+              {addNotice ? (
+                <p className={addNotice.type === 'success' ? 'text-xs text-success' : 'text-xs text-destructive'}>
+                  {addNotice.message}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Works with group links, channel links, direct JIDs, status, or phone numbers.
+                </p>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}
@@ -231,7 +264,7 @@ const TargetsPage = () => {
                     <TableHeaderCell>Name</TableHeaderCell>
                     <TableHeaderCell>Type</TableHeaderCell>
                     <TableHeaderCell className="hidden md:table-cell">Address</TableHeaderCell>
-                      <TableHeaderCell className="w-28">Actions</TableHeaderCell>
+                    <TableHeaderCell className="w-20">Actions</TableHeaderCell>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -254,7 +287,12 @@ const TargetsPage = () => {
                           }
                         />
                       </TableCell>
-                      <TableCell className="font-medium">{target.name}</TableCell>
+                      <TableCell className="font-medium">
+                        <div className="min-w-0">
+                          <p className="truncate">{target.name}</p>
+                          {target.notes ? <p className="truncate text-xs text-muted-foreground">{target.notes}</p> : null}
+                        </div>
+                      </TableCell>
                       <TableCell>
                         <Badge variant={TYPE_BADGES[target.type]?.variant || 'secondary'}>
                           {TYPE_BADGES[target.type]?.label || target.type}
@@ -264,14 +302,6 @@ const TargetsPage = () => {
                         {target.phone_number}
                       </TableCell>
                       <TableCell>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => renameTarget(target)}
-                          className="mr-1"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
                         <Button
                           size="sm"
                           variant="ghost"

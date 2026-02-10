@@ -51,6 +51,9 @@ const spec = {
     '/api/whatsapp/channels': {
       get: { tags: ['whatsapp'], summary: 'List WhatsApp channels', responses: { 200: { description: 'OK' } } }
     },
+    '/api/whatsapp/resolve-target': {
+      post: { tags: ['whatsapp'], summary: 'Resolve WhatsApp link/JID to target', responses: { 200: { description: 'OK' } } }
+    },
     '/api/whatsapp/disconnect': {
       post: { tags: ['whatsapp'], summary: 'Disconnect WhatsApp', responses: { 200: { description: 'OK' } } }
     },

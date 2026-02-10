@@ -184,6 +184,14 @@ export type WhatsAppGroup = {
   jid: string;
   name: string;
   size: number;
+  announce?: boolean;
+  restrict?: boolean;
+  participantCount?: number;
+  me?: {
+    jid?: string | null;
+    isAdmin?: boolean;
+    admin?: string | null;
+  };
 };
 
 export type WhatsAppChannel = {
@@ -191,6 +199,8 @@ export type WhatsAppChannel = {
   jid: string;
   name: string;
   subscribers: number;
+  role?: string | null;
+  canPost?: boolean;
   source?: 'live' | 'saved';
 };
 

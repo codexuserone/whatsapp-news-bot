@@ -25,6 +25,8 @@ type ChannelSummary = {
   jid: string;
   name: string;
   subscribers: number;
+  role?: string | null;
+  canPost?: boolean;
   source?: 'api' | 'cache' | 'metadata' | 'store';
 };
 
@@ -33,6 +35,28 @@ type GroupSummary = {
   jid: string;
   name: string;
   size: number;
+  announce?: boolean;
+  restrict?: boolean;
+  participantCount?: number;
+  me?: { jid: string | null; isAdmin: boolean; admin: string | null };
+};
+
+type ResolvedDestination = {
+  input: string;
+  type: 'group' | 'channel' | 'individual' | 'status';
+  jid: string;
+  name: string;
+  source: 'group_invite' | 'channel_invite' | 'group_jid' | 'channel_jid' | 'individual_jid' | 'status';
+  size?: number;
+  participantCount?: number;
+  announce?: boolean;
+  restrict?: boolean;
+  subscribers?: number;
+  role?: string | null;
+  canPost?: boolean;
+  exists?: boolean | null;
+  me?: { jid: string | null; isAdmin: boolean; admin: string | null };
+  inviteCode?: string | null;
 };
 
 type ChannelDiagnostics = {
@@ -110,6 +134,39 @@ const readTextValue = (value: unknown) => {
   return value.trim();
 };
 
+const extractGroupInviteCode = (value: unknown) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const match = raw.match(/chat\.whatsapp\.com\/([A-Za-z0-9]{10,40})/i);
+  return String(match?.[1] || '').trim();
+};
+
+const extractChannelInviteCode = (value: unknown) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const match = raw.match(/whatsapp\.com\/channel\/([A-Za-z0-9_-]{6,80})/i);
+  return String(match?.[1] || '').trim();
+};
+
+const normalizeGroupJid = (value: unknown) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.toLowerCase().endsWith('@g.us')) return raw;
+  if (raw.includes('@')) return '';
+  const cleaned = raw.replace(/[^0-9-]/g, '');
+  return cleaned ? `${cleaned}@g.us` : '';
+};
+
+const normalizeIndividualJid = (value: unknown) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.toLowerCase().endsWith('@s.whatsapp.net')) return raw;
+  if (raw.includes('@')) return '';
+  const digits = raw.replace(/[^0-9]/g, '');
+  if (digits.length < 7) return '';
+  return `${digits}@s.whatsapp.net`;
+};
+
 const extractChannelSummary = (input: unknown, options?: { allowNumeric?: boolean }): ChannelSummary | null => {
   if (typeof input === 'string') {
     const jid = normalizeNewsletterJid(input, options);
@@ -146,11 +203,21 @@ const extractChannelSummary = (input: unknown, options?: { allowNumeric?: boolea
     readNumericValue(record.subscribers_count) ||
     readNumericValue(threadMetadata?.subscribers_count);
 
+  const viewerMetadata =
+    record.viewer_metadata && typeof record.viewer_metadata === 'object'
+      ? (record.viewer_metadata as Record<string, unknown>)
+      : null;
+  const roleRaw = readTextValue(viewerMetadata?.role);
+  const role = roleRaw || null;
+  const canPost = role === 'OWNER' || role === 'ADMIN';
+
   return {
     id: jid,
     jid,
     name,
-    subscribers
+    subscribers,
+    role,
+    canPost
   };
 };
 
@@ -329,15 +396,35 @@ class WhatsAppClient {
   getGroupsFromMetadataCache(): GroupSummary[] {
     const groups: GroupSummary[] = [];
     for (const [jid, raw] of this.groupMetadataCache.entries()) {
-      const metadata = raw as { subject?: unknown; name?: unknown; size?: unknown; participants?: unknown };
+      const metadata = raw as {
+        subject?: unknown;
+        name?: unknown;
+        size?: unknown;
+        announce?: unknown;
+        restrict?: unknown;
+        participants?: unknown;
+      };
       const participants = Array.isArray(metadata?.participants) ? metadata.participants : [];
       const sizeCandidate = Number(metadata?.size);
       const size = Number.isFinite(sizeCandidate) ? sizeCandidate : participants.length;
+      const meJid = this.meJid || (this.socket as any)?.user?.id || null;
+      const meRow = meJid
+        ? participants.find((participant: any) => String(participant?.id || '') === String(meJid))
+        : null;
+      const adminRaw = meRow?.admin ? String(meRow.admin) : null;
       groups.push({
         id: jid,
         jid,
         name: String(metadata?.subject || metadata?.name || jid),
-        size
+        size,
+        announce: Boolean(metadata?.announce),
+        restrict: Boolean(metadata?.restrict),
+        participantCount: participants.length,
+        me: {
+          jid: meJid,
+          isAdmin: Boolean(adminRaw),
+          admin: adminRaw
+        }
       });
     }
     return groups.sort((a, b) => a.name.localeCompare(b.name));
@@ -359,7 +446,25 @@ class WhatsAppClient {
         const sizeRaw = Number(chat?.size);
         const participants = Array.isArray(chat?.participants) ? chat.participants : [];
         const size = Number.isFinite(sizeRaw) ? sizeRaw : participants.length;
-        map.set(jid, { id: jid, jid, name, size });
+        const meJid = this.meJid || socket?.user?.id || null;
+        const meRow = meJid
+          ? participants.find((participant: any) => String(participant?.id || '') === String(meJid))
+          : null;
+        const adminRaw = meRow?.admin ? String(meRow.admin) : null;
+        map.set(jid, {
+          id: jid,
+          jid,
+          name,
+          size,
+          announce: Boolean(chat?.announce),
+          restrict: Boolean(chat?.restrict),
+          participantCount: participants.length,
+          me: {
+            jid: meJid,
+            isAdmin: Boolean(adminRaw),
+            admin: adminRaw
+          }
+        });
       }
 
       return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -1294,7 +1399,23 @@ class WhatsAppClient {
             id: group.id,
             jid: group.id,
             name: group.subject || group.id,
-            size: group.size || 0
+            size: group.size || 0,
+            announce: Boolean((group as any).announce),
+            restrict: Boolean((group as any).restrict),
+            participantCount: Array.isArray((group as any).participants) ? (group as any).participants.length : Number(group.size || 0),
+            me: (() => {
+              const meJid = this.meJid || (socket as any)?.user?.id || null;
+              const participants = Array.isArray((group as any).participants) ? (group as any).participants : [];
+              const meRow = meJid
+                ? participants.find((participant: any) => String(participant?.id || '') === String(meJid))
+                : null;
+              const adminRaw = meRow?.admin ? String(meRow.admin) : null;
+              return {
+                jid: meJid,
+                isAdmin: Boolean(adminRaw),
+                admin: adminRaw
+              };
+            })()
           }))
           .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -1393,6 +1514,11 @@ class WhatsAppClient {
         jid: candidate.jid,
         name: candidate.name || existing?.name || candidate.jid,
         subscribers: candidate.subscribers || existing?.subscribers || 0,
+        role: candidate.role || existing?.role || null,
+        canPost:
+          typeof candidate.canPost === 'boolean'
+            ? candidate.canPost
+            : (existing?.canPost || false),
         source: pickSource()
       };
       channelMap.set(candidate.jid, merged);
@@ -1471,6 +1597,183 @@ class WhatsAppClient {
   async getChannels(): Promise<Array<{ id: string; jid: string; name: string; subscribers: number }>> {
     const result = await this.getChannelsWithDiagnostics();
     return result.channels;
+  }
+
+  async resolveDestination(
+    input: string,
+    forceType: 'auto' | 'group' | 'channel' | 'individual' | 'status' = 'auto',
+    timeoutMs = 15000
+  ): Promise<ResolvedDestination | null> {
+    const socket = this.socket as any;
+    if (!socket) return null;
+
+    const rawInput = String(input || '').trim();
+    if (!rawInput) return null;
+    const normalizedInput = rawInput.toLowerCase();
+
+    const meJid = this.meJid || socket?.user?.id || null;
+
+    if (forceType === 'status' || normalizedInput === 'status' || normalizedInput === 'status@broadcast') {
+      return {
+        input: rawInput,
+        type: 'status',
+        jid: 'status@broadcast',
+        name: 'My Status',
+        source: 'status'
+      };
+    }
+
+    if (forceType === 'auto' || forceType === 'group') {
+      const groupInviteCode = extractGroupInviteCode(rawInput);
+      if (groupInviteCode && typeof socket.groupGetInviteInfo === 'function') {
+        try {
+          const metadata = await withTimeout(
+            socket.groupGetInviteInfo(groupInviteCode),
+            timeoutMs,
+            'Timed out resolving group invite'
+          );
+          const jid = String(metadata?.id || '').trim();
+          if (!jid) return null;
+          const participants = Array.isArray(metadata?.participants) ? metadata.participants : [];
+          const meRow = meJid
+            ? participants.find((participant: any) => String(participant?.id || '') === String(meJid))
+            : null;
+          const adminRaw = meRow?.admin ? String(meRow.admin) : null;
+          return {
+            input: rawInput,
+            type: 'group',
+            jid,
+            name: String(metadata?.subject || jid),
+            source: 'group_invite',
+            size: Number(metadata?.size || 0),
+            participantCount: participants.length,
+            announce: Boolean(metadata?.announce),
+            restrict: Boolean(metadata?.restrict),
+            me: {
+              jid: meJid,
+              isAdmin: Boolean(adminRaw),
+              admin: adminRaw
+            },
+            inviteCode: groupInviteCode
+          };
+        } catch (error) {
+          logger.warn({ input: rawInput, error: getErrorMessage(error) }, 'Failed to resolve group invite');
+        }
+      }
+    }
+
+    if (forceType === 'auto' || forceType === 'channel') {
+      const channelInviteCode = extractChannelInviteCode(rawInput);
+      if (channelInviteCode && typeof socket.newsletterMetadata === 'function') {
+        try {
+          const metadata = await withTimeout(
+            socket.newsletterMetadata('invite', channelInviteCode),
+            timeoutMs,
+            'Timed out resolving channel invite'
+          );
+          const normalized = extractChannelSummary(metadata, { allowNumeric: true });
+          if (normalized?.jid) {
+            return {
+              input: rawInput,
+              type: 'channel',
+              jid: normalized.jid,
+              name: normalized.name || normalized.jid,
+              source: 'channel_invite',
+              subscribers: Number(normalized.subscribers || 0),
+              role: normalized.role || null,
+              canPost: Boolean(normalized.canPost),
+              inviteCode: channelInviteCode
+            };
+          }
+        } catch (error) {
+          logger.warn({ input: rawInput, error: getErrorMessage(error) }, 'Failed to resolve channel invite');
+        }
+      }
+    }
+
+    const explicitGroupJid = normalizeGroupJid(rawInput);
+    if (explicitGroupJid && (forceType === 'auto' || forceType === 'group')) {
+      const groupInfo = await this.getGroupInfo(explicitGroupJid, timeoutMs);
+      if (!groupInfo) return null;
+      return {
+        input: rawInput,
+        type: 'group',
+        jid: groupInfo.jid,
+        name: groupInfo.name,
+        source: 'group_jid',
+        size: groupInfo.size,
+        participantCount: groupInfo.participantCount,
+        announce: groupInfo.announce,
+        restrict: groupInfo.restrict,
+        me: groupInfo.me
+      };
+    }
+
+    const explicitChannelJid = normalizeNewsletterJid(rawInput, { allowNumeric: true });
+    if (explicitChannelJid && (forceType === 'auto' || forceType === 'channel')) {
+      let normalized: ChannelSummary | null = null;
+      if (typeof socket.newsletterMetadata === 'function') {
+        try {
+          const metadata = await withTimeout(
+            socket.newsletterMetadata('jid', explicitChannelJid),
+            timeoutMs,
+            'Timed out resolving channel metadata'
+          );
+          normalized = extractChannelSummary(metadata, { allowNumeric: true });
+        } catch {
+          normalized = null;
+        }
+      }
+
+      const fallback = normalized || {
+        id: explicitChannelJid,
+        jid: explicitChannelJid,
+        name: explicitChannelJid,
+        subscribers: 0
+      };
+
+      return {
+        input: rawInput,
+        type: 'channel',
+        jid: fallback.jid,
+        name: fallback.name || fallback.jid,
+        source: 'channel_jid',
+        subscribers: Number(fallback.subscribers || 0),
+        role: fallback.role || null,
+        canPost: Boolean(fallback.canPost)
+      };
+    }
+
+    if (forceType === 'auto' || forceType === 'individual') {
+      const normalizedIndividual = normalizeIndividualJid(rawInput);
+      if (normalizedIndividual) {
+        let exists: boolean | null = null;
+        if (typeof socket.onWhatsApp === 'function') {
+          try {
+            const lookup = await withTimeout(
+              socket.onWhatsApp(normalizedIndividual),
+              timeoutMs,
+              'Timed out checking WhatsApp number'
+            );
+            const first = Array.isArray(lookup) ? lookup[0] : null;
+            exists = first ? Boolean((first as { exists?: unknown }).exists) : null;
+          } catch {
+            exists = null;
+          }
+        }
+
+        return {
+          input: rawInput,
+          type: 'individual',
+          jid: normalizedIndividual,
+          name: normalizedIndividual.replace('@s.whatsapp.net', ''),
+          source: 'individual_jid',
+          exists
+        };
+      }
+    }
+
+    return null;
   }
 
   async sendMessage(jid: string, content: AnyMessageContent, options: Record<string, unknown> = {}) {

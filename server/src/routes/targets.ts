@@ -51,7 +51,7 @@ const dedupeTargetsForResponse = (rows: TargetRow[]) => {
 
   for (const row of rows || []) {
     const type = String(row.type || '').trim();
-    if (type === 'channel' && row.active !== true && (isPlaceholderChannelName(row.name) || isRawChannelJidLabel(row.name))) {
+    if (type === 'channel' && (isPlaceholderChannelName(row.name) || isRawChannelJidLabel(row.name))) {
       continue;
     }
     const phone = normalizePhoneForKey(type, String(row.phone_number || ''));

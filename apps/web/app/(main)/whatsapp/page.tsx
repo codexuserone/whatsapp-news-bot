@@ -137,7 +137,13 @@ const WhatsAppPage = () => {
 
   const isConnected = status?.status === 'connected';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
-  const activeTargets = existingTargets.filter((target) => target.active);
+  const activeTargets = React.useMemo(() => {
+    const isPlaceholderChannel = (target: Target) =>
+      target.type === 'channel' &&
+      (/^channel\s+\d+$/i.test(String(target.name || '').trim()) ||
+        String(target.name || '').toLowerCase().includes('@newsletter'));
+    return existingTargets.filter((target) => target.active && !isPlaceholderChannel(target));
+  }, [existingTargets]);
   const groupedTargets = React.useMemo(() => {
     const groups = activeTargets.filter((target) => target.type === 'group');
     const channels = activeTargets.filter((target) => target.type === 'channel');

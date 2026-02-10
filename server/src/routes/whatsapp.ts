@@ -153,6 +153,8 @@ type DiscoveredTargetCandidate = {
   notes?: string | null;
 };
 
+type ResolveTargetType = 'auto' | 'group' | 'channel' | 'individual' | 'status';
+
 const upsertDiscoveredTargets = async (
   supabase: ReturnType<typeof getSupabaseClient> | null,
   candidates: DiscoveredTargetCandidate[],
@@ -308,13 +310,40 @@ const whatsappRoutes = () => {
     if (supabase) {
       await upsertDiscoveredTargets(
         supabase,
-        groups.map((group: { jid?: string; name?: string; size?: number }) => ({
-          name: String(group?.name || group?.jid || '').trim() || String(group?.jid || ''),
-          phone_number: String(group?.jid || '').trim(),
-          type: 'group',
-          active: true,
-          notes: Number.isFinite(group?.size) ? `${Number(group?.size || 0)} members` : null
-        })),
+        groups.map(
+          (group: {
+            jid?: string;
+            name?: string;
+            size?: number;
+            participantCount?: number;
+            announce?: boolean;
+            restrict?: boolean;
+            me?: { isAdmin?: boolean };
+          }) => {
+            const noteParts: string[] = [];
+            if (Number.isFinite(group?.size)) {
+              noteParts.push(`${Number(group?.size || 0)} members`);
+            } else if (Number.isFinite(group?.participantCount)) {
+              noteParts.push(`${Number(group?.participantCount || 0)} members`);
+            }
+            if (group?.me?.isAdmin) {
+              noteParts.push('you are admin');
+            }
+            if (group?.announce) {
+              noteParts.push('admin-only messages');
+            }
+            if (group?.restrict) {
+              noteParts.push('admin-only settings');
+            }
+            return {
+              name: String(group?.name || group?.jid || '').trim() || String(group?.jid || ''),
+              phone_number: String(group?.jid || '').trim(),
+              type: 'group' as const,
+              active: true,
+              notes: noteParts.length ? noteParts.join(' | ') : null
+            };
+          }
+        ),
         { deactivateMissingTypes: ['group'] }
       );
     }
@@ -330,6 +359,8 @@ const whatsappRoutes = () => {
       jid: string;
       name: string;
       subscribers: number;
+      role: string | null;
+      canPost: boolean;
       source: 'live';
     }>();
     const discoveredChannelCandidates: DiscoveredTargetCandidate[] = [];
@@ -351,19 +382,33 @@ const whatsappRoutes = () => {
         if (sourceTag === 'seed') continue;
         const friendlyName = buildFriendlyChannelName(String(channel?.name || ''), jid);
         if (!friendlyName) continue;
+        const role = String((channel as { role?: string | null })?.role || '').trim() || null;
+        const canPost = (channel as { canPost?: boolean })?.canPost === true;
         channelsByJid.set(jid.toLowerCase(), {
           id: jid,
           jid,
           name: friendlyName,
           subscribers: Number(channel?.subscribers || 0),
+          role,
+          canPost,
           source: 'live'
         });
+        const noteParts: string[] = [];
+        if (Number.isFinite(channel?.subscribers)) {
+          noteParts.push(`${Number(channel?.subscribers || 0)} subscribers`);
+        }
+        if (role) {
+          noteParts.push(`role: ${role.toLowerCase()}`);
+        }
+        if (canPost) {
+          noteParts.push('can post');
+        }
         discoveredChannelCandidates.push({
           name: friendlyName,
           phone_number: jid,
           type: 'channel',
           active: true,
-          notes: Number.isFinite(channel?.subscribers) ? `${Number(channel?.subscribers || 0)} subscribers` : null
+          notes: noteParts.length ? noteParts.join(' | ') : null
         });
       }
 
@@ -404,6 +449,135 @@ const whatsappRoutes = () => {
         sourceCounts: { api: 0, cache: 0, metadata: 0, store: 0 },
         limitation: channels.length ? null : 'Channel diagnostics are unavailable in this server build.'
       }
+    });
+  }));
+
+  router.post('/resolve-target', asyncHandler(async (req: Request, res: Response) => {
+    const whatsapp = req.app.locals.whatsapp;
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      throw badRequest('Database is not available');
+    }
+
+    const rawValue = String((req.body as { value?: unknown })?.value || '').trim();
+    if (!rawValue) {
+      throw badRequest('value is required');
+    }
+
+    const rawType = String((req.body as { type?: unknown })?.type || 'auto').trim().toLowerCase();
+    const allowedTypes: ResolveTargetType[] = ['auto', 'group', 'channel', 'individual', 'status'];
+    const requestedType: ResolveTargetType = allowedTypes.includes(rawType as ResolveTargetType)
+      ? (rawType as ResolveTargetType)
+      : 'auto';
+
+    const isConnected = whatsapp?.getStatus?.().status === 'connected';
+    if (!isConnected) {
+      throw badRequest('WhatsApp is not connected');
+    }
+
+    const resolved =
+      typeof whatsapp?.resolveDestination === 'function'
+        ? await whatsapp.resolveDestination(rawValue, requestedType)
+        : null;
+
+    if (!resolved || !resolved.jid || !resolved.type) {
+      throw badRequest('Could not resolve this WhatsApp link/JID in the current session');
+    }
+
+    if (resolved.type === 'individual' && resolved.exists === false) {
+      throw badRequest('This number is not on WhatsApp');
+    }
+
+    const targetType =
+      resolved.type === 'group' || resolved.type === 'channel' || resolved.type === 'status' || resolved.type === 'individual'
+        ? resolved.type
+        : null;
+
+    if (!targetType) {
+      throw badRequest('Unsupported destination type');
+    }
+
+    const notesParts: string[] = [];
+    if (resolved.type === 'group') {
+      if (Number.isFinite(Number(resolved.size))) {
+        notesParts.push(`${Number(resolved.size || 0)} members`);
+      } else if (Number.isFinite(Number(resolved.participantCount))) {
+        notesParts.push(`${Number(resolved.participantCount || 0)} members`);
+      }
+      if (resolved?.me?.isAdmin) {
+        notesParts.push('you are admin');
+      }
+      if (resolved.announce) {
+        notesParts.push('admin-only messages');
+      }
+      if (resolved.restrict) {
+        notesParts.push('admin-only settings');
+      }
+    } else if (resolved.type === 'channel') {
+      if (Number.isFinite(Number(resolved.subscribers))) {
+        notesParts.push(`${Number(resolved.subscribers || 0)} subscribers`);
+      }
+      if (resolved.role) {
+        notesParts.push(`role: ${String(resolved.role).toLowerCase()}`);
+      }
+      if (resolved.canPost) {
+        notesParts.push('can post');
+      }
+    } else if (resolved.type === 'status') {
+      notesParts.push('Posts to your WhatsApp Status');
+    }
+
+    const payload = {
+      name: String(resolved.name || resolved.jid).trim() || String(resolved.jid).trim(),
+      phone_number: String(resolved.jid).trim(),
+      type: targetType,
+      active: true,
+      notes: notesParts.length ? notesParts.join(' | ') : null
+    };
+
+    const { data: existingRows, error: existingError } = await supabase
+      .from('targets')
+      .select('*')
+      .eq('phone_number', payload.phone_number)
+      .order('created_at', { ascending: false });
+
+    if (existingError) throw existingError;
+
+    const existingList = Array.isArray(existingRows) ? existingRows : [];
+    const primaryExisting = existingList[0] as { id?: string } | undefined;
+    let targetRecord: Record<string, unknown> | null = null;
+
+    if (primaryExisting?.id) {
+      const { data: updated, error: updateError } = await supabase
+        .from('targets')
+        .update(payload)
+        .eq('id', primaryExisting.id)
+        .select()
+        .single();
+      if (updateError) throw updateError;
+      targetRecord = updated || null;
+
+      const duplicateIds = existingList
+        .slice(1)
+        .map((row: { id?: string }) => String(row.id || '').trim())
+        .filter(Boolean);
+      if (duplicateIds.length) {
+        await supabase.from('targets').update({ active: false }).in('id', duplicateIds);
+      }
+    } else {
+      const { data: inserted, error: insertError } = await supabase
+        .from('targets')
+        .insert(payload)
+        .select()
+        .single();
+      if (insertError) throw insertError;
+      targetRecord = inserted || null;
+    }
+
+    res.json({
+      ok: true,
+      resolved,
+      target: targetRecord
     });
   }));
 

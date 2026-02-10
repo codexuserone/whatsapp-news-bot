@@ -17,6 +17,9 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Settings, Clock, MapPin, Loader2, Copy } from 'lucide-react';
 
+const WHATSAPP_EDIT_MAX_MINUTES = 15;
+const CORRECTION_SCAN_MAX_MINUTES = 120;
+
 const schema = z.object({
   app_name: z.string().min(1),
   app_paused: z.boolean().default(false),
@@ -26,8 +29,8 @@ const schema = z.object({
   max_retries: z.coerce.number().min(0).max(25),
   defaultInterTargetDelaySec: z.coerce.number().min(0),
   defaultIntraTargetDelaySec: z.coerce.number().min(0),
-  post_send_edit_window_minutes: z.coerce.number().min(1).max(15),
-  post_send_correction_window_minutes: z.coerce.number().min(1).max(120),
+  post_send_edit_window_minutes: z.coerce.number().min(1).max(WHATSAPP_EDIT_MAX_MINUTES),
+  post_send_correction_window_minutes: z.coerce.number().min(1).max(CORRECTION_SCAN_MAX_MINUTES),
   processingTimeoutMinutes: z.coerce.number().min(1),
   dedupeThreshold: z.coerce.number().min(0).max(1).optional()
 }).superRefine((value, ctx) => {
@@ -150,10 +153,19 @@ const SettingsPage = () => {
   };
 
   const submitSettings = (values: SettingsFormValues) => {
-    const editWindow = Math.max(1, Math.min(15, Number(values.post_send_edit_window_minutes || 15)));
+    const editWindow = Math.max(
+      1,
+      Math.min(
+        WHATSAPP_EDIT_MAX_MINUTES,
+        Number(values.post_send_edit_window_minutes || WHATSAPP_EDIT_MAX_MINUTES)
+      )
+    );
     const correctionWindow = Math.max(
       editWindow,
-      Math.min(120, Number(values.post_send_correction_window_minutes || 120))
+      Math.min(
+        CORRECTION_SCAN_MAX_MINUTES,
+        Number(values.post_send_correction_window_minutes || CORRECTION_SCAN_MAX_MINUTES)
+      )
     );
 
     saveSettings.mutate({
@@ -293,10 +305,12 @@ const SettingsPage = () => {
                   <Input
                     id="post_send_edit_window_minutes"
                     type="number"
+                    min={1}
+                    max={WHATSAPP_EDIT_MAX_MINUTES}
                     {...form.register('post_send_edit_window_minutes', { valueAsNumber: true })}
                   />
                   <p className="text-xs text-muted-foreground">
-                    True WhatsApp edit only; WhatsApp currently allows up to 15 minutes.
+                    True WhatsApp edit only. Max {WHATSAPP_EDIT_MAX_MINUTES} minutes (real WhatsApp limit). If you enter more, it is saved as {WHATSAPP_EDIT_MAX_MINUTES}.
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -304,10 +318,12 @@ const SettingsPage = () => {
                   <Input
                     id="post_send_correction_window_minutes"
                     type="number"
+                    min={1}
+                    max={CORRECTION_SCAN_MAX_MINUTES}
                     {...form.register('post_send_correction_window_minutes', { valueAsNumber: true })}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Feed changes are monitored in this window (up to 120 minutes); no resend fallback is used.
+                    Feed changes are monitored in this window (max {CORRECTION_SCAN_MAX_MINUTES} min). This does not bypass WhatsApp&rsquo;s {WHATSAPP_EDIT_MAX_MINUTES}-minute edit limit.
                   </p>
                 </div>
               </div>

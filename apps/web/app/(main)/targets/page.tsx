@@ -21,7 +21,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from '@/components/ui/alert-dialog';
-import { Target as TargetIcon, Users, Radio, MessageSquare, Trash2, AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
+import { Target as TargetIcon, Users, Radio, MessageSquare, Trash2, AlertTriangle, Loader2, RefreshCw, Pencil } from 'lucide-react';
 
 const TYPE_BADGES: Record<
   Target['type'],
@@ -85,6 +85,22 @@ const TargetsPage = () => {
       setDeleteTarget(null);
     }
   });
+
+  const renameTarget = (target: Target) => {
+    const nextNameRaw = window.prompt('Set display name', target.name || '') || '';
+    const nextName = String(nextNameRaw || '').trim();
+    if (!nextName || nextName === target.name) return;
+    updateTarget.mutate({
+      id: target.id,
+      payload: {
+        name: nextName,
+        phone_number: target.phone_number,
+        type: target.type,
+        active: target.active,
+        notes: target.notes || null
+      }
+    });
+  };
 
   const filteredTargets = targets.filter((target) => {
     const matchesSearch =
@@ -215,7 +231,7 @@ const TargetsPage = () => {
                     <TableHeaderCell>Name</TableHeaderCell>
                     <TableHeaderCell>Type</TableHeaderCell>
                     <TableHeaderCell className="hidden md:table-cell">Address</TableHeaderCell>
-                    <TableHeaderCell className="w-20">Actions</TableHeaderCell>
+                      <TableHeaderCell className="w-28">Actions</TableHeaderCell>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -248,6 +264,14 @@ const TargetsPage = () => {
                         {target.phone_number}
                       </TableCell>
                       <TableCell>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => renameTarget(target)}
+                          className="mr-1"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
                         <Button
                           size="sm"
                           variant="ghost"

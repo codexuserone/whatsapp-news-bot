@@ -349,7 +349,11 @@ const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
         try {
           const result = await fetchAndProcessFeed(feed);
           if (Array.isArray(result.updatedItems) && result.updatedItems.length) {
-            await reconcileUpdatedFeedItems(result.updatedItems, whatsappClient);
+            const reconcile = await reconcileUpdatedFeedItems(result.updatedItems, whatsappClient);
+            logger.info(
+              { feedId: feed.id, reconcile },
+              'Applied post-send reconciliation after feed polling update pass'
+            );
           }
           if (result.items.length) {
             await queueBatchSchedulesForFeed(feed.id);

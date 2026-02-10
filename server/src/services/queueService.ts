@@ -1190,23 +1190,25 @@ const reconcileUpdatedFeedItems = async (
         ? String(sendResult.response.key.id)
         : null;
 
-      if (replacementMessageId) {
-        if (whatsappClient.confirmSend) {
-          const isImage = sendResult?.media?.type === 'image' && Boolean(sendResult?.media?.sent);
-          const confirmation = await whatsappClient.confirmSend(
-            replacementMessageId,
-            isImage
-              ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
-              : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 }
-          );
-          if (!confirmation?.ok) {
-            throw new Error('Replacement message send not confirmed (no upsert/ack)');
-          }
-        } else if (whatsappClient.waitForMessage) {
-          const observed = await whatsappClient.waitForMessage(replacementMessageId, 15000);
-          if (!observed) {
-            throw new Error('Replacement message send not confirmed (no local upsert)');
-          }
+      if (!replacementMessageId) {
+        throw new Error('Replacement message send returned no message id');
+      }
+
+      if (whatsappClient.confirmSend) {
+        const isImage = sendResult?.media?.type === 'image' && Boolean(sendResult?.media?.sent);
+        const confirmation = await whatsappClient.confirmSend(
+          replacementMessageId,
+          isImage
+            ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
+            : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 }
+        );
+        if (!confirmation?.ok) {
+          throw new Error('Replacement message send not confirmed (no upsert/ack)');
+        }
+      } else if (whatsappClient.waitForMessage) {
+        const observed = await whatsappClient.waitForMessage(replacementMessageId, 15000);
+        if (!observed) {
+          throw new Error('Replacement message send not confirmed (no local upsert)');
         }
       }
 
@@ -1215,7 +1217,7 @@ const reconcileUpdatedFeedItems = async (
         .update({
           status: 'sent',
           message_content: sendResult?.text || desiredText,
-          whatsapp_message_id: replacementMessageId || log.whatsapp_message_id || null,
+          whatsapp_message_id: replacementMessageId,
           error_message: null,
           retry_count: 0,
           processing_started_at: null,
@@ -1762,6 +1764,8 @@ const sendQueuedForSchedule = async (
       return { sent: 0, queued: 0, skipped: true, reason: FEED_PAUSED_ERROR };
     }
 
+    let reconcileResult: ReconcileUpdatedFeedItemsResult | null = null;
+
     if (!options?.skipFeedRefresh) {
       try {
         const feedRefreshResult = await fetchAndProcessFeed(feed);
@@ -1769,7 +1773,11 @@ const sendQueuedForSchedule = async (
           ? feedRefreshResult.updatedItems
           : [];
         if (updatedItems.length && whatsappClient?.getStatus?.().status === 'connected') {
-          await reconcileUpdatedFeedItems(updatedItems, whatsappClient);
+          reconcileResult = await reconcileUpdatedFeedItems(updatedItems, whatsappClient);
+          logger.info(
+            { scheduleId, feedId: schedule.feed_id, reconcile: reconcileResult },
+            'Applied post-send reconciliation during schedule dispatch'
+          );
         }
       } catch (error) {
         logger.warn({ scheduleId, feedId: schedule.feed_id, error }, 'Failed to refresh feed during dispatch');
@@ -2240,8 +2248,8 @@ const sendQueuedForSchedule = async (
       }
     }
 
-    logger.info({ scheduleId, sentCount }, 'Dispatch completed successfully');
-    return { sent: sentCount, queued: queuedCount };
+    logger.info({ scheduleId, sentCount, reconcileResult }, 'Dispatch completed successfully');
+    return { sent: sentCount, queued: queuedCount, reconcile: reconcileResult };
   } catch (error) {
     logger.error({ error, scheduleId }, 'Failed to send queued messages');
     return { sent: 0, queued: 0, error: getErrorMessage(error) };

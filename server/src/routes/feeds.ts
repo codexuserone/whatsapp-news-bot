@@ -272,8 +272,9 @@ const feedsRoutes = () => {
       }
       
       const result = await fetchAndProcessFeed(feed);
+      let reconcile: Record<string, unknown> | null = null;
       if (Array.isArray(result.updatedItems) && result.updatedItems.length) {
-        await reconcileUpdatedFeedItems(result.updatedItems, req.app.locals.whatsapp);
+        reconcile = await reconcileUpdatedFeedItems(result.updatedItems, req.app.locals.whatsapp);
       }
       if (result.items.length) {
         await queueBatchSchedulesForFeed(feed.id);
@@ -288,7 +289,8 @@ const feedsRoutes = () => {
         updatedCount: result.updatedCount || 0,
         duplicateCount: result.duplicateCount,
         errorCount: result.errorCount,
-        queuedCount: 0
+        queuedCount: 0,
+        reconcile
       });
     } catch (error) {
       console.error('Error refreshing feed:', error);
@@ -312,11 +314,17 @@ const feedsRoutes = () => {
       let totalDuplicates = 0;
       let totalErrors = 0;
       let totalQueued = 0;
+      let totalReconcileProcessed = 0;
+      let totalReconcileEdited = 0;
+      let totalReconcileReplaced = 0;
+      let totalReconcileSkipped = 0;
+      let totalReconcileFailed = 0;
 
       for (const feed of feeds || []) {
         const result = await fetchAndProcessFeed(feed);
+        let reconcile: Record<string, unknown> | null = null;
         if (Array.isArray(result.updatedItems) && result.updatedItems.length) {
-          await reconcileUpdatedFeedItems(result.updatedItems, req.app.locals.whatsapp);
+          reconcile = await reconcileUpdatedFeedItems(result.updatedItems, req.app.locals.whatsapp);
         }
         if (result.items.length) {
           await queueBatchSchedulesForFeed(feed.id);
@@ -328,6 +336,11 @@ const feedsRoutes = () => {
         totalUpdated += result.updatedCount || 0;
         totalDuplicates += result.duplicateCount;
         totalErrors += result.errorCount;
+        totalReconcileProcessed += Number(reconcile?.processed || 0);
+        totalReconcileEdited += Number(reconcile?.edited || 0);
+        totalReconcileReplaced += Number(reconcile?.replaced || 0);
+        totalReconcileSkipped += Number(reconcile?.skipped || 0);
+        totalReconcileFailed += Number(reconcile?.failed || 0);
 
         results.push({
           feedId: feed.id,
@@ -338,7 +351,8 @@ const feedsRoutes = () => {
           updatedCount: result.updatedCount || 0,
           duplicateCount: result.duplicateCount,
           errorCount: result.errorCount,
-          queuedCount: 0
+          queuedCount: 0,
+          reconcile
         });
       }
 
@@ -351,7 +365,14 @@ const feedsRoutes = () => {
           updatedCount: totalUpdated,
           duplicateCount: totalDuplicates,
           errorCount: totalErrors,
-          queuedCount: totalQueued
+          queuedCount: totalQueued,
+          reconcile: {
+            processed: totalReconcileProcessed,
+            edited: totalReconcileEdited,
+            replaced: totalReconcileReplaced,
+            skipped: totalReconcileSkipped,
+            failed: totalReconcileFailed
+          }
         },
         feeds: results
       });

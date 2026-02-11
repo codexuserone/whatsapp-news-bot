@@ -73,6 +73,7 @@ export type FeedItem = {
   link?: string | null;
   author?: string | null;
   pub_date?: string | null;
+  raw_data?: Record<string, unknown> | null;
   image_url?: string | null;
   categories?: string[] | string | null;
   sent?: boolean | null;
@@ -109,6 +110,7 @@ export type QueueItem = {
   title?: string | null;
   url?: string | null;
   pub_date?: string | null;
+  pub_precision?: 'date' | 'datetime' | null | string;
   image_url?: string | null;
   rendered_content?: string | null;
   media_url?: string | null;

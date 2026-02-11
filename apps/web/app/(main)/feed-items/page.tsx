@@ -43,13 +43,13 @@ const FeedItemsPage = () => {
       return { label: 'No active automation', variant: 'secondary' as const };
     }
     if (item.delivery_status === 'automation_incomplete') {
-      return { label: 'Automation incomplete', variant: 'warning' as const };
+      return { label: 'Automation setup incomplete', variant: 'warning' as const };
     }
     if (item.delivery_status === 'not_queued') {
-      return { label: 'Waiting for next send window', variant: 'secondary' as const };
+      return { label: 'Will queue on next poll', variant: 'secondary' as const };
     }
     if (item.delivery_status === 'not_queued_old') {
-      return { label: 'Older than automation queue window', variant: 'secondary' as const };
+      return { label: 'Older than queue start', variant: 'secondary' as const };
     }
 
     const delivery = item.delivery || {
@@ -106,6 +106,18 @@ const FeedItemsPage = () => {
     const manualPaused = Number(item.delivery?.manual_paused || 0);
     if (manualPaused > 0) return true;
     return item.delivery_status === 'paused' || item.delivery_status === 'paused_with_queue';
+  };
+
+  const formatPublishedAt = (pubDate?: string | null, rawData?: Record<string, unknown> | null) => {
+    if (!pubDate) return '-';
+    const parsed = new Date(pubDate);
+    if (!Number.isFinite(parsed.getTime())) return '-';
+    const precision = String(rawData?.published_precision || '').toLowerCase();
+    const dateOnlyByValue = /t00:00(?::00(?:\.\d+)?)?(?:z|[+-]\d{2}:\d{2})$/i.test(String(pubDate));
+    if (precision === 'date' || (!precision && dateOnlyByValue)) {
+      return `${parsed.toLocaleDateString()} (date only from source)`;
+    }
+    return parsed.toLocaleString();
   };
 
   return (
@@ -218,7 +230,7 @@ const FeedItemsPage = () => {
                         )}
                       </TableCell>
                       <TableCell className="hidden text-muted-foreground lg:table-cell">
-                        {item.pub_date ? new Date(item.pub_date).toLocaleString() : '-'}
+                        {formatPublishedAt(item.pub_date, item.raw_data)}
                       </TableCell>
                       <TableCell>
                         {(() => {

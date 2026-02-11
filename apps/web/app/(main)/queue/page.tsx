@@ -388,6 +388,18 @@ const QueuePage = () => {
     return new Date(dateStr).toLocaleString();
   };
 
+  const formatPublishedDate = (dateStr?: string | null, precision?: string | null) => {
+    if (!dateStr) return '-';
+    const parsed = new Date(dateStr);
+    if (!Number.isFinite(parsed.getTime())) return '-';
+    const normalizedPrecision = String(precision || '').toLowerCase();
+    const dateOnlyByValue = /t00:00(?::00(?:\.\d+)?)?(?:z|[+-]\d{2}:\d{2})$/i.test(String(dateStr));
+    if (normalizedPrecision === 'date' || (!normalizedPrecision && dateOnlyByValue)) {
+      return `${parsed.toLocaleDateString()} (date only from source)`;
+    }
+    return parsed.toLocaleString();
+  };
+
   const getDeliveryPath = (item: QueueItem) => {
     const mediaType = String(item.media_type || '').toLowerCase();
     const mediaSent = Boolean(item.media_sent);
@@ -638,6 +650,7 @@ const QueuePage = () => {
                         size="sm"
                         variant="outline"
                         onClick={() => requestEdit(item)}
+                        disabled={!canEdit(item)}
                         title={canEdit(item) ? 'Edit message text (queued or recent sent in-place)' : 'Can edit queued items or recently sent items still inside WhatsApp edit window'}
                       >
                         <Pencil className="mr-1 h-3 w-3" /> Edit
@@ -687,7 +700,7 @@ const QueuePage = () => {
                     ) : null}
 
                     <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-                      {item.pub_date ? <span>Published: {formatDate(item.pub_date)}</span> : null}
+                      {item.pub_date ? <span>Published: {formatPublishedDate(item.pub_date, item.pub_precision)}</span> : null}
                       <span>Created: {formatDate(item.created_at)}</span>
                       {item.batch_times && item.batch_times.length ? <span>Send windows: {item.batch_times.join(', ')}</span> : null}
                       {item.scheduled_for ? <span>Scheduled: {formatDate(item.scheduled_for)}</span> : null}
@@ -755,7 +768,7 @@ const QueuePage = () => {
                       {item.rendered_content || deriveDefaultMessage(item) || 'No content'}
                     </p>
                     <p className="text-[11px] text-muted-foreground">{deliveryPath.label}</p>
-                    {item.pub_date ? <p className="text-[11px] text-muted-foreground">Published: {formatDate(item.pub_date)}</p> : null}
+                    {item.pub_date ? <p className="text-[11px] text-muted-foreground">Published: {formatPublishedDate(item.pub_date, item.pub_precision)}</p> : null}
                     {editing ? (
                       <div className="rounded-md border bg-muted/30 p-2 space-y-2">
                         <p className="text-[11px] text-muted-foreground">Edit message text before sending</p>
@@ -783,6 +796,7 @@ const QueuePage = () => {
                           variant="outline"
                           className="h-7 text-xs px-2"
                           onClick={() => requestEdit(item)}
+                          disabled={!canEdit(item)}
                           title={canEdit(item) ? 'Edit message text (queued or recent sent in-place)' : 'Can edit queued items or recently sent items still inside WhatsApp edit window'}
                         >
                           <Pencil className="mr-1 h-3 w-3" /> Edit

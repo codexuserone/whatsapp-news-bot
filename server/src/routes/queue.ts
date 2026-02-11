@@ -83,7 +83,8 @@ const queueRoutes = () => {
             title,
             link,
             image_url,
-            pub_date
+            pub_date,
+            raw_data
           )
         `);
 
@@ -112,7 +113,17 @@ const queueRoutes = () => {
       if (error) throw error;
 
       const items = (rows || []).map((row: Record<string, unknown>) => {
-        const feedItems = row.feed_items as { title?: string; link?: string; image_url?: string; pub_date?: string } | undefined;
+        const feedItems = row.feed_items as {
+          title?: string;
+          link?: string;
+          image_url?: string;
+          pub_date?: string;
+          raw_data?: Record<string, unknown> | null;
+        } | undefined;
+        const rawData =
+          feedItems?.raw_data && typeof feedItems.raw_data === 'object'
+            ? (feedItems.raw_data as Record<string, unknown>)
+            : null;
         const schedule = row.schedule as {
           id?: string;
           name?: string;
@@ -135,6 +146,7 @@ const queueRoutes = () => {
           url: feedItems?.link || null,
           image_url: feedItems?.image_url || null,
           pub_date: feedItems?.pub_date || null,
+          pub_precision: rawData ? String(rawData.published_precision || '') || null : null,
           rendered_content: row.message_content,
           status: row.status,
           error_message: row.error_message,

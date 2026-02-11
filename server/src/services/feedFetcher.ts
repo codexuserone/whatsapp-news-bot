@@ -261,6 +261,162 @@ type FeedItemResult = {
   raw?: Record<string, unknown>;
 };
 
+const hasExplicitTimeComponent = (value: string) => {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (/[T\s]\d{1,2}:\d{2}/.test(text)) return true;
+  if (/:\d{2}/.test(text)) return true;
+  return false;
+};
+
+const parsePublishedAt = (value: unknown): { value?: string; precision?: 'date' | 'datetime'; original?: string } => {
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    if (!Number.isFinite(ms)) return {};
+    return {
+      value: value.toISOString(),
+      precision: 'datetime',
+      original: value.toISOString()
+    };
+  }
+
+  const raw = toTextValue(value)?.trim();
+  if (!raw) return {};
+
+  const parsed = new Date(raw);
+  const ms = parsed.getTime();
+  if (!Number.isFinite(ms)) {
+    return { original: raw };
+  }
+
+  return {
+    value: parsed.toISOString(),
+    precision: hasExplicitTimeComponent(raw) ? 'datetime' : 'date',
+    original: raw
+  };
+};
+
+const parseRssPublishedAt = (isoDateValue: unknown, pubDateValue: unknown) => {
+  const rawPubDate = toTextValue(pubDateValue)?.trim();
+  const rawIsoDate = toTextValue(isoDateValue)?.trim();
+
+  if (rawPubDate) {
+    const parsedPubDate = parsePublishedAt(rawPubDate);
+    if (parsedPubDate.value) {
+      return {
+        value: parsedPubDate.value,
+        precision: hasExplicitTimeComponent(rawPubDate) ? 'datetime' : 'date',
+        original: rawPubDate
+      } as const;
+    }
+  }
+
+  return parsePublishedAt(rawIsoDate);
+};
+
+const extractWordPressPostId = (...candidates: Array<unknown>) => {
+  for (const candidate of candidates) {
+    const value = toTextValue(candidate)?.trim();
+    if (!value) continue;
+    const queryMatch = value.match(/[?&]p=(\d+)/i);
+    if (queryMatch?.[1]) return queryMatch[1];
+    const idMatch = value.match(/\/\?p=(\d+)(?:$|[&#])/i);
+    if (idMatch?.[1]) return idMatch[1];
+  }
+  return undefined;
+};
+
+const chunkValues = <T>(values: T[], chunkSize: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += chunkSize) {
+    chunks.push(values.slice(index, index + chunkSize));
+  }
+  return chunks;
+};
+
+const enrichWordPressRssPublishedAt = async (feedUrl: string, items: FeedItemResult[]) => {
+  if (!Array.isArray(items) || !items.length) return items;
+
+  let origin = '';
+  try {
+    origin = new URL(feedUrl).origin;
+  } catch {
+    return items;
+  }
+
+  const postsById = new Map<string, FeedItemResult[]>();
+  for (const item of items) {
+    const raw = item.raw && typeof item.raw === 'object' ? item.raw : undefined;
+    if (!raw) continue;
+    const precision = String(raw.published_precision || '').toLowerCase();
+    if (precision !== 'date') continue;
+    const postId = String(raw.wp_post_id || '').trim();
+    if (!postId) continue;
+    const bucket = postsById.get(postId) || [];
+    bucket.push(item);
+    postsById.set(postId, bucket);
+  }
+
+  if (!postsById.size) return items;
+
+  const endpoint = `${origin}/wp-json/wp/v2/posts`;
+  try {
+    await assertSafeOutboundUrl(endpoint);
+  } catch {
+    return items;
+  }
+
+  const postIds = Array.from(postsById.keys());
+  const maxEnrichedPosts = 120;
+  const idsToEnrich = postIds.slice(0, maxEnrichedPosts);
+  const batches = chunkValues(idsToEnrich, 50);
+
+  for (const batch of batches) {
+    try {
+      const response = await axios.get(endpoint, {
+        timeout: 12000,
+        params: {
+          include: batch.join(','),
+          per_page: batch.length,
+          _fields: 'id,date_gmt,date'
+        },
+        headers: {
+          'User-Agent': DEFAULT_USER_AGENT,
+          Accept: 'application/json, text/json, */*;q=0.8'
+        }
+      });
+
+      const posts = Array.isArray(response.data) ? response.data : [];
+      for (const post of posts as Record<string, unknown>[]) {
+        const postId = String(post.id || '').trim();
+        if (!postId) continue;
+        const publishedValue = toTextValue(post.date_gmt) || toTextValue(post.date);
+        const published = parsePublishedAt(publishedValue);
+        if (!published.value) continue;
+
+        const matchingItems = postsById.get(postId) || [];
+        for (const item of matchingItems) {
+          item.publishedAt = published.value;
+          const itemRaw = item.raw && typeof item.raw === 'object' ? item.raw : {};
+          itemRaw.published_precision = 'datetime';
+          itemRaw.published_source = 'wp_rest';
+          if (toTextValue(post.date_gmt)) itemRaw.wp_date_gmt = toTextValue(post.date_gmt);
+          if (toTextValue(post.date)) itemRaw.wp_date = toTextValue(post.date);
+          item.raw = itemRaw;
+        }
+      }
+    } catch (error) {
+      console.warn(
+        `WordPress publish-time enrichment failed for ${feedUrl}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+      break;
+    }
+  }
+
+  return items;
+};
+
 const toStringValue = (value: unknown): string | undefined => {
   if (value === null || value === undefined) return undefined;
   return String(value);
@@ -385,6 +541,16 @@ const mapJsonFeedItem = (feed: FeedConfig, item: Record<string, unknown>): FeedI
     toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.full.source_url'))
   );
 
+  const publishedCandidate =
+    toTextLike(getPath(item, 'date_published')) ||
+    toTextLike(getPath(item, 'date')) ||
+    toTextLike(getPath(item, 'pubDate')) ||
+    toTextLike(getPath(item, 'publishedAt'));
+  const published = parsePublishedAt(publishedCandidate);
+  const rawData = extractJsonRawFields(item, imageCandidate);
+  if (published.original) rawData.published_input = published.original;
+  if (published.precision) rawData.published_precision = published.precision;
+
   return {
     guid: toStringValue(guidRaw) || `${feed.url}-${Date.now()}-${Math.random()}`,
     title,
@@ -393,24 +559,20 @@ const mapJsonFeedItem = (feed: FeedConfig, item: Record<string, unknown>): FeedI
     content,
     author: toTextLike(getPath(item, 'author.name')) || toTextLike(getPath(item, 'author')),
     imageUrl: imageCandidate,
-    publishedAt:
-      toTextLike(getPath(item, 'date_published')) ||
-      toTextLike(getPath(item, 'date')) ||
-      toTextLike(getPath(item, 'pubDate')) ||
-      toTextLike(getPath(item, 'publishedAt')),
+    publishedAt: published.value || publishedCandidate,
     categories: Array.isArray(getPath(item, 'tags'))
       ? (getPath(item, 'tags') as unknown[]).map((value) => String(value))
       : Array.isArray(getPath(item, 'categories'))
         ? (getPath(item, 'categories') as unknown[]).map((value) => String(value))
         : [],
-    raw: extractJsonRawFields(item, imageCandidate)
+    raw: rawData
   };
 };
 
 const fetchRssItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
   try {
     const data = await parser.parseURL(feed.url);
-    return (data.items || []).map((item: Record<string, unknown>) => {
+    const mapped = (data.items || []).map((item: Record<string, unknown>) => {
       const rssItem = item as Record<string, unknown> & {
         enclosure?: { url?: string };
         'media:content'?: { $?: { url?: string }; url?: string };
@@ -418,6 +580,12 @@ const fetchRssItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
       };
       const guidRaw = rssItem.guid || rssItem.id || rssItem.link;
       const guidValue = toStringValue(guidRaw) || `${feed.url}-${rssItem.title}-${Date.now()}`;
+      const published = parseRssPublishedAt(rssItem.isoDate, rssItem.pubDate);
+      const wpPostId = extractWordPressPostId(rssItem.guid, rssItem.link, guidRaw);
+      const raw: Record<string, unknown> = {};
+      if (wpPostId) raw.wp_post_id = wpPostId;
+      if (published.original) raw.published_input = published.original;
+      if (published.precision) raw.published_precision = published.precision;
       return {
         guid: guidValue,
         title: toStringValue(rssItem.title),
@@ -428,10 +596,12 @@ const fetchRssItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
         imageUrl: toStringValue(
           rssItem.enclosure?.url || rssItem['media:content']?.$?.url || rssItem['media:content']?.url
         ),
-        publishedAt: toStringValue(rssItem.isoDate || rssItem.pubDate),
-        categories: Array.isArray(rssItem.categories) ? rssItem.categories.map((value) => String(value)) : []
+        publishedAt: published.value || toStringValue(rssItem.pubDate || rssItem.isoDate),
+        categories: Array.isArray(rssItem.categories) ? rssItem.categories.map((value) => String(value)) : [],
+        raw
       };
     });
+    return enrichWordPressRssPublishedAt(feed.url, mapped);
   } catch (error) {
     console.error(`Error fetching RSS feed ${feed.url}:`, error instanceof Error ? error.message : String(error));
     throw error;
@@ -483,6 +653,12 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
     };
     const guidRaw = rssItem.guid || rssItem.id || rssItem.link;
     const guidValue = toStringValue(guidRaw) || `${feed.url}-${rssItem.title}-${Date.now()}`;
+    const published = parseRssPublishedAt(rssItem.isoDate, rssItem.pubDate);
+    const wpPostId = extractWordPressPostId(rssItem.guid, rssItem.link, guidRaw);
+    const raw: Record<string, unknown> = {};
+    if (wpPostId) raw.wp_post_id = wpPostId;
+    if (published.original) raw.published_input = published.original;
+    if (published.precision) raw.published_precision = published.precision;
     const htmlImage = extractFirstImageFromHtml(
       toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet)
     );
@@ -503,12 +679,14 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
       content: toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet),
       author: toStringValue(rssItem.creator || rssItem.author || rssItem['dc:creator']),
       imageUrl,
-      publishedAt: toStringValue(rssItem.isoDate || rssItem.pubDate),
-      categories: Array.isArray(rssItem.categories) ? rssItem.categories.map((value) => String(value)) : []
+      publishedAt: published.value || toStringValue(rssItem.pubDate || rssItem.isoDate),
+      categories: Array.isArray(rssItem.categories) ? rssItem.categories.map((value) => String(value)) : [],
+      raw
     };
   });
 
-  return { items, meta };
+  const enrichedItems = await enrichWordPressRssPublishedAt(feed.url, items);
+  return { items: enrichedItems, meta };
 };
 
 const fetchJsonItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {

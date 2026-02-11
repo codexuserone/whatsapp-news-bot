@@ -103,7 +103,7 @@ const isAppPaused = async () => {
 };
 
 const clearAll = () => {
-  feedIntervals.forEach((interval) => clearInterval(interval));
+  feedIntervals.forEach((interval) => clearTimeout(interval));
   feedIntervals.clear();
   scheduleJobs.forEach((job) => job.stop());
   scheduleJobs.clear();
@@ -180,6 +180,48 @@ const parseBatchTimes = (value: unknown): string[] => {
   return Array.from(seen).sort();
 };
 
+const getLocalMinuteOfDay = (timezone?: string | null, date = new Date()) => {
+  const tz = String(timezone || 'UTC').trim() || 'UTC';
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  const parts = formatter.formatToParts(date);
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value || '0');
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value || '0');
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return Number.NaN;
+  return hour * 60 + minute;
+};
+
+const normalizeBatchGraceMinutes = (value: number) => {
+  if (!Number.isFinite(value)) return 8;
+  return Math.min(Math.max(Math.floor(value), 1), 30);
+};
+
+const isBatchTimestampAligned = (
+  timestampMs: number,
+  times: string[],
+  timezone?: string | null,
+  graceMinutes = Math.max(Number(process.env.BATCH_WINDOW_GRACE_MINUTES || 8), 1)
+) => {
+  if (!Number.isFinite(timestampMs) || !times.length) return false;
+  const minuteOfDay = getLocalMinuteOfDay(timezone, new Date(timestampMs));
+  if (!Number.isFinite(minuteOfDay)) return false;
+  const grace = normalizeBatchGraceMinutes(graceMinutes);
+  return times.some((time) => {
+    const [hourRaw, minuteRaw] = String(time).split(':');
+    const hour = Number(hourRaw);
+    const minute = Number(minuteRaw);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return false;
+    const targetMinute = hour * 60 + minute;
+    const directDiff = Math.abs(minuteOfDay - targetMinute);
+    const wrappedDiff = Math.min(directDiff, 1440 - directDiff);
+    return wrappedDiff <= grace;
+  });
+};
+
 const normalizeCronExpression = (value: unknown): string | null => {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -205,16 +247,18 @@ const computeNextBatchRunAt = (times: string[], timezone?: string | null) => {
   return nextValue;
 };
 
-const queueBatchSchedulesForFeed = async (feedId: string) => {
+const getOverdueBatchDispatchGraceMs = () => {
+  const minutesRaw = Number(process.env.BATCH_OVERDUE_DISPATCH_GRACE_MINUTES || 20);
+  const minutes = Number.isFinite(minutesRaw) ? Math.max(Math.floor(minutesRaw), 5) : 20;
+  return Math.min(minutes, 180) * 60 * 1000;
+};
+
+const queueBatchSchedulesForFeed = async (feedId: string, whatsappClient?: WhatsAppClient) => {
   if (schedulersDisabled()) return;
   if (await isAppPaused()) return;
 
   const supabase = getSupabaseClient();
   if (!supabase) return;
-
-  const disconnectedClient: WhatsAppClient = {
-    getStatus: () => ({ status: 'disconnected' })
-  };
 
   try {
     const { data: schedules, error } = await supabase
@@ -232,7 +276,7 @@ const queueBatchSchedulesForFeed = async (feedId: string) => {
 
     logger.info({ feedId, count: batchSchedules.length }, 'Queueing batch schedules after feed refresh');
     for (const schedule of batchSchedules) {
-      await runScheduleOnce(schedule.id, disconnectedClient, { skipFeedRefresh: true });
+      await runScheduleOnce(schedule.id, whatsappClient, { skipFeedRefresh: true });
     }
   } catch (error) {
     logger.error({ error, feedId }, 'Failed to queue batch schedules');
@@ -250,13 +294,13 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
   const supabase = getSupabaseClient();
   if (!supabase) return;
 
-  // Check WhatsApp connection before triggering
   const status = whatsappClient?.getStatus?.();
-  if (!status || status.status !== 'connected') {
-    logger.warn({ feedId, whatsappStatus: status?.status || 'unknown' },
-      'Skipping immediate schedules - WhatsApp not connected');
-    return;
-  }
+  const dispatchClient: WhatsAppClient =
+    status?.status === 'connected'
+      ? (whatsappClient as WhatsAppClient)
+      : {
+          getStatus: () => ({ status: 'disconnected' })
+        };
 
   try {
     const { data: schedules, error } = await supabase
@@ -269,10 +313,18 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
     const immediateSchedules = (schedules || []).filter((schedule: ScheduleRow) => {
       return isScheduleRunning(schedule) && getDeliveryMode(schedule) !== 'batched' && !schedule.cron_expression;
     });
-    logger.info({ feedId, count: immediateSchedules.length }, 'Triggering immediate schedules');
+    logger.info(
+      {
+        feedId,
+        count: immediateSchedules.length,
+        dispatchMode: status?.status === 'connected' ? 'queue-and-send' : 'queue-only',
+        whatsappStatus: status?.status || 'unknown'
+      },
+      'Triggering immediate schedules'
+    );
 
     for (const schedule of immediateSchedules) {
-      await runScheduleOnce(schedule.id, whatsappClient, { skipFeedRefresh: true });
+      await runScheduleOnce(schedule.id, dispatchClient, { skipFeedRefresh: true });
     }
   } catch (error) {
     logger.error({ error, feedId }, 'Failed to trigger immediate schedules');
@@ -362,7 +414,7 @@ const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
             );
           }
           if (result.items.length) {
-            await queueBatchSchedulesForFeed(feed.id);
+            await queueBatchSchedulesForFeed(feed.id, whatsappClient);
             await triggerImmediateSchedules(feed.id, whatsappClient);
           }
         } catch (error) {
@@ -411,7 +463,7 @@ const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
 
     for (const schedule of runningSchedules) {
       const mode = getDeliveryMode(schedule);
-      const timezone = schedule.timezone || 'UTC';
+      const timezone = String(schedule.timezone || 'UTC').trim() || 'UTC';
 
       if (mode === 'batched') {
         const batchTimes = parseBatchTimes(schedule.batch_times);
@@ -434,9 +486,42 @@ const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
           }
         }
 
-        const nextBatchRunAt = computeNextBatchRunAt(batchTimes, timezone);
-        if (nextBatchRunAt) {
-          await supabase.from('schedules').update({ next_run_at: nextBatchRunAt }).eq('id', schedule.id);
+        const persistedNextRunAt = String(schedule.next_run_at || '').trim();
+        const persistedNextRunMs = Date.parse(persistedNextRunAt);
+        const overdueDispatchGraceMs = getOverdueBatchDispatchGraceMs();
+        const batchWindowGraceMinutes = Math.max(Number(process.env.BATCH_WINDOW_GRACE_MINUTES || 8), 1);
+        const overdueAgeMs = Number.isFinite(persistedNextRunMs) ? Date.now() - persistedNextRunMs : Number.NaN;
+        const hasOverdueNextRun =
+          Number.isFinite(overdueAgeMs) && overdueAgeMs >= 0;
+        const overdueAligned =
+          Number.isFinite(persistedNextRunMs) &&
+          isBatchTimestampAligned(persistedNextRunMs, batchTimes, timezone, batchWindowGraceMinutes);
+        const keepOverdueCursor =
+          hasOverdueNextRun && overdueAgeMs <= overdueDispatchGraceMs && overdueAligned;
+
+        if (keepOverdueCursor) {
+          logger.info(
+            { scheduleId: schedule.id, nextRunAt: persistedNextRunAt },
+            'Keeping overdue batch next_run_at to allow catch-up dispatch'
+          );
+        } else {
+          const nextBatchRunAt = computeNextBatchRunAt(batchTimes, timezone);
+          if (nextBatchRunAt) {
+            await supabase.from('schedules').update({ next_run_at: nextBatchRunAt }).eq('id', schedule.id);
+            if (hasOverdueNextRun || !overdueAligned) {
+              logger.info(
+                {
+                  scheduleId: schedule.id,
+                  staleNextRunAt: persistedNextRunAt,
+                  realignedNextRunAt: nextBatchRunAt,
+                  overdueAgeMs,
+                  overdueDispatchGraceMs,
+                  overdueAligned
+                },
+                'Realigned stale overdue batch next_run_at'
+              );
+            }
+          }
         }
         continue;
       }
@@ -480,15 +565,20 @@ const startPendingSendCatchup = (whatsappClient?: WhatsAppClient) => {
   }
 
   const intervalMs = Math.max(Number(process.env.PENDING_SEND_CATCHUP_MS || 60000), 15000);
-  pendingSendCatchupTimer = setInterval(async () => {
+  const runCatchupPass = async () => {
     try {
       if (await isAppPaused()) return;
       if (!canRunSchedulers(whatsappClient)) return;
-      if (whatsappClient?.getStatus?.().status !== 'connected') return;
       await sendPendingForAllSchedules(whatsappClient);
     } catch (error) {
       logger.error({ error }, 'Failed pending-send catch-up pass');
     }
+  };
+
+  // Do one catch-up pass immediately on startup/reconnect, then continue on interval.
+  void runCatchupPass();
+  pendingSendCatchupTimer = setInterval(() => {
+    void runCatchupPass();
   }, intervalMs);
 };
 

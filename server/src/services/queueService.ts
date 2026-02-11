@@ -1268,6 +1268,41 @@ const getLocalMinuteOfDay = (timezone?: string | null, date = new Date()) => {
   return hour * 60 + minute;
 };
 
+const normalizeBatchGraceMinutes = (value: number) => {
+  if (!Number.isFinite(value)) return 8;
+  return Math.min(Math.max(Math.floor(value), 1), 30);
+};
+
+const isMinuteAlignedToBatchTimes = (
+  minuteOfDay: number,
+  times: string[],
+  graceMinutes: number
+) => {
+  if (!times.length || !Number.isFinite(minuteOfDay)) return false;
+  const grace = normalizeBatchGraceMinutes(graceMinutes);
+  return times.some((time) => {
+    const [hourRaw, minuteRaw] = String(time).split(':');
+    const hour = Number(hourRaw);
+    const minute = Number(minuteRaw);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return false;
+    const targetMinute = hour * 60 + minute;
+    const directDiff = Math.abs(minuteOfDay - targetMinute);
+    const wrappedDiff = Math.min(directDiff, 1440 - directDiff);
+    return wrappedDiff <= grace;
+  });
+};
+
+const isBatchTimestampAligned = (
+  timestampMs: number,
+  times: string[],
+  timezone?: string | null,
+  graceMinutes = Math.max(Number(process.env.BATCH_WINDOW_GRACE_MINUTES || 8), 1)
+) => {
+  if (!Number.isFinite(timestampMs)) return false;
+  const minuteOfDay = getLocalMinuteOfDay(timezone, new Date(timestampMs));
+  return isMinuteAlignedToBatchTimes(minuteOfDay, times, graceMinutes);
+};
+
 const isWithinBatchWindow = (
   times: string[],
   timezone?: string | null,
@@ -1276,16 +1311,13 @@ const isWithinBatchWindow = (
   if (!times.length) return false;
   const nowMinute = getLocalMinuteOfDay(timezone);
   if (!Number.isFinite(nowMinute)) return false;
-  const grace = Math.min(Math.max(graceMinutes, 1), 30);
+  return isMinuteAlignedToBatchTimes(nowMinute, times, graceMinutes);
+};
 
-  return times.some((time) => {
-    const [hourRaw, minuteRaw] = String(time).split(':');
-    const hour = Number(hourRaw);
-    const minute = Number(minuteRaw);
-    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return false;
-    const targetMinute = hour * 60 + minute;
-    return Math.abs(nowMinute - targetMinute) <= grace;
-  });
+const getOverdueBatchDispatchGraceMs = () => {
+  const minutesRaw = Number(process.env.BATCH_OVERDUE_DISPATCH_GRACE_MINUTES || 20);
+  const minutes = Number.isFinite(minutesRaw) ? Math.max(Math.floor(minutesRaw), 5) : 20;
+  return Math.min(minutes, 180) * 60 * 1000;
 };
 
 const toDailyCronExpression = (time: string) => {
@@ -1864,9 +1896,11 @@ const sendQueuedForSchedule = async (
 
     if (deliveryMode === 'batched') {
       const batchTimes = parseBatchTimes(schedule.batch_times);
-      const timezone = schedule.timezone || 'UTC';
-      const withinWindow = isWithinBatchWindow(batchTimes, timezone);
+      const timezone = String(schedule.timezone || 'UTC').trim() || 'UTC';
+      const batchWindowGraceMinutes = Math.max(Number(process.env.BATCH_WINDOW_GRACE_MINUTES || 8), 1);
+      const withinWindow = isWithinBatchWindow(batchTimes, timezone, batchWindowGraceMinutes);
       const allowOverdueBatchDispatch = options?.allowOverdueBatchDispatch === true;
+      const overdueDispatchGraceMs = getOverdueBatchDispatchGraceMs();
 
       let nextRunAtIso = String(schedule.next_run_at || '').trim();
       let nextRunAtMs = Date.parse(nextRunAtIso);
@@ -1878,8 +1912,49 @@ const sendQueuedForSchedule = async (
         }
       }
 
-      const isOverdueDispatch = allowOverdueBatchDispatch && Number.isFinite(nextRunAtMs) && nextRunAtMs <= Date.now();
+      const nowMs = Date.now();
+      const overdueAgeMs = Number.isFinite(nextRunAtMs) ? nowMs - nextRunAtMs : Number.NaN;
+      const overdueAligned =
+        Number.isFinite(nextRunAtMs) &&
+        isBatchTimestampAligned(nextRunAtMs, batchTimes, timezone, batchWindowGraceMinutes);
+      const isOverdueDispatch =
+        allowOverdueBatchDispatch &&
+        overdueAligned &&
+        Number.isFinite(overdueAgeMs) &&
+        overdueAgeMs >= 0 &&
+        overdueAgeMs <= overdueDispatchGraceMs;
+
       if (!withinWindow && !isOverdueDispatch) {
+        const misalignedOverdueCursor =
+          allowOverdueBatchDispatch &&
+          Number.isFinite(overdueAgeMs) &&
+          overdueAgeMs >= 0 &&
+          !overdueAligned;
+        const staleDueCursor =
+          Number.isFinite(overdueAgeMs) &&
+          (overdueAgeMs > overdueDispatchGraceMs || misalignedOverdueCursor);
+
+        if (staleDueCursor) {
+          const computedNextRunAt = computeNextBatchRunAt(batchTimes, timezone);
+          if (computedNextRunAt) {
+            nextRunAtIso = computedNextRunAt;
+            nextRunAtMs = Date.parse(computedNextRunAt);
+            await supabase.from('schedules').update({ next_run_at: computedNextRunAt }).eq('id', scheduleId);
+          }
+        }
+
+        if (misalignedOverdueCursor) {
+          logger.warn(
+            {
+              scheduleId,
+              timezone,
+              batchTimes,
+              nextRunAt: nextRunAtIso
+            },
+            'Skipping overdue batch dispatch because next_run_at is not aligned to configured batch times'
+          );
+        }
+
         const resumeAtIso = Number.isFinite(nextRunAtMs) ? new Date(nextRunAtMs).toISOString() : null;
         const reason = resumeAtIso
           ? `Waiting for the next batch send window (${timezone}).`
@@ -2390,7 +2465,12 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
 
     const { data: claimRows, error: claimError } = await supabase
       .from('message_logs')
-      .update({ status: 'processing', processing_started_at: new Date().toISOString() })
+      .update({
+        status: 'processing',
+        processing_started_at: new Date().toISOString(),
+        retry_count: 0,
+        error_message: null
+      })
       .eq('id', log.id)
       .in('status', ['pending', 'failed', 'skipped'])
       .select('id');
@@ -2590,11 +2670,13 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
   }
 
   try {
+    const orphanCleanupCutoffIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const { data: orphanPendingRows, error: orphanPendingError } = await supabase
       .from('message_logs')
       .select('id')
       .is('schedule_id', null)
-      .eq('status', 'pending');
+      .eq('status', 'pending')
+      .lt('created_at', orphanCleanupCutoffIso);
     if (orphanPendingError) throw orphanPendingError;
 
     const orphanPendingIds = (orphanPendingRows || [])
@@ -2654,6 +2736,7 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
 
       const isBatchSchedule = schedule?.delivery_mode === 'batched' || schedule?.delivery_mode === 'batch';
       if (isBatchSchedule) {
+        const overdueDispatchGraceMs = getOverdueBatchDispatchGraceMs();
         let nextRunAtMs = schedule?.next_run_at ? Date.parse(String(schedule.next_run_at)) : Number.NaN;
 
         // Never dispatch batched schedules without a valid due cursor.
@@ -2667,8 +2750,22 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
           }
         }
 
-        const isBatchWindowDue = Number.isFinite(nextRunAtMs) && nextRunAtMs <= Date.now();
-        if (!isBatchWindowDue) {
+        const overdueAgeMs = Number.isFinite(nextRunAtMs) ? Date.now() - nextRunAtMs : Number.NaN;
+        const shouldAttemptBatchDispatch =
+          Number.isFinite(overdueAgeMs) &&
+          overdueAgeMs >= 0 &&
+          overdueAgeMs <= overdueDispatchGraceMs;
+
+        if (!shouldAttemptBatchDispatch) {
+          const staleDueCursor = Number.isFinite(overdueAgeMs) && overdueAgeMs > overdueDispatchGraceMs;
+          if (staleDueCursor) {
+            const batchTimes = parseBatchTimes(schedule?.batch_times);
+            const computedNextRunAt = computeNextBatchRunAt(batchTimes, schedule?.timezone || 'UTC');
+            if (computedNextRunAt) {
+              await supabase.from('schedules').update({ next_run_at: computedNextRunAt }).eq('id', scheduleId);
+              schedule.next_run_at = computedNextRunAt;
+            }
+          }
           skippedBatch += 1;
           continue;
         }

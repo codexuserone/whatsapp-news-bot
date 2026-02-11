@@ -14,6 +14,7 @@ const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { normalizeMessageText } = require('../utils/messageText');
 const { ensureWhatsAppConnected } = require('./whatsappConnection');
 const { isScheduleRunning } = require('./scheduleState');
+const { withScheduleLock } = require('./scheduleLockService');
 
 type Target = {
   id?: string;
@@ -1700,13 +1701,23 @@ const sendQueuedForSchedule = async (
 
       if (!manualLogs || manualLogs.length === 0) {
         logger.info({ scheduleId }, 'No pending manual messages to send');
-        return { sent: 0, queued: 0, skipped: true, reason: 'No pending messages queued for this automation yet' };
+        return {
+          sent: 0,
+          queued: 0,
+          skipped: true,
+          reason: 'Nothing is queued for this automation yet. New feed matches will appear here automatically.'
+        };
       }
 
       // For manual dispatch, we can't proceed without feed items
       logger.warn({ scheduleId, count: manualLogs.length },
         'Pending manual logs found but no feed items - cannot send');
-      return { sent: 0, queued: 0, skipped: true, reason: 'No sendable feed items are queued for this automation yet' };
+      return {
+        sent: 0,
+        queued: 0,
+        skipped: true,
+        reason: 'This automation has no sendable feed item queued right now.'
+      };
     }
 
     // Get targets
@@ -2232,7 +2243,7 @@ const sendQueuedForSchedule = async (
         sent: 0,
         queued: 0,
         skipped: true,
-        reason: 'No pending messages queued for this automation yet',
+        reason: 'Nothing is queued for this automation right now.',
         reconcile: reconcileResult
       };
     }
@@ -2536,14 +2547,13 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
     const scheduleIds = [...new Set((pendingLogs || []).map((log: { schedule_id?: string }) => log.schedule_id).filter(Boolean))] as string[];
     const { data: scheduleRows } = await supabase
       .from('schedules')
-      .select('id,delivery_mode')
+      .select('id,delivery_mode,next_run_at,batch_times,timezone,state,active')
       .in('id', scheduleIds);
 
-    const batchScheduleIds = new Set(
+    const scheduleById = new Map(
       (scheduleRows || [])
-        .filter((row: { id?: string; delivery_mode?: string | null }) => row?.delivery_mode === 'batched' || row?.delivery_mode === 'batch')
-        .map((row: { id?: string }) => String(row.id || ''))
-        .filter(Boolean)
+        .filter((row: { id?: string }) => Boolean(row?.id))
+        .map((row: { id?: string }) => [String(row.id), row] as const)
     );
 
     let totalSent = 0;
@@ -2551,17 +2561,67 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
     let skippedBatch = 0;
 
     for (const scheduleId of scheduleIds) {
-      if (batchScheduleIds.has(scheduleId)) {
-        skippedBatch += 1;
+      const schedule = scheduleById.get(scheduleId) as
+        | {
+            delivery_mode?: string | null;
+            next_run_at?: string | null;
+            batch_times?: string[] | null;
+            timezone?: string | null;
+            active?: boolean;
+            state?: string | null;
+          }
+        | undefined;
+      if (schedule && !isScheduleRunning(schedule)) {
         continue;
       }
-      const result = await sendQueuedForSchedule(scheduleId, whatsappClient);
+
+      const isBatchSchedule = schedule?.delivery_mode === 'batched' || schedule?.delivery_mode === 'batch';
+      if (isBatchSchedule) {
+        let nextRunAtMs = schedule?.next_run_at ? Date.parse(String(schedule.next_run_at)) : Number.NaN;
+
+        // Never dispatch batched schedules without a valid due cursor.
+        if (!Number.isFinite(nextRunAtMs)) {
+          const batchTimes = parseBatchTimes(schedule?.batch_times);
+          const computedNextRunAt = computeNextBatchRunAt(batchTimes, schedule?.timezone || 'UTC');
+          if (computedNextRunAt) {
+            nextRunAtMs = Date.parse(computedNextRunAt);
+            await supabase.from('schedules').update({ next_run_at: computedNextRunAt }).eq('id', scheduleId);
+            schedule.next_run_at = computedNextRunAt;
+          }
+        }
+
+        const isBatchWindowDue = Number.isFinite(nextRunAtMs) && nextRunAtMs <= Date.now();
+        if (!isBatchWindowDue) {
+          skippedBatch += 1;
+          continue;
+        }
+      }
+
+      const lockResult = await withScheduleLock(
+        supabase,
+        scheduleId,
+        async () => sendQueuedForSchedule(scheduleId, whatsappClient),
+        { timeoutMs: 300000, skipIfLocked: true }
+      );
+      if (lockResult.skipped || !lockResult.result) {
+        continue;
+      }
+
+      const result = lockResult.result;
       if (result?.sent) {
         totalSent += result.sent;
       }
       if (result?.queued) {
         totalQueued += result.queued;
       }
+    }
+
+    // Handle stale pending schedules that no longer exist in schedules table.
+    for (const scheduleId of scheduleIds) {
+      if (scheduleById.has(scheduleId)) {
+        continue;
+      }
+      logger.warn({ scheduleId }, 'Skipping pending logs for missing schedule');
     }
 
     logger.info(

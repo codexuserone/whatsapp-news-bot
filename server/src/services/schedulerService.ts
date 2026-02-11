@@ -2,7 +2,7 @@ import type { ScheduledTask } from 'node-cron';
 const cron = require('node-cron');
 const { getSupabaseClient } = require('../db/supabase');
 const { fetchAndProcessFeed } = require('./feedProcessor');
-const { sendQueuedForSchedule, reconcileUpdatedFeedItems } = require('./queueService');
+const { sendQueuedForSchedule, reconcileUpdatedFeedItems, sendPendingForAllSchedules } = require('./queueService');
 const { computeNextRunAt } = require('../utils/cron');
 const { withScheduleLock, cleanupStaleLocks } = require('./scheduleLockService');
 const { isScheduleRunning } = require('./scheduleState');
@@ -39,6 +39,7 @@ type RunScheduleOptions = {
 
 const feedIntervals = new Map<string, NodeJS.Timeout>();
 const scheduleJobs = new Map<string, ScheduledTask>();
+let pendingSendCatchupTimer: NodeJS.Timeout | null = null;
 const feedInFlight = new Map<string, boolean>();
 const scheduleInFlight = new Map<string, boolean>();
 
@@ -106,6 +107,10 @@ const clearAll = () => {
   feedIntervals.clear();
   scheduleJobs.forEach((job) => job.stop());
   scheduleJobs.clear();
+  if (pendingSendCatchupTimer) {
+    clearInterval(pendingSendCatchupTimer);
+    pendingSendCatchupTimer = null;
+  }
   feedInFlight.clear();
   scheduleInFlight.clear();
 };
@@ -467,6 +472,25 @@ const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
   }
 };
 
+const startPendingSendCatchup = (whatsappClient?: WhatsAppClient) => {
+  if (pendingSendCatchupTimer) {
+    clearInterval(pendingSendCatchupTimer);
+    pendingSendCatchupTimer = null;
+  }
+
+  const intervalMs = Math.max(Number(process.env.PENDING_SEND_CATCHUP_MS || 60000), 15000);
+  pendingSendCatchupTimer = setInterval(async () => {
+    try {
+      if (await isAppPaused()) return;
+      if (!canRunSchedulers(whatsappClient)) return;
+      if (whatsappClient?.getStatus?.().status !== 'connected') return;
+      await sendPendingForAllSchedules(whatsappClient);
+    } catch (error) {
+      logger.error({ error }, 'Failed pending-send catch-up pass');
+    }
+  }, intervalMs);
+};
+
 const initSchedulers = async (whatsappClient?: WhatsAppClient) => {
   clearAll();
   if (schedulersDisabled()) {
@@ -494,6 +518,7 @@ const initSchedulers = async (whatsappClient?: WhatsAppClient) => {
 
   await scheduleFeedPolling(whatsappClient);
   await scheduleSenders(whatsappClient);
+  startPendingSendCatchup(whatsappClient);
 };
 
 module.exports = {

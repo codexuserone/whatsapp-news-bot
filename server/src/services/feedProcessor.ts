@@ -118,6 +118,10 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
     const retentionDays = Number(settings.log_retention_days ?? settings.retentionDays ?? 14);
     const bootstrapLimitRaw = Number(settings.initial_fetch_limit);
     const bootstrapLimit = Number.isFinite(bootstrapLimitRaw) ? Math.max(1, Math.floor(bootstrapLimitRaw)) : 1;
+    const processWindowRaw = Number(
+      settings.feed_process_window_limit ?? process.env.FEED_PROCESS_WINDOW_LIMIT ?? 500
+    );
+    const processWindowLimit = Number.isFinite(processWindowRaw) ? Math.max(0, Math.floor(processWindowRaw)) : 500;
     const since = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
     const { items, meta } = await fetchFeedItemsWithMeta(normalizedFeed);
 
@@ -132,10 +136,15 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
     const sourceItems = isFirstFetch
       ? [...byMostRecent.slice(0, bootstrapLimit)].reverse()
       : (() => {
-        // Process the top feed window on every poll.
-        // This catches both newly published entries and edits to already-seen entries.
-        const checkLimit = 50;
-        const candidates = byMostRecent.slice(0, checkLimit);
+        // Process a large rolling window each poll to avoid silently skipping bursts.
+        // 0 means "process full parsed feed result".
+        const candidates =
+          processWindowLimit > 0 ? byMostRecent.slice(0, processWindowLimit) : byMostRecent;
+        if (processWindowLimit > 0 && byMostRecent.length > processWindowLimit) {
+          console.info(
+            `Feed window for ${feed.url}: processing ${candidates.length}/${byMostRecent.length} items (limit=${processWindowLimit})`
+          );
+        }
         return candidates.reverse();
       })();
 

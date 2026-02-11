@@ -52,9 +52,14 @@ const isDuplicateFeedItem = async ({ title, url, threshold, since, feedId }: Fee
 
     if (exact) return true;
 
-    // Check for fuzzy title matches
+    // Avoid false positives: if incoming item has a URL and no exact URL/hash match,
+    // do not drop it purely because a previous title is similar.
+    if (normalizedUrlValue) return false;
+
+    // Fuzzy fallback is only for URL-less entries.
     return items.some((item) => {
       if (!item.title) return false;
+      if (item.normalized_url) return false;
       return fuzzy(normalizedTitle, normalizeText(item.title)) >= thresholdValue;
     });
   } catch (error) {

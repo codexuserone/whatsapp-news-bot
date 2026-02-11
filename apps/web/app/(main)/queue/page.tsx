@@ -54,12 +54,34 @@ const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | nu
   }
 };
 
+const WHATSAPP_SENT_EDIT_WINDOW_MINUTES = 15;
+
 const isSafeImageSrc = (value: unknown) => {
   const src = String(value || '').trim();
   if (!src) return false;
   if (src.startsWith('data:image/')) return true;
   if (src.startsWith('/')) return true;
   return src.startsWith('http://') || src.startsWith('https://');
+};
+
+const deriveDefaultMessage = (item: QueueItem) => {
+  const title = String(item.title || '').trim();
+  const url = String(item.url || '').trim();
+  const chunks = [title, url].filter(Boolean);
+  return chunks.join('\n\n');
+};
+
+const canEditSentInPlace = (item: QueueItem) => {
+  if (item.status !== 'sent') return false;
+  if (item.target_type === 'status' || item.target_type === 'channel') return false;
+  if (!String(item.whatsapp_message_id || '').trim()) return false;
+  const sentAt = String(item.sent_at || '').trim();
+  if (!sentAt) return false;
+  const sentMs = Date.parse(sentAt);
+  if (!Number.isFinite(sentMs)) return false;
+  const ageMs = Date.now() - sentMs;
+  if (ageMs < 0) return false;
+  return ageMs <= WHATSAPP_SENT_EDIT_WINDOW_MINUTES * 60 * 1000;
 };
 
 const QueuePage = () => {
@@ -228,7 +250,19 @@ const QueuePage = () => {
 
   const beginEdit = (item: QueueItem) => {
     setEditingId(item.id);
-    setDraftMessage(item.rendered_content || '');
+    setDraftMessage(item.rendered_content || deriveDefaultMessage(item));
+  };
+
+  const requestEdit = (item: QueueItem) => {
+    if (!canEdit(item)) {
+      const blockedStatus = String(item.status || 'unknown');
+      setActionNotice({
+        type: 'error',
+        message: `Editing is available before send and for recently sent messages inside WhatsApp's 15-minute edit window. Current status: ${blockedStatus}.`
+      });
+      return;
+    }
+    beginEdit(item);
   };
 
   const cancelEdit = () => {
@@ -254,8 +288,11 @@ const QueuePage = () => {
 
   const isPaused = (item: QueueItem) => isItemPaused(item) || isPostPaused(item);
 
-  // Keep edit behavior aligned with API: everything except sent/processing can be edited.
-  const canEdit = (item: QueueItem) => item.status !== 'sent' && item.status !== 'processing';
+  const canEdit = (item: QueueItem) => {
+    if (item.status === 'processing') return false;
+    if (item.status === 'sent') return canEditSentInPlace(item);
+    return true;
+  };
 
   const canPause = (item: QueueItem) => item.status === 'pending' || item.status === 'failed';
 
@@ -589,10 +626,10 @@ const QueuePage = () => {
                           </Button>
                         </div>
                       </div>
-                    ) : item.rendered_content ? (
+                    ) : (item.rendered_content || deriveDefaultMessage(item)) ? (
                       <div className="rounded-md bg-muted p-3">
                         <p className="mb-1 text-xs text-muted-foreground">Message</p>
-                        <p className="line-clamp-3 whitespace-pre-wrap text-sm">{item.rendered_content}</p>
+                        <p className="line-clamp-3 whitespace-pre-wrap text-sm">{item.rendered_content || deriveDefaultMessage(item)}</p>
                       </div>
                     ) : null}
 
@@ -600,9 +637,8 @@ const QueuePage = () => {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => beginEdit(item)}
-                        disabled={!canEdit(item)}
-                        title={canEdit(item) ? 'Edit message text before send' : 'Can only edit queued/failed/skipped items before send'}
+                        onClick={() => requestEdit(item)}
+                        title={canEdit(item) ? 'Edit message text (queued or recent sent in-place)' : 'Can edit queued items or recently sent items still inside WhatsApp edit window'}
                       >
                         <Pencil className="mr-1 h-3 w-3" /> Edit
                       </Button>
@@ -619,7 +655,7 @@ const QueuePage = () => {
                           ) : (
                             <PauseCircle className="mr-1 h-3 w-3" />
                           )}
-                          {canResume(item) ? 'Resume destination' : 'Pause destination'}
+                          {canResume(item) ? 'Resume this target' : 'Pause this target'}
                         </Button>
                       ) : null}
 
@@ -635,7 +671,7 @@ const QueuePage = () => {
                           ) : (
                             <PauseCircle className="mr-1 h-3 w-3" />
                           )}
-                          {canResumePost(item) ? 'Resume story' : 'Pause story'}
+                          {canResumePost(item) ? 'Resume story (all targets)' : 'Pause story (all targets)'}
                         </Button>
                       ) : null}
 
@@ -646,7 +682,7 @@ const QueuePage = () => {
                     </div>
                     {(canToggleItemPause(item) || canTogglePostPause(item)) ? (
                       <p className="text-[11px] text-muted-foreground">
-                        Destination pause affects only this target. Story pause affects all targets for this story.
+                        Target pause changes one destination only. Story pause changes every destination for this story.
                       </p>
                     ) : null}
 
@@ -716,7 +752,7 @@ const QueuePage = () => {
                       </Button>
                     </div>
                     <p className="text-xs text-muted-foreground line-clamp-3 flex-1">
-                      {item.rendered_content || 'No content'}
+                      {item.rendered_content || deriveDefaultMessage(item) || 'No content'}
                     </p>
                     <p className="text-[11px] text-muted-foreground">{deliveryPath.label}</p>
                     {item.pub_date ? <p className="text-[11px] text-muted-foreground">Published: {formatDate(item.pub_date)}</p> : null}
@@ -746,9 +782,8 @@ const QueuePage = () => {
                           size="sm"
                           variant="outline"
                           className="h-7 text-xs px-2"
-                          onClick={() => beginEdit(item)}
-                          disabled={!canEdit(item)}
-                          title={canEdit(item) ? 'Edit message text before send' : 'Can only edit queued/failed/skipped items before send'}
+                          onClick={() => requestEdit(item)}
+                          title={canEdit(item) ? 'Edit message text (queued or recent sent in-place)' : 'Can edit queued items or recently sent items still inside WhatsApp edit window'}
                         >
                           <Pencil className="mr-1 h-3 w-3" /> Edit
                         </Button>
@@ -762,7 +797,7 @@ const QueuePage = () => {
                           disabled={pauseItem.isPending || resumeItem.isPending}
                         >
                           {canResume(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
-                          {canResume(item) ? 'Resume destination' : 'Pause destination'}
+                          {canResume(item) ? 'Resume target' : 'Pause target'}
                         </Button>
                       )}
                       {canTogglePostPause(item) && (
@@ -775,7 +810,7 @@ const QueuePage = () => {
                           title={canResumePost(item) ? 'Resume this story for all targets' : 'Pause this story for all targets'}
                         >
                           {canResumePost(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
-                          {canResumePost(item) ? 'Resume story' : 'Pause story'}
+                          {canResumePost(item) ? 'Resume story (all)' : 'Pause story (all)'}
                         </Button>
                       )}
                       <Button size="sm" variant="outline" className="h-7 text-xs px-2 ml-auto" onClick={() => sendNowItem.mutate(item.id)} disabled={!canSendNow(item)}>

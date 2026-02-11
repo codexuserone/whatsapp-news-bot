@@ -7,6 +7,29 @@ const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const { normalizeMessageText } = require('../utils/messageText');
 
+const WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES = 15;
+
+const normalizeTargetJid = (target: { phone_number?: string | null; type?: string | null }) => {
+  const raw = String(target?.phone_number || '').trim();
+  const type = String(target?.type || '').trim().toLowerCase();
+  if (!raw) return '';
+  if (raw.includes('@')) return raw;
+  if (type === 'status') return 'status@broadcast';
+  if (type === 'channel') return `${raw}@newsletter`;
+  if (type === 'group') return raw.endsWith('@g.us') ? raw : `${raw}@g.us`;
+  return `${raw.replace(/[^\d]/g, '')}@s.whatsapp.net`;
+};
+
+const canEditSentInPlace = (sentAt: unknown) => {
+  const sentIso = String(sentAt || '').trim();
+  if (!sentIso) return false;
+  const sentMs = Date.parse(sentIso);
+  if (!Number.isFinite(sentMs)) return false;
+  const ageMs = Date.now() - sentMs;
+  if (ageMs < 0) return false;
+  return ageMs <= WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES * 60 * 1000;
+};
+
 const queueRoutes = () => {
   const router = express.Router();
 
@@ -275,7 +298,7 @@ const queueRoutes = () => {
       const supabase = getDb();
       const { data: current, error: currentError } = await supabase
         .from('message_logs')
-        .select('id,status')
+        .select('id,status,target_id,whatsapp_message_id,sent_at')
         .eq('id', req.params.id)
         .single();
 
@@ -284,19 +307,24 @@ const queueRoutes = () => {
       }
 
       const currentStatus = String((current as { status?: string }).status || '');
-      if (currentStatus === 'sent' || currentStatus === 'processing') {
+      if (currentStatus === 'processing') {
         return res.status(400).json({ error: `Cannot edit queue item with status "${currentStatus}"` });
       }
 
       const body = req.body as { message_content?: unknown; status?: unknown };
       const patch: Record<string, unknown> = {};
+      let normalizedMessageContent: string | null = null;
 
       if (Object.prototype.hasOwnProperty.call(body, 'message_content')) {
         const normalized = normalizeMessageText(String(body.message_content || ''));
-        patch.message_content = normalized || null;
+        normalizedMessageContent = normalized || null;
+        patch.message_content = normalizedMessageContent;
       }
 
       if (Object.prototype.hasOwnProperty.call(body, 'status')) {
+        if (currentStatus === 'sent') {
+          return res.status(400).json({ error: 'Cannot change status for a sent message' });
+        }
         const status = String(body.status || '').toLowerCase();
         if (status !== 'pending' && status !== 'skipped') {
           return res.status(400).json({ error: 'status must be pending or skipped' });
@@ -310,6 +338,66 @@ const queueRoutes = () => {
 
       if (!Object.keys(patch).length) {
         return res.status(400).json({ error: 'No supported fields provided' });
+      }
+
+      if (currentStatus === 'sent') {
+        if (!Object.prototype.hasOwnProperty.call(body, 'message_content')) {
+          return res.status(400).json({ error: 'Only message_content can be updated for sent messages' });
+        }
+        if (!normalizedMessageContent) {
+          return res.status(400).json({ error: 'message_content cannot be empty for sent message edits' });
+        }
+        if (!canEditSentInPlace((current as { sent_at?: string | null }).sent_at)) {
+          return res.status(400).json({
+            error: `Sent messages can only be edited in-place within ${WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES} minutes`
+          });
+        }
+
+        const whatsappMessageId = String((current as { whatsapp_message_id?: string | null }).whatsapp_message_id || '').trim();
+        if (!whatsappMessageId) {
+          return res.status(400).json({ error: 'Cannot edit sent message without WhatsApp message id' });
+        }
+
+        const targetId = String((current as { target_id?: string | null }).target_id || '').trim();
+        if (!targetId) {
+          return res.status(400).json({ error: 'Cannot edit sent message without target id' });
+        }
+
+        const { data: targetRow, error: targetError } = await supabase
+          .from('targets')
+          .select('id,phone_number,type')
+          .eq('id', targetId)
+          .single();
+        if (targetError || !targetRow) {
+          return res.status(400).json({ error: 'Could not resolve target for sent message edit' });
+        }
+
+        const targetType = String((targetRow as { type?: string | null }).type || '').toLowerCase();
+        if (targetType === 'status' || targetType === 'channel') {
+          return res.status(400).json({ error: 'In-place edit is only supported for direct/group messages' });
+        }
+
+        const jid = normalizeTargetJid(targetRow as { phone_number?: string | null; type?: string | null });
+        if (!jid) {
+          return res.status(400).json({ error: 'Could not build WhatsApp JID for sent message edit' });
+        }
+
+        const whatsapp = req.app.locals.whatsapp as
+          | {
+              getStatus?: () => { status?: string | null };
+              editMessage?: (jid: string, messageId: string, text: string) => Promise<unknown>;
+            }
+          | undefined;
+        const waStatus = String(whatsapp?.getStatus?.().status || '').toLowerCase();
+        if (!whatsapp || typeof whatsapp.editMessage !== 'function' || waStatus !== 'connected') {
+          return res.status(400).json({ error: 'WhatsApp is not connected; cannot perform in-place edit' });
+        }
+
+        try {
+          await whatsapp.editMessage(jid, whatsappMessageId, normalizedMessageContent);
+        } catch (waError) {
+          return res.status(400).json({ error: getErrorMessage(waError) || 'Failed to edit WhatsApp message in-place' });
+        }
       }
 
       const { data: updated, error: updateError } = await supabase

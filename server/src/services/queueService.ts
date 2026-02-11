@@ -1836,10 +1836,8 @@ const sendQueuedForSchedule = async (
       queueCursorAt = latestResult.cursorAt || null;
     }
 
-    if (deliveryMode !== 'batched') {
-      const lookbackHours = Math.max(Number(settings.reconcile_queue_lookback_hours || 12), 1);
-      queuedCount += await queueRecentMissingForSchedule(supabase, schedule, targets, lookbackHours);
-    }
+    const lookbackHours = Math.max(Number(settings.reconcile_queue_lookback_hours || 12), 1);
+    queuedCount += await queueRecentMissingForSchedule(supabase, schedule, targets, lookbackHours);
 
     // Persist the queue cursor even if we skip sending (e.g. WhatsApp disconnected or Shabbos).
     // This avoids re-scanning the same feed items on every retry.

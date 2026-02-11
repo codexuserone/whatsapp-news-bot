@@ -7,6 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate": "tsx src/scripts/migrate.ts",
+    "audit:scheduling": "tsx src/scripts/audit_schedule_integrity.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {

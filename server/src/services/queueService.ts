@@ -1239,6 +1239,7 @@ type Schedule = {
 
 type SendQueuedOptions = {
   skipFeedRefresh?: boolean;
+  allowOverdueBatchDispatch?: boolean;
 };
 
 const parseBatchTimes = (value: unknown): string[] => {
@@ -1863,17 +1864,43 @@ const sendQueuedForSchedule = async (
 
     if (deliveryMode === 'batched') {
       const batchTimes = parseBatchTimes(schedule.batch_times);
-      const withinWindow = isWithinBatchWindow(batchTimes, schedule.timezone || 'UTC');
-      if (!withinWindow) {
+      const timezone = schedule.timezone || 'UTC';
+      const withinWindow = isWithinBatchWindow(batchTimes, timezone);
+      const allowOverdueBatchDispatch = options?.allowOverdueBatchDispatch === true;
+
+      let nextRunAtIso = String(schedule.next_run_at || '').trim();
+      let nextRunAtMs = Date.parse(nextRunAtIso);
+      if (!Number.isFinite(nextRunAtMs)) {
+        const computedNextRunAt = computeNextBatchRunAt(batchTimes, timezone);
+        if (computedNextRunAt) {
+          nextRunAtIso = computedNextRunAt;
+          nextRunAtMs = Date.parse(computedNextRunAt);
+        }
+      }
+
+      const isOverdueDispatch = allowOverdueBatchDispatch && Number.isFinite(nextRunAtMs) && nextRunAtMs <= Date.now();
+      if (!withinWindow && !isOverdueDispatch) {
+        const resumeAtIso = Number.isFinite(nextRunAtMs) ? new Date(nextRunAtMs).toISOString() : null;
+        const reason = resumeAtIso
+          ? `Waiting for the next batch send window (${timezone}).`
+          : `Waiting for the next batch send window (${timezone}); no next run is scheduled yet.`;
         logger.info(
-          { scheduleId, timezone: schedule.timezone || 'UTC', batchTimes, queuedCount },
+          {
+            scheduleId,
+            timezone,
+            batchTimes,
+            queuedCount,
+            allowOverdueBatchDispatch,
+            nextRunAt: resumeAtIso
+          },
           'Skipping batched send outside dispatch window'
         );
         return {
           sent: 0,
           queued: queuedCount,
           skipped: true,
-          reason: 'Waiting for the next batch send window.'
+          reason,
+          resumeAt: resumeAtIso
         };
       }
     }
@@ -2650,7 +2677,10 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
       const lockResult = await withScheduleLock(
         supabase,
         scheduleId,
-        async () => sendQueuedForSchedule(scheduleId, whatsappClient),
+        async () =>
+          sendQueuedForSchedule(scheduleId, whatsappClient, {
+            allowOverdueBatchDispatch: true
+          }),
         { timeoutMs: 300000, skipIfLocked: true }
       );
       if (lockResult.skipped || !lockResult.result) {

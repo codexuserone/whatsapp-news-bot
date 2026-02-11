@@ -15,7 +15,13 @@ const normalizeScheduleState = (value: unknown): ScheduleState | null => {
 
 const resolveScheduleState = (schedule: ScheduleLike | null | undefined): ScheduleState => {
   const normalized = normalizeScheduleState(schedule?.state);
-  if (normalized) return normalized;
+  if (normalized) {
+    // Legacy rows can drift (state=active, active=false). Never treat those as running.
+    if (normalized === 'active' && schedule?.active === false) {
+      return 'paused';
+    }
+    return normalized;
+  }
   return schedule?.active === true ? 'active' : 'stopped';
 };
 

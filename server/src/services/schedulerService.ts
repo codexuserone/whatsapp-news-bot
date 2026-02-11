@@ -147,7 +147,8 @@ const runScheduleOnce = async (
       async () => {
         logger.info({ scheduleId }, 'Acquired distributed lock, running schedule');
         return await sendQueuedForSchedule(scheduleId, whatsappClient, {
-          skipFeedRefresh: Boolean(options?.skipFeedRefresh)
+          skipFeedRefresh: Boolean(options?.skipFeedRefresh),
+          allowOverdueBatchDispatch: true
         });
       },
       { timeoutMs: 300000, skipIfLocked: true } // 5 minute lock timeout

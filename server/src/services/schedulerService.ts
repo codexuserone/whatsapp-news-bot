@@ -234,6 +234,14 @@ const toDailyCronExpression = (time: string) => {
   return `${minute} ${hour} * * *`;
 };
 
+const toMinuteOfDay = (time: string): number | null => {
+  const [hourRaw, minuteRaw] = String(time).split(':');
+  const hour = Number(hourRaw);
+  const minute = Number(minuteRaw);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  return hour * 60 + minute;
+};
+
 const computeNextBatchRunAt = (times: string[], timezone?: string | null) => {
   let nextValue: string | null = null;
   for (const time of times) {
@@ -471,19 +479,32 @@ const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
           logger.warn({ scheduleId: schedule.id }, 'Batch schedule has no valid batch_times');
           continue;
         }
-
+        const batchMinuteSet = new Set<number>();
         for (const time of batchTimes) {
-          try {
-            const expression = toDailyCronExpression(time);
-            const job = cron.schedule(
-              expression,
-              () => runScheduleOnce(schedule.id, whatsappClient),
-              { timezone }
-            );
-            scheduleJobs.set(`${schedule.id}:batch:${time}`, job);
-          } catch (cronError) {
-            logger.error({ error: cronError, scheduleId: schedule.id, time }, 'Invalid batch dispatch time');
-          }
+          const minute = toMinuteOfDay(time);
+          if (minute == null) continue;
+          batchMinuteSet.add(minute);
+        }
+        if (!batchMinuteSet.size) {
+          logger.warn({ scheduleId: schedule.id, batchTimes }, 'Batch schedule has no parsable minute marks');
+          continue;
+        }
+
+        try {
+          // Run every minute and evaluate the batch window using Intl timezone conversion.
+          // This avoids node-cron timezone drift/compatibility issues in container runtimes.
+          const job = cron.schedule(
+            '* * * * *',
+            () => {
+              const minuteOfDay = getLocalMinuteOfDay(timezone);
+              if (!Number.isFinite(minuteOfDay) || !batchMinuteSet.has(minuteOfDay)) return;
+              void runScheduleOnce(schedule.id, whatsappClient);
+            },
+            { timezone: 'UTC' }
+          );
+          scheduleJobs.set(`${schedule.id}:batch:tick`, job);
+        } catch (cronError) {
+          logger.error({ error: cronError, scheduleId: schedule.id }, 'Invalid batch dispatch schedule');
         }
 
         const persistedNextRunAt = String(schedule.next_run_at || '').trim();

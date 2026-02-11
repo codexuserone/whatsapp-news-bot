@@ -30,6 +30,25 @@ const applyTemplate = (templateBody: string, data: Record<string, unknown>): str
   });
 };
 
+const toLocalDateTime = (value: string | Date, timezone: string) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone || 'UTC',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).format(date);
+  } catch {
+    return null;
+  }
+};
+
 const buildMessageData = (feedItem: FeedItem) => ({
   id: feedItem?.id,
   guid: (feedItem as unknown as { guid?: string }).guid,
@@ -107,8 +126,23 @@ const getScheduleDiagnostics = async (scheduleId: string, whatsappClient?: Whats
       batch_times: Array.isArray(schedule.batch_times) ? schedule.batch_times : [],
       cron_expression: schedule.cron_expression || null,
       timezone: schedule.timezone || 'UTC',
-      last_run_at: schedule.last_run_at || null
+      last_run_at: schedule.last_run_at || null,
+      last_queued_at: schedule.last_queued_at || null,
+      next_run_at: schedule.next_run_at || null
     };
+
+    if ((schedule.delivery_mode === 'batch' || schedule.delivery_mode === 'batched')) {
+      const timezone = String(schedule.timezone || 'UTC');
+      const nextRunAtIso = String(schedule.next_run_at || '').trim();
+      diagnostics.dispatchWindow = {
+        timezone,
+        batch_times: Array.isArray(schedule.batch_times) ? schedule.batch_times : [],
+        now_utc: new Date().toISOString(),
+        now_local: toLocalDateTime(new Date(), timezone),
+        next_run_at_utc: nextRunAtIso || null,
+        next_run_at_local: nextRunAtIso ? toLocalDateTime(nextRunAtIso, timezone) : null
+      };
+    }
 
     if (!isScheduleRunning(schedule)) {
       diagnostics.blockingReasons.push('Automation is paused/stopped');
@@ -198,6 +232,18 @@ const getScheduleDiagnostics = async (scheduleId: string, whatsappClient?: Whats
 
     if (logsSummary.queued === 0 && logsSummary.sent === 0 && logsSummary.failed === 0 && logsSummary.skipped === 0) {
       diagnostics.warnings.push('No queue rows yet for this automation (normal before first matching feed item)');
+    }
+
+    if ((schedule.delivery_mode === 'batch' || schedule.delivery_mode === 'batched') && logsSummary.queued > 0) {
+      const nextRunAtIso = String(schedule.next_run_at || '').trim();
+      const nextRunAtMs = Date.parse(nextRunAtIso);
+      if (Number.isFinite(nextRunAtMs)) {
+        const waitMs = nextRunAtMs - Date.now();
+        if (waitMs > 0) {
+          const waitMin = Math.max(Math.ceil(waitMs / 60000), 1);
+          diagnostics.warnings.push(`Queued items are waiting for the next batch window in ~${waitMin} min.`);
+        }
+      }
     }
 
     if (schedule.feed_id) {

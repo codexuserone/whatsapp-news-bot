@@ -1252,6 +1252,41 @@ const parseBatchTimes = (value: unknown): string[] => {
   return Array.from(seen).sort();
 };
 
+const getLocalMinuteOfDay = (timezone?: string | null, date = new Date()) => {
+  const tz = String(timezone || 'UTC').trim() || 'UTC';
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  const parts = formatter.formatToParts(date);
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value || '0');
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value || '0');
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return Number.NaN;
+  return hour * 60 + minute;
+};
+
+const isWithinBatchWindow = (
+  times: string[],
+  timezone?: string | null,
+  graceMinutes = Math.max(Number(process.env.BATCH_WINDOW_GRACE_MINUTES || 8), 1)
+) => {
+  if (!times.length) return false;
+  const nowMinute = getLocalMinuteOfDay(timezone);
+  if (!Number.isFinite(nowMinute)) return false;
+  const grace = Math.min(Math.max(graceMinutes, 1), 30);
+
+  return times.some((time) => {
+    const [hourRaw, minuteRaw] = String(time).split(':');
+    const hour = Number(hourRaw);
+    const minute = Number(minuteRaw);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return false;
+    const targetMinute = hour * 60 + minute;
+    return Math.abs(nowMinute - targetMinute) <= grace;
+  });
+};
+
 const toDailyCronExpression = (time: string) => {
   const [hour, minute] = time.split(':').map((part) => Number(part));
   return `${minute} ${hour} * * *`;
@@ -1825,6 +1860,23 @@ const sendQueuedForSchedule = async (
         } else {
           logger.warn({ scheduleId, error: queueCursorError }, 'Failed to update schedule queue cursor');
         }
+      }
+    }
+
+    if (deliveryMode === 'batched') {
+      const batchTimes = parseBatchTimes(schedule.batch_times);
+      const withinWindow = isWithinBatchWindow(batchTimes, schedule.timezone || 'UTC');
+      if (!withinWindow) {
+        logger.info(
+          { scheduleId, timezone: schedule.timezone || 'UTC', batchTimes, queuedCount },
+          'Skipping batched send outside dispatch window'
+        );
+        return {
+          sent: 0,
+          queued: queuedCount,
+          skipped: true,
+          reason: 'Waiting for the next batch send window.'
+        };
       }
     }
 

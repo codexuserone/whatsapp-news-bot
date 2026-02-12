@@ -76,6 +76,63 @@ const MANUAL_POST_PAUSE_ERROR = 'Paused for this post';
 const FEED_PAUSED_ERROR = 'Feed paused';
 const NON_REVIVABLE_SKIP_ERRORS = new Set([MANUAL_POST_PAUSE_ERROR, FEED_PAUSED_ERROR]);
 
+const isDuplicateDispatchConflict = (error: unknown) => {
+  const code = String((error as { code?: unknown })?.code || '').trim();
+  const message = String((error as { message?: unknown })?.message || '').toLowerCase();
+  const details = String((error as { details?: unknown })?.details || '').toLowerCase();
+  if (code !== '23505') return false;
+  if (message.includes('idx_message_logs_unique_dispatch')) return true;
+  if (message.includes('duplicate key value')) return true;
+  if (details.includes('schedule_id,feed_item_id,target_id')) return true;
+  if (details.includes('schedule_id, feed_item_id, target_id')) return true;
+  return false;
+};
+
+const upsertPendingDispatchRows = async (
+  supabase: SupabaseClient,
+  rows: Array<Record<string, unknown>>,
+  scheduleId: string,
+  context: string
+) => {
+  if (!rows.length) return 0;
+
+  const { data: insertedRows, error: upsertError } = await supabase
+    .from('message_logs')
+    .upsert(rows, { onConflict: 'schedule_id,feed_item_id,target_id', ignoreDuplicates: true })
+    .select('id');
+
+  if (!upsertError) {
+    return insertedRows?.length || 0;
+  }
+
+  if (!isDuplicateDispatchConflict(upsertError)) {
+    logger.warn({ scheduleId, error: upsertError }, context);
+    return 0;
+  }
+
+  // Fallback path for legacy/partial unique index definitions that bypass onConflict matching.
+  let inserted = 0;
+  for (const row of rows) {
+    const { data: rowInserted, error: rowError } = await supabase
+      .from('message_logs')
+      .insert(row)
+      .select('id');
+
+    if (!rowError) {
+      inserted += rowInserted?.length || 0;
+      continue;
+    }
+
+    if (isDuplicateDispatchConflict(rowError)) {
+      continue;
+    }
+
+    logger.warn({ scheduleId, error: rowError }, `${context} (row fallback)`);
+  }
+
+  return inserted;
+};
+
 let globalLastTargetId: string | null = null;
 let globalLastSentAtMs = 0;
 const globalLastSentByTargetId = new Map<string, number>();
@@ -1389,14 +1446,12 @@ const queueSinceLastRunForSchedule = async (
     
     if (!filtered.length) return 0;
     
-    const { data: insertedRows, error: upsertError } = await supabase
-      .from('message_logs')
-      .upsert(filtered, { onConflict: 'schedule_id,feed_item_id,target_id', ignoreDuplicates: true })
-      .select('id');
-    if (upsertError) {
-      logger.warn({ scheduleId: schedule.id, error: upsertError }, 'Failed to queue items since last run');
-      return 0;
-    }
+    const inserted = await upsertPendingDispatchRows(
+      supabase,
+      filtered,
+      schedule.id,
+      'Failed to queue items since last run'
+    );
     
     // Add newly inserted to our tracking set
     for (const item of filtered) {
@@ -1404,7 +1459,7 @@ const queueSinceLastRunForSchedule = async (
       existingCombos.add(key);
     }
     
-    return insertedRows?.length || 0;
+    return inserted;
   };
 
   while (true) {
@@ -1517,17 +1572,12 @@ const queueRecentMissingForSchedule = async (
 
   if (!pendingRows.length) return 0;
 
-  const { data: insertedRows, error: insertError } = await supabase
-    .from('message_logs')
-    .upsert(pendingRows, { onConflict: 'schedule_id,feed_item_id,target_id', ignoreDuplicates: true })
-    .select('id');
-
-  if (insertError) {
-    logger.warn({ scheduleId: schedule.id, error: insertError }, 'Failed reconciling recent queue items');
-    return 0;
-  }
-
-  const inserted = insertedRows?.length || 0;
+  const inserted = await upsertPendingDispatchRows(
+    supabase,
+    pendingRows,
+    schedule.id,
+    'Failed reconciling recent queue items'
+  );
   if (inserted > 0) {
     logger.info({ scheduleId: schedule.id, inserted, lookbackHours: lookback }, 'Reconciled missing recent queue items');
   }
@@ -1666,15 +1716,12 @@ const queueLatestForSchedule = async (
 
   let inserted = 0;
   if (toInsert.length) {
-    const { data: insertedRows, error: insertError } = await supabase
-      .from('message_logs')
-      .upsert(toInsert, { onConflict: 'schedule_id,feed_item_id,target_id', ignoreDuplicates: true })
-      .select('id');
-    if (insertError) {
-      logger.warn({ scheduleId: schedule.id, error: insertError }, 'Failed to queue latest feed item');
-    } else {
-      inserted = insertedRows?.length || 0;
-    }
+    inserted = await upsertPendingDispatchRows(
+      supabase,
+      toInsert,
+      schedule.id,
+      'Failed to queue latest feed item'
+    );
   }
 
   return {

@@ -379,6 +379,19 @@ const SchedulesPage = () => {
         }
       } else if (data?.skipped && data?.reason) {
         message = `Skipped: ${data.reason}`;
+        try {
+          const diagnostics = await api.get<DispatchDiagnostics>(`/api/schedules/${scheduleId}/diagnostics`);
+          const blocking = diagnostics.blockingReasons || [];
+          const warnings = diagnostics.warnings || [];
+          if (blocking.length) {
+            message += `\n\nBlocking reasons:\n- ${blocking.join('\n- ')}`;
+          }
+          if (warnings.length) {
+            message += `\n\nWarnings:\n- ${warnings.join('\n- ')}`;
+          }
+        } catch {
+          // Keep the primary skip message even if diagnostics request fails.
+        }
         const reconcileSummary = summarizeReconcile(data?.reconcile);
         if (reconcileSummary) {
           message += `\n\n${reconcileSummary}`;

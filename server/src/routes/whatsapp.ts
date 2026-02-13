@@ -132,9 +132,18 @@ const parseVideoDataUrl = (value: string) => {
 const normalizeChannelJid = (value: string) => {
   const raw = String(value || '').trim();
   if (!raw) return raw;
-  if (raw.toLowerCase().includes('@newsletter')) {
-    const tokenMatch = raw.match(/[a-z0-9._-]+@newsletter(?:_[a-z0-9_-]+)?/i);
-    return tokenMatch?.[0] || raw;
+  const lower = raw.toLowerCase();
+  if (lower.includes('@newsletter')) {
+    // Baileys treats newsletters as "...@newsletter". Some UIs surface decorated ids like
+    // "true_123@newsletter_ABC..."; canonicalize those to a Baileys-safe jid.
+    const match = lower.match(/([a-z0-9._-]+)@newsletter/i);
+    const userRaw = String(match?.[1] || '').trim();
+    if (!userRaw) return raw;
+
+    const strippedPrefix = userRaw.replace(/^(true|false)_/i, '');
+    const digits = strippedPrefix.replace(/[^0-9]/g, '');
+    const user = digits || strippedPrefix;
+    return user ? `${user}@newsletter` : raw;
   }
   const compact = raw.replace(/\s+/g, '');
   if (/^[a-z0-9._-]{6,}$/i.test(compact)) {
@@ -145,7 +154,7 @@ const normalizeChannelJid = (value: string) => {
 };
 
 const isValidChannelJid = (value: string) =>
-  /^[a-z0-9._-]+@newsletter(?:_[a-z0-9_-]+)?$/i.test(String(value || '').trim());
+  /^[a-z0-9._-]+@newsletter$/i.test(String(value || '').trim());
 
 const normalizeDisplayText = (value: unknown) => String(value || '').replace(/\s+/g, ' ').trim();
 
@@ -395,7 +404,7 @@ type ChannelDiscoveryResult = {
 const discoverChannelsForSession = async (
   whatsapp: any,
   supabase: ReturnType<typeof getSupabaseClient> | null,
-  options?: { persistTargets?: boolean; strictDeactivateMissing?: boolean }
+  options?: { persistTargets?: boolean; strictDeactivateMissing?: boolean; liveOnly?: boolean }
 ): Promise<ChannelDiscoveryResult> => {
   const defaultDiagnostics: ChannelDiscoveryDiagnostics = {
     methodsTried: [],
@@ -491,19 +500,6 @@ const discoverChannelsForSession = async (
     });
   }
 
-  for (const [jidKey, savedChannel] of savedChannelByJid.entries()) {
-    if (channelsByJid.has(jidKey)) continue;
-    channelsByJid.set(jidKey, {
-      id: savedChannel.jid,
-      jid: savedChannel.jid,
-      name: savedChannel.name,
-      subscribers: 0,
-      role: null,
-      canPost: false,
-      source: 'verified_target'
-    });
-  }
-
   if (supabase && options?.persistTargets !== false) {
     const shouldDeactivateMissingChannels =
       options?.strictDeactivateMissing === true || discoveredChannelCandidates.length > 0;
@@ -512,10 +508,15 @@ const discoverChannelsForSession = async (
     });
   }
 
-  const channels = Array.from(channelsByJid.values()).sort((a, b) => a.name.localeCompare(b.name));
+  const allChannels = Array.from(channelsByJid.values()).sort((a, b) => a.name.localeCompare(b.name));
+  const channels = options?.liveOnly
+    ? allChannels.filter((channel) => channel.source === 'live')
+    : allChannels;
   const diagnostics = (enriched?.diagnostics || defaultDiagnostics) as ChannelDiscoveryDiagnostics;
   if (channels.length > 0) {
     diagnostics.limitation = null;
+  } else if (options?.liveOnly && allChannels.length > 0) {
+    diagnostics.limitation = 'Only saved/verified channels were found. No live channel list is available in this session yet.';
   } else if (!diagnostics.limitation) {
     diagnostics.limitation = 'No channels discovered in this session yet. Open channels in WhatsApp, then run discovery again.';
   }
@@ -599,7 +600,9 @@ const whatsappRoutes = () => {
     const whatsapp = req.app.locals.whatsapp;
     const supabase = getSupabaseClient();
     try {
-      const result = await discoverChannelsForSession(whatsapp, supabase, { persistTargets: true });
+      // Return both live and verified saved channels so the UI does not appear empty
+      // when this Baileys session cannot provide a full live channel list.
+      const result = await discoverChannelsForSession(whatsapp, supabase, { persistTargets: true, liveOnly: false });
       res.json(result.channels);
     } catch (error) {
       console.warn('Channel discovery failed, returning empty list', error);
@@ -807,7 +810,7 @@ const whatsappRoutes = () => {
   const normalizeTestJid = (jid: string) => {
     const raw = String(jid || '').trim();
     if (!raw) return raw;
-    if (raw.toLowerCase().includes('@newsletter')) return raw;
+    if (raw.toLowerCase().includes('@newsletter')) return normalizeChannelJid(raw);
     if (raw.includes('@')) return raw;
     return `${raw.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
   };

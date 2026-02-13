@@ -102,9 +102,14 @@ const parseShabbosTimesFromHebcal = (data: { items?: Array<{ category?: string; 
     if (item.category === 'candles') {
       // Start of Shabbos or Yom Tov
       if (!item.date) continue;
-      const title = item.title || '';
       currentStart = new Date(item.date);
-      currentCategory = title.includes('Candle') ? 'shabbos' : 'yomtov';
+      const title = String(item.title || '').toLowerCase();
+      if (title.includes('shabbos') || title.includes('shabbat')) {
+        currentCategory = 'shabbos';
+      } else {
+        // Hebcal candle titles are usually generic; use Friday as Shabbos, other days as Yom Tov.
+        currentCategory = currentStart.getDay() === 5 ? 'shabbos' : 'yomtov';
+      }
     } else if (item.category === 'havdalah' && currentStart) {
       // End of Shabbos or Yom Tov
       if (!item.date) continue;

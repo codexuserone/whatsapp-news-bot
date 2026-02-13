@@ -358,7 +358,7 @@ const feedsRoutes = () => {
         reconcile = await reconcileUpdatedFeedItems(result.updatedItems, req.app.locals.whatsapp);
       }
       if (result.items.length) {
-        await queueBatchSchedulesForFeed(feed.id);
+        await queueBatchSchedulesForFeed(feed.id, req.app.locals.whatsapp);
         await triggerImmediateSchedules(feed.id, req.app.locals.whatsapp);
       }
       res.json({
@@ -408,7 +408,7 @@ const feedsRoutes = () => {
           reconcile = await reconcileUpdatedFeedItems(result.updatedItems, req.app.locals.whatsapp);
         }
         if (result.items.length) {
-          await queueBatchSchedulesForFeed(feed.id);
+          await queueBatchSchedulesForFeed(feed.id, req.app.locals.whatsapp);
           await triggerImmediateSchedules(feed.id, req.app.locals.whatsapp);
         }
 

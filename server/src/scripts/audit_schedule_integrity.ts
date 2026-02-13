@@ -54,7 +54,11 @@ const isWithinWindow = (sentAt: Date, timezone: string, batchMinutes: number[], 
   if (!batchMinutes.length) return true;
   const localMinute = toMinuteOfDay(timezone, sentAt);
   if (!Number.isFinite(localMinute)) return false;
-  return batchMinutes.some((targetMinute) => Math.abs(localMinute - targetMinute) <= graceMinutes);
+  return batchMinutes.some((targetMinute) => {
+    const directDiff = Math.abs(localMinute - targetMinute);
+    const wrappedDiff = Math.min(directDiff, 1440 - directDiff);
+    return wrappedDiff <= graceMinutes;
+  });
 };
 
 const main = async () => {
@@ -174,10 +178,6 @@ const main = async () => {
       const deliveryMode = schedule.delivery_mode === 'batch' ? 'batched' : schedule.delivery_mode || 'immediate';
       if (deliveryMode === 'batched') {
         const lookbackStartMs = Date.now() - lookbackHours * 60 * 60 * 1000;
-        const scheduleUpdatedMs = schedule.updated_at ? Date.parse(schedule.updated_at) : Number.NaN;
-        const effectiveStartMs = Number.isFinite(scheduleUpdatedMs)
-          ? Math.max(lookbackStartMs, scheduleUpdatedMs)
-          : lookbackStartMs;
         const sentRowsRes = await client.query<{ id: string; sent_at: string }>(
           `
             select id, sent_at
@@ -193,7 +193,7 @@ const main = async () => {
         const timezone = String(schedule.timezone || 'UTC');
         for (const row of sentRowsRes.rows) {
           const sentAt = new Date(row.sent_at);
-          if (!Number.isFinite(sentAt.getTime()) || sentAt.getTime() < effectiveStartMs) {
+          if (!Number.isFinite(sentAt.getTime()) || sentAt.getTime() < lookbackStartMs) {
             continue;
           }
           const ok = isWithinWindow(sentAt, timezone, batchMinutes, graceMinutes);

@@ -12,6 +12,12 @@ const RENDER_API_KEY = process.env.RENDER_API_KEY || '';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 const TEST_GROUP_ID = process.env.TEST_GROUP_ID || '120363407220244757@g.us';
 const KEEP_DEBUG_DATA = String(process.env.KEEP_DEBUG_DATA || '').toLowerCase() === 'true';
+const DEBUG_BASIC_AUTH_USER = process.env.DEBUG_BASIC_AUTH_USER || process.env.BASIC_AUTH_USER || '';
+const DEBUG_BASIC_AUTH_PASS = process.env.DEBUG_BASIC_AUTH_PASS || process.env.BASIC_AUTH_PASS || '';
+const BASIC_AUTH_HEADER =
+  DEBUG_BASIC_AUTH_USER && DEBUG_BASIC_AUTH_PASS
+    ? `Basic ${Buffer.from(`${DEBUG_BASIC_AUTH_USER}:${DEBUG_BASIC_AUTH_PASS}`).toString('base64')}`
+    : '';
 
 const now = new Date();
 const stamp = now.toISOString().replace(/[^0-9]/g, '').slice(0, 14);
@@ -63,11 +69,15 @@ const pushBlocker = (title, details) => {
 const apiRequest = async (method, route, body, expectedStatuses = [200], timeoutMs = 45000) => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const headers = {
+    'content-type': 'application/json'
+  };
+  if (BASIC_AUTH_HEADER) {
+    headers.authorization = BASIC_AUTH_HEADER;
+  }
   const response = await fetch(`${BASE_URL}${route}`, {
     method,
-    headers: {
-      'content-type': 'application/json'
-    },
+    headers,
     signal: controller.signal,
     body: body === undefined ? undefined : JSON.stringify(body)
   }).finally(() => clearTimeout(timeoutId));

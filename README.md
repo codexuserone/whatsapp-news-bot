@@ -107,6 +107,7 @@ ACCESS_ALLOWLIST=203.0.113.10
 TRUST_PROXY_HOPS=1
 HSTS_MAX_AGE_SECONDS=15552000
 SKIP_WHATSAPP_LEASE=false
+WHATSAPP_SESSION_ID=primary
 ```
 ### Environment URLs
 - Backend API: `http://localhost:10000` (with Swagger docs at `/api-docs`)
@@ -149,12 +150,14 @@ ACCESS_ALLOWLIST=203.0.113.10
 TRUST_PROXY_HOPS=1
 HSTS_MAX_AGE_SECONDS=15552000
 CORS_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
+WHATSAPP_SESSION_ID=primary
 ```
 
 When `REQUIRE_BASIC_AUTH=true`, all routes require authentication except uptime probes:
 `/health` and `/ping` (GET/HEAD only).
 Optional `ACCESS_ALLOWLIST` further restricts access by source IP.
 `ACCESS_ALLOWLIST` supports exact IPs and IPv4 CIDR entries (for example `198.51.100.0/24`).
+Set `WHATSAPP_SESSION_ID=primary` in Render and use a different value locally (`local`) to avoid session/lease conflicts.
 
 **Deploy Steps**:
 1. Push to GitHub

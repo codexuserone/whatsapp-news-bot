@@ -50,6 +50,8 @@ const isSafeImageSrc = (value: unknown) => {
   return src.startsWith('http://') || src.startsWith('https://');
 };
 
+const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : '');
+
 const WhatsAppPage = () => {
   const queryClient = useQueryClient();
   const [selectedTargets, setSelectedTargets] = React.useState<string[]>([]);
@@ -74,13 +76,13 @@ const WhatsAppPage = () => {
     enabled: status?.status !== 'connected'
   });
 
-  const { data: groupsRaw } = useQuery<unknown>({
+  const { data: groupsRaw, error: groupsError } = useQuery<unknown>({
     queryKey: ['whatsapp-groups'],
     queryFn: () => api.get('/api/whatsapp/groups'),
     enabled: status?.status === 'connected'
   });
 
-  const { data: channelsRaw } = useQuery<unknown>({
+  const { data: channelsRaw, error: channelsError } = useQuery<unknown>({
     queryKey: ['whatsapp-channels'],
     queryFn: () => api.get('/api/whatsapp/channels'),
     enabled: status?.status === 'connected'
@@ -95,6 +97,7 @@ const WhatsAppPage = () => {
     try {
       if (!Array.isArray(groupsRaw)) return [];
       return groupsRaw
+        .slice(0, 250)
         .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
         .map((entry) => {
           const jid = normalizeDisplayText(entry.jid || entry.id);
@@ -126,6 +129,7 @@ const WhatsAppPage = () => {
     try {
       if (!Array.isArray(channelsRaw)) return [];
       return channelsRaw
+        .slice(0, 250)
         .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
         .map((entry) => {
           const jid = normalizeDisplayText(entry.jid || entry.id);
@@ -588,6 +592,11 @@ const WhatsAppPage = () => {
           <CardDescription>Groups and channels loaded from your connected account.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
+          {groupsError || channelsError ? (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              Could not load all destinations right now. {String(getErrorMessage(groupsError) || getErrorMessage(channelsError)).trim()}
+            </div>
+          ) : null}
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="rounded-lg border p-3">
               <div className="flex items-center justify-between">

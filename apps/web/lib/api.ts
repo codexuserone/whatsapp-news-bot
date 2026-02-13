@@ -9,8 +9,25 @@ const getApiUrl = () => {
 
 const handleResponse = async <T>(response: Response): Promise<T> => {
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || 'Request failed');
+    const rawBody = await response.text().catch(() => '');
+    let parsedBody: Record<string, unknown> | null = null;
+    if (rawBody) {
+      try {
+        parsedBody = JSON.parse(rawBody) as Record<string, unknown>;
+      } catch {
+        parsedBody = null;
+      }
+    }
+
+    const message =
+      String(parsedBody?.error || '').trim() ||
+      String(parsedBody?.message || '').trim() ||
+      String(rawBody || '').trim() ||
+      `Request failed (${response.status})`;
+
+    const error = new Error(message) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 };

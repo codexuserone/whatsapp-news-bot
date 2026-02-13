@@ -51,6 +51,8 @@ const FeedsPage = () => {
 
   const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Unknown error');
   const isRateLimitedError = (error: unknown) => {
+    const status = (error as { status?: unknown })?.status;
+    if (typeof status === 'number' && status === 429) return true;
     const message = getErrorMessage(error).toLowerCase();
     return message.includes('too many requests') || message.includes('rate limit') || message.includes('rate limited');
   };

@@ -137,7 +137,6 @@ const TargetsPage = () => {
 
   const liveChannelCount = waChannels.filter((channel) => channel.source === 'live').length;
   const channelDiagnostics = channelDiagnosticsRaw?.diagnostics;
-  const channelSeedSummary = channelDiagnostics?.seeded || {};
   const channelMethodErrors = Array.isArray(channelDiagnostics?.methodErrors)
     ? channelDiagnostics?.methodErrors?.slice(0, 3)
     : [];
@@ -267,9 +266,6 @@ const TargetsPage = () => {
                 {liveChannelCount > 0 ? (
                   <p className="text-[11px] text-muted-foreground">Live: {liveChannelCount}</p>
                 ) : null}
-                {Number(channelSeedSummary?.verified || 0) > 0 ? (
-                  <p className="text-[11px] text-muted-foreground">Verified from saved: {Number(channelSeedSummary?.verified || 0)}</p>
-                ) : null}
               </div>
               <div className="rounded-lg border p-3">
                 <p className="text-xs text-muted-foreground">Saved targets</p>
@@ -288,7 +284,7 @@ const TargetsPage = () => {
             ) : null}
             {channelDiagnostics?.limitation && waChannels.length === 0 ? (
               <p className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning-foreground">
-                {channelDiagnostics.limitation}
+                Live channel list is not available in this session yet. Open your channels in WhatsApp, then run discovery again.
               </p>
             ) : null}
             {channelMethodErrors.length ? (

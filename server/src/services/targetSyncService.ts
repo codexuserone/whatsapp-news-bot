@@ -70,9 +70,18 @@ const isPlaceholderChannelName = (value: string) => /^channel[\s_-]*\d+$/i.test(
 const normalizeChannelJid = (value: string) => {
   const trimmed = String(value || '').trim();
   if (!trimmed) return trimmed;
-  if (trimmed.toLowerCase().includes('@newsletter')) {
-    const tokenMatch = trimmed.match(/[a-z0-9._-]+@newsletter(?:_[a-z0-9_-]+)?/i);
-    return tokenMatch?.[0] || trimmed;
+  const lower = trimmed.toLowerCase();
+  if (lower.includes('@newsletter')) {
+    // Baileys treats newsletters as "...@newsletter". Some UIs surface decorated ids like
+    // "true_123@newsletter_ABC..."; canonicalize those to a Baileys-safe jid.
+    const match = lower.match(/([a-z0-9._-]+)@newsletter/i);
+    const userRaw = String(match?.[1] || '').trim();
+    if (!userRaw) return trimmed;
+
+    const strippedPrefix = userRaw.replace(/^(true|false)_/i, '');
+    const digits = strippedPrefix.replace(/[^0-9]/g, '');
+    const user = digits || strippedPrefix;
+    return user ? `${user}@newsletter` : trimmed;
   }
   const compact = trimmed.replace(/\s+/g, '');
   if (/^[a-z0-9._-]{6,}$/i.test(compact)) {

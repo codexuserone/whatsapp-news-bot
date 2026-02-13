@@ -54,5 +54,7 @@ services:
         value: "false"
       - key: SKIP_WHATSAPP_LEASE
         value: "false"
+      - key: WHATSAPP_SESSION_ID
+        value: primary
     healthCheckPath: /health
     autoDeploy: true

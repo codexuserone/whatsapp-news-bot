@@ -85,56 +85,113 @@ const acquireLockViaTable = async (
   const instanceId = process.env.RENDER_INSTANCE_ID || 
                      process.env.HOSTNAME || 
                      `instance_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const nowIso = now.toISOString();
+  const lockedUntilIso = lockedUntil.toISOString();
+
+  const isMissingTableError = (error: unknown) => {
+    const message = String((error as { message?: unknown })?.message || error).toLowerCase();
+    return message.includes('does not exist') || message.includes('schedule_locks');
+  };
+
+  const isUniqueViolation = (error: unknown) => {
+    const code = String((error as { code?: unknown })?.code || '');
+    const message = String((error as { message?: unknown })?.message || error).toLowerCase();
+    return code === '23505' || message.includes('duplicate key');
+  };
+
+  const buildRelease = () => async () => {
+    try {
+      await supabase
+        .from('schedule_locks')
+        .delete()
+        .eq('schedule_id', scheduleId)
+        .eq('locked_by', instanceId);
+    } catch {
+      // Ignore release errors
+    }
+  };
+
+  const tryUpdateLock = async (
+    filter: (query: any) => any
+  ): Promise<{ acquired: boolean; release?: () => Promise<void>; error?: unknown }> => {
+    const query = supabase
+      .from('schedule_locks')
+      .update({
+        locked_by: instanceId,
+        locked_at: nowIso,
+        locked_until: lockedUntilIso
+      })
+      .eq('schedule_id', scheduleId);
+
+    const { data, error } = await filter(query)
+      .select('schedule_id')
+      .limit(1);
+
+    if (error) {
+      if (isMissingTableError(error)) {
+        // Allow operation without locking if table isn't present.
+        return { acquired: true };
+      }
+      return { acquired: false, error };
+    }
+
+    if (Array.isArray(data) && data.length > 0) {
+      return { acquired: true, release: buildRelease() };
+    }
+
+    return { acquired: false };
+  };
 
   try {
-    // Try to insert or update lock atomically
-    // Only succeed if lock doesn't exist or has expired
-    const { data, error } = await supabase
+    // 1) Refresh a lock already held by this instance.
+    const ownLock = await tryUpdateLock((query) => query.eq('locked_by', instanceId));
+    if (ownLock.acquired) {
+      return ownLock.release ? { acquired: true, release: ownLock.release } : { acquired: true };
+    }
+
+    // 2) Acquire an expired lock.
+    const expiredLock = await tryUpdateLock((query) => query.lt('locked_until', nowIso));
+    if (expiredLock.acquired) {
+      return expiredLock.release ? { acquired: true, release: expiredLock.release } : { acquired: true };
+    }
+
+    // 3) Create a brand-new lock row.
+    const { error: insertError } = await supabase
       .from('schedule_locks')
-      .upsert({
+      .insert({
         schedule_id: scheduleId,
         locked_by: instanceId,
-        locked_at: now.toISOString(),
-        locked_until: lockedUntil.toISOString()
-      }, {
-        onConflict: 'schedule_id',
-        ignoreDuplicates: false // We want to update
+        locked_at: nowIso,
+        locked_until: lockedUntilIso
       })
       .select()
       .single();
 
-    if (error) {
-      // Table might not exist - graceful degradation
-      if (String(error).includes('does not exist') || 
-          String(error).includes('schedule_locks')) {
+    if (insertError) {
+      if (isMissingTableError(insertError)) {
         // Allow operation without locking
         return { acquired: true };
+      }
+      if (isUniqueViolation(insertError)) {
+        const { data: lockRow } = await supabase
+          .from('schedule_locks')
+          .select('locked_by,locked_until')
+          .eq('schedule_id', scheduleId)
+          .maybeSingle();
+        const lockedBy = String((lockRow as { locked_by?: string | null })?.locked_by || 'unknown');
+        const lockedUntilAt = String((lockRow as { locked_until?: string | null })?.locked_until || '');
+        return {
+          acquired: false,
+          holderInfo: lockedUntilAt
+            ? `held_by_${lockedBy}_until_${lockedUntilAt}`
+            : `held_by_${lockedBy}`
+        };
       }
       return { acquired: false, holderInfo: null };
     }
 
-    // Check if we got the lock
-    if (data?.locked_by === instanceId) {
-      const release = async () => {
-        try {
-          await supabase
-            .from('schedule_locks')
-            .delete()
-            .eq('schedule_id', scheduleId)
-            .eq('locked_by', instanceId);
-        } catch (e) {
-          // Ignore release errors
-        }
-      };
-      return { acquired: true, release };
-    }
-
-    // Another instance has the lock
-    return { 
-      acquired: false, 
-      holderInfo: `held_by_${data?.locked_by || 'unknown'}` 
-    };
-  } catch (e) {
+    return { acquired: true, release: buildRelease() };
+  } catch {
     // Graceful degradation - allow operation if locking fails
     return { acquired: true };
   }

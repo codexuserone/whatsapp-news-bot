@@ -15,24 +15,71 @@ const resetStuckProcessingLogs = async (): Promise<number> => {
   try {
     const settings = await settingsService.getSettings();
     const processingTimeoutMinutes = Number(settings.processingTimeoutMinutes || 30);
+    const maxRetries = Math.max(Number(settings.max_retries || 3), 0);
     const timeoutMs = Math.max(processingTimeoutMinutes, 5) * 60 * 1000;
     const processingCutoff = new Date(Date.now() - timeoutMs);
 
     const { data, error } = await supabase
       .from('message_logs')
-      .update({ status: 'pending', processing_started_at: null })
+      .select('id,retry_count')
       .eq('status', 'processing')
-      .lt('processing_started_at', processingCutoff.toISOString())
-      .select('id');
+      .lt('processing_started_at', processingCutoff.toISOString());
 
     if (error) {
       logger.warn({ error: error.message }, 'Failed to reset stuck processing logs');
       return 0;
     }
 
-    const count = data?.length || 0;
+    const staleLogs = (data || []) as Array<{ id?: string; retry_count?: number | null }>;
+    if (!staleLogs.length) return 0;
+
+    let resetToPendingCount = 0;
+    let movedToFailedCount = 0;
+    for (const row of staleLogs) {
+      const id = String(row.id || '').trim();
+      if (!id) continue;
+
+      const currentRetry = Math.max(Number(row.retry_count || 0), 0);
+      const nextRetry = currentRetry + 1;
+      const exhaustedRetries = nextRetry > maxRetries;
+      const patch = exhaustedRetries
+        ? {
+            status: 'failed',
+            processing_started_at: null,
+            retry_count: nextRetry,
+            error_message: `Max retries (${maxRetries}) exceeded after stuck-processing watchdog recovery`
+          }
+        : {
+            status: 'pending',
+            processing_started_at: null,
+            retry_count: nextRetry,
+            error_message: `Recovered from stuck processing (retry ${nextRetry}/${maxRetries})`
+          };
+
+      const { error: updateError } = await supabase
+        .from('message_logs')
+        .update(patch)
+        .eq('id', id)
+        .eq('status', 'processing');
+
+      if (updateError) {
+        logger.warn({ id, error: updateError.message }, 'Failed to recover stuck processing log');
+        continue;
+      }
+
+      if (exhaustedRetries) {
+        movedToFailedCount += 1;
+      } else {
+        resetToPendingCount += 1;
+      }
+    }
+
+    const count = resetToPendingCount + movedToFailedCount;
     if (count > 0) {
-      logger.info({ count }, 'Reset stuck processing logs');
+      logger.info(
+        { count, resetToPendingCount, movedToFailedCount },
+        'Recovered stuck processing logs'
+      );
     }
     return count;
   } catch (error) {

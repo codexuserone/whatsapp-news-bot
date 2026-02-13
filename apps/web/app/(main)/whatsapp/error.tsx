@@ -1,27 +1,43 @@
 'use client';
 
-import React from 'react';
+import { useEffect } from 'react';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 
-export default function WhatsAppPageError({
-  error,
-  reset
-}: {
+type WhatsAppPageErrorProps = {
   error: Error & { digest?: string };
   reset: () => void;
-}) {
-  const message = String(error?.message || 'Unexpected error').trim();
+};
+
+export default function WhatsAppPageError({ error, reset }: WhatsAppPageErrorProps) {
+  useEffect(() => {
+    console.error('WhatsApp page runtime error:', error);
+  }, [error]);
+
   return (
-    <div className="mx-auto max-w-2xl space-y-4 rounded-lg border p-6">
-      <h2 className="text-xl font-semibold">WhatsApp page could not load</h2>
-      <p className="text-sm text-muted-foreground">
-        {message || 'Unexpected error'}
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" onClick={reset}>
-          Try again
-        </Button>
-      </div>
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-destructive" />
+            WhatsApp page could not load
+          </CardTitle>
+          <CardDescription>
+            A client error occurred while rendering this screen. Your data was not changed.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {String(error?.message || 'Unknown client error')}
+          </div>
+          <Button type="button" onClick={reset}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Retry loading WhatsApp page
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }
+

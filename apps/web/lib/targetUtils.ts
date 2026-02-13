@@ -36,7 +36,13 @@ const cleanupDisplayName = (value: string) => {
   if (/\btarget\b/i.test(cleaned)) {
     const beforeTarget = normalizeDisplayText(cleaned.split(/\btarget\b/i)[0]);
     if (beforeTarget.length >= 3) {
-      cleaned = beforeTarget;
+      const tokens = beforeTarget.split(/\s+/).filter(Boolean);
+      const hasLongIdToken = tokens.some((token) => /\d{5,}/.test(token));
+      if (hasLongIdToken && tokens.length > 1) {
+        cleaned = tokens[0] || beforeTarget;
+      } else {
+        cleaned = beforeTarget;
+      }
     }
   }
 
@@ -78,9 +84,18 @@ const normalizeGroupJid = (value: string) => {
 const normalizeChannelJid = (value: string) => {
   const raw = String(value || '').trim();
   if (!raw) return raw;
-  if (raw.toLowerCase().includes('@newsletter')) {
-    const tokenMatch = raw.match(/[a-z0-9._-]+@newsletter(?:_[a-z0-9_-]+)?/i);
-    return (tokenMatch?.[0] || raw).toLowerCase();
+  const lower = raw.toLowerCase();
+  if (lower.includes('@newsletter')) {
+    // Baileys treats newsletters as "...@newsletter". Some UIs expose decorated ids like
+    // "true_123@newsletter_ABC..."; canonicalize those to a Baileys-safe jid.
+    const match = lower.match(/([a-z0-9._-]+)@newsletter/i);
+    const userRaw = String(match?.[1] || '').trim();
+    if (!userRaw) return lower;
+
+    const strippedPrefix = userRaw.replace(/^(true|false)_/i, '');
+    const digits = strippedPrefix.replace(/[^0-9]/g, '');
+    const user = digits || strippedPrefix;
+    return user ? `${user}@newsletter` : lower;
   }
   const compact = raw.replace(/\s+/g, '');
   if (/^[a-z0-9._-]{6,}$/i.test(compact)) {

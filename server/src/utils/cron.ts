@@ -1,4 +1,4 @@
-const cronParser = require('cron-parser');
+import cronParser = require('cron-parser');
 
 const computeNextRunAt = (cronExpression: string, timezone?: string | null): string | null => {
   if (!cronExpression) return null;
@@ -13,8 +13,6 @@ const computeNextRunAt = (cronExpression: string, timezone?: string | null): str
   }
 };
 
-module.exports = {
+export = {
   computeNextRunAt
 };
-
-export {};

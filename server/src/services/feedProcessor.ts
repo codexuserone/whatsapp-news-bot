@@ -465,7 +465,6 @@ const processAllFeeds = async () => {
     const results = [];
     for (const feed of feeds) {
       const result = await fetchAndProcessFeed(feed);
-      const queuedLogs = await queueFeedItemsForSchedules(feed.id, result.items);
       results.push({
         feedId: feed.id,
         fetchedCount: result.fetchedCount,
@@ -473,7 +472,7 @@ const processAllFeeds = async () => {
         updatedCount: result.updatedCount,
         duplicateCount: result.duplicateCount,
         errorCount: result.errorCount,
-        queuedCount: queuedLogs.length
+        queuedCount: 0
       });
     }
     return results;
@@ -488,4 +487,4 @@ module.exports = {
   processAllFeeds,
   queueFeedItemsForSchedules
 };
-export { };
+export {};

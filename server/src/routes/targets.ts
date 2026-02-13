@@ -47,16 +47,25 @@ const normalizeTargetType = (type: unknown, phoneNumber: unknown) => {
 const normalizeChannelJidForKey = (phoneNumber: string) => {
   const trimmed = String(phoneNumber || '').trim();
   if (!trimmed) return '';
-  if (trimmed.toLowerCase().includes('@newsletter')) {
-    const tokenMatch = trimmed.match(/[a-z0-9._-]+@newsletter(?:_[a-z0-9_-]+)?/i);
-    return (tokenMatch?.[0] || trimmed).toLowerCase();
+  const lower = trimmed.toLowerCase();
+  if (lower.includes('@newsletter')) {
+    // Baileys treats newsletters as "...@newsletter". Some UIs surface decorated ids like
+    // "true_123@newsletter_ABC..."; canonicalize those to a Baileys-safe jid.
+    const match = lower.match(/([a-z0-9._-]+)@newsletter/i);
+    const userRaw = String(match?.[1] || '').trim();
+    if (!userRaw) return lower;
+
+    const strippedPrefix = userRaw.replace(/^(true|false)_/i, '');
+    const digits = strippedPrefix.replace(/[^0-9]/g, '');
+    const user = digits || strippedPrefix;
+    return user ? `${user}@newsletter` : lower;
   }
   const compact = trimmed.replace(/\s+/g, '');
   if (/^[a-z0-9._-]{6,}$/i.test(compact)) {
     return `${compact.toLowerCase()}@newsletter`;
   }
   const digits = trimmed.replace(/[^0-9]/g, '');
-  return digits ? `${digits}@newsletter` : trimmed.toLowerCase();
+  return digits ? `${digits}@newsletter` : lower;
 };
 
 const normalizeGroupJidForKey = (phoneNumber: string) => {
@@ -92,7 +101,7 @@ const isValidPhoneForType = (type: string, phoneNumber: string) => {
   if (!phone) return false;
   if (type === 'status') return phone === 'status@broadcast';
   if (type === 'group') return /^[0-9-]{6,}@g\.us$/.test(phone);
-  if (type === 'channel') return /^[a-z0-9._-]+@newsletter(?:_[a-z0-9_-]+)?$/.test(phone);
+  if (type === 'channel') return /^[a-z0-9._-]+@newsletter$/.test(phone);
   return /^[0-9]{6,}@s\.whatsapp\.net$/.test(phone) || phone.endsWith('@lid');
 };
 
@@ -103,7 +112,13 @@ const cleanupDisplayName = (value: unknown, type: string) => {
   if (/\btarget\b/i.test(cleaned)) {
     const beforeTarget = normalizeDisplayText(cleaned.split(/\btarget\b/i)[0]);
     if (beforeTarget.length >= 3) {
-      cleaned = beforeTarget;
+      const tokens = beforeTarget.split(/\s+/).filter(Boolean);
+      const hasLongIdToken = tokens.some((token) => /\d{5,}/.test(token));
+      if (hasLongIdToken && tokens.length > 1) {
+        cleaned = tokens[0] || beforeTarget;
+      } else {
+        cleaned = beforeTarget;
+      }
     }
   }
 
@@ -321,9 +336,16 @@ const targetRoutes = () => {
   const normalizeChannelJid = (phoneNumber: string) => {
     const trimmed = String(phoneNumber || '').trim();
     if (!trimmed) return trimmed;
-    if (trimmed.toLowerCase().includes('@newsletter')) {
-      const tokenMatch = trimmed.match(/[a-z0-9._-]+@newsletter(?:_[a-z0-9_-]+)?/i);
-      return tokenMatch?.[0] || trimmed;
+    const lower = trimmed.toLowerCase();
+    if (lower.includes('@newsletter')) {
+      const match = lower.match(/([a-z0-9._-]+)@newsletter/i);
+      const userRaw = String(match?.[1] || '').trim();
+      if (!userRaw) return trimmed;
+
+      const strippedPrefix = userRaw.replace(/^(true|false)_/i, '');
+      const digits = strippedPrefix.replace(/[^0-9]/g, '');
+      const user = digits || strippedPrefix;
+      return user ? `${user}@newsletter` : trimmed;
     }
     const compact = trimmed.replace(/\s+/g, '');
     if (/^[a-z0-9._-]{6,}$/i.test(compact)) {

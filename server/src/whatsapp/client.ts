@@ -8,7 +8,7 @@ const withTimeout = require('../utils/withTimeout');
 const { getErrorMessage } = require('../utils/errorUtils');
 const useSupabaseAuthState = require('./authStore');
 const { saveIncomingMessages } = require('../services/messageService');
-const { sendPendingForAllSchedules } = require('../services/queueService');
+const { initSchedulers } = require('../services/schedulerService');
 const { runTargetAutoSyncPass } = require('../services/targetSyncService');
 
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict';
@@ -116,11 +116,17 @@ const normalizeNewsletterJid = (value: unknown, options?: { allowNumeric?: boole
   const raw = String(value || '').trim();
   if (!raw) return '';
 
-  // Keep explicit newsletter JIDs as-is (including WhatsApp-decorated suffixes),
-  // because stripping suffix/prefix can produce non-deliverable channel IDs.
+  // Baileys treats the newsletter server as exactly "@newsletter". Some UIs surface decorated
+  // forms like "true_123@newsletter_ABC..."; canonicalize those to a Baileys-safe jid.
   if (raw.toLowerCase().includes('@newsletter')) {
-    const tokenMatch = raw.match(/[a-z0-9._-]+@newsletter(?:_[a-z0-9]+)?/i);
-    return tokenMatch?.[0] || raw;
+    const match = raw.toLowerCase().match(/([a-z0-9._-]+)@newsletter/i);
+    const userRaw = String(match?.[1] || '').trim();
+    if (!userRaw) return '';
+
+    const strippedPrefix = userRaw.replace(/^(true|false)_/i, '');
+    const digits = strippedPrefix.replace(/[^0-9]/g, '');
+    const user = digits || strippedPrefix;
+    return user ? `${user}@newsletter` : '';
   }
 
   if (raw.includes('@')) return '';
@@ -272,6 +278,12 @@ const extractChannelSummary = (input: unknown, options?: { allowNumeric?: boolea
   };
 };
 
+const resolveSessionId = () => {
+  const explicit = String(process.env.WHATSAPP_SESSION_ID || '').trim();
+  if (explicit) return explicit;
+  return process.env.NODE_ENV === 'production' ? 'primary' : 'local';
+};
+
 class WhatsAppClient {
   socket: WASocket | null;
   status: WhatsAppStatus;
@@ -279,6 +291,7 @@ class WhatsAppClient {
   lastError: string | null;
   lastSeenAt: Date | null;
   instanceId: string;
+  sessionId: string;
   authStore: {
     state: { creds: Record<string, unknown>; keys: { get: (type: string, ids: string[]) => Promise<Record<string, unknown>>; set: (data: Record<string, Record<string, unknown>>) => Promise<void> } };
     saveCreds: () => Promise<void>;
@@ -337,6 +350,7 @@ class WhatsAppClient {
     this.lastError = null;
     this.lastSeenAt = null;
     this.instanceId = randomUUID();
+    this.sessionId = resolveSessionId();
     this.authStore = null;
     this.leaseSupported = false;
     this.leaseHeld = false;
@@ -369,7 +383,7 @@ class WhatsAppClient {
 
   async init(): Promise<void> {
     try {
-      this.authStore = await useSupabaseAuthState('primary');
+      this.authStore = await useSupabaseAuthState(this.sessionId);
       await this.connect();
     } catch (error) {
       logger.error({ error }, 'Failed to initialize WhatsApp client');
@@ -1055,9 +1069,9 @@ class WhatsAppClient {
           logger.info('WhatsApp connected successfully');
           await authStore.updateStatus('connected', null);
           try {
-            await sendPendingForAllSchedules(this);
+            await initSchedulers(this);
           } catch (error) {
-            logger.error({ error }, 'Failed to send pending schedules after connect');
+            logger.error({ error }, 'Failed to initialize schedulers after reconnect');
           }
           void runTargetAutoSyncPass(this, { silent: true });
         }
@@ -1249,6 +1263,7 @@ class WhatsAppClient {
     hasQr: boolean;
     me: { jid: string | null; name: string | null };
     instanceId: string;
+    sessionId: string;
     lease: { supported: boolean; held: boolean; ownerId: string | null; expiresAt: string | null };
   } {
     if (this.status === 'conflict' && this.leaseSupported && !this.leaseHeld && this.leaseExpiresAt) {
@@ -1268,6 +1283,7 @@ class WhatsAppClient {
       hasQr: Boolean(this.qrCode),
       me: { jid: this.meJid, name: this.meName },
       instanceId: this.instanceId,
+      sessionId: this.sessionId,
       lease: {
         supported: this.leaseSupported,
         held: this.leaseHeld,

@@ -621,6 +621,30 @@ const resolveImageUrlForFeedItem = async (
   }
 };
 
+const normalizeNewsletterJidForSend = (value: unknown, options?: { allowNumeric?: boolean }) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  // Baileys treats newsletters as "...@newsletter". Some UIs expose decorated ids like
+  // "true_123@newsletter_ABC..."; canonicalize those to a Baileys-safe jid.
+  const lower = raw.toLowerCase();
+  if (lower.includes('@newsletter')) {
+    const match = lower.match(/([a-z0-9._-]+)@newsletter/i);
+    const userRaw = String(match?.[1] || '').trim();
+    if (!userRaw) return '';
+
+    const strippedPrefix = userRaw.replace(/^(true|false)_/i, '');
+    const digits = strippedPrefix.replace(/[^0-9]/g, '');
+    const user = digits || strippedPrefix;
+    return user ? `${user}@newsletter` : '';
+  }
+
+  if (raw.includes('@')) return '';
+  if (!options?.allowNumeric) return '';
+  const digits = raw.replace(/[^0-9]/g, '');
+  return digits ? `${digits}@newsletter` : '';
+};
+
 const normalizeTargetJid = (target: Target) => {
   if (!target?.phone_number) {
     throw new Error('Target phone number missing');
@@ -647,18 +671,13 @@ const normalizeTargetJid = (target: Target) => {
   }
 
   if (target.type === 'channel') {
-    if (raw.toLowerCase().includes('@newsletter')) {
-      return raw;
-    }
-    const channelId = raw.replace(/[^0-9]/g, '');
-    if (!channelId) {
-      throw new Error('Channel ID invalid');
-    }
-    return `${channelId}@newsletter`;
+    const normalized = normalizeNewsletterJidForSend(raw, { allowNumeric: true });
+    if (!normalized) throw new Error('Channel ID invalid');
+    return normalized;
   }
 
   if (lower.includes('@newsletter')) {
-    return raw;
+    return normalizeNewsletterJidForSend(raw, { allowNumeric: false }) || raw;
   }
 
   const phoneDigits = raw.replace(/[^0-9]/g, '');

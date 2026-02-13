@@ -8,7 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { Feed, FeedItem, Target, Template } from '@/lib/types';
-import { dedupeTargets, formatTargetLabel } from '@/lib/targetUtils';
+import { dedupeTargets, formatTargetLabel, normalizeTargetName } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -70,7 +70,7 @@ const TemplatesPage = () => {
   const queryClient = useQueryClient();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [sampleFeedId, setSampleFeedId] = useState<string>('__all');
-  const [previewTargetId, setPreviewTargetId] = useState<string>('');
+  const [previewTargetKey, setPreviewTargetKey] = useState<string>('');
   const [previewSendNotice, setPreviewSendNotice] = useState<string>('');
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
@@ -101,18 +101,30 @@ const TemplatesPage = () => {
       const phone = String(target.phone_number || '').trim().toLowerCase();
       const key = `${type}:${phone}`;
       if (!target.id || !phone || byKey.has(key)) continue;
-      byKey.set(key, target);
+      const cleanedName = normalizeTargetName(target.name, target.type, phone);
+      if (target.type === 'channel' && !cleanedName) continue;
+      byKey.set(key, {
+        ...target,
+        name: cleanedName || target.name || phone
+      });
     }
     return Array.from(byKey.values());
   }, [activeTargets]);
+  const previewTargetByKey = React.useMemo(() => {
+    const map = new Map<string, Target>();
+    for (const target of previewTargets) {
+      const key = `${target.type}:${target.phone_number}`;
+      map.set(key, target);
+    }
+    return map;
+  }, [previewTargets]);
 
   React.useEffect(() => {
-    if (!previewTargetId) return;
-    const stillExists = previewTargets.some((target) => String(target.id) === previewTargetId);
-    if (!stillExists) setPreviewTargetId('');
-  }, [previewTargetId, previewTargets]);
+    if (!previewTargetKey) return;
+    if (!previewTargetByKey.has(previewTargetKey)) setPreviewTargetKey('');
+  }, [previewTargetByKey, previewTargetKey]);
 
-  const selectedPreviewTarget = previewTargets.find((target) => String(target.id) === previewTargetId) || null;
+  const selectedPreviewTarget = previewTargetByKey.get(previewTargetKey) || null;
 
   const resolveSendMode = (template?: Template | null): 'image' | 'image_only' | 'link_preview' | 'text_only' => {
     if (template?.send_mode === 'image_only') return 'image_only';
@@ -544,10 +556,10 @@ const TemplatesPage = () => {
               <div className="space-y-2">
                 <Label>Target</Label>
                 <Select
-                  value={previewTargetId || '__none'}
-                  onValueChange={(value) => setPreviewTargetId(value === '__none' ? '' : String(value || '').trim())}
+                  value={previewTargetKey || '__none'}
+                  onValueChange={(value) => setPreviewTargetKey(value === '__none' ? '' : String(value || '').trim())}
                 >
-                  <SelectTrigger className="w-full min-w-0">
+                  <SelectTrigger className="w-full min-w-0 max-w-full">
                     <SelectValue placeholder="Select target" />
                   </SelectTrigger>
                   <SelectContent>
@@ -556,7 +568,7 @@ const TemplatesPage = () => {
                     </SelectItem>
                     {previewTargets.length > 0 ? (
                       previewTargets.map((target) => (
-                        <SelectItem key={target.id} value={String(target.id)}>
+                        <SelectItem key={`${target.type}:${target.phone_number}`} value={`${target.type}:${target.phone_number}`} className="max-w-full">
                           {formatTargetLabel(target)}
                         </SelectItem>
                       ))

@@ -70,6 +70,11 @@ const scheduleRoutes = () => {
       await sendQueuedForSchedule(scheduleId, whatsappClient as never);
     });
 
+  const primeQueue = (scheduleId: string) =>
+    runAsync(`Prime queue ${scheduleId}`, async () => {
+      await queueLatestForSchedule(scheduleId);
+    });
+
   const getDb = () => {
     const supabase = getSupabaseClient();
     if (!supabase) throw serviceUnavailable('Database not available');
@@ -156,6 +161,9 @@ const scheduleRoutes = () => {
         schedule?.delivery_mode !== 'batch'
       ) {
         dispatchImmediate(schedule.id, req.app.locals.whatsapp);
+      } else if (isScheduleRunning(schedule)) {
+        // Scheduled/batch automations should still show pending queue rows right away.
+        primeQueue(schedule.id);
       }
       res.json({
         ...schedule,
@@ -240,6 +248,8 @@ const scheduleRoutes = () => {
         schedule?.delivery_mode !== 'batch'
       ) {
         dispatchImmediate(schedule.id, req.app.locals.whatsapp);
+      } else if (isScheduleRunning(schedule)) {
+        primeQueue(schedule.id);
       }
       res.json({
         ...schedule,
@@ -356,6 +366,8 @@ const scheduleRoutes = () => {
         schedule?.delivery_mode !== 'batch'
       ) {
         dispatchImmediate(schedule.id, req.app.locals.whatsapp);
+      } else if (isScheduleRunning(schedule)) {
+        primeQueue(schedule.id);
       }
 
       res.json({
@@ -457,9 +469,7 @@ const scheduleRoutes = () => {
   router.get('/:id/diagnostics', async (req: Request, res: Response) => {
     try {
       const diagnostics = await getScheduleDiagnostics(req.params.id, req.app.locals.whatsapp);
-      if (!diagnostics.ok) {
-        return res.status(400).json(diagnostics);
-      }
+      // Return diagnostics as data (not an HTTP error) so UI can always display reasons.
       res.json(diagnostics);
     } catch (error) {
       console.error('Error generating schedule diagnostics:', error);

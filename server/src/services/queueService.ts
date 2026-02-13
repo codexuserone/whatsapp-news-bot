@@ -846,26 +846,6 @@ const sendMessageWithTemplate = async (
     };
   }
 
-  // Channel/newsletter media delivery is unreliable in current Baileys builds.
-  // Use text/link mode for channels to avoid fake-success media sends.
-  if (target.type === 'channel') {
-    const channelText = textWithPreview || renderedText;
-    if (!channelText) {
-      throw new Error('Channel send requires text content in this build');
-    }
-    const response = await sendText(channelText);
-    return {
-      response,
-      text: channelText,
-      media: {
-        type: sendMode === 'image_only' || sendMode === 'image' ? 'image' : null,
-        url: null,
-        sent: false,
-        error: 'Channel media disabled: sent text/link only'
-      }
-    };
-  }
-
   const resolved = await resolveImageUrlForFeedItem(options?.supabase, feedItem, allowImages);
   if (sendMode === 'image_only' && !resolved.url) {
     throw new Error('Image-only mode requires an available image for this feed item');

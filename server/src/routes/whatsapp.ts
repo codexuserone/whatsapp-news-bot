@@ -885,8 +885,6 @@ const whatsappRoutes = () => {
     const confirm = payload.confirm;
     const includeCaption = payload.includeCaption !== false;
     const captionText = [normalizedMessage, normalizedLink].filter(Boolean).join('\n').trim();
-    const requestedMediaSend = Boolean(videoDataUrl || imageDataUrl || imageUrl);
-
     if (!captionText && !imageUrl && !imageDataUrl && !videoDataUrl) {
       throw badRequest('message, linkUrl, imageUrl, imageDataUrl, or videoDataUrl is required');
     }
@@ -945,20 +943,7 @@ const whatsappRoutes = () => {
 
     for (const normalizedJid of normalizedJids) {
       try {
-        let effectiveContent = content;
-        if (requestedMediaSend && normalizedJid.toLowerCase().includes('@newsletter')) {
-          if (!captionText) {
-            results.push({
-              jid: normalizedJid,
-              ok: false,
-              error: 'Channel media send requires text content in this build'
-            });
-            continue;
-          }
-          effectiveContent = disableLinkPreview
-            ? { text: captionText, linkPreview: null }
-            : { text: captionText };
-        }
+        const effectiveContent = content;
 
         const sendPromise = isStatusBroadcast(normalizedJid)
           ? whatsapp.sendStatusBroadcast(effectiveContent)

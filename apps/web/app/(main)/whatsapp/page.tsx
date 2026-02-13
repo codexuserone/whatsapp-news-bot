@@ -208,12 +208,6 @@ const WhatsAppPage = () => {
     [activeTargets, groupedTargets]
   );
 
-  const selectedChannelCount = React.useMemo(() => {
-    if (!selectedTargets.length) return 0;
-    const selected = new Set(selectedTargets);
-    return groupedTargets.channels.filter((target) => selected.has(target.phone_number)).length;
-  }, [groupedTargets.channels, selectedTargets]);
-
   React.useEffect(() => {
     setSelectedTargets((current) => {
       if (!current.length) return current;
@@ -563,11 +557,6 @@ const WhatsAppPage = () => {
                 <Label htmlFor="attachmentUpload">Attachment</Label>
                 <Input id="attachmentUpload" type="file" accept="image/*,video/*" onChange={onPickAttachmentFile} />
                 {attachmentName ? <p className="text-xs text-muted-foreground">Selected: {attachmentName}</p> : null}
-                {selectedChannelCount > 0 ? (
-                  <p className="text-xs text-warning-foreground">
-                    Channel targets currently send text/link only in this build; media is not sent to channels.
-                  </p>
-                ) : null}
               </div>
             ) : null}
 

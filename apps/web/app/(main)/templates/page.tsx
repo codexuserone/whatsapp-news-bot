@@ -128,7 +128,7 @@ const TemplatesPage = () => {
 
   const resolveSendMode = (template?: Template | null): 'image' | 'image_only' | 'link_preview' | 'text_only' => {
     if (template?.send_mode === 'image_only') return 'image_only';
-    if (template?.send_mode === 'image' && template?.send_images === false) return 'image_only';
+    if (template?.send_mode === 'image' && template?.send_images === false) return 'link_preview';
     if (template?.send_mode === 'link_preview') return 'link_preview';
     if (template?.send_mode === 'text_only') return 'text_only';
     return 'image';

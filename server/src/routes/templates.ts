@@ -35,16 +35,12 @@ const normalizeTemplatePayload = (payload: Record<string, unknown>) => {
 
   if (explicitMode === 'image_only') {
     next.send_mode = 'image_only';
-    next.send_images = false;
+    // image_only still attaches an image; it just suppresses the caption/text fallback.
+    next.send_images = true;
     return next;
   }
 
   if (explicitMode === 'image') {
-    if (next.send_images === false) {
-      next.send_mode = 'image_only';
-      next.send_images = false;
-      return next;
-    }
     next.send_mode = 'image';
     next.send_images = true;
     return next;
@@ -68,11 +64,15 @@ const normalizeTemplateResponse = <T extends Record<string, unknown>>(template: 
     send_images?: boolean | null;
   };
 
+  // Backward compatibility: legacy rows may have send_images=false with send_mode defaulting to "image".
+  // In that case, treat it as link_preview (no media).
   if (next.send_mode === 'image' && next.send_images === false) {
-    next.send_mode = 'image_only';
+    next.send_mode = 'link_preview';
   }
 
-  if (next.send_mode === 'image_only') {
+  if (next.send_mode === 'image' || next.send_mode === 'image_only') {
+    next.send_images = true;
+  } else if (next.send_mode === 'link_preview' || next.send_mode === 'text_only') {
     next.send_images = false;
   }
 

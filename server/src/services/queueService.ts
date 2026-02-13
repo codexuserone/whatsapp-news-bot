@@ -12,7 +12,7 @@ const { computeNextRunAt } = require('../utils/cron');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { safeAxiosRequest } = require('../utils/safeAxios');
 const { normalizeMessageText } = require('../utils/messageText');
-const { isNewsletterJid, prepareNewsletterImage } = require('../utils/whatsappMedia');
+const { isNewsletterJid, prepareNewsletterImage, prepareNewsletterVideo } = require('../utils/whatsappMedia');
 const { ensureWhatsAppConnected } = require('./whatsappConnection');
 const { isScheduleRunning } = require('./scheduleState');
 const { withScheduleLock } = require('./scheduleLockService');
@@ -270,11 +270,18 @@ const isImageUrl = (url: string): boolean => {
   const audioExtensions = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.wma'];
 
   // Explicitly exclude videos and audio
-  if (videoExtensions.some(ext => lower.includes(ext))) return false;
-  if (audioExtensions.some(ext => lower.includes(ext))) return false;
+  if (videoExtensions.some(hasExt)) return false;
+  if (audioExtensions.some(hasExt)) return false;
 
   // Check if it's a known image extension
-  return imageExtensions.some(ext => lower.includes(ext));
+  return imageExtensions.some(hasExt);
+};
+
+const isVideoUrl = (url: string): boolean => {
+  const lower = String(url || '').toLowerCase();
+  const hasExt = (ext: string) => new RegExp(`${ext.replace('.', '\\.')}([?#]|$)`).test(lower);
+  const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v'];
+  return videoExtensions.some(hasExt);
 };
 
 const DEFAULT_USER_AGENT =
@@ -450,6 +457,15 @@ const scrapeImageFromPage = async (pageUrl: string) => {
   return null;
 };
 
+const toOriginOrUndefined = (value?: string | null) => {
+  if (!value) return undefined;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return undefined;
+  }
+};
+
 const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null) => {
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
   const SUPPORTED_WHATSAPP_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -463,7 +479,7 @@ const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null)
       'User-Agent': validUserAgent,
       // Avoid asking for AVIF since WhatsApp media uploads are stricter and we don't transcode it.
       'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-      'Referer': refererUrl ? new URL(refererUrl).origin : undefined,
+      'Referer': toOriginOrUndefined(refererUrl),
       'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120"',
       'Sec-Ch-Ua-Mobile': '?0',
       'Sec-Ch-Ua-Platform': '"Windows"'
@@ -515,6 +531,46 @@ const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null)
   return { buffer, mimetype: detectedMimeType };
 };
 
+const downloadVideoBuffer = async (videoUrl: string, refererUrl?: string | null) => {
+  const MAX_VIDEO_BYTES = Math.max(
+    1,
+    Math.floor(Number(process.env.MAX_VIDEO_BYTES || process.env.WHATSAPP_MAX_VIDEO_BYTES || 32 * 1024 * 1024))
+  );
+  const validUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  const response = await safeAxiosRequest(videoUrl, {
+    timeout: 30000,
+    responseType: 'arraybuffer',
+    maxContentLength: MAX_VIDEO_BYTES,
+    maxBodyLength: MAX_VIDEO_BYTES,
+    headers: {
+      'User-Agent': validUserAgent,
+      Accept: 'video/mp4,video/*;q=0.9,*/*;q=0.8',
+      'Referer': toOriginOrUndefined(refererUrl),
+      'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120"',
+      'Sec-Ch-Ua-Mobile': '?0',
+      'Sec-Ch-Ua-Platform': '"Windows"'
+    }
+  });
+
+  const data = response.data;
+  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  if (!buffer.length) {
+    throw new Error('Video download returned empty body');
+  }
+
+  // MP4 typically contains "ftyp" at offset 4.
+  const hasMp4Signature = buffer.length >= 12 && buffer.slice(4, 8).toString('ascii') === 'ftyp';
+  if (!hasMp4Signature) {
+    throw new Error('Unsupported or corrupt video data for WhatsApp upload (expected mp4)');
+  }
+
+  if (buffer.length > MAX_VIDEO_BYTES) {
+    throw new Error(`Video too large (${buffer.length} bytes)`);
+  }
+
+  return { buffer, mimetype: 'video/mp4' };
+};
+
 const maybeUpdateFeedItemImage = async (
   supabase: SupabaseClient | undefined,
   feedItemId: string | undefined,
@@ -528,13 +584,19 @@ const maybeUpdateFeedItemImage = async (
   }
 };
 
-const resolveImageUrlForFeedItem = async (
+const resolveMediaUrlForFeedItem = async (
   supabase: SupabaseClient | undefined,
   feedItem: FeedItem,
-  allowImages: boolean
-): Promise<{ url: string | null; source: string | null; scraped: boolean; error: string | null }> => {
-  if (!allowImages) {
-    return { url: null, source: null, scraped: false, error: null };
+  allowMedia: boolean
+): Promise<{
+  url: string | null;
+  kind: 'image' | 'video' | null;
+  source: string | null;
+  scraped: boolean;
+  error: string | null;
+}> => {
+  if (!allowMedia) {
+    return { url: null, kind: null, source: null, scraped: false, error: null };
   }
 
   let existingUrlIssue: string | null = null;
@@ -543,18 +605,25 @@ const resolveImageUrlForFeedItem = async (
     if (isImageUrl(existing)) {
       try {
         await assertSafeOutboundUrl(existing);
-        return { url: existing, source: feedItem.image_source || 'feed', scraped: false, error: null };
+        return { url: existing, kind: 'image', source: feedItem.image_source || 'feed', scraped: false, error: null };
+      } catch (error) {
+        existingUrlIssue = getErrorMessage(error);
+      }
+    } else if (isVideoUrl(existing)) {
+      try {
+        await assertSafeOutboundUrl(existing);
+        return { url: existing, kind: 'video', source: feedItem.image_source || 'feed', scraped: false, error: null };
       } catch (error) {
         existingUrlIssue = getErrorMessage(error);
       }
     } else {
-      existingUrlIssue = 'Feed media URL is not an image';
+      existingUrlIssue = 'Feed media URL is not a supported image/video';
     }
   }
 
   const link = typeof feedItem.link === 'string' ? feedItem.link : null;
   if (!link || !isHttpUrl(link)) {
-    return { url: null, source: null, scraped: false, error: existingUrlIssue };
+    return { url: null, kind: null, source: null, scraped: false, error: existingUrlIssue };
   }
 
   const scrapedAt = feedItem.image_scraped_at ? new Date(feedItem.image_scraped_at).getTime() : 0;
@@ -562,6 +631,7 @@ const resolveImageUrlForFeedItem = async (
   if (recentlyScraped) {
     return {
       url: null,
+      kind: null,
       source: null,
       scraped: false,
       error: feedItem.image_scrape_error || existingUrlIssue || null
@@ -571,51 +641,51 @@ const resolveImageUrlForFeedItem = async (
   try {
     const scraped = await scrapeImageFromPage(link);
     const nowIso = new Date().toISOString();
-    if (scraped) {
-      try {
-        await assertSafeOutboundUrl(scraped);
-      } catch (error) {
-        const message = getErrorMessage(error);
+      if (scraped) {
+        try {
+          await assertSafeOutboundUrl(scraped);
+        } catch (error) {
+          const message = getErrorMessage(error);
+          feedItem.image_scraped_at = nowIso;
+          feedItem.image_scrape_error = message;
+          await maybeUpdateFeedItemImage(supabase, feedItem.id, {
+            image_scraped_at: nowIso,
+            image_scrape_error: message
+          });
+          return { url: null, kind: null, source: null, scraped: true, error: message };
+        }
+
+        feedItem.image_url = scraped;
+        feedItem.image_source = 'page';
         feedItem.image_scraped_at = nowIso;
-        feedItem.image_scrape_error = message;
+        feedItem.image_scrape_error = null;
         await maybeUpdateFeedItemImage(supabase, feedItem.id, {
+          image_url: scraped,
+          image_source: 'page',
           image_scraped_at: nowIso,
-          image_scrape_error: message
+          image_scrape_error: null
         });
-        return { url: null, source: null, scraped: true, error: message };
+        return { url: scraped, kind: 'image', source: 'page', scraped: true, error: null };
       }
 
-      feedItem.image_url = scraped;
-      feedItem.image_source = 'page';
       feedItem.image_scraped_at = nowIso;
-      feedItem.image_scrape_error = null;
+      feedItem.image_scrape_error = 'No image found on page';
       await maybeUpdateFeedItemImage(supabase, feedItem.id, {
-        image_url: scraped,
-        image_source: 'page',
         image_scraped_at: nowIso,
-        image_scrape_error: null
+        image_scrape_error: 'No image found on page'
       });
-      return { url: scraped, source: 'page', scraped: true, error: null };
+      return { url: null, kind: null, source: null, scraped: true, error: 'No image found on page' };
+    } catch (error) {
+      const message = getErrorMessage(error);
+      const nowIso = new Date().toISOString();
+      feedItem.image_scraped_at = nowIso;
+      feedItem.image_scrape_error = message;
+      await maybeUpdateFeedItemImage(supabase, feedItem.id, {
+        image_scraped_at: nowIso,
+        image_scrape_error: message
+      });
+      return { url: null, kind: null, source: null, scraped: true, error: message };
     }
-
-    feedItem.image_scraped_at = nowIso;
-    feedItem.image_scrape_error = 'No image found on page';
-    await maybeUpdateFeedItemImage(supabase, feedItem.id, {
-      image_scraped_at: nowIso,
-      image_scrape_error: 'No image found on page'
-    });
-    return { url: null, source: null, scraped: true, error: 'No image found on page' };
-  } catch (error) {
-    const message = getErrorMessage(error);
-    const nowIso = new Date().toISOString();
-    feedItem.image_scraped_at = nowIso;
-    feedItem.image_scrape_error = message;
-    await maybeUpdateFeedItemImage(supabase, feedItem.id, {
-      image_scraped_at: nowIso,
-      image_scrape_error: message
-    });
-    return { url: null, source: null, scraped: true, error: message };
-  }
 };
 
 const normalizeNewsletterJidForSend = (value: unknown, options?: { allowNumeric?: boolean }) => {
@@ -735,7 +805,7 @@ type TemplateSendMode = 'image' | 'image_only' | 'link_preview' | 'text_only';
 
 const getTemplateSendMode = (template: Template): TemplateSendMode => {
   if (template?.send_mode === 'image' && template?.send_images === false) {
-    return 'image_only';
+    return 'link_preview';
   }
   if (
     template?.send_mode === 'image' ||
@@ -862,9 +932,9 @@ const sendMessageWithTemplate = async (
     };
   }
 
-  const resolved = await resolveImageUrlForFeedItem(options?.supabase, feedItem, allowImages);
+  const resolved = await resolveMediaUrlForFeedItem(options?.supabase, feedItem, allowImages);
   if (sendMode === 'image_only' && !resolved.url) {
-    throw new Error('Image-only mode requires an available image for this feed item');
+    throw new Error('Image-only mode requires an available media (image/video) for this feed item');
   }
 
   if (allowImages && resolved.url) {
@@ -873,16 +943,139 @@ const sendMessageWithTemplate = async (
       safeUrl = (await assertSafeOutboundUrl(resolved.url)).toString();
     } catch (error) {
       const message = getErrorMessage(error);
-      logger.warn({ error, jid, imageUrl: resolved.url }, 'Blocked unsafe image URL');
+      logger.warn({ error, jid, mediaUrl: resolved.url, kind: resolved.kind }, 'Blocked unsafe media URL');
       if (!allowTextFallback) {
-        throw new Error(`Image-only mode blocked unsafe image URL: ${message}`);
+        throw new Error(`Image-only mode blocked unsafe media URL: ${message}`);
       }
       const response = await sendText(textWithPreview);
       return {
         response,
         text: textWithPreview,
-        media: { type: 'image', url: resolved.url, sent: false, error: message }
+        media: { type: resolved.kind || 'image', url: resolved.url, sent: false, error: message }
       };
+    }
+
+    if (resolved.kind === 'video') {
+      try {
+        const { buffer, mimetype } = await downloadVideoBuffer(safeUrl, feedItem.link);
+        let sendBuffer = buffer;
+        let sendMime = mimetype;
+        let newsletterExtras: Record<string, unknown> | null = null;
+        if (isNewsletterJid(jid)) {
+          try {
+            const prepared = await prepareNewsletterVideo(buffer, { maxBytes: 32 * 1024 * 1024 });
+            sendBuffer = prepared.buffer;
+            sendMime = prepared.mimetype || sendMime;
+            newsletterExtras = {
+              ...(prepared.jpegThumbnail ? { jpegThumbnail: prepared.jpegThumbnail } : {}),
+              ...(typeof prepared.seconds === 'number' ? { seconds: prepared.seconds } : {}),
+              ...(typeof prepared.width === 'number' ? { width: prepared.width } : {}),
+              ...(typeof prepared.height === 'number' ? { height: prepared.height } : {})
+            };
+          } catch (error) {
+            logger.warn({ error, jid }, 'Failed to normalize newsletter video; sending original buffer');
+          }
+        }
+
+        const content: Record<string, unknown> = includeImageCaption
+          ? { video: sendBuffer, caption: renderedText }
+          : { video: sendBuffer };
+        if (sendMime) {
+          content.mimetype = sendMime;
+        }
+        if (newsletterExtras && Object.keys(newsletterExtras).length) {
+          Object.assign(content, newsletterExtras);
+        }
+
+        const response =
+          target.type === 'status'
+            ? await withTimeout(
+              whatsappClient.sendStatusBroadcast(content),
+              sendTimeoutMs,
+              'Timed out sending video status message'
+            )
+            : await withTimeout(
+              whatsappClient.sendMessage(jid, content),
+              sendTimeoutMs,
+              'Timed out sending video message'
+            );
+
+        return {
+          response,
+          text: includeImageCaption ? renderedText : '',
+          media: { type: 'video', url: safeUrl, sent: true, error: null }
+        };
+      } catch (error) {
+        const bufferErrorMessage = getErrorMessage(error);
+        if (!allowTextFallback) {
+          throw new Error(bufferErrorMessage);
+        }
+
+        const normalizedBufferError = bufferErrorMessage.toLowerCase();
+        const shouldTryUrlSend = !(
+          normalizedBufferError.includes('too large') ||
+          normalizedBufferError.includes('maxcontentlength') ||
+          normalizedBufferError.includes('content length') ||
+          normalizedBufferError.includes('expected mp4') ||
+          normalizedBufferError.includes('unsupported')
+        );
+
+        if (!shouldTryUrlSend) {
+          logger.warn({ error, jid, videoUrl: safeUrl }, 'Video buffer send unavailable; using text fallback');
+          const response = await sendText(textWithPreview);
+          return {
+            response,
+            text: textWithPreview,
+            media: { type: 'video', url: safeUrl, sent: false, error: bufferErrorMessage }
+          };
+        }
+
+        logger.warn(
+          { error, jid, videoUrl: safeUrl },
+          'Video buffer send unavailable; trying URL-based send'
+        );
+
+        try {
+          const content: Record<string, unknown> = includeImageCaption
+            ? { video: { url: safeUrl }, caption: renderedText }
+            : { video: { url: safeUrl } };
+          const response =
+            target.type === 'status'
+              ? await withTimeout(
+                whatsappClient.sendStatusBroadcast(content),
+                sendTimeoutMs,
+                'Timed out sending video status message'
+              )
+              : await withTimeout(
+                whatsappClient.sendMessage(jid, content),
+                sendTimeoutMs,
+                'Timed out sending video message'
+              );
+
+          return {
+            response,
+            text: includeImageCaption ? renderedText : '',
+            media: { type: 'video', url: safeUrl, sent: true, error: null }
+          };
+        } catch (urlError) {
+          const urlErrorMessage = getErrorMessage(urlError);
+          logger.info(
+            { error: urlError, jid, videoUrl: safeUrl, bufferError: bufferErrorMessage },
+            'Video URL send rejected; using text fallback'
+          );
+          const response = await sendText(textWithPreview);
+          return {
+            response,
+            text: textWithPreview,
+            media: {
+              type: 'video',
+              url: safeUrl,
+              sent: false,
+              error: `${bufferErrorMessage}; url-send: ${urlErrorMessage}`
+            }
+          };
+        }
+      }
     }
 
     try {
@@ -1007,7 +1200,7 @@ const sendMessageWithTemplate = async (
   }
 
   if (sendMode === 'image_only') {
-    throw new Error('Image-only mode could not find an image to send');
+    throw new Error('Image-only mode could not find a media (image/video) to send');
   }
 
   const response = await sendText(textWithPreview);
@@ -2267,14 +2460,13 @@ const sendQueuedForSchedule = async (
         }
 
         try {
-          const sendResult = await withGlobalSendLock(async () => {
-            await waitForDelays(String(target.id), settings);
-            const result = await sendMessageWithTemplate(whatsappClient, target, template, feedItem, {
-              sendImages: template?.send_images !== false,
-              supabase,
-              sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
-              overrideText: typeof log.message_content === 'string' ? log.message_content : null
-            });
+            const sendResult = await withGlobalSendLock(async () => {
+              await waitForDelays(String(target.id), settings);
+              const result = await sendMessageWithTemplate(whatsappClient, target, template, feedItem, {
+                supabase,
+                sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+                overrideText: typeof log.message_content === 'string' ? log.message_content : null
+              });
             const nowMs = Date.now();
             globalLastSentAtMs = nowMs;
             globalLastTargetId = String(target.id);
@@ -2287,12 +2479,14 @@ const sendQueuedForSchedule = async (
           const response = sendResult?.response;
 
           const messageId = response?.key?.id;
-          if (messageId) {
-            if (whatsappClient.confirmSend) {
-              const isImage = sendResult?.media?.type === 'image' && Boolean(sendResult?.media?.sent);
+            if (messageId) {
+              if (whatsappClient.confirmSend) {
+              const isMedia =
+                (sendResult?.media?.type === 'image' || sendResult?.media?.type === 'video') &&
+                Boolean(sendResult?.media?.sent);
               const confirmation = await whatsappClient.confirmSend(
                 messageId,
-                isImage
+                isMedia
                   ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
                   : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 }
               );
@@ -2634,7 +2828,6 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           template as Template,
           feedItemRes.data as FeedItem,
           {
-            sendImages: (template as Template).send_images !== false,
             supabase,
             sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
             overrideText: typeof log.message_content === 'string' ? log.message_content : null
@@ -2653,10 +2846,12 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       const messageId = sendResult?.response?.key?.id;
       if (messageId) {
         if (activeWhatsappClient.confirmSend) {
-          const isImage = sendResult?.media?.type === 'image' && Boolean(sendResult?.media?.sent);
+          const isMedia =
+            (sendResult?.media?.type === 'image' || sendResult?.media?.type === 'video') &&
+            Boolean(sendResult?.media?.sent);
           const confirmation = await activeWhatsappClient.confirmSend(
             messageId,
-            isImage
+            isMedia
               ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
               : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 }
           );

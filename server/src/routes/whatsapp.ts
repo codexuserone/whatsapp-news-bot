@@ -10,7 +10,7 @@ const { getErrorMessage } = require('../utils/errorUtils');
 const { getSupabaseClient } = require('../db/supabase');
 const { normalizeMessageText } = require('../utils/messageText');
 const { ensureWhatsAppConnected } = require('../services/whatsappConnection');
-const { isNewsletterJid, prepareNewsletterImage } = require('../utils/whatsappMedia');
+const { isNewsletterJid, prepareNewsletterImage, prepareNewsletterVideo } = require('../utils/whatsappMedia');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const DEFAULT_USER_AGENT =
@@ -958,8 +958,27 @@ const whatsappRoutes = () => {
         let effectiveContent: Record<string, unknown> = content;
 
         // Baileys uses a special raw-media path for newsletters; in practice it is far pickier
-        // about image payloads. Normalize newsletter images to JPEG and include thumbnails/dimensions.
+        // about media payloads. Normalize newsletter media (image/video) and include thumbnails/dimensions.
         if (isNewsletterJid(normalizedJid)) {
+          const videoValue = (content as any)?.video;
+          if (Buffer.isBuffer(videoValue)) {
+            try {
+              const prepared = await prepareNewsletterVideo(videoValue, { maxBytes: 32 * 1024 * 1024 });
+              effectiveContent = {
+                ...effectiveContent,
+                video: prepared.buffer,
+                mimetype: prepared.mimetype || (effectiveContent as any)?.mimetype,
+                ...(prepared.jpegThumbnail ? { jpegThumbnail: prepared.jpegThumbnail } : {}),
+                ...(typeof prepared.seconds === 'number' ? { seconds: prepared.seconds } : {}),
+                ...(typeof prepared.width === 'number' ? { width: prepared.width } : {}),
+                ...(typeof prepared.height === 'number' ? { height: prepared.height } : {})
+              };
+            } catch {
+              // Best-effort only; fall back to the original payload.
+              effectiveContent = effectiveContent;
+            }
+          }
+
           const imageValue = (content as any)?.image;
           if (Buffer.isBuffer(imageValue)) {
             try {

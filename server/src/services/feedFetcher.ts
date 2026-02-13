@@ -1,8 +1,8 @@
 const Parser = require('rss-parser');
-const axios = require('axios');
 const cheerio = require('cheerio');
 const he = require('he');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
+const { safeAxiosRequest } = require('../utils/safeAxios');
 
 const parser = new Parser({
   customFields: {
@@ -141,7 +141,7 @@ const discoverFeedEndpointFromHtml = async (
   pageUrl: string
 ): Promise<{ url: string; type: 'rss' | 'atom' | 'json' | null } | null> => {
   await assertSafeOutboundUrl(pageUrl);
-  const response = await axios.get(pageUrl, {
+  const response = await safeAxiosRequest(pageUrl, {
     timeout: 15000,
     headers: {
       'User-Agent': DEFAULT_USER_AGENT,
@@ -373,7 +373,7 @@ const enrichWordPressRssPublishedAt = async (feedUrl: string, items: FeedItemRes
 
   for (const batch of batches) {
     try {
-      const response = await axios.get(endpoint, {
+      const response = await safeAxiosRequest(endpoint, {
         timeout: 12000,
         params: {
           include: batch.join(','),
@@ -617,7 +617,7 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
   headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
   headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8';
 
-  const response = await axios.get(feed.url, {
+  const response = await safeAxiosRequest(feed.url, {
     timeout: 20000,
     headers,
     responseType: 'arraybuffer', // CRITICAL: Get raw bytes to handle encoding manually
@@ -692,7 +692,7 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
 const fetchJsonItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
   try {
     await assertSafeOutboundUrl(feed.url);
-    const response = await axios.get(feed.url, { timeout: 15000 });
+    const response = await safeAxiosRequest(feed.url, { timeout: 15000 });
     const json = response.data;
     const itemsPath = (feed.parseConfig?.itemsPath as string) || 'items';
     const itemsRaw = getPath(json as Record<string, unknown>, itemsPath);
@@ -712,7 +712,7 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
   headers['User-Agent'] = DEFAULT_USER_AGENT;
   headers['Accept'] = 'application/json, text/json, */*;q=0.8';
 
-  const response = await axios.get(feed.url, {
+  const response = await safeAxiosRequest(feed.url, {
     timeout: 15000,
     headers,
     validateStatus: (status: number) => (status >= 200 && status < 300) || status === 304

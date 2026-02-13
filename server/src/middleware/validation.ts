@@ -144,7 +144,8 @@ const schemas = {
       linkUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       imageDataUrl: z.string().max(12_000_000).optional().nullable().transform(normalizeOptional),
-      videoDataUrl: z.string().max(24_000_000).optional().nullable().transform(normalizeOptional),
+      // Base64 video payloads are large; keep this bounded even if JSON_BODY_LIMIT_LARGE is higher.
+      videoDataUrl: z.string().max(35_000_000).optional().nullable().transform(normalizeOptional),
       includeCaption: z.boolean().optional().default(true),
       disableLinkPreview: z.boolean().optional().default(false),
       confirm: z.boolean().optional()

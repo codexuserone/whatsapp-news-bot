@@ -3,7 +3,6 @@ const { getSupabaseClient } = require('../db/supabase');
 const { fetchAndProcessFeed } = require('./feedProcessor');
 const settingsService = require('./settingsService');
 const { isCurrentlyShabbos } = require('./shabbosService');
-const axios = require('axios');
 const cheerio = require('cheerio');
 const sleep = require('../utils/sleep');
 const logger = require('../utils/logger');
@@ -11,6 +10,7 @@ const withTimeout = require('../utils/withTimeout');
 const { getErrorMessage } = require('../utils/errorUtils');
 const { computeNextRunAt } = require('../utils/cron');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
+const { safeAxiosRequest } = require('../utils/safeAxios');
 const { normalizeMessageText } = require('../utils/messageText');
 const { ensureWhatsAppConnected } = require('./whatsappConnection');
 const { isScheduleRunning } = require('./scheduleState');
@@ -405,10 +405,10 @@ const collectDomImageCandidates = ($: any) => {
 };
 
 const scrapeImageFromPage = async (pageUrl: string) => {
-  await assertSafeOutboundUrl(pageUrl);
-  const response = await axios.get(pageUrl, {
+  const response = await safeAxiosRequest(pageUrl, {
     timeout: 12000,
     maxContentLength: 2 * 1024 * 1024,
+    maxBodyLength: 2 * 1024 * 1024,
     headers: {
       'User-Agent': DEFAULT_USER_AGENT,
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
@@ -450,11 +450,10 @@ const scrapeImageFromPage = async (pageUrl: string) => {
 };
 
 const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null) => {
-  await assertSafeOutboundUrl(imageUrl);
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
   const SUPPORTED_WHATSAPP_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
   const validUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-  const response = await axios.get(imageUrl, {
+  const response = await safeAxiosRequest(imageUrl, {
     timeout: 20000,
     responseType: 'arraybuffer',
     maxContentLength: MAX_IMAGE_BYTES,

@@ -4,8 +4,8 @@ const { validate, schemas } = require('../middleware/validation');
 const asyncHandler = require('../middleware/asyncHandler');
 const { badRequest } = require('../core/errors');
 const withTimeout = require('../utils/withTimeout');
-const axios = require('axios');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
+const { safeAxiosRequest } = require('../utils/safeAxios');
 const { getErrorMessage } = require('../utils/errorUtils');
 const { getSupabaseClient } = require('../db/supabase');
 const { normalizeMessageText } = require('../utils/messageText');
@@ -55,9 +55,8 @@ const isHttpUrl = (value: string) => {
 };
 
 const downloadImageBuffer = async (url: string) => {
-  await assertSafeOutboundUrl(url);
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-  const response = await axios.get(url, {
+  const response = await safeAxiosRequest(url, {
     timeout: DEFAULT_SEND_TIMEOUT_MS,
     responseType: 'arraybuffer',
     maxContentLength: MAX_IMAGE_BYTES,
@@ -126,7 +125,18 @@ const parseVideoDataUrl = (value: string) => {
   if (buffer.length > MAX_VIDEO_BYTES) {
     throw badRequest(`Video too large (${buffer.length} bytes)`);
   }
-  return { buffer, mimetype };
+
+  // WhatsApp media uploads are strict; require an MP4 container signature to avoid sending junk
+  // (or HTML error pages) as "video/*". MP4/MOV commonly contain "ftyp" at offset 4.
+  const hasMp4Signature =
+    buffer.length >= 12 && buffer.slice(4, 8).toString('ascii') === 'ftyp';
+  if (!hasMp4Signature) {
+    throw badRequest('videoDataUrl must be an mp4 video');
+  }
+
+  // Force mimetype to mp4 for consistency with WhatsApp expectations.
+  const finalMime = mimetype === 'video/mp4' ? mimetype : 'video/mp4';
+  return { buffer, mimetype: finalMime };
 };
 
 const normalizeChannelJid = (value: string) => {

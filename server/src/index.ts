@@ -329,9 +329,20 @@ const start = async () => {
       maxAge: 86400
     })
   );
-  // Large payload support is needed for /api/whatsapp/send-test imageDataUrl/videoDataUrl.
-  // Keep basic auth enabled in production to avoid exposing large-body endpoints publicly.
-  app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '30mb' }));
+
+  // Most API routes should not accept large JSON bodies. Only a small subset (for example,
+  // /api/whatsapp/send-test) needs a higher limit for base64 media payloads.
+  const defaultJsonLimit = process.env.JSON_BODY_LIMIT_DEFAULT || process.env.JSON_BODY_LIMIT || '2mb';
+  const largeJsonLimit = process.env.JSON_BODY_LIMIT_LARGE || process.env.JSON_BODY_LIMIT || '50mb';
+  const defaultJson = express.json({ limit: defaultJsonLimit });
+  const largeJson = express.json({ limit: largeJsonLimit });
+  app.use((req: any, res: any, next: any) => {
+    const path = String(req?.path || '');
+    const wantsLargeJson =
+      path === '/api/whatsapp/send-test' ||
+      path === '/api/whatsapp/send-test/';
+    return (wantsLargeJson ? largeJson : defaultJson)(req, res, next);
+  });
 
   // Serve static files in production
   const publicPath = path.join(__dirname, '../public');

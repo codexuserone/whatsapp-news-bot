@@ -245,10 +245,20 @@ const WhatsAppPage = () => {
       return;
     }
 
+    const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+    const MAX_VIDEO_BYTES = 24 * 1024 * 1024;
+    const maxBytes = isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
+    if (file.size > maxBytes) {
+      const maxLabel = isVideo ? '24MB' : '8MB';
+      alert(`File too large. Max allowed is ${maxLabel}.`);
+      event.target.value = '';
+      return;
+    }
+
     const reader = new FileReader();
     const dataUrl = await new Promise<string>((resolve, reject) => {
       reader.onload = () => resolve(String(reader.result || ''));
-      reader.onerror = () => reject(new Error('Failed to read image file'));
+      reader.onerror = () => reject(new Error('Failed to read file'));
       reader.readAsDataURL(file);
     }).catch(() => '');
 

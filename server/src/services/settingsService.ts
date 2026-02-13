@@ -40,6 +40,27 @@ const clampNumber = (value: unknown, fallback: number, min: number, max: number)
 const normalizeSettingsPatch = (updates: Record<string, unknown>) => {
   const next = { ...updates };
 
+  // Support legacy retention keys but keep one canonical value.
+  if (Object.prototype.hasOwnProperty.call(next, 'retention_days')) {
+    if (!Object.prototype.hasOwnProperty.call(next, 'log_retention_days')) {
+      next.log_retention_days = next.retention_days;
+    }
+    delete (next as Record<string, unknown>).retention_days;
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(next, 'retentionDays') &&
+    !Object.prototype.hasOwnProperty.call(next, 'log_retention_days')
+  ) {
+    next.log_retention_days = next.retentionDays;
+  }
+  if (Object.prototype.hasOwnProperty.call(next, 'log_retention_days')) {
+    next.log_retention_days = clampNumber(next.log_retention_days, DEFAULTS.log_retention_days, 1, 3650);
+    next.retentionDays = next.log_retention_days;
+  } else if (Object.prototype.hasOwnProperty.call(next, 'retentionDays')) {
+    next.retentionDays = clampNumber(next.retentionDays, DEFAULTS.log_retention_days, 1, 3650);
+    next.log_retention_days = next.retentionDays;
+  }
+
   if (Object.prototype.hasOwnProperty.call(next, 'post_send_edit_window_minutes')) {
     next.post_send_edit_window_minutes = clampNumber(
       next.post_send_edit_window_minutes,
@@ -127,6 +148,13 @@ const getSettings = async () => {
     }
     if (data.retentionDays == null && data.log_retention_days != null) {
       data.retentionDays = data.log_retention_days;
+    }
+    if (data.log_retention_days == null && data.retention_days != null) {
+      data.log_retention_days = data.retention_days;
+      data.retentionDays = data.retention_days;
+    }
+    if ('retention_days' in data) {
+      delete data.retention_days;
     }
     if ('send_images' in data) {
       delete data.send_images;

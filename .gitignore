@@ -13,7 +13,10 @@ coverage/
 .devlogs/
 server/*.log
 server/*.pid
+server_logs*.txt
 whatsapp-qr.png
 apps/web/*.log
 apps/web/*.pid
 pnpm-lock.yaml
+render-openapi.json
+tools/full-debug-e2e*.json

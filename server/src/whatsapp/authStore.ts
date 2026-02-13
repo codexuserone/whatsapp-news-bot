@@ -293,29 +293,15 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
       return { ok: true, supported: false, ownerId: null, expiresAt: null };
     }
 
-    const nowMs = Date.now();
+    const nowIso = new Date().toISOString();
     const expiresAt = new Date(Date.now() + Math.max(10_000, Number(ttlMs) || 0)).toISOString();
-    const current = await getCurrentLeaseRow();
-
-    if (current?.ownerId && current.ownerId !== ownerId) {
-      const expiryMs = current.expiresAt ? Date.parse(current.expiresAt) : Number.NaN;
-      const leaseStillValid = Number.isFinite(expiryMs) && expiryMs > nowMs;
-      if (leaseStillValid) {
-        leaseSupported = true;
-        return {
-          ok: false,
-          supported: true,
-          ownerId: current.ownerId,
-          expiresAt: current.expiresAt,
-          reason: 'lease_held'
-        };
-      }
-    }
 
     const { data, error: leaseError } = await supabase
       .from('auth_state')
       .update({ lease_owner: ownerId, lease_expires_at: expiresAt })
       .eq('session_id', sessionId)
+      // Only acquire when the lease is free/expired, or already owned by this instance.
+      .or(`lease_owner.is.null,lease_owner.eq.${ownerId},lease_expires_at.lt.${nowIso}`)
       .select('lease_owner,lease_expires_at');
 
     if (leaseError) {
@@ -336,27 +322,23 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
 
     leaseSupported = true;
     const row = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
-    let currentOwner = row?.lease_owner ? String(row.lease_owner) : current?.ownerId || null;
-    let currentExpiry = row?.lease_expires_at ? String(row.lease_expires_at) : current?.expiresAt || null;
-    const ok = currentOwner === ownerId;
-    if (ok) {
-      return { ok: true, supported: true, ownerId: currentOwner, expiresAt: currentExpiry || expiresAt };
+    if (row?.lease_owner && String(row.lease_owner) === ownerId) {
+      return {
+        ok: true,
+        supported: true,
+        ownerId,
+        expiresAt: row?.lease_expires_at ? String(row.lease_expires_at) : expiresAt
+      };
     }
 
-    // If we didn't update anything, fetch the current lease holder for better diagnostics.
-    if (!currentOwner || !currentExpiry) {
-      const current = await getCurrentLeaseRow();
-      if (current) {
-        currentOwner = current.ownerId;
-        currentExpiry = current.expiresAt;
-      }
-    }
+    // Lease not acquired (likely held by another instance). Fetch holder for diagnostics.
+    const current = await getCurrentLeaseRow();
 
     return {
       ok: false,
       supported: true,
-      ownerId: currentOwner,
-      expiresAt: currentExpiry,
+      ownerId: current?.ownerId || null,
+      expiresAt: current?.expiresAt || null,
       reason: 'lease_held'
     };
   };

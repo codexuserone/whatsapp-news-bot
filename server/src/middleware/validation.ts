@@ -2,11 +2,23 @@ import type { NextFunction, Request, Response } from 'express';
 import type { ZodIssue, ZodTypeAny } from 'zod';
 const { z } = require('zod');
 const { badRequest } = require('../core/errors');
+const cron = require('node-cron');
 
 const JID_PATTERN = /^([0-9+\s\-\(\)]+|status@broadcast|[0-9\-]+@g\.us|[0-9]+@s\.whatsapp\.net|[a-z0-9._-]+@newsletter(?:_[a-z0-9]+)?)$/i;
 
 // Validation schemas
 const normalizeOptional = (value: string | null | undefined) => (value === '' ? null : value);
+
+const isValidIanaTimezone = (value: unknown) => {
+  const tz = String(value || '').trim();
+  if (!tz) return false;
+  try {
+    Intl.DateTimeFormat('en-US', { timeZone: tz }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 const schemas = {
   scheduleBatchTime: z
@@ -16,7 +28,7 @@ const schemas = {
   schedule: z.object({
     name: z.string().min(1).max(255),
     cron_expression: z.string().optional().nullable().transform(normalizeOptional),
-    timezone: z.string().default('UTC'),
+    timezone: z.string().default('UTC').transform((value: string) => String(value || '').trim() || 'UTC'),
     feed_id: z.string().uuid(),
     target_ids: z.array(z.string().uuid()).min(1),
     template_id: z.string().uuid(),
@@ -27,7 +39,27 @@ const schemas = {
   }).superRefine((value: {
     delivery_mode?: 'immediate' | 'batch' | 'batched';
     batch_times?: string[];
+    timezone?: string;
+    cron_expression?: string | null;
   }, ctx: { addIssue: (issue: { code: string; path: string[]; message: string }) => void }) => {
+    const timezone = String(value.timezone || '').trim() || 'UTC';
+    if (!isValidIanaTimezone(timezone)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['timezone'],
+        message: 'Invalid timezone (must be an IANA timezone like "America/New_York")'
+      });
+    }
+
+    const cronExpression = String(value.cron_expression || '').trim().replace(/\s+/g, ' ');
+    if (cronExpression && !cron.validate(cronExpression)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['cron_expression'],
+        message: 'Invalid cron expression'
+      });
+    }
+
     if (value.delivery_mode !== 'batch' && value.delivery_mode !== 'batched') return;
     const times = Array.isArray(value.batch_times) ? value.batch_times : [];
     if (!times.length) {

@@ -868,7 +868,9 @@ class WhatsAppClient {
       // This prevents WhatsApp "conflict/replaced" errors during rolling deploys.
       // Keep lease protection ON by default so deploy overlaps don't fight for the same WA session.
       const skipLease = String(process.env.SKIP_WHATSAPP_LEASE || 'false').toLowerCase() === 'true';
-      const allowAutoTakeover = process.env.WHATSAPP_LEASE_AUTO_TAKEOVER !== 'false'; // Default to true
+      // Auto-takeover is intentionally opt-in: forcing takeovers during deploy overlaps can
+      // cause WhatsApp "conflict/replaced" churn. Use POST /api/whatsapp/takeover when needed.
+      const allowAutoTakeover = String(process.env.WHATSAPP_LEASE_AUTO_TAKEOVER || '').toLowerCase() === 'true';
       if (!skipLease && authStore.acquireLease) {
         try {
           const lease = await authStore.acquireLease(this.instanceId, 90_000);
@@ -878,14 +880,34 @@ class WhatsAppClient {
           this.leaseExpiresAt = lease.expiresAt;
 
           if (lease.supported && !lease.ok) {
-            // Auto-takeover: force acquire the lease immediately
-            // This prevents users from having to manually click "Take Over"
-            logger.warn({ holder: lease.ownerId }, 'Lease held, attempting auto-takeover...');
+            const nowMs = Date.now();
+            const expiryMs = lease.expiresAt ? Date.parse(lease.expiresAt) : Number.NaN;
+            const leaseStillValid = Number.isFinite(expiryMs) && expiryMs > nowMs;
+            const retryJitterMs = Math.random() * 5000;
+            const retryDelayMs = Number.isFinite(expiryMs)
+              ? Math.min(Math.max(expiryMs - nowMs, 10_000), 60_000) + retryJitterMs
+              : 15_000 + retryJitterMs;
+            const nearExpiry = Number.isFinite(expiryMs) ? expiryMs - nowMs <= 10_000 : true;
+
+            if (!allowAutoTakeover || (leaseStillValid && !nearExpiry)) {
+              logger.warn(
+                { holder: lease.ownerId, expiresAt: lease.expiresAt, retryDelayMs },
+                'Lease held by another instance; skipping connect until lease is available'
+              );
+              this.status = 'conflict';
+              this.lastError = 'Another instance currently holds the WhatsApp lease.';
+              await authStore.updateStatus('conflict');
+              this.isConnecting = false;
+              this.scheduleReconnect(retryDelayMs);
+              return;
+            }
+
+            logger.warn({ holder: lease.ownerId, expiresAt: lease.expiresAt }, 'Lease held, attempting auto-takeover...');
             this.status = 'connecting';
             this.lastError = null; // Don't show confusing messages to users
 
             try {
-              if (allowAutoTakeover && authStore.forceAcquireLease) {
+              if (authStore.forceAcquireLease) {
                 const takeover = await authStore.forceAcquireLease(this.instanceId, 90_000);
                 if (takeover.ok) {
                   logger.info('Auto-takeover successful');
@@ -900,16 +922,16 @@ class WhatsAppClient {
                   this.lastError = 'Another instance currently holds the WhatsApp lease.';
                   await authStore.updateStatus('conflict');
                   this.isConnecting = false;
-                  this.scheduleReconnect(15000 + Math.random() * 5000);
+                  this.scheduleReconnect(retryDelayMs);
                   return;
                 }
               } else {
-                logger.warn({ holder: lease.ownerId }, 'Lease held by another instance; skipping connect');
+                logger.warn('Auto-takeover requested but forceAcquireLease is not available; skipping connect');
                 this.status = 'conflict';
                 this.lastError = 'Another instance currently holds the WhatsApp lease.';
                 await authStore.updateStatus('conflict');
                 this.isConnecting = false;
-                this.scheduleReconnect(15000 + Math.random() * 5000);
+                this.scheduleReconnect(retryDelayMs);
                 return;
               }
             } catch (error) {
@@ -918,7 +940,7 @@ class WhatsAppClient {
               this.lastError = 'Failed to acquire WhatsApp lease.';
               await authStore.updateStatus('conflict');
               this.isConnecting = false;
-              this.scheduleReconnect(15000 + Math.random() * 5000);
+              this.scheduleReconnect(retryDelayMs);
               return;
             }
           }

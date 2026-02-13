@@ -329,7 +329,9 @@ const start = async () => {
       maxAge: 86400
     })
   );
-  app.use(express.json({ limit: '2mb' }));
+  // Large payload support is needed for /api/whatsapp/send-test imageDataUrl/videoDataUrl.
+  // Keep basic auth enabled in production to avoid exposing large-body endpoints publicly.
+  app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '30mb' }));
 
   // Serve static files in production
   const publicPath = path.join(__dirname, '../public');

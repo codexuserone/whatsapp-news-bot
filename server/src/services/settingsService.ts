@@ -163,6 +163,8 @@ const getSettings = async () => {
     Object.assign(
       data,
       normalizeSettingsPatch({
+        retentionDays: data.retentionDays,
+        log_retention_days: data.log_retention_days,
         post_send_edit_window_minutes: data.post_send_edit_window_minutes,
         post_send_correction_window_minutes: data.post_send_correction_window_minutes,
         app_paused: data.app_paused

@@ -12,6 +12,7 @@ const { computeNextRunAt } = require('../utils/cron');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { safeAxiosRequest } = require('../utils/safeAxios');
 const { normalizeMessageText } = require('../utils/messageText');
+const { isNewsletterJid, prepareNewsletterImage } = require('../utils/whatsappMedia');
 const { ensureWhatsAppConnected } = require('./whatsappConnection');
 const { isScheduleRunning } = require('./scheduleState');
 const { withScheduleLock } = require('./scheduleLockService');
@@ -460,7 +461,8 @@ const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null)
     maxBodyLength: MAX_IMAGE_BYTES,
     headers: {
       'User-Agent': validUserAgent,
-      'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      // Avoid asking for AVIF since WhatsApp media uploads are stricter and we don't transcode it.
+      'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
       'Referer': refererUrl ? new URL(refererUrl).origin : undefined,
       'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120"',
       'Sec-Ch-Ua-Mobile': '?0',
@@ -499,22 +501,18 @@ const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null)
     return null;
   };
 
-  if (!contentType.startsWith('image/')) {
-    throw new Error(`URL did not return an image (content-type: ${contentType || 'unknown'})`);
-  }
-  const normalizedMimeType = contentType.split(';')[0]?.trim() || '';
   const detectedMimeType = detectMimeTypeFromBuffer(buffer);
-  const finalMimeType = detectedMimeType || normalizedMimeType;
   if (!detectedMimeType) {
     throw new Error('Unsupported or corrupt image data for WhatsApp upload');
   }
-  if (!SUPPORTED_WHATSAPP_IMAGE_MIME.has(finalMimeType)) {
-    throw new Error(`Unsupported image MIME type for WhatsApp upload (${normalizedMimeType || 'unknown'})`);
+  if (!SUPPORTED_WHATSAPP_IMAGE_MIME.has(detectedMimeType)) {
+    const normalizedMimeType = contentType.split(';')[0]?.trim() || '';
+    throw new Error(`Unsupported image MIME type for WhatsApp upload (${normalizedMimeType || detectedMimeType})`);
   }
   if (buffer.length > MAX_IMAGE_BYTES) {
     throw new Error(`Image too large (${buffer.length} bytes)`);
   }
-  return { buffer, mimetype: finalMimeType };
+  return { buffer, mimetype: detectedMimeType };
 };
 
 const maybeUpdateFeedItemImage = async (
@@ -889,11 +887,32 @@ const sendMessageWithTemplate = async (
 
     try {
       const { buffer, mimetype } = await downloadImageBuffer(safeUrl, feedItem.link);
+      let sendBuffer = buffer;
+      let sendMime = mimetype;
+      let newsletterExtras: Record<string, unknown> | null = null;
+      if (isNewsletterJid(jid)) {
+        try {
+          const prepared = await prepareNewsletterImage(buffer, { maxBytes: 8 * 1024 * 1024 });
+          sendBuffer = prepared.buffer;
+          sendMime = prepared.mimetype || sendMime;
+          newsletterExtras = {
+            ...(prepared.jpegThumbnail ? { jpegThumbnail: prepared.jpegThumbnail } : {}),
+            ...(typeof prepared.width === 'number' ? { width: prepared.width } : {}),
+            ...(typeof prepared.height === 'number' ? { height: prepared.height } : {})
+          };
+        } catch (error) {
+          logger.warn({ error, jid }, 'Failed to normalize newsletter image; sending original buffer');
+        }
+      }
+
       const content: Record<string, unknown> = includeImageCaption
-        ? { image: buffer, caption: renderedText }
-        : { image: buffer };
-      if (mimetype) {
-        content.mimetype = mimetype;
+        ? { image: sendBuffer, caption: renderedText }
+        : { image: sendBuffer };
+      if (sendMime) {
+        content.mimetype = sendMime;
+      }
+      if (newsletterExtras && Object.keys(newsletterExtras).length) {
+        Object.assign(content, newsletterExtras);
       }
 
       const response =

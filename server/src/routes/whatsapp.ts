@@ -10,6 +10,7 @@ const { getErrorMessage } = require('../utils/errorUtils');
 const { getSupabaseClient } = require('../db/supabase');
 const { normalizeMessageText } = require('../utils/messageText');
 const { ensureWhatsAppConnected } = require('../services/whatsappConnection');
+const { isNewsletterJid, prepareNewsletterImage } = require('../utils/whatsappMedia');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const DEFAULT_USER_AGENT =
@@ -63,15 +64,13 @@ const downloadImageBuffer = async (url: string) => {
     maxBodyLength: MAX_IMAGE_BYTES,
     headers: {
       'User-Agent': DEFAULT_USER_AGENT,
-      Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
+      // Avoid asking for AVIF since WhatsApp uploads are stricter and we don't transcode it.
+      Accept: 'image/webp,image/apng,image/*,*/*;q=0.8'
     }
   });
   const contentType = String(response.headers?.['content-type'] || '').toLowerCase();
   const data = response.data;
   const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-  if (!contentType.startsWith('image/')) {
-    throw new Error(`URL did not return an image (content-type: ${contentType || 'unknown'})`);
-  }
   if (buffer.length > MAX_IMAGE_BYTES) {
     throw new Error(`Image too large (${buffer.length} bytes)`);
   }
@@ -956,7 +955,52 @@ const whatsappRoutes = () => {
 
     for (const normalizedJid of normalizedJids) {
       try {
-        const effectiveContent = content;
+        let effectiveContent: Record<string, unknown> = content;
+
+        // Baileys uses a special raw-media path for newsletters; in practice it is far pickier
+        // about image payloads. Normalize newsletter images to JPEG and include thumbnails/dimensions.
+        if (isNewsletterJid(normalizedJid)) {
+          const imageValue = (content as any)?.image;
+          if (Buffer.isBuffer(imageValue)) {
+            try {
+              const prepared = await prepareNewsletterImage(imageValue, { maxBytes: 8 * 1024 * 1024 });
+              effectiveContent = {
+                ...content,
+                image: prepared.buffer,
+                mimetype: prepared.mimetype || (content as any)?.mimetype,
+                ...(prepared.jpegThumbnail ? { jpegThumbnail: prepared.jpegThumbnail } : {}),
+                ...(typeof prepared.width === 'number' ? { width: prepared.width } : {}),
+                ...(typeof prepared.height === 'number' ? { height: prepared.height } : {})
+              };
+            } catch {
+              // Best-effort only; fall back to the original payload.
+              effectiveContent = content;
+            }
+          } else if (
+            imageValue &&
+            typeof imageValue === 'object' &&
+            typeof (imageValue as any).url === 'string' &&
+            isHttpUrl(String((imageValue as any).url))
+          ) {
+            // If we reached a URL-send fallback, try to prefetch+normalize anyway for newsletters.
+            // This avoids Baileys' internal fetch (no referer/UA) which often fails on hotlink-protected CDNs.
+            try {
+              const { buffer } = await downloadImageBuffer(String((imageValue as any).url));
+              const prepared = await prepareNewsletterImage(buffer, { maxBytes: 8 * 1024 * 1024 });
+              effectiveContent = {
+                ...content,
+                image: prepared.buffer,
+                mimetype: prepared.mimetype || (content as any)?.mimetype,
+                ...(prepared.jpegThumbnail ? { jpegThumbnail: prepared.jpegThumbnail } : {}),
+                ...(typeof prepared.width === 'number' ? { width: prepared.width } : {}),
+                ...(typeof prepared.height === 'number' ? { height: prepared.height } : {})
+              };
+            } catch {
+              // Keep URL-based fallback.
+              effectiveContent = content;
+            }
+          }
+        }
 
         const sendPromise = isStatusBroadcast(normalizedJid)
           ? whatsapp.sendStatusBroadcast(effectiveContent)

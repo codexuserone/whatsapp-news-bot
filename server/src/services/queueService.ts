@@ -11,7 +11,7 @@ const { getErrorMessage } = require('../utils/errorUtils');
 const { computeNextRunAt } = require('../utils/cron');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { safeAxiosRequest } = require('../utils/safeAxios');
-const { normalizeMessageText } = require('../utils/messageText');
+const { normalizeMessageText, escapeWhatsAppFormatting } = require('../utils/messageText');
 const { isNewsletterJid, prepareNewsletterImage, prepareNewsletterVideo } = require('../utils/whatsappMedia');
 const { ensureWhatsAppConnected } = require('./whatsappConnection');
 const { isScheduleRunning } = require('./scheduleState');
@@ -23,6 +23,9 @@ type Target = {
   type: 'individual' | 'group' | 'channel' | 'status';
   name?: string;
   active?: boolean;
+  message_delay_ms_override?: number | null;
+  inter_target_delay_sec_override?: number | null;
+  intra_target_delay_sec_override?: number | null;
 };
 
 type Template = {
@@ -196,12 +199,24 @@ const withGlobalSendLock = async <T>(fn: () => Promise<T>): Promise<T> => {
 };
 
 const waitForDelays = async (
-  targetId: string,
+  target: Target,
   settings: Record<string, unknown>
 ) => {
-  const messageDelayMs = Number(settings.message_delay_ms || 0);
-  const interTargetDelayMs = Number(settings.defaultInterTargetDelaySec || 0) * 1000;
-  const intraTargetDelayMs = Number(settings.defaultIntraTargetDelaySec || 0) * 1000;
+  const targetId = String(target?.id || target?.phone_number || '').trim();
+  const toInt = (value: unknown, fallback: number) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(0, Math.floor(parsed));
+  };
+  const baseMessageDelayMs = toInt(settings.message_delay_ms, 0);
+  const baseInterTargetDelaySec = toInt(settings.defaultInterTargetDelaySec, 0);
+  const baseIntraTargetDelaySec = toInt(settings.defaultIntraTargetDelaySec, 0);
+
+  const messageDelayMs = toInt(target?.message_delay_ms_override ?? baseMessageDelayMs, baseMessageDelayMs);
+  const interTargetDelayMs =
+    toInt(target?.inter_target_delay_sec_override ?? baseInterTargetDelaySec, baseInterTargetDelaySec) * 1000;
+  const intraTargetDelayMs =
+    toInt(target?.intra_target_delay_sec_override ?? baseIntraTargetDelaySec, baseIntraTargetDelaySec) * 1000;
 
   const minBetweenAnyMs = Math.max(messageDelayMs, 0);
   const minBetweenSameTargetMs = Math.max(messageDelayMs, intraTargetDelayMs, 0);
@@ -245,7 +260,7 @@ const isAuthStateError = (message: string) => {
 const applyTemplate = (templateBody: string, data: Record<string, unknown>): string => {
   const rendered = templateBody.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
     const value = data[key];
-    return value != null ? String(value) : '';
+    return value != null ? escapeWhatsAppFormatting(value) : '';
   });
   return normalizeMessageText(rendered);
 };
@@ -1355,10 +1370,10 @@ const reconcileUpdatedFeedItems = async (
       String(log.whatsapp_message_id || '').trim()
     );
 
-      if (hasEditCandidate) {
-        try {
-          await withGlobalSendLock(async () => {
-            await waitForDelays(normalizedTargetId, settings);
+          if (hasEditCandidate) {
+          try {
+            await withGlobalSendLock(async () => {
+            await waitForDelays(target as Target, settings);
           await withTimeout(
             whatsappClient.editMessage!(
               jid,
@@ -1422,6 +1437,7 @@ type Schedule = {
   last_dispatched_at?: string | null;
   created_at?: string | null;
   active?: boolean;
+  approval_required?: boolean | null;
 };
 
 type SendQueuedOptions = {
@@ -1538,6 +1554,8 @@ const queueSinceLastRunForSchedule = async (
   const targetIds = targets.map((t) => t.id).filter(Boolean) as string[];
   if (!targetIds.length) return { queued: 0, feedItemCount: 0, cursorAt: null };
 
+  const queuedStatus = schedule.approval_required === true ? 'awaiting_approval' : 'pending';
+
   const FEED_PAGE_SIZE = 200;
   const LOG_BATCH_SIZE = 1000;
 
@@ -1630,7 +1648,9 @@ const queueSinceLastRunForSchedule = async (
           target_id: targetId,
           schedule_id: schedule.id,
           template_id: schedule.template_id,
-          status: 'pending'
+          status: queuedStatus,
+          approved_at: null,
+          approved_by: null
         });
         if (batch.length >= LOG_BATCH_SIZE) {
           totalQueued += await flushBatch(batch);
@@ -1685,6 +1705,8 @@ const queueRecentMissingForSchedule = async (
   const targetIds = targets.map((target) => target.id).filter(Boolean) as string[];
   if (!targetIds.length) return 0;
 
+  const queuedStatus = schedule.approval_required === true ? 'awaiting_approval' : 'pending';
+
   const pendingRows: Array<Record<string, unknown>> = [];
   for (const item of recentItems as Array<{ id?: string }>) {
     const feedItemId = item?.id ? String(item.id) : null;
@@ -1695,7 +1717,9 @@ const queueRecentMissingForSchedule = async (
         target_id: targetId,
         schedule_id: schedule.id,
         template_id: schedule.template_id,
-        status: 'pending'
+        status: queuedStatus,
+        approved_at: null,
+        approved_by: null
       });
     }
   }
@@ -1780,7 +1804,7 @@ const queueLatestForSchedule = async (
   const targetIds = targets.map((target) => target.id).filter(Boolean) as string[];
   const { data: existingLogs, error: existingLogsError } = await supabase
     .from('message_logs')
-    .select('id, target_id, status, error_message')
+    .select('id, target_id, status, error_message, approved_at')
     .eq('schedule_id', schedule.id)
     .eq('feed_item_id', latestFeedItem.id)
     .in('target_id', targetIds);
@@ -1789,7 +1813,13 @@ const queueLatestForSchedule = async (
     logger.warn({ scheduleId: schedule.id, error: existingLogsError }, 'Failed to check existing logs');
   }
 
-  type ExistingLogRow = { id: string; target_id: string; status: string; error_message?: string | null };
+  type ExistingLogRow = {
+    id: string;
+    target_id: string;
+    status: string;
+    error_message?: string | null;
+    approved_at?: string | null;
+  };
   const existingByTarget = new Map<string, ExistingLogRow>();
   for (const row of (existingLogs || []) as Array<Partial<ExistingLogRow>>) {
     if (!row?.id || !row?.target_id || !row?.status) continue;
@@ -1797,12 +1827,17 @@ const queueLatestForSchedule = async (
       id: String(row.id),
       target_id: String(row.target_id),
       status: String(row.status),
-      error_message: row.error_message ? String(row.error_message) : null
+      error_message: row.error_message ? String(row.error_message) : null,
+      approved_at: row.approved_at ? String(row.approved_at) : null
     });
   }
 
+  const requiresApproval = schedule.approval_required === true;
+  const queuedStatus = requiresApproval ? 'awaiting_approval' : 'pending';
+
   const toInsert: Array<Record<string, unknown>> = [];
-  const toRevive: string[] = [];
+  const toRevivePending: string[] = [];
+  const toReviveAwaitingApproval: string[] = [];
   let skipped = 0;
 
   for (const targetId of targetIds) {
@@ -1813,7 +1848,9 @@ const queueLatestForSchedule = async (
         target_id: targetId,
         schedule_id: schedule.id,
         template_id: schedule.template_id,
-        status: 'pending'
+        status: queuedStatus,
+        approved_at: null,
+        approved_by: null
       });
       continue;
     }
@@ -1829,19 +1866,32 @@ const queueLatestForSchedule = async (
     }
 
     if (existing.status === 'failed' || existing.status === 'skipped') {
-      toRevive.push(existing.id);
+      if (requiresApproval && !String(existing.approved_at || '').trim()) {
+        toReviveAwaitingApproval.push(existing.id);
+      } else {
+        toRevivePending.push(existing.id);
+      }
       continue;
     }
   }
 
   let revived = 0;
-  if (toRevive.length) {
+  if (toRevivePending.length) {
     const { data: revivedRows } = await supabase
       .from('message_logs')
       .update({ status: 'pending', error_message: null, retry_count: 0, processing_started_at: null })
-      .in('id', toRevive)
+      .in('id', toRevivePending)
       .select('id');
-    revived = revivedRows?.length || 0;
+    revived += revivedRows?.length || 0;
+  }
+
+  if (toReviveAwaitingApproval.length) {
+    const { data: revivedRows } = await supabase
+      .from('message_logs')
+      .update({ status: 'awaiting_approval', error_message: null, retry_count: 0, processing_started_at: null })
+      .in('id', toReviveAwaitingApproval)
+      .select('id');
+    revived += revivedRows?.length || 0;
   }
 
   let inserted = 0;
@@ -2379,9 +2429,9 @@ const sendQueuedForSchedule = async (
           continue;
         }
 
-        try {
+          try {
             const sendResult = await withGlobalSendLock(async () => {
-              await waitForDelays(String(target.id), settings);
+              await waitForDelays(target as Target, settings);
               const result = await sendMessageWithTemplate(whatsappClient, target, template, feedItem, {
                 supabase,
                 sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
@@ -2641,16 +2691,23 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       return { ok: false, error: 'Queue item is missing schedule, target, or feed item' };
     }
 
+    const actor = process.env.BASIC_AUTH_USER || 'send-now';
+    const claimPatch: Record<string, unknown> = {
+      status: 'processing',
+      processing_started_at: new Date().toISOString(),
+      retry_count: 0,
+      error_message: null
+    };
+    if (log.status === 'awaiting_approval') {
+      claimPatch.approved_at = new Date().toISOString();
+      claimPatch.approved_by = actor;
+    }
+
     const { data: claimRows, error: claimError } = await supabase
       .from('message_logs')
-      .update({
-        status: 'processing',
-        processing_started_at: new Date().toISOString(),
-        retry_count: 0,
-        error_message: null
-      })
+      .update(claimPatch)
       .eq('id', log.id)
-      .in('status', ['pending', 'failed', 'skipped'])
+      .in('status', ['awaiting_approval', 'pending', 'failed', 'skipped'])
       .select('id');
 
     if (claimError) {
@@ -2738,10 +2795,10 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       return { ok: false, error: 'Template not found' };
     }
 
-    const settings = await settingsService.getSettings();
-    try {
-      const sendResult = await withGlobalSendLock(async () => {
-        await waitForDelays(String(targetRes.data.id), settings);
+      const settings = await settingsService.getSettings();
+      try {
+        const sendResult = await withGlobalSendLock(async () => {
+        await waitForDelays(targetRes.data as Target, settings);
         const result = await sendMessageWithTemplate(
           activeWhatsappClient,
           targetRes.data as Target,

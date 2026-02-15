@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '@/components/ui/table';
 import {
   AlertDialog,
@@ -22,7 +23,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from '@/components/ui/alert-dialog';
-import { Target as TargetIcon, Users, Radio, MessageSquare, Trash2, AlertTriangle, Loader2, RefreshCw, Plus } from 'lucide-react';
+import { Target as TargetIcon, Users, Radio, MessageSquare, Trash2, AlertTriangle, Loader2, RefreshCw, Plus, Pencil, Save, X } from 'lucide-react';
 
 const TYPE_BADGES: Record<
   Target['type'],
@@ -40,6 +41,9 @@ type TargetPayload = {
   type: Target['type'];
   active: boolean;
   notes?: string | null;
+  message_delay_ms_override?: number | null;
+  inter_target_delay_sec_override?: number | null;
+  intra_target_delay_sec_override?: number | null;
 };
 
 type ChannelDiagnostics = {
@@ -83,6 +87,16 @@ const TargetsPage = () => {
   const [addNotice, setAddNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [discoveryNotice, setDiscoveryNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Target | null>(null);
+  const [editingTargetId, setEditingTargetId] = useState<string | null>(null);
+  const [delayDraft, setDelayDraft] = useState<{
+    message_delay_ms_override: string;
+    inter_target_delay_sec_override: string;
+    intra_target_delay_sec_override: string;
+  }>({
+    message_delay_ms_override: '',
+    inter_target_delay_sec_override: '',
+    intra_target_delay_sec_override: ''
+  });
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
     queryKey: ['targets'],
@@ -385,51 +399,189 @@ const TargetsPage = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredTargets.map((target) => (
-                    <TableRow key={target.id}>
-                      <TableCell>
-                        <Checkbox
-                          checked={target.active}
-                          onCheckedChange={(checked) =>
-                            updateTarget.mutate({
-                              id: target.id,
-                              payload: {
-                                name: target.name,
-                                phone_number: target.phone_number,
-                                type: target.type,
-                                active: checked === true,
-                                notes: target.notes || null
-                              }
-                            })
+                  {filteredTargets.map((target) => {
+                    const isEditing = editingTargetId === target.id;
+                    const openDelayEditor = () => {
+                      setEditingTargetId(target.id);
+                      setDelayDraft({
+                        message_delay_ms_override:
+                          target.message_delay_ms_override == null ? '' : String(target.message_delay_ms_override),
+                        inter_target_delay_sec_override:
+                          target.inter_target_delay_sec_override == null ? '' : String(target.inter_target_delay_sec_override),
+                        intra_target_delay_sec_override:
+                          target.intra_target_delay_sec_override == null ? '' : String(target.intra_target_delay_sec_override)
+                      });
+                    };
+
+                    const parseOptionalInt = (value: string, options: { min: number; max: number }) => {
+                      const raw = String(value || '').trim();
+                      if (!raw) return null;
+                      const parsed = Number(raw);
+                      if (!Number.isFinite(parsed)) return null;
+                      const clamped = Math.min(Math.max(Math.floor(parsed), options.min), options.max);
+                      return clamped;
+                    };
+
+                    const saveDelayOverrides = () => {
+                      updateTarget.mutate(
+                        {
+                          id: target.id,
+                          payload: {
+                            name: target.name,
+                            phone_number: target.phone_number,
+                            type: target.type,
+                            active: target.active,
+                            notes: target.notes || null,
+                            message_delay_ms_override: parseOptionalInt(delayDraft.message_delay_ms_override, { min: 0, max: 60000 }),
+                            inter_target_delay_sec_override: parseOptionalInt(delayDraft.inter_target_delay_sec_override, { min: 0, max: 600 }),
+                            intra_target_delay_sec_override: parseOptionalInt(delayDraft.intra_target_delay_sec_override, { min: 0, max: 600 })
                           }
-                        />
-                      </TableCell>
-                      <TableCell className="font-medium">
-                        <div className="min-w-0">
-                          <p className="truncate">{target.name}</p>
-                          {target.notes ? <p className="truncate text-xs text-muted-foreground">{target.notes}</p> : null}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={TYPE_BADGES[target.type]?.variant || 'secondary'}>
-                          {TYPE_BADGES[target.type]?.label || target.type}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="hidden max-w-[280px] truncate text-xs text-muted-foreground md:table-cell">
-                        {target.phone_number}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setDeleteTarget(target)}
-                          className="text-destructive hover:text-destructive"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                        },
+                        {
+                          onSuccess: () => {
+                            setEditingTargetId(null);
+                          }
+                        }
+                      );
+                    };
+
+                    const cancelDelayOverrides = () => {
+                      setEditingTargetId(null);
+                      setDelayDraft({
+                        message_delay_ms_override: '',
+                        inter_target_delay_sec_override: '',
+                        intra_target_delay_sec_override: ''
+                      });
+                    };
+
+                    return (
+                      <React.Fragment key={target.id}>
+                        <TableRow>
+                          <TableCell>
+                            <Checkbox
+                              checked={target.active}
+                              onCheckedChange={(checked) =>
+                                updateTarget.mutate({
+                                  id: target.id,
+                                  payload: {
+                                    name: target.name,
+                                    phone_number: target.phone_number,
+                                    type: target.type,
+                                    active: checked === true,
+                                    notes: target.notes || null
+                                  }
+                                })
+                              }
+                            />
+                          </TableCell>
+                          <TableCell className="font-medium">
+                            <div className="min-w-0">
+                              <p className="truncate">{target.name}</p>
+                              {target.notes ? <p className="truncate text-xs text-muted-foreground">{target.notes}</p> : null}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={TYPE_BADGES[target.type]?.variant || 'secondary'}>
+                              {TYPE_BADGES[target.type]?.label || target.type}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="hidden max-w-[280px] truncate text-xs text-muted-foreground md:table-cell">
+                            {target.phone_number}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={openDelayEditor}
+                                title="Edit per-target delays"
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setDeleteTarget(target)}
+                                className="text-destructive hover:text-destructive"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+
+                        {isEditing ? (
+                          <TableRow>
+                            <TableCell colSpan={5} className="bg-muted/20">
+                              <div className="grid gap-3 sm:grid-cols-3">
+                                <div className="space-y-1.5">
+                                  <Label htmlFor={`delay_ms_${target.id}`}>Message delay override (ms)</Label>
+                                  <Input
+                                    id={`delay_ms_${target.id}`}
+                                    type="number"
+                                    min={0}
+                                    max={60000}
+                                    placeholder="Default"
+                                    value={delayDraft.message_delay_ms_override}
+                                    onChange={(event) =>
+                                      setDelayDraft((current) => ({ ...current, message_delay_ms_override: event.target.value }))
+                                    }
+                                  />
+                                  <p className="text-[11px] text-muted-foreground">Blank = use global setting.</p>
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label htmlFor={`delay_inter_${target.id}`}>Between targets override (sec)</Label>
+                                  <Input
+                                    id={`delay_inter_${target.id}`}
+                                    type="number"
+                                    min={0}
+                                    max={600}
+                                    placeholder="Default"
+                                    value={delayDraft.inter_target_delay_sec_override}
+                                    onChange={(event) =>
+                                      setDelayDraft((current) => ({
+                                        ...current,
+                                        inter_target_delay_sec_override: event.target.value
+                                      }))
+                                    }
+                                  />
+                                  <p className="text-[11px] text-muted-foreground">Blank = use global setting.</p>
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label htmlFor={`delay_intra_${target.id}`}>Within one target override (sec)</Label>
+                                  <Input
+                                    id={`delay_intra_${target.id}`}
+                                    type="number"
+                                    min={0}
+                                    max={600}
+                                    placeholder="Default"
+                                    value={delayDraft.intra_target_delay_sec_override}
+                                    onChange={(event) =>
+                                      setDelayDraft((current) => ({
+                                        ...current,
+                                        intra_target_delay_sec_override: event.target.value
+                                      }))
+                                    }
+                                  />
+                                  <p className="text-[11px] text-muted-foreground">Blank = use global setting.</p>
+                                </div>
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <Button size="sm" onClick={saveDelayOverrides} disabled={updateTarget.isPending}>
+                                  {updateTarget.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                                  Save delays
+                                </Button>
+                                <Button size="sm" variant="outline" onClick={cancelDelayOverrides}>
+                                  <X className="mr-2 h-4 w-4" />
+                                  Cancel
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ) : null}
+                      </React.Fragment>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>

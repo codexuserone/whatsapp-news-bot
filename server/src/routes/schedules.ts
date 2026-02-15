@@ -393,7 +393,7 @@ const scheduleRoutes = () => {
         .from('message_logs')
         .delete()
         .eq('schedule_id', scheduleId)
-        .in('status', ['pending', 'processing', 'failed', 'skipped']);
+        .in('status', ['awaiting_approval', 'pending', 'processing', 'failed', 'skipped']);
       if (unsentCleanupError) throw unsentCleanupError;
 
       const { error } = await getDb()

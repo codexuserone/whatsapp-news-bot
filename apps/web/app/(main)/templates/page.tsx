@@ -29,12 +29,20 @@ const schema = z.object({
 
 type TemplateFormValues = z.infer<typeof schema>;
 
+const WORD_JOINER = '\u2060';
+
+const escapeWhatsAppFormatting = (value: unknown) => {
+  const text = String(value ?? '');
+  if (!text) return '';
+  return text.replace(/([*_~`])(?!\u2060)/g, `$1${WORD_JOINER}`);
+};
+
 const applyTemplate = (content: string, data: Record<string, unknown>) => {
   if (!content || !data) return content;
   return content.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key) => {
     const value = data[key];
     if (value === undefined || value === null) return `{{${key}}}`;
-    return String(value);
+    return escapeWhatsAppFormatting(value);
   });
 };
 
@@ -51,10 +59,10 @@ const formatWhatsAppMarkdown = (text: string) => {
   if (!text) return '';
   const safe = escapeHtml(text);
   return safe
-    .replace(/\*(.*?)\*/g, '<strong>$1</strong>')
-    .replace(/_(.*?)_/g, '<em>$1</em>')
-    .replace(/~(.*?)~/g, '<del>$1</del>')
-    .replace(/```([\s\S]*?)```/g, '<code>$1</code>')
+    .replace(/```(?!\u2060)([\s\S]*?)```(?!\u2060)/g, '<code>$1</code>')
+    .replace(/\*(?!\u2060)(.*?)\*(?!\u2060)/g, '<strong>$1</strong>')
+    .replace(/_(?!\u2060)(.*?)_(?!\u2060)/g, '<em>$1</em>')
+    .replace(/~(?!\u2060)(.*?)~(?!\u2060)/g, '<del>$1</del>')
     .replace(/\n/g, '<br/>');
 };
 

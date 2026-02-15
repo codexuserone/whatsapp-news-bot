@@ -31,7 +31,7 @@ const logRoutes = () => {
         query = query.eq('status', statusFilter);
       } else if (!includeQueue) {
         // Logs page is delivery history by default. Queue/processing states belong in /api/queue.
-        query = query.not('status', 'in', '("pending","processing")');
+        query = query.not('status', 'in', '("awaiting_approval","pending","processing")');
       }
       
       const { data: logs, error } = await query;

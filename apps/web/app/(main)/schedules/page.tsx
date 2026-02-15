@@ -25,6 +25,7 @@ const schema = z.object({
   schedule_preset: z.enum(['every15', 'every30', 'hourly', 'daily', 'weekly']).default('daily'),
   delivery_mode: z.enum(['immediate', 'batched']).default('immediate'),
   batch_times: z.array(z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/)).default(['09:00', '20:00']),
+  approval_required: z.boolean().default(false),
   time_of_day: z.string().default('09:00'),
   day_of_week: z.enum(['0', '1', '2', '3', '4', '5', '6']).default('1'),
   timezone: z.string().optional(),
@@ -44,6 +45,7 @@ type ScheduleApiPayload = {
   template_id: string;
   delivery_mode: 'immediate' | 'batch' | 'batched';
   batch_times: string[];
+  approval_required: boolean;
   state: 'active' | 'paused' | 'stopped';
   active: boolean;
 };
@@ -230,6 +232,7 @@ const SchedulesPage = () => {
       schedule_preset: 'daily',
       delivery_mode: 'immediate',
       batch_times: DEFAULT_BATCH_TIMES,
+      approval_required: false,
       time_of_day: '09:00',
       day_of_week: '1',
       timezone: defaultTimezone,
@@ -254,6 +257,7 @@ const SchedulesPage = () => {
           Array.isArray(active.batch_times) && active.batch_times.length
             ? active.batch_times
             : DEFAULT_BATCH_TIMES,
+        approval_required: active.approval_required === true,
         time_of_day: timing.time_of_day,
         day_of_week: timing.day_of_week,
         timezone: active.timezone || localTimezone,
@@ -294,6 +298,7 @@ const SchedulesPage = () => {
           schedule_preset: 'daily',
           delivery_mode: 'immediate',
           batch_times: DEFAULT_BATCH_TIMES,
+          approval_required: false,
           time_of_day: '09:00',
           day_of_week: '1',
           timezone: defaultTimezone,
@@ -471,6 +476,7 @@ const SchedulesPage = () => {
       template_id: values.template_id,
       delivery_mode: deliveryMode,
       batch_times: normalizedBatchTimes.length ? normalizedBatchTimes : DEFAULT_BATCH_TIMES,
+      approval_required: values.approval_required === true,
       state: nextState,
       active: nextState === 'active'
     };
@@ -711,6 +717,29 @@ const SchedulesPage = () => {
 
               <p className="text-xs text-muted-foreground">First run sends the latest item. Future runs catch up on new items automatically.</p>
 
+              <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-3">
+                <Controller
+                  control={form.control}
+                  name="approval_required"
+                  render={({ field }) => (
+                    <Checkbox
+                      id="approval_required"
+                      checked={field.value === true}
+                      onCheckedChange={(checked) => field.onChange(checked === true)}
+                    />
+                  )}
+                />
+                <div className="space-y-1">
+                  <Label htmlFor="approval_required" className="cursor-pointer">
+                    Require approval before sending
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    New queue items will be created as <span className="font-medium">Awaiting approval</span> and will
+                    not send until you approve them in Queue.
+                  </p>
+                </div>
+              </div>
+
               <div className="space-y-2">
                 <Label htmlFor="feed_id">Feed</Label>
                 <Controller
@@ -896,6 +925,9 @@ const SchedulesPage = () => {
                         <span>Last: {formatDateTime(schedule.last_run_at)}</span>
                         {feedDisabled ? (
                           <span className="text-warning-foreground">Feed disabled</span>
+                        ) : null}
+                        {schedule.approval_required ? (
+                          <span className="text-warning-foreground">Approval required</span>
                         ) : null}
                       </div>
                     </div>

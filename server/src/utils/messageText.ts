@@ -11,6 +11,16 @@ const ARROW_REPLACEMENTS: Array<[RegExp, string]> = [
   [/➠/g, '->']
 ];
 
+// Used to break WhatsApp markdown delimiters inside variable values (e.g. titles with underscores).
+// WhatsApp has no true escaping; inserting an invisible joiner prevents accidental formatting.
+const WORD_JOINER = '\u2060';
+
+const escapeWhatsAppFormatting = (value: unknown): string => {
+  const text = String(value ?? '');
+  if (!text) return '';
+  return text.replace(/([*_~`])(?!\u2060)/g, `$1${WORD_JOINER}`);
+};
+
 const normalizeMessageText = (value: unknown): string => {
   let normalized = String(value ?? '')
     .replace(/\r\n?/g, '\n')
@@ -25,7 +35,8 @@ const normalizeMessageText = (value: unknown): string => {
 };
 
 module.exports = {
-  normalizeMessageText
+  normalizeMessageText,
+  escapeWhatsAppFormatting
 };
 
 export {};

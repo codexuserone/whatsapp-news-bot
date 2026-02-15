@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 
 type QueueStats = {
+  awaiting_approval?: number;
   pending: number;
   processing: number;
   sent: number;
@@ -54,7 +55,13 @@ const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | nu
   }
 };
 
-const WHATSAPP_SENT_EDIT_WINDOW_MINUTES = 15;
+const WHATSAPP_SENT_EDIT_MAX_MINUTES = 15;
+
+const normalizeEditWindowMinutes = (value: unknown) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return WHATSAPP_SENT_EDIT_MAX_MINUTES;
+  return Math.min(Math.max(Math.floor(parsed), 1), WHATSAPP_SENT_EDIT_MAX_MINUTES);
+};
 
 const isSafeImageSrc = (value: unknown) => {
   const src = String(value || '').trim();
@@ -71,7 +78,7 @@ const deriveDefaultMessage = (item: QueueItem) => {
   return chunks.join('\n\n');
 };
 
-const canEditSentInPlace = (item: QueueItem) => {
+const canEditSentInPlace = (item: QueueItem, editWindowMinutes: number) => {
   if (item.status !== 'sent') return false;
   if (item.target_type === 'status' || item.target_type === 'channel') return false;
   if (!String(item.whatsapp_message_id || '').trim()) return false;
@@ -81,7 +88,7 @@ const canEditSentInPlace = (item: QueueItem) => {
   if (!Number.isFinite(sentMs)) return false;
   const ageMs = Date.now() - sentMs;
   if (ageMs < 0) return false;
-  return ageMs <= WHATSAPP_SENT_EDIT_WINDOW_MINUTES * 60 * 1000;
+  return ageMs <= editWindowMinutes * 60 * 1000;
 };
 
 const QueuePage = () => {
@@ -91,6 +98,13 @@ const QueuePage = () => {
   const [draftMessage, setDraftMessage] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [actionNotice, setActionNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const { data: settings } = useQuery<{ post_send_edit_window_minutes?: number }>({
+    queryKey: ['settings'],
+    queryFn: () => api.get('/api/settings'),
+    staleTime: 60000
+  });
+  const editWindowMinutes = normalizeEditWindowMinutes(settings?.post_send_edit_window_minutes);
 
   const refreshQueueViews = () => {
     queryClient.invalidateQueries({ queryKey: ['queue'] });
@@ -226,6 +240,28 @@ const QueuePage = () => {
     }
   });
 
+  const approveItem = useMutation({
+    mutationFn: (id: string) => api.post(`/api/queue/${id}/approve`),
+    onSuccess: () => {
+      setActionNotice({ type: 'success', message: 'Approved. Item is now queued to send.' });
+      refreshQueueViews();
+    },
+    onError: (error: unknown) => {
+      setActionNotice({ type: 'error', message: `Approve failed: ${getMutationErrorMessage(error)}` });
+    }
+  });
+
+  const rejectItem = useMutation({
+    mutationFn: (id: string) => api.post(`/api/queue/${id}/reject`),
+    onSuccess: () => {
+      setActionNotice({ type: 'success', message: 'Rejected. Item was skipped.' });
+      refreshQueueViews();
+    },
+    onError: (error: unknown) => {
+      setActionNotice({ type: 'error', message: `Reject failed: ${getMutationErrorMessage(error)}` });
+    }
+  });
+
   const pausePost = useMutation({
     mutationFn: (feedItemId: string) => api.post(`/api/feed-items/${feedItemId}/pause`),
     onSuccess: () => {
@@ -258,7 +294,7 @@ const QueuePage = () => {
       const blockedStatus = String(item.status || 'unknown');
       setActionNotice({
         type: 'error',
-        message: `Editing is available before send and for recently sent messages inside WhatsApp's 15-minute edit window. Current status: ${blockedStatus}.`
+        message: `Editing is available before send and for recently sent messages inside WhatsApp's ${editWindowMinutes}-minute edit window. Current status: ${blockedStatus}.`
       });
       return;
     }
@@ -290,11 +326,11 @@ const QueuePage = () => {
 
   const canEdit = (item: QueueItem) => {
     if (item.status === 'processing') return false;
-    if (item.status === 'sent') return canEditSentInPlace(item);
+    if (item.status === 'sent') return canEditSentInPlace(item, editWindowMinutes);
     return true;
   };
 
-  const canPause = (item: QueueItem) => item.status === 'pending' || item.status === 'failed';
+  const canPause = (item: QueueItem) => item.status === 'awaiting_approval' || item.status === 'pending' || item.status === 'failed';
 
   const canResume = (item: QueueItem) => isPaused(item) || item.status === 'failed';
 
@@ -339,6 +375,8 @@ const QueuePage = () => {
     }
 
     switch (item.status) {
+      case 'awaiting_approval':
+        return <Badge variant="warning">Awaiting approval</Badge>;
       case 'pending':
         return <Badge variant="secondary">Waiting to send</Badge>;
       case 'processing':
@@ -497,6 +535,7 @@ const QueuePage = () => {
             <SelectValue placeholder="Select status" />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="awaiting_approval">Awaiting approval ({queueStats?.awaiting_approval ?? 0})</SelectItem>
             <SelectItem value="pending">Queued ({queueStats?.pending ?? 0})</SelectItem>
             <SelectItem value="processing">Sending ({queueStats?.processing ?? 0})</SelectItem>
             <SelectItem value="sent">Sent ({queueStats?.sent ?? 0})</SelectItem>
@@ -656,6 +695,27 @@ const QueuePage = () => {
                         <Pencil className="mr-1 h-3 w-3" /> Edit
                       </Button>
 
+                      {item.status === 'awaiting_approval' ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => approveItem.mutate(item.id)}
+                            disabled={approveItem.isPending}
+                          >
+                            <PlayCircle className="mr-1 h-3 w-3" /> Approve
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => rejectItem.mutate(item.id)}
+                            disabled={rejectItem.isPending}
+                          >
+                            <X className="mr-1 h-3 w-3" /> Reject
+                          </Button>
+                        </>
+                      ) : null}
+
                       {canToggleItemPause(item) ? (
                         <Button
                           size="sm"
@@ -802,6 +862,30 @@ const QueuePage = () => {
                           <Pencil className="mr-1 h-3 w-3" /> Edit
                         </Button>
                       )}
+                      {item.status === 'awaiting_approval' ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs px-2"
+                            onClick={() => approveItem.mutate(item.id)}
+                            disabled={approveItem.isPending}
+                          >
+                            <PlayCircle className="mr-1 h-3 w-3" />
+                            Approve
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs px-2"
+                            onClick={() => rejectItem.mutate(item.id)}
+                            disabled={rejectItem.isPending}
+                          >
+                            <X className="mr-1 h-3 w-3" />
+                            Reject
+                          </Button>
+                        </>
+                      ) : null}
                       {canToggleItemPause(item) && (
                         <Button
                           size="sm"

@@ -401,6 +401,8 @@ const queueFeedItemsForSchedules = async (feedId: string, items: FeedItemRecord[
 
       if (!targetIds.length) continue;
 
+      const queuedStatus = schedule.approval_required === true ? 'awaiting_approval' : 'pending';
+
       const { data: existingLogs, error: existingLogsError } = await supabase
         .from('message_logs')
         .select('feed_item_id,target_id')
@@ -429,7 +431,9 @@ const queueFeedItemsForSchedules = async (feedId: string, items: FeedItemRecord[
             target_id: targetId,
             schedule_id: schedule.id,
             template_id: schedule.template_id,
-            status: 'pending'
+            status: queuedStatus,
+            approved_at: null,
+            approved_by: null
           });
         }
       }

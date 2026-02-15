@@ -125,7 +125,7 @@ const feedItemRoutes = () => {
             manual_paused: 0
           };
 
-          if (status === 'pending') current.pending += 1;
+          if (status === 'pending' || status === 'awaiting_approval') current.pending += 1;
           else if (status === 'processing') current.processing += 1;
           else if (status === 'sent' || status === 'delivered' || status === 'read') current.sent += 1;
           else if (status === 'failed') current.failed += 1;

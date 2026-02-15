@@ -8,6 +8,17 @@ const JID_PATTERN = /^([0-9+\s\-\(\)]+|status@broadcast|[0-9\-]+@g\.us|[0-9]+@s\
 
 // Validation schemas
 const normalizeOptional = (value: string | null | undefined) => (value === '' ? null : value);
+const normalizeOptionalInt = (value: unknown) => {
+  if (value === '' || value === undefined || value === null) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.floor(parsed);
+};
+const optionalInt = (min: number, max: number) =>
+  z.preprocess(
+    normalizeOptionalInt,
+    z.number().int().min(min).max(max).nullable().optional()
+  );
 
 const isValidIanaTimezone = (value: unknown) => {
   const tz = String(value || '').trim();
@@ -35,7 +46,8 @@ const schemas = {
     active: z.boolean().optional(),
     state: z.enum(['active', 'paused', 'stopped', 'draft']).optional(),
     delivery_mode: z.enum(['immediate', 'batch', 'batched']).default('immediate'),
-    batch_times: z.array(z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/)).default(['07:00', '15:00', '22:00'])
+    batch_times: z.array(z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/)).default(['07:00', '15:00', '22:00']),
+    approval_required: z.boolean().optional().default(false)
   }).superRefine((value: {
     delivery_mode?: 'immediate' | 'batch' | 'batched';
     batch_times?: string[];
@@ -124,7 +136,10 @@ const schemas = {
     phone_number: z.string().regex(JID_PATTERN),
     type: z.enum(['individual', 'group', 'channel', 'status']),
     active: z.boolean().default(true),
-    notes: z.string().max(1000).optional().nullable().transform(normalizeOptional)
+    notes: z.string().max(1000).optional().nullable().transform(normalizeOptional),
+    message_delay_ms_override: optionalInt(0, 60000),
+    inter_target_delay_sec_override: optionalInt(0, 600),
+    intra_target_delay_sec_override: optionalInt(0, 600)
   }),
 
   template: z.object({

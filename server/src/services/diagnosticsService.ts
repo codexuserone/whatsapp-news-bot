@@ -3,6 +3,7 @@ const { isCurrentlyShabbos } = require('./shabbosService');
 const { isScheduleRunning, resolveScheduleState } = require('./scheduleState');
 const logger = require('../utils/logger');
 const { getErrorMessage } = require('../utils/errorUtils');
+const { escapeWhatsAppFormatting } = require('../utils/messageText');
 
 type FeedItem = {
   id?: string;
@@ -26,7 +27,7 @@ const applyTemplate = (templateBody: string, data: Record<string, unknown>): str
   if (!templateBody) return '';
   return templateBody.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
     const value = data[key];
-    return value != null ? String(value) : '';
+    return value != null ? escapeWhatsAppFormatting(value) : '';
   });
 };
 

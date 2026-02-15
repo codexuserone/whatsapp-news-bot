@@ -9,6 +9,20 @@ export type Feed = {
   last_fetched_at?: string | null;
   last_success_at?: string | null;
   consecutive_failures?: number | null;
+  etag?: string | null;
+  last_modified?: string | null;
+  parse_config?: {
+    itemsPath?: string | null;
+    titlePath?: string | null;
+    descriptionPath?: string | null;
+    linkPath?: string | null;
+    imagePath?: string | null;
+  } | null;
+  cleaning?: {
+    stripUtm?: boolean | null;
+    decodeEntities?: boolean | null;
+    removePhrases?: string[] | null;
+  } | null;
 };
 
 export type Template = {
@@ -28,6 +42,9 @@ export type Target = {
   type: 'individual' | 'group' | 'channel' | 'status';
   active: boolean;
   notes?: string | null;
+  message_delay_ms_override?: number | null;
+  inter_target_delay_sec_override?: number | null;
+  intra_target_delay_sec_override?: number | null;
 };
 
 export type Schedule = {
@@ -41,6 +58,7 @@ export type Schedule = {
   template_id?: string | null;
   delivery_mode?: 'immediate' | 'batch' | 'batched' | null;
   batch_times?: string[] | null;
+  approval_required?: boolean | null;
   active: boolean;
   last_run_at?: string | null;
   next_run_at?: string | null;
@@ -125,6 +143,7 @@ export type QueueItem = {
 
 export type QueueStats = {
   pending: number;
+  awaiting_approval?: number;
   processing: number;
   sent: number;
   failed: number;

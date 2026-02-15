@@ -3,6 +3,7 @@ const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
 const { resetStuckProcessingLogs } = require('../services/retentionService');
 const { sendQueueLogNow } = require('../services/queueService');
+const settingsService = require('../services/settingsService');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const { normalizeMessageText } = require('../utils/messageText');
@@ -20,14 +21,34 @@ const normalizeTargetJid = (target: { phone_number?: string | null; type?: strin
   return `${raw.replace(/[^\d]/g, '')}@s.whatsapp.net`;
 };
 
-const canEditSentInPlace = (sentAt: unknown) => {
+const resolveEditWindowMinutes = (settings: Record<string, unknown>) => {
+  const configured = Number(settings?.post_send_edit_window_minutes);
+  if (!Number.isFinite(configured)) return WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES;
+  return Math.min(Math.max(Math.floor(configured), 1), WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES);
+};
+
+const canEditSentInPlace = (sentAt: unknown, windowMinutes: number) => {
   const sentIso = String(sentAt || '').trim();
   if (!sentIso) return false;
   const sentMs = Date.parse(sentIso);
   if (!Number.isFinite(sentMs)) return false;
   const ageMs = Date.now() - sentMs;
   if (ageMs < 0) return false;
-  return ageMs <= WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES * 60 * 1000;
+  return ageMs <= windowMinutes * 60 * 1000;
+};
+
+const readBasicAuthUser = (req: Request) => {
+  const header = String(req.headers.authorization || '');
+  if (!header.startsWith('Basic ')) return null;
+  try {
+    const raw = Buffer.from(header.slice(6), 'base64').toString('utf8');
+    const idx = raw.indexOf(':');
+    const user = idx >= 0 ? raw.slice(0, idx) : raw;
+    const cleaned = String(user || '').trim();
+    return cleaned || null;
+  } catch {
+    return null;
+  }
 };
 
 const queueRoutes = () => {
@@ -37,6 +58,26 @@ const queueRoutes = () => {
     const supabase = getSupabaseClient();
     if (!supabase) throw serviceUnavailable('Database not available');
     return supabase;
+  };
+
+  const resolveResumeStatus = async (
+    supabase: ReturnType<typeof getSupabaseClient>,
+    row: { schedule_id?: unknown; approved_at?: unknown }
+  ) => {
+    const approvedAt = String(row?.approved_at || '').trim();
+    if (approvedAt) return 'pending';
+    const scheduleId = String(row?.schedule_id || '').trim();
+    if (!scheduleId) return 'pending';
+    try {
+      const { data } = await supabase
+        .from('schedules')
+        .select('approval_required')
+        .eq('id', scheduleId)
+        .maybeSingle();
+      return (data as { approval_required?: boolean } | null)?.approval_required === true ? 'awaiting_approval' : 'pending';
+    } catch {
+      return 'pending';
+    }
   };
 
   // Get queue items (message_logs) with optional status filter
@@ -95,7 +136,7 @@ const queueRoutes = () => {
         query = query.not('schedule_id', 'is', null);
       }
 
-      if (statusFilter === 'pending' || statusFilter === 'processing') {
+      if (statusFilter === 'awaiting_approval' || statusFilter === 'pending' || statusFilter === 'processing') {
         query = query.order('created_at', { ascending: true }).order('id', { ascending: true });
       } else if (statusFilter === 'sent' || statusFilter === 'failed' || statusFilter === 'skipped') {
         query = query
@@ -256,7 +297,8 @@ const queueRoutes = () => {
         return query;
       };
 
-      const [pendingRes, processingRes, sentRes, failedRes, skippedRes] = await Promise.all([
+      const [awaitingRes, pendingRes, processingRes, sentRes, failedRes, skippedRes] = await Promise.all([
+        countByStatus('awaiting_approval'),
         countByStatus('pending'),
         countByStatus('processing'),
         countByStatus('sent', true),
@@ -270,6 +312,7 @@ const queueRoutes = () => {
         countByStatus('skipped')
       ]);
 
+      const awaitingCount = awaitingRes.count ?? 0;
       const pCount = pendingRes.count ?? 0;
       const prCount = processingRes.count ?? 0;
       const sRecentCount = sentRes.count ?? 0;
@@ -278,11 +321,12 @@ const queueRoutes = () => {
       const sAllCount = sentAllTimeRes.count ?? 0;
       const fAllCount = failedAllTimeRes.count ?? 0;
       const skAllCount = skippedAllTimeRes.count ?? 0;
-      const queuedNow = pCount + prCount;
+      const queuedNow = awaitingCount + pCount + prCount;
       const historyWindowTotal = sRecentCount + fRecentCount + skRecentCount;
       const allTimeTotal = sAllCount + fAllCount + skAllCount;
 
       res.json({
+        awaiting_approval: awaitingCount,
         pending: pCount,
         processing: prCount,
         sent: sRecentCount,
@@ -310,7 +354,7 @@ const queueRoutes = () => {
       const supabase = getDb();
       const { data: current, error: currentError } = await supabase
         .from('message_logs')
-        .select('id,status,target_id,whatsapp_message_id,sent_at')
+        .select('id,status,target_id,whatsapp_message_id,sent_at,approved_at,schedule_id')
         .eq('id', req.params.id)
         .single();
 
@@ -346,6 +390,12 @@ const queueRoutes = () => {
         patch.processing_started_at = null;
         patch.retry_count = 0;
         patch.error_message = status === 'skipped' ? 'Paused by user' : null;
+
+        if (currentStatus === 'awaiting_approval' && status === 'pending') {
+          // Treat status patch as an implicit approval so the audit columns remain consistent.
+          patch.approved_at = new Date().toISOString();
+          patch.approved_by = readBasicAuthUser(req) || process.env.BASIC_AUTH_USER || 'unknown';
+        }
       }
 
       if (!Object.keys(patch).length) {
@@ -359,9 +409,11 @@ const queueRoutes = () => {
         if (!normalizedMessageContent) {
           return res.status(400).json({ error: 'message_content cannot be empty for sent message edits' });
         }
-        if (!canEditSentInPlace((current as { sent_at?: string | null }).sent_at)) {
+        const settings = await settingsService.getSettings();
+        const editWindowMinutes = resolveEditWindowMinutes(settings || {});
+        if (!canEditSentInPlace((current as { sent_at?: string | null }).sent_at, editWindowMinutes)) {
           return res.status(400).json({
-            error: `Sent messages can only be edited in-place within ${WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES} minutes`
+            error: `Sent messages can only be edited in-place within ${editWindowMinutes} minutes`
           });
         }
 
@@ -427,6 +479,114 @@ const queueRoutes = () => {
     }
   });
 
+  router.post('/:id/approve', async (req: Request, res: Response) => {
+    try {
+      const supabase = getDb();
+      const id = String(req.params.id || '').trim();
+      if (!id) return res.status(400).json({ error: 'Queue item id is required' });
+
+      const { data: current, error: currentError } = await supabase
+        .from('message_logs')
+        .select('id,status')
+        .eq('id', id)
+        .single();
+
+      if (currentError || !current) {
+        return res.status(404).json({ error: 'Queue item not found' });
+      }
+
+      const currentStatus = String((current as { status?: string }).status || '').toLowerCase();
+      if (currentStatus === 'sent') {
+        return res.status(400).json({ error: 'Queue item is already sent' });
+      }
+      if (currentStatus === 'processing') {
+        return res.status(400).json({ error: 'Queue item is currently being processed' });
+      }
+      if (currentStatus !== 'awaiting_approval') {
+        return res.status(400).json({ error: `Queue item is not awaiting approval (status=${currentStatus || 'unknown'})` });
+      }
+
+      const actor = readBasicAuthUser(req) || process.env.BASIC_AUTH_USER || 'unknown';
+      const nowIso = new Date().toISOString();
+      const { data: updated, error } = await supabase
+        .from('message_logs')
+        .update({
+          status: 'pending',
+          approved_at: nowIso,
+          approved_by: actor,
+          error_message: null,
+          processing_started_at: null,
+          retry_count: 0
+        })
+        .eq('id', id)
+        .eq('status', 'awaiting_approval')
+        .select('*')
+        .single();
+
+      if (error || !updated) {
+        return res.status(400).json({ error: getErrorMessage(error) || 'Could not approve this queue item' });
+      }
+
+      return res.json({ ok: true, item: updated });
+    } catch (error) {
+      console.error('Error approving queue item:', error);
+      return res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+    }
+  });
+
+  router.post('/:id/reject', async (req: Request, res: Response) => {
+    try {
+      const supabase = getDb();
+      const id = String(req.params.id || '').trim();
+      if (!id) return res.status(400).json({ error: 'Queue item id is required' });
+
+      const { data: current, error: currentError } = await supabase
+        .from('message_logs')
+        .select('id,status')
+        .eq('id', id)
+        .single();
+
+      if (currentError || !current) {
+        return res.status(404).json({ error: 'Queue item not found' });
+      }
+
+      const currentStatus = String((current as { status?: string }).status || '').toLowerCase();
+      if (currentStatus === 'sent') {
+        return res.status(400).json({ error: 'Queue item is already sent' });
+      }
+      if (currentStatus === 'processing') {
+        return res.status(400).json({ error: 'Queue item is currently being processed' });
+      }
+      if (currentStatus !== 'awaiting_approval') {
+        return res.status(400).json({ error: `Queue item is not awaiting approval (status=${currentStatus || 'unknown'})` });
+      }
+
+      const { data: updated, error } = await supabase
+        .from('message_logs')
+        .update({
+          status: 'skipped',
+          approved_at: null,
+          approved_by: null,
+          error_message: 'Rejected',
+          processing_started_at: null,
+          retry_count: 0
+        })
+        .eq('id', id)
+        .eq('status', 'awaiting_approval')
+        .select('*')
+        .single();
+
+      if (error || !updated) {
+        return res.status(400).json({ error: getErrorMessage(error) || 'Could not reject this queue item' });
+      }
+
+      return res.json({ ok: true, item: updated });
+    } catch (error) {
+      console.error('Error rejecting queue item:', error);
+      return res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+    }
+  });
+
   router.post('/:id/pause', async (req: Request, res: Response) => {
     try {
       const supabase = getDb();
@@ -438,7 +598,7 @@ const queueRoutes = () => {
           error_message: 'Paused by user'
         })
         .eq('id', req.params.id)
-        .in('status', ['pending', 'failed'])
+        .in('status', ['awaiting_approval', 'pending', 'failed'])
         .select('id,status,error_message')
         .single();
 
@@ -456,10 +616,26 @@ const queueRoutes = () => {
   router.post('/:id/resume', async (req: Request, res: Response) => {
     try {
       const supabase = getDb();
+      const { data: current, error: currentError } = await supabase
+        .from('message_logs')
+        .select('id,status,schedule_id,approved_at')
+        .eq('id', req.params.id)
+        .single();
+
+      if (currentError || !current) {
+        return res.status(404).json({ error: 'Queue item not found' });
+      }
+
+      const currentStatus = String((current as { status?: string }).status || '').toLowerCase();
+      if (!['failed', 'skipped'].includes(currentStatus)) {
+        return res.status(400).json({ error: 'Queue item cannot be resumed from its current status' });
+      }
+
+      const nextStatus = await resolveResumeStatus(supabase, current as { schedule_id?: unknown; approved_at?: unknown });
       const { data: updated, error } = await supabase
         .from('message_logs')
         .update({
-          status: 'pending',
+          status: nextStatus,
           processing_started_at: null,
           retry_count: 0,
           error_message: null

@@ -12,13 +12,34 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
+import { Separator } from '@/components/ui/separator';
 import { Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 
 const schema = z.object({
   name: z.string().min(1),
   url: z.string().url(),
   type: z.enum(['rss', 'atom', 'json', 'html']).optional(),
-  fetch_interval: z.coerce.number().min(300)
+  fetch_interval: z.coerce.number().min(300),
+  parse_config: z
+    .object({
+      itemsPath: z.string().max(255).optional(),
+      titlePath: z.string().max(255).optional(),
+      descriptionPath: z.string().max(255).optional(),
+      linkPath: z.string().max(255).optional(),
+      imagePath: z.string().max(255).optional()
+    })
+    .partial()
+    .optional(),
+  cleaning: z
+    .object({
+      stripUtm: z.boolean().optional(),
+      decodeEntities: z.boolean().optional(),
+      removePhrasesText: z.string().max(4000).optional()
+    })
+    .partial()
+    .optional()
 });
 
 type FeedFormValues = z.infer<typeof schema>;
@@ -39,6 +60,34 @@ type DeleteFeedResponse = {
   rateLimited?: boolean;
   deactivated?: boolean;
   message?: string;
+};
+
+const normalizeOptionalText = (value: unknown) => String(value ?? '').trim();
+
+const buildParseConfigPayload = (value: FeedFormValues['parse_config'] | undefined) => {
+  if (!value) return null as Record<string, string> | null;
+  const entries = Object.entries(value)
+    .map(([key, raw]) => [key, normalizeOptionalText(raw)] as const)
+    .filter(([, text]) => Boolean(text));
+  return entries.length ? (Object.fromEntries(entries) as Record<string, string>) : null;
+};
+
+const buildCleaningPayload = (value: FeedFormValues['cleaning'] | undefined) => {
+  const stripUtm = value?.stripUtm ?? true;
+  const decodeEntities = value?.decodeEntities ?? true;
+  const removePhrases = normalizeOptionalText(value?.removePhrasesText)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const hasOverride = stripUtm !== true || decodeEntities !== true || removePhrases.length > 0;
+  if (!hasOverride) return null as { stripUtm?: boolean; decodeEntities?: boolean; removePhrases?: string[] } | null;
+
+  return {
+    stripUtm,
+    decodeEntities,
+    ...(removePhrases.length ? { removePhrases } : {})
+  };
 };
 
 const FeedsPage = () => {
@@ -62,19 +111,50 @@ const FeedsPage = () => {
     defaultValues: {
       name: '',
       url: '',
-      fetch_interval: 900
+      fetch_interval: 900,
+      type: undefined,
+      parse_config: {
+        itemsPath: '',
+        titlePath: '',
+        descriptionPath: '',
+        linkPath: '',
+        imagePath: ''
+      },
+      cleaning: {
+        stripUtm: true,
+        decodeEntities: true,
+        removePhrasesText: ''
+      }
     }
   });
 
   const watchedUrl = useWatch({ control: form.control, name: 'url' });
+  const watchedStripUtm = useWatch({ control: form.control, name: 'cleaning.stripUtm' });
+  const watchedDecodeEntities = useWatch({ control: form.control, name: 'cleaning.decodeEntities' });
 
   useEffect(() => {
     if (active) {
+      const parseConfig = active.parse_config && typeof active.parse_config === 'object' ? active.parse_config : null;
+      const cleaning = active.cleaning && typeof active.cleaning === 'object' ? active.cleaning : null;
+      const removePhrases =
+        cleaning && Array.isArray(cleaning.removePhrases) ? cleaning.removePhrases.filter(Boolean).join('\n') : '';
       form.reset({
         name: active.name,
         url: active.url,
         type: active.type,
-        fetch_interval: active.fetch_interval || 900
+        fetch_interval: active.fetch_interval || 900,
+        parse_config: {
+          itemsPath: normalizeOptionalText(parseConfig?.itemsPath),
+          titlePath: normalizeOptionalText(parseConfig?.titlePath),
+          descriptionPath: normalizeOptionalText(parseConfig?.descriptionPath),
+          linkPath: normalizeOptionalText(parseConfig?.linkPath),
+          imagePath: normalizeOptionalText(parseConfig?.imagePath)
+        },
+        cleaning: {
+          stripUtm: cleaning?.stripUtm !== false,
+          decodeEntities: cleaning?.decodeEntities !== false,
+          removePhrasesText: removePhrases
+        }
       });
     }
   }, [active, form]);
@@ -86,8 +166,15 @@ const FeedsPage = () => {
 
   const saveFeed = useMutation({
     mutationFn: ({ feedId, payload }: { feedId: string | null; payload: FeedFormValues }) => {
-      const body = {
-        ...payload,
+      const parse_config = buildParseConfigPayload(payload.parse_config);
+      const cleaning = buildCleaningPayload(payload.cleaning);
+      const body: Record<string, unknown> = {
+        name: payload.name,
+        url: payload.url,
+        ...(payload.type ? { type: payload.type } : {}),
+        fetch_interval: payload.fetch_interval,
+        parse_config,
+        cleaning,
         active: active ? Boolean(active.active) : true
       };
       return feedId ? api.put<Feed>(`/api/feeds/${feedId}`, body) : api.post<Feed>('/api/feeds', body);
@@ -97,11 +184,28 @@ const FeedsPage = () => {
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
       setActive(savedFeed);
       setTestResult(null);
+      const parseConfig =
+        savedFeed.parse_config && typeof savedFeed.parse_config === 'object' ? savedFeed.parse_config : null;
+      const cleaning = savedFeed.cleaning && typeof savedFeed.cleaning === 'object' ? savedFeed.cleaning : null;
+      const removePhrases =
+        cleaning && Array.isArray(cleaning.removePhrases) ? cleaning.removePhrases.filter(Boolean).join('\n') : '';
       form.reset({
         name: savedFeed.name || '',
         url: savedFeed.url || '',
         type: savedFeed.type || undefined,
-        fetch_interval: savedFeed.fetch_interval || 900
+        fetch_interval: savedFeed.fetch_interval || 900,
+        parse_config: {
+          itemsPath: normalizeOptionalText(parseConfig?.itemsPath),
+          titlePath: normalizeOptionalText(parseConfig?.titlePath),
+          descriptionPath: normalizeOptionalText(parseConfig?.descriptionPath),
+          linkPath: normalizeOptionalText(parseConfig?.linkPath),
+          imagePath: normalizeOptionalText(parseConfig?.imagePath)
+        },
+        cleaning: {
+          stripUtm: cleaning?.stripUtm !== false,
+          decodeEntities: cleaning?.decodeEntities !== false,
+          removePhrasesText: removePhrases
+        }
       });
     },
     onError: (error: unknown) => alert(`Failed to save feed: ${getErrorMessage(error)}`)
@@ -133,12 +237,7 @@ const FeedsPage = () => {
       if (active?.id === id) {
         setActive(null);
         setTestResult(null);
-        form.reset({
-          name: '',
-          url: '',
-          type: undefined,
-          fetch_interval: 900
-        });
+        form.reset();
       }
     },
     onError: (error: unknown) => {
@@ -159,7 +258,15 @@ const FeedsPage = () => {
     setTestLoading(true);
     setTestResult(null);
     try {
-      const result = await api.post<FeedTestResult>('/api/feeds/test', { url });
+      const values = form.getValues();
+      const parse_config = buildParseConfigPayload(values.parse_config) || undefined;
+      const cleaning = buildCleaningPayload(values.cleaning) || undefined;
+      const result = await api.post<FeedTestResult>('/api/feeds/test', {
+        url,
+        ...(values.type ? { type: values.type } : {}),
+        ...(parse_config ? { parse_config } : {}),
+        ...(cleaning ? { cleaning } : {})
+      });
       setTestResult(result);
       if (!form.getValues('name') && result.feedTitle) {
         form.setValue('name', result.feedTitle);
@@ -248,6 +355,130 @@ const FeedsPage = () => {
                     <input type="hidden" {...form.register('type')} />
                   </div>
                 </div>
+
+                <details className="rounded-lg border bg-muted/20 p-4">
+                  <summary className="cursor-pointer text-sm font-medium">
+                    Advanced: JSON paths + cleaning
+                  </summary>
+                  <div className="mt-4 space-y-4">
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          form.setValue('type', 'json');
+                          form.setValue('parse_config.itemsPath', '');
+                          form.setValue('parse_config.titlePath', 'title.rendered');
+                          form.setValue('parse_config.descriptionPath', 'excerpt.rendered');
+                          form.setValue('parse_config.linkPath', 'link');
+                          form.setValue('parse_config.imagePath', '_embedded.wp:featuredmedia[0].source_url');
+                          form.setValue('cleaning.stripUtm', true);
+                          form.setValue('cleaning.decodeEntities', true);
+                          form.setValue('cleaning.removePhrasesText', 'Read More');
+                        }}
+                      >
+                        Preset: WordPress wp-json
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          form.setValue('parse_config.itemsPath', '');
+                          form.setValue('parse_config.titlePath', '');
+                          form.setValue('parse_config.descriptionPath', '');
+                          form.setValue('parse_config.linkPath', '');
+                          form.setValue('parse_config.imagePath', '');
+                          form.setValue('cleaning.stripUtm', true);
+                          form.setValue('cleaning.decodeEntities', true);
+                          form.setValue('cleaning.removePhrasesText', '');
+                        }}
+                      >
+                        Reset advanced
+                      </Button>
+                    </div>
+
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">JSON Parse Config (optional)</p>
+                      <p className="text-xs text-muted-foreground">
+                        Only needed for JSON feeds. Use dot paths like <code>title.rendered</code> or{' '}
+                        <code>_embedded.wp:featuredmedia[0].source_url</code>.
+                      </p>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <Label htmlFor="itemsPath">Items path</Label>
+                          <Input id="itemsPath" {...form.register('parse_config.itemsPath')} placeholder="items (leave blank for arrays)" />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="titlePath">Title path</Label>
+                          <Input id="titlePath" {...form.register('parse_config.titlePath')} placeholder="title.rendered" />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="descriptionPath">Description path</Label>
+                          <Input
+                            id="descriptionPath"
+                            {...form.register('parse_config.descriptionPath')}
+                            placeholder="excerpt.rendered"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="linkPath">Link path</Label>
+                          <Input id="linkPath" {...form.register('parse_config.linkPath')} placeholder="link" />
+                        </div>
+                        <div className="space-y-1.5 sm:col-span-2">
+                          <Label htmlFor="imagePath">Image path</Label>
+                          <Input
+                            id="imagePath"
+                            {...form.register('parse_config.imagePath')}
+                            placeholder="_embedded.wp:featuredmedia[0].source_url"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <Separator />
+
+                    <div className="space-y-3">
+                      <p className="text-sm font-medium">Cleaning (optional)</p>
+
+                      <div className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">Strip UTM parameters</p>
+                          <p className="text-xs text-muted-foreground">Remove <code>utm_*</code> from links and images.</p>
+                        </div>
+                        <Switch
+                          checked={watchedStripUtm !== false}
+                          onCheckedChange={(checked) => form.setValue('cleaning.stripUtm', checked)}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">Decode HTML entities</p>
+                          <p className="text-xs text-muted-foreground">Convert <code>&amp;amp;</code> into <code>&amp;</code>.</p>
+                        </div>
+                        <Switch
+                          checked={watchedDecodeEntities !== false}
+                          onCheckedChange={(checked) => form.setValue('cleaning.decodeEntities', checked)}
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="removePhrasesText">Remove phrases (one per line)</Label>
+                        <Textarea
+                          id="removePhrasesText"
+                          {...form.register('cleaning.removePhrasesText')}
+                          placeholder="Read More"
+                          className="min-h-[96px]"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          These phrases are stripped from title/description/content after HTML is removed.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </details>
 
                 <p className="text-xs text-muted-foreground">
                   Feed polling only runs when at least one running automation uses this feed.

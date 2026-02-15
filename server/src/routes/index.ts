@@ -20,6 +20,10 @@ const registerRoutes = (app: Express) => {
 
   router.get('/health', (_req: Request, res: Response) => res.json({ ok: true }));
   router.get('/ping', (_req: Request, res: Response) => res.json({ ok: true, uptime: process.uptime() }));
+
+  // Keep these probe endpoints in sync with middleware/publicProbePaths.ts
+  router.get('/api/health', (_req: Request, res: Response) => res.json({ ok: true }));
+  router.get('/api/ping', (_req: Request, res: Response) => res.json({ ok: true, uptime: process.uptime() }));
   router.get('/ready', async (req: Request, res: Response) => {
     const dbOk = await testConnection();
     const whatsappStatus = req.app.locals.whatsapp?.getStatus?.();

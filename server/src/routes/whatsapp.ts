@@ -64,20 +64,43 @@ const downloadImageBuffer = async (url: string) => {
     maxBodyLength: MAX_IMAGE_BYTES,
     headers: {
       'User-Agent': DEFAULT_USER_AGENT,
-      // Avoid asking for AVIF since WhatsApp uploads are stricter and we don't transcode it.
+      // Prefer formats WhatsApp accepts; if the origin still serves AVIF/other formats, we will
+      // attempt to transcode them to JPEG via sharp (see below).
       Accept: 'image/webp,image/apng,image/*,*/*;q=0.8'
     }
   });
   const contentType = String(response.headers?.['content-type'] || '').toLowerCase();
   const data = response.data;
-  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  let buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
   if (buffer.length > MAX_IMAGE_BYTES) {
     throw new Error(`Image too large (${buffer.length} bytes)`);
   }
-  const detectedMime = detectImageMimeTypeFromBuffer(buffer);
+
+  let detectedMime = detectImageMimeTypeFromBuffer(buffer);
+
+  // Some sites return formats like AVIF/SVG/GIF even when we prefer jpeg/png/webp.
+  // If sharp is available, transcode to JPEG so WhatsApp uploads work reliably.
+  if (!detectedMime || !SUPPORTED_WHATSAPP_IMAGE_MIME.has(detectedMime)) {
+    const baseContentType = contentType.split(';')[0]?.trim() || '';
+    const isProbablyImage =
+      baseContentType.startsWith('image/') || baseContentType === '' || baseContentType === 'application/octet-stream';
+    if (!isProbablyImage) {
+      throw new Error('URL did not return an image');
+    }
+
+    try {
+      const prepared = await prepareNewsletterImage(buffer, { maxBytes: MAX_IMAGE_BYTES });
+      buffer = prepared.buffer;
+      detectedMime = prepared.mimetype;
+    } catch {
+      // fall through
+    }
+  }
+
   if (!detectedMime || !SUPPORTED_WHATSAPP_IMAGE_MIME.has(detectedMime)) {
     throw new Error('Unsupported or corrupt image data for WhatsApp upload');
   }
+
   return { buffer, mimetype: detectedMime };
 };
 

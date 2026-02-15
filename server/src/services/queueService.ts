@@ -477,7 +477,8 @@ const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null)
     maxBodyLength: MAX_IMAGE_BYTES,
     headers: {
       'User-Agent': validUserAgent,
-      // Avoid asking for AVIF since WhatsApp media uploads are stricter and we don't transcode it.
+      // Prefer formats WhatsApp accepts; if the origin still serves AVIF/other formats, we will
+      // attempt to transcode them to JPEG via sharp (see below).
       'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
       'Referer': toOriginOrUndefined(refererUrl),
       'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120"',
@@ -488,7 +489,7 @@ const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null)
 
   const contentType = String(response.headers?.['content-type'] || '').toLowerCase();
   const data = response.data;
-  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  let buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
 
   const detectMimeTypeFromBuffer = (value: Buffer): string | null => {
     if (value.length >= 3 && value[0] === 0xff && value[1] === 0xd8 && value[2] === 0xff) {
@@ -517,7 +518,27 @@ const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null)
     return null;
   };
 
-  const detectedMimeType = detectMimeTypeFromBuffer(buffer);
+  let detectedMimeType = detectMimeTypeFromBuffer(buffer);
+
+  // Some sites return formats like AVIF/SVG/GIF even when we prefer jpeg/png/webp.
+  // If sharp is available, transcode to JPEG so WhatsApp uploads work reliably.
+  if (!detectedMimeType || !SUPPORTED_WHATSAPP_IMAGE_MIME.has(detectedMimeType)) {
+    const baseContentType = contentType.split(';')[0]?.trim() || '';
+    const isProbablyImage =
+      baseContentType.startsWith('image/') || baseContentType === '' || baseContentType === 'application/octet-stream';
+    if (!isProbablyImage) {
+      throw new Error('URL did not return an image');
+    }
+
+    try {
+      const prepared = await prepareNewsletterImage(buffer, { maxBytes: MAX_IMAGE_BYTES });
+      buffer = prepared.buffer;
+      detectedMimeType = prepared.mimetype;
+    } catch {
+      // Fall through to the normal unsupported checks below.
+    }
+  }
+
   if (!detectedMimeType) {
     throw new Error('Unsupported or corrupt image data for WhatsApp upload');
   }

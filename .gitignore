@@ -20,3 +20,4 @@ apps/web/*.pid
 pnpm-lock.yaml
 render-openapi.json
 tools/full-debug-e2e*.json
+tools/tmp/

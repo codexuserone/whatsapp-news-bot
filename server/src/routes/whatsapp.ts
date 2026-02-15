@@ -118,6 +118,41 @@ const downloadImageBuffer = async (url: string, refererUrl?: string | null) => {
   return { buffer, mimetype: detectedMime };
 };
 
+const downloadVideoBuffer = async (url: string, refererUrl?: string | null) => {
+  const MAX_VIDEO_BYTES = Math.max(
+    1,
+    Math.floor(Number(process.env.MAX_VIDEO_BYTES || process.env.WHATSAPP_MAX_VIDEO_BYTES || 32 * 1024 * 1024))
+  );
+  const refererOrigin = toOriginOrUndefined(refererUrl);
+  const response = await safeAxiosRequest(url, {
+    timeout: Math.max(DEFAULT_SEND_TIMEOUT_MS, 30000),
+    responseType: 'arraybuffer',
+    maxContentLength: MAX_VIDEO_BYTES,
+    maxBodyLength: MAX_VIDEO_BYTES,
+    headers: {
+      'User-Agent': DEFAULT_USER_AGENT,
+      Accept: 'video/mp4,video/*;q=0.9,*/*;q=0.8',
+      ...(refererOrigin ? { Referer: refererOrigin } : {})
+    }
+  });
+  const data = response.data;
+  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  if (!buffer.length) {
+    throw new Error('Video download returned empty body');
+  }
+  if (buffer.length > MAX_VIDEO_BYTES) {
+    throw new Error(`Video too large (${buffer.length} bytes)`);
+  }
+
+  // MP4 typically contains "ftyp" at offset 4.
+  const hasMp4Signature = buffer.length >= 12 && buffer.slice(4, 8).toString('ascii') === 'ftyp';
+  if (!hasMp4Signature) {
+    throw new Error('Unsupported or corrupt video data for WhatsApp upload (expected mp4)');
+  }
+
+  return { buffer, mimetype: 'video/mp4' };
+};
+
 const parseImageDataUrl = (value: string) => {
   const raw = String(value || '').trim();
   const match = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([a-zA-Z0-9+/=\s]+)$/);
@@ -903,6 +938,7 @@ const whatsappRoutes = () => {
       message?: string | null;
       linkUrl?: string | null;
       imageUrl?: string | null;
+      videoUrl?: string | null;
       imageDataUrl?: string | null;
       videoDataUrl?: string | null;
       includeCaption?: boolean;
@@ -929,16 +965,19 @@ const whatsappRoutes = () => {
     const normalizedMessage = normalizeMessageText(String(payload.message || ''));
     const normalizedLink = String(payload.linkUrl || '').trim();
     const imageUrl = payload.imageUrl ? String(payload.imageUrl).trim() : null;
+    const videoUrl = payload.videoUrl ? String(payload.videoUrl).trim() : null;
     const imageDataUrl = payload.imageDataUrl ? String(payload.imageDataUrl).trim() : null;
     const videoDataUrl = payload.videoDataUrl ? String(payload.videoDataUrl).trim() : null;
     const disableLinkPreview = payload.disableLinkPreview === true;
     const confirm = payload.confirm;
 	    const includeCaption = payload.includeCaption !== false;
 	    const captionText = [normalizedMessage, normalizedLink].filter(Boolean).join('\n').trim();
-	    if (!captionText && !imageUrl && !imageDataUrl && !videoDataUrl) {
-	      throw badRequest('message, linkUrl, imageUrl, imageDataUrl, or videoDataUrl is required');
+	    if (!captionText && !imageUrl && !videoUrl && !imageDataUrl && !videoDataUrl) {
+	      throw badRequest('message, linkUrl, imageUrl, videoUrl, imageDataUrl, or videoDataUrl is required');
 	    }
 
+	    const requestedMediaType = videoDataUrl || videoUrl ? 'video' : imageDataUrl || imageUrl ? 'image' : null;
+	    const requestedMediaUrl = videoUrl || imageUrl || null;
 	    let mediaWarning: string | null = null;
 	    const connected = await ensureConnectedForSend(whatsapp, 'send-test route');
 	    if (!connected) {
@@ -951,6 +990,28 @@ const whatsappRoutes = () => {
       content = includeCaption && captionText
         ? { video: buffer, mimetype, caption: captionText }
         : { video: buffer, mimetype };
+    } else if (videoUrl) {
+      if (!isHttpUrl(videoUrl)) {
+        throw badRequest('videoUrl must be an http(s) URL');
+      }
+      try {
+        await assertSafeOutboundUrl(videoUrl);
+      } catch (error) {
+        throw badRequest(getErrorMessage(error, 'videoUrl is not allowed'));
+      }
+      try {
+        const { buffer, mimetype } = await downloadVideoBuffer(videoUrl, normalizedLink || null);
+        content = includeCaption && captionText
+          ? { video: buffer, mimetype, caption: captionText }
+          : { video: buffer, mimetype };
+      } catch (error) {
+        const message = getErrorMessage(error, 'Failed to download videoUrl');
+        if (!captionText) {
+          throw badRequest(message);
+        }
+        mediaWarning = message;
+        content = disableLinkPreview ? { text: captionText, linkPreview: null } : { text: captionText };
+      }
     } else if (imageDataUrl) {
       const { buffer, mimetype } = parseImageDataUrl(imageDataUrl);
       content = includeCaption && captionText
@@ -1076,7 +1137,7 @@ const whatsappRoutes = () => {
         const messageId = result?.key?.id || null;
         let confirmation: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null = null;
         if (confirm && messageId && whatsapp?.confirmSend) {
-          const timeouts = (imageUrl || imageDataUrl || videoDataUrl)
+          const timeouts = (imageUrl || videoUrl || imageDataUrl || videoDataUrl)
             ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
             : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 };
           confirmation = await whatsapp.confirmSend(messageId, timeouts);
@@ -1125,7 +1186,11 @@ const whatsappRoutes = () => {
           status: 'sent',
           error_message: null,
           whatsapp_message_id: entry.messageId || null,
-          sent_at: sentAt
+          sent_at: sentAt,
+          media_url: requestedMediaUrl && !requestedMediaUrl.startsWith('data:') ? requestedMediaUrl : null,
+          media_type: requestedMediaType,
+          media_sent: Boolean(requestedMediaType && !mediaWarning),
+          media_error: mediaWarning
         }));
 
         if (rowsToInsert.length) {

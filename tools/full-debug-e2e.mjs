@@ -608,6 +608,16 @@ const run = async () => {
           includeCaption: true,
           confirm: true
         }
+      },
+      {
+        label: 'Channel (test) video',
+        target: channelTarget,
+        payload: {
+          message: `${PREFIX} channel test video`,
+          videoUrl: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+          includeCaption: true,
+          confirm: true
+        }
       }
     ];
 

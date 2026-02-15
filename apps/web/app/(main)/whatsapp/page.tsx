@@ -73,7 +73,7 @@ const WhatsAppPage = () => {
     queryKey: ['whatsapp-qr'],
     queryFn: () => api.get('/api/whatsapp/qr'),
     refetchInterval: 3000,
-    enabled: status?.status !== 'connected'
+    enabled: status?.status !== 'connected' && status?.status !== 'paused'
   });
 
   const { data: groupsRaw, error: groupsError } = useQuery<unknown>({
@@ -170,6 +170,26 @@ const WhatsAppPage = () => {
     }
   });
 
+  const pauseSession = useMutation({
+    mutationFn: () => api.post('/api/whatsapp/pause'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+    }
+  });
+
+  const resumeSession = useMutation({
+    mutationFn: () => api.post('/api/whatsapp/resume'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+    }
+  });
+
   const refreshQr = useMutation({
     mutationFn: () => api.post('/api/whatsapp/hard-refresh'),
     onSuccess: () => {
@@ -190,6 +210,7 @@ const WhatsAppPage = () => {
   });
 
   const isConnected = status?.status === 'connected';
+  const isPaused = status?.status === 'paused';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
   const activeTargets = React.useMemo(() => {
     return existingTargets.filter((target) => target.active);
@@ -222,6 +243,7 @@ const WhatsAppPage = () => {
 
   const getStatusBadge = () => {
     if (statusLoading) return <Badge variant="secondary">Loading...</Badge>;
+    if (isPaused) return <Badge variant="secondary">Paused</Badge>;
     if (isConnected) return <Badge variant="success">Connected</Badge>;
     if (isQrReady) return <Badge variant="warning">Scan QR Code</Badge>;
     if (status?.status === 'connecting') return <Badge variant="secondary">Connecting...</Badge>;
@@ -324,16 +346,32 @@ const WhatsAppPage = () => {
           <p className="text-muted-foreground">Connect once, then send normal messages to your saved destinations.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => disconnect.mutate()} disabled={disconnect.isPending || !isConnected}>
-            <Power className="mr-2 h-4 w-4" />
-            {disconnect.isPending ? 'Disconnecting...' : 'Disconnect'}
-          </Button>
-          {!isConnected ? (
+          {isPaused ? (
+            <Button onClick={() => resumeSession.mutate()} disabled={resumeSession.isPending}>
+              <Power className="mr-2 h-4 w-4" />
+              {resumeSession.isPending ? 'Resuming...' : 'Resume'}
+            </Button>
+          ) : (
+            <Button variant="outline" onClick={() => pauseSession.mutate()} disabled={pauseSession.isPending}>
+              <Power className="mr-2 h-4 w-4" />
+              {pauseSession.isPending ? 'Pausing...' : 'Pause'}
+            </Button>
+          )}
+          {!isConnected && !isPaused ? (
             <Button onClick={() => refreshQr.mutate()} disabled={refreshQr.isPending}>
               <RefreshCw className={`mr-2 h-4 w-4 ${refreshQr.isPending ? 'animate-spin' : ''}`} />
               {refreshQr.isPending ? 'Refreshing QR...' : 'Get QR code'}
             </Button>
           ) : null}
+          {/* Keep disconnect available for advanced recovery, but prefer Pause/Resume for phone sync issues. */}
+          <Button
+            variant="ghost"
+            onClick={() => disconnect.mutate()}
+            disabled={disconnect.isPending || !isConnected}
+            className="hidden sm:inline-flex"
+          >
+            {disconnect.isPending ? 'Disconnecting...' : 'Disconnect'}
+          </Button>
         </div>
       </div>
 
@@ -355,12 +393,22 @@ const WhatsAppPage = () => {
             </div>
 
             {status?.lastError ? (
-              <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-                <strong>Error:</strong> {status.lastError}
+              <div
+                className={
+                  isPaused
+                    ? 'rounded-lg bg-muted p-3 text-sm text-muted-foreground'
+                    : 'rounded-lg bg-destructive/10 p-3 text-sm text-destructive'
+                }
+              >
+                <strong>{isPaused ? 'Paused:' : 'Error:'}</strong> {status.lastError}
               </div>
             ) : null}
 
-            {!isConnected && !isQrReady ? (
+            {isPaused ? (
+              <div className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
+                WhatsApp is paused. Resume to reconnect (and to generate a QR code if needed).
+              </div>
+            ) : !isConnected && !isQrReady ? (
               <div className="rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
                 Tap <strong>Get QR code</strong> to request a fresh login QR.
               </div>
@@ -377,7 +425,14 @@ const WhatsAppPage = () => {
             <CardDescription>Scan in WhatsApp &rarr; Linked Devices</CardDescription>
           </CardHeader>
           <CardContent className="flex min-h-[280px] items-center justify-center">
-            {isConnected ? (
+            {isPaused ? (
+              <div className="space-y-3 text-center">
+                <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-muted">
+                  <Power className="h-8 w-8 text-muted-foreground" />
+                </div>
+                <p className="text-sm text-muted-foreground">Paused. Resume to reconnect.</p>
+              </div>
+            ) : isConnected ? (
               <div className="space-y-3 text-center">
                 <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-success/10">
                   <CheckCircle className="h-8 w-8 text-success" />

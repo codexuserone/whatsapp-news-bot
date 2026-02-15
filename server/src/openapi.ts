@@ -57,6 +57,12 @@ const spec = {
     '/api/whatsapp/disconnect': {
       post: { tags: ['whatsapp'], summary: 'Disconnect WhatsApp', responses: { 200: { description: 'OK' } } }
     },
+    '/api/whatsapp/pause': {
+      post: { tags: ['whatsapp'], summary: 'Pause WhatsApp (stay offline)', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/whatsapp/resume': {
+      post: { tags: ['whatsapp'], summary: 'Resume WhatsApp connection', responses: { 200: { description: 'OK' } } }
+    },
     '/api/whatsapp/hard-refresh': {
       post: { tags: ['whatsapp'], summary: 'Hard refresh WhatsApp session', responses: { 200: { description: 'OK' } } }
     },

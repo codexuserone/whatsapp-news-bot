@@ -12,7 +12,7 @@ const { initSchedulers } = require('../services/schedulerService');
 const { runTargetAutoSyncPass } = require('../services/targetSyncService');
 const { persistReceiptUpdates } = require('../services/receiptService');
 
-type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict';
+type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict' | 'paused';
 
 type MessageStatusSnapshot = {
   status: number | null;
@@ -289,6 +289,7 @@ const resolveSessionId = () => {
 class WhatsAppClient {
   socket: WASocket | null;
   status: WhatsAppStatus;
+  isPaused: boolean;
   qrCode: string | null;
   lastError: string | null;
   lastSeenAt: Date | null;
@@ -352,6 +353,7 @@ class WhatsAppClient {
   constructor() {
     this.socket = null;
     this.status = 'disconnected';
+    this.isPaused = false;
     this.qrCode = null;
     this.lastError = null;
     this.lastSeenAt = null;
@@ -451,6 +453,23 @@ class WhatsAppClient {
   async init(): Promise<void> {
     try {
       this.authStore = await useSupabaseAuthState(this.sessionId);
+
+      // Respect a persisted pause flag so the bot doesn't immediately reconnect after a restart/deploy.
+      try {
+        const settingsService = require('../services/settingsService');
+        const settings = await settingsService.getSettings?.();
+        const paused = settings?.whatsapp_paused === true;
+        if (paused) {
+          this.isPaused = true;
+          this.isConnecting = false;
+          this.status = 'paused';
+          this.lastError = 'WhatsApp session paused.';
+          return;
+        }
+      } catch (error) {
+        logger.warn({ error }, 'Failed to load WhatsApp pause state from settings');
+      }
+
       await this.connect();
     } catch (error) {
       logger.error({ error }, 'Failed to initialize WhatsApp client');
@@ -843,6 +862,9 @@ class WhatsAppClient {
     expiresAt: string | null;
     reason?: string;
   }> {
+    if (this.isPaused) {
+      return { ok: false, supported: Boolean(this.authStore?.forceAcquireLease), ownerId: null, expiresAt: null, reason: 'paused' };
+    }
     const store = this.authStore;
     if (!store?.forceAcquireLease) {
       return { ok: false, supported: false, ownerId: null, expiresAt: null, reason: 'unsupported' };
@@ -894,6 +916,9 @@ class WhatsAppClient {
   }
 
   scheduleReconnect(delay: number): void {
+    if (this.isPaused) {
+      return;
+    }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
     }
@@ -917,6 +942,13 @@ class WhatsAppClient {
   }
 
   async connect(): Promise<void> {
+    if (this.isPaused) {
+      this.isConnecting = false;
+      this.status = 'paused';
+      this.lastError = 'WhatsApp session paused.';
+      return;
+    }
+
     // Prevent concurrent connection attempts
     if (this.isConnecting) {
       logger.warn('Connection already in progress, skipping');
@@ -1043,6 +1075,24 @@ class WhatsAppClient {
         }
       }
 
+      if (this.isPaused) {
+        this.isConnecting = false;
+        this.status = 'paused';
+        this.lastError = 'WhatsApp session paused.';
+        this.stopLeaseRenewal();
+        if (authStore.releaseLease) {
+          try {
+            await authStore.releaseLease(this.instanceId);
+          } catch (error) {
+            logger.warn({ error }, 'Failed to release WhatsApp lease while pausing connect');
+          }
+        }
+        this.leaseHeld = false;
+        this.leaseOwnerId = null;
+        this.leaseExpiresAt = null;
+        return;
+      }
+
       const {
         makeWASocket,
         DisconnectReason,
@@ -1123,6 +1173,24 @@ class WhatsAppClient {
         socketConfig.version = this.waVersion;
       }
 
+      if (this.isPaused) {
+        this.isConnecting = false;
+        this.status = 'paused';
+        this.lastError = 'WhatsApp session paused.';
+        this.stopLeaseRenewal();
+        if (authStore.releaseLease) {
+          try {
+            await authStore.releaseLease(this.instanceId);
+          } catch (error) {
+            logger.warn({ error }, 'Failed to release WhatsApp lease while pausing connect');
+          }
+        }
+        this.leaseHeld = false;
+        this.leaseOwnerId = null;
+        this.leaseExpiresAt = null;
+        return;
+      }
+
       this.socket = makeWASocket(socketConfig);
 
       this.setupErrorHandlers();
@@ -1130,6 +1198,32 @@ class WhatsAppClient {
       const socket = this.socket;
       if (!socket) {
         throw new Error('Failed to initialize socket');
+      }
+
+      if (this.isPaused) {
+        try {
+          this.cleanupSocket();
+          socket.end(new Error('Paused'));
+        } catch {
+          // ignore
+        }
+        this.socket = null;
+        this.isConnecting = false;
+        this.status = 'paused';
+        this.lastError = 'WhatsApp session paused.';
+        this.clearPresenceOfflineHeartbeat();
+        this.stopLeaseRenewal();
+        if (authStore.releaseLease) {
+          try {
+            await authStore.releaseLease(this.instanceId);
+          } catch (error) {
+            logger.warn({ error }, 'Failed to release WhatsApp lease while pausing connect');
+          }
+        }
+        this.leaseHeld = false;
+        this.leaseOwnerId = null;
+        this.leaseExpiresAt = null;
+        return;
       }
 
       socket.ev.on('connection.update', async (update) => {
@@ -1187,6 +1281,14 @@ class WhatsAppClient {
 
         if (connection === 'close') {
           this.isConnecting = false;
+          if (this.isPaused) {
+            this.status = 'paused';
+            this.lastError = 'WhatsApp session paused.';
+            this.clearPresenceOfflineHeartbeat();
+            this.meJid = null;
+            this.meName = null;
+            return;
+          }
           const disconnectError = lastDisconnect?.error as { output?: { statusCode?: number; payload?: { message?: string } }; message?: string } | undefined;
           const statusCode = disconnectError?.output?.statusCode;
           const rawReason = disconnectError?.output?.payload?.message || disconnectError?.message;
@@ -1385,6 +1487,28 @@ class WhatsAppClient {
     sessionId: string;
     lease: { supported: boolean; held: boolean; ownerId: string | null; expiresAt: string | null };
   } {
+    if (this.isPaused) {
+      this.status = 'paused';
+      if (!this.lastError) {
+        this.lastError = 'WhatsApp session paused.';
+      }
+      return {
+        status: this.status,
+        lastError: this.lastError,
+        lastSeenAt: this.lastSeenAt,
+        hasQr: Boolean(this.qrCode),
+        me: { jid: this.meJid, name: this.meName },
+        instanceId: this.instanceId,
+        sessionId: this.sessionId,
+        lease: {
+          supported: this.leaseSupported,
+          held: this.leaseHeld,
+          ownerId: this.leaseOwnerId,
+          expiresAt: this.leaseExpiresAt
+        }
+      };
+    }
+
     if (this.status === 'conflict' && this.leaseSupported && !this.leaseHeld && this.leaseExpiresAt) {
       const expiryMs = Date.parse(this.leaseExpiresAt);
       const isExpired = Number.isFinite(expiryMs) && expiryMs < Date.now() - 5000;
@@ -2173,6 +2297,55 @@ class WhatsAppClient {
     });
   }
 
+  async persistPauseSetting(paused: boolean): Promise<void> {
+    try {
+      const settingsService = require('../services/settingsService');
+      if (typeof settingsService?.updateSettings !== 'function') return;
+      await settingsService.updateSettings({ whatsapp_paused: paused });
+    } catch (error) {
+      logger.warn({ error }, 'Failed to persist WhatsApp pause setting');
+    }
+  }
+
+  async pause(): Promise<void> {
+    this.isPaused = true;
+    this.isConnecting = false;
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    await this.persistPauseSetting(true);
+
+    try {
+      await this.disconnect();
+    } catch (error) {
+      logger.warn({ error }, 'Failed to disconnect WhatsApp while pausing');
+    }
+
+    this.status = 'paused';
+    this.lastError = 'WhatsApp session paused.';
+  }
+
+  async resume(): Promise<void> {
+    this.isPaused = false;
+    this.isConnecting = false;
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    await this.persistPauseSetting(false);
+
+    if (this.lastError === 'WhatsApp session paused.') {
+      this.lastError = null;
+    }
+
+    await this.connect();
+  }
+
   async disconnect(): Promise<void> {
     // Disconnect without logging out (keeps auth state so reconnect doesn't require QR)
     if (this.reconnectTimer) {
@@ -2225,6 +2398,11 @@ class WhatsAppClient {
   }
 
   async hardRefresh(): Promise<void> {
+    if (this.isPaused) {
+      this.status = 'paused';
+      this.lastError = 'WhatsApp is paused. Resume before hard refresh.';
+      return;
+    }
     // Clear any pending reconnect
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -2274,6 +2452,11 @@ class WhatsAppClient {
   }
 
   async clearSenderKeys(): Promise<void> {
+    if (this.isPaused) {
+      this.status = 'paused';
+      this.lastError = 'WhatsApp is paused. Resume before clearing sender keys.';
+      return;
+    }
     // Clears sender-key cache to fix group send issues without forcing re-login.
     if (this.authStore?.clearKeys) {
       await this.authStore.clearKeys(['sender-key']);

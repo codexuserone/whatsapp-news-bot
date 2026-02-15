@@ -28,7 +28,8 @@ const DEFAULTS = {
   reconcile_queue_lookback_hours: Number(process.env.RECONCILE_QUEUE_LOOKBACK_HOURS || 12),
   dedupeThreshold: 0.88,
   processingTimeoutMinutes: Number(process.env.PROCESSING_TIMEOUT_MINUTES || 30),
-  app_paused: false
+  app_paused: false,
+  whatsapp_paused: false
 };
 
 const clampNumber = (value: unknown, fallback: number, min: number, max: number) => {
@@ -89,6 +90,10 @@ const normalizeSettingsPatch = (updates: Record<string, unknown>) => {
 
   if (Object.prototype.hasOwnProperty.call(next, 'app_paused')) {
     next.app_paused = next.app_paused === true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'whatsapp_paused')) {
+    next.whatsapp_paused = next.whatsapp_paused === true;
   }
 
   return next;
@@ -167,7 +172,8 @@ const getSettings = async () => {
         log_retention_days: data.log_retention_days,
         post_send_edit_window_minutes: data.post_send_edit_window_minutes,
         post_send_correction_window_minutes: data.post_send_correction_window_minutes,
-        app_paused: data.app_paused
+        app_paused: data.app_paused,
+        whatsapp_paused: data.whatsapp_paused
       })
     );
 

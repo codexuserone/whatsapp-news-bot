@@ -864,6 +864,24 @@ const whatsappRoutes = () => {
     res.json({ ok: true });
   }));
 
+  router.post('/pause', asyncHandler(async (req: Request, res: Response) => {
+    const whatsapp = req.app.locals.whatsapp;
+    if (!whatsapp || typeof whatsapp.pause !== 'function') {
+      throw badRequest('WhatsApp client not available');
+    }
+    await whatsapp.pause();
+    res.json({ ok: true });
+  }));
+
+  router.post('/resume', asyncHandler(async (req: Request, res: Response) => {
+    const whatsapp = req.app.locals.whatsapp;
+    if (!whatsapp || typeof whatsapp.resume !== 'function') {
+      throw badRequest('WhatsApp client not available');
+    }
+    await whatsapp.resume();
+    res.json({ ok: true });
+  }));
+
   router.post('/hard-refresh', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
     await whatsapp?.hardRefresh();

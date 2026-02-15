@@ -28,6 +28,13 @@ const isDuplicateFeedItem = async ({ title, url, threshold, since, feedId }: Fee
     const contentHash = hashContent(title || '', url || '');
     const thresholdValue = Number.isFinite(threshold) ? threshold : 0.88;
 
+    const hostFromNormalizedUrl = (value?: string | null) => {
+      const raw = String(value || '').trim().toLowerCase();
+      if (!raw) return '';
+      const idx = raw.search(/[/?#]/);
+      return idx === -1 ? raw : raw.slice(0, idx);
+    };
+
     let query = supabase
       .from('feed_items')
       .select('title, normalized_url, content_hash')
@@ -52,9 +59,26 @@ const isDuplicateFeedItem = async ({ title, url, threshold, since, feedId }: Fee
 
     if (exact) return true;
 
-    // Avoid false positives: if incoming item has a URL and no exact URL/hash match,
-    // do not drop it purely because a previous title is similar.
-    if (normalizedUrlValue) return false;
+    // Semantic-ish duplicate detection: only if URLs share the same host (same site) and the titles are nearly identical.
+    // This catches cases like republished permalinks (/story vs /?p=123) without dropping cross-site items.
+    if (normalizedUrlValue) {
+      const incomingHost = hostFromNormalizedUrl(normalizedUrlValue);
+      const wordCount = normalizedTitle.split(' ').filter(Boolean).length;
+      if (!incomingHost || !normalizedTitle || wordCount < 3) {
+        return false;
+      }
+
+      const semanticThreshold = Math.max(thresholdValue, 0.93);
+      const nearDuplicate = items.some((item) => {
+        if (!item.title) return false;
+        if (!item.normalized_url) return false;
+        if (hostFromNormalizedUrl(item.normalized_url) !== incomingHost) return false;
+        return fuzzy(normalizedTitle, normalizeText(item.title)) >= semanticThreshold;
+      });
+
+      if (nearDuplicate) return true;
+      return false;
+    }
 
     // Fuzzy fallback is only for URL-less entries.
     return items.some((item) => {

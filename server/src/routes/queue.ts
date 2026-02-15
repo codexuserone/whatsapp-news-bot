@@ -7,6 +7,7 @@ const settingsService = require('../services/settingsService');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const { normalizeMessageText } = require('../utils/messageText');
+const { stripManualMeta } = require('../utils/manualMeta');
 
 const WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES = 15;
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
@@ -185,6 +186,13 @@ const queueRoutes = () => {
           batch_times?: string[];
         } | undefined;
         const target = row.target as { id?: string; name?: string; type?: string } | undefined;
+        const isManual = row.schedule_id == null;
+        const rawMessageContent = typeof row.message_content === 'string' ? String(row.message_content) : '';
+        const displayMessageContent = String(isManual ? stripManualMeta(rawMessageContent) : rawMessageContent).trim();
+        const manualTitleCandidate = displayMessageContent
+          ? (displayMessageContent.split('\n').find((line) => String(line || '').trim()) || '').trim()
+          : '';
+        const title = feedItems?.title || manualTitleCandidate || (isManual ? 'Manual message' : 'No title');
         return {
           id: row.id,
           schedule_id: row.schedule_id,
@@ -196,12 +204,12 @@ const queueRoutes = () => {
           batch_times: schedule?.batch_times || null,
           target_name: target?.name || null,
           target_type: target?.type || null,
-          title: feedItems?.title || 'No title',
+          title,
           url: feedItems?.link || null,
           image_url: feedItems?.image_url || null,
           pub_date: feedItems?.pub_date || null,
           pub_precision: rawData ? String(rawData.published_precision || '') || null : null,
-          rendered_content: row.message_content,
+          rendered_content: isManual ? displayMessageContent : row.message_content,
           status: row.status,
           error_message: row.error_message,
           media_url: row.media_url || null,
@@ -216,6 +224,7 @@ const queueRoutes = () => {
           read_at: row.read_at || null,
           played_at: row.played_at || null,
           created_at: row.created_at,
+          is_manual: isManual,
           scheduled_for: null
         };
       });

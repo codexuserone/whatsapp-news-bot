@@ -201,6 +201,37 @@ const schemas = {
       }
     ),
 
+  manualPost: z
+    .object({
+      target_id: z.string().uuid().optional().nullable().transform(normalizeOptional),
+      target_ids: z.array(z.string().uuid()).max(50).optional(),
+      message: z.string().max(4096).optional().nullable().transform(normalizeOptional),
+      imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      videoUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      disableLinkPreview: z.boolean().optional().default(false),
+      includeCaption: z.boolean().optional().default(true)
+    })
+    .refine(
+      (value: { target_id?: string | null; target_ids?: string[] }) =>
+        Boolean(String(value.target_id || '').trim()) || (Array.isArray(value.target_ids) && value.target_ids.length > 0),
+      {
+        message: 'target_id or target_ids is required'
+      }
+    )
+    .refine(
+      (value: { message?: string | null; imageUrl?: string | null; videoUrl?: string | null }) =>
+        Boolean(value.message || value.imageUrl || value.videoUrl),
+      {
+        message: 'message, imageUrl, or videoUrl is required'
+      }
+    )
+    .refine(
+      (value: { imageUrl?: string | null; videoUrl?: string | null }) => !(value.imageUrl && value.videoUrl),
+      {
+        message: 'Provide either imageUrl or videoUrl, not both'
+      }
+    ),
+
   settings: z.record(z.unknown())
 };
 

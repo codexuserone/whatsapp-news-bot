@@ -123,6 +123,7 @@ export type QueueItem = {
   id: string;
   status: string;
   schedule_id?: string | null;
+  is_manual?: boolean | null;
   target_id?: string | null;
   feed_item_id?: string | null;
   whatsapp_message_id?: string | null;

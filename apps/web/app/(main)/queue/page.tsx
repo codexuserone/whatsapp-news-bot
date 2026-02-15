@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
+import { useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { QueueItem, ShabbosStatus, WhatsAppOutbox, WhatsAppOutboxStatus } from '@/lib/types';
@@ -10,6 +11,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import {
   ListOrdered,
   RefreshCw,
@@ -95,9 +98,11 @@ const canEditSentInPlace = (item: QueueItem, editWindowMinutes: number, nowMs?: 
   return ageMs <= editWindowMinutes * 60 * 1000;
 };
 
-const QueuePage = () => {
+const QueueInner = () => {
   const queryClient = useQueryClient();
+  const searchParams = useSearchParams();
   const [statusFilter, setStatusFilter] = useState('all');
+  const [includeManual, setIncludeManual] = useState(() => String(searchParams.get('include_manual') || '').toLowerCase() === 'true');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftMessage, setDraftMessage] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
@@ -126,15 +131,19 @@ const QueuePage = () => {
   const getMutationErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Request failed');
 
   const { data: queueStats } = useQuery<QueueStats>({
-    queryKey: ['queue-stats'],
-    queryFn: () => api.get('/api/queue/stats?window_hours=24'),
+    queryKey: ['queue-stats', includeManual],
+    queryFn: () => api.get(`/api/queue/stats?window_hours=24&include_manual=${includeManual}`),
     refetchInterval: 10000
   });
 
   const { data: queueItems = [], isLoading } = useQuery<QueueItem[]>({
-    queryKey: ['queue', statusFilter],
+    queryKey: ['queue', statusFilter, includeManual],
     queryFn: () =>
-      api.get(statusFilter === 'all' ? '/api/queue' : `/api/queue?status=${statusFilter}`),
+      api.get(
+        statusFilter === 'all'
+          ? `/api/queue?include_manual=${includeManual}`
+          : `/api/queue?status=${statusFilter}&include_manual=${includeManual}`
+      ),
     refetchInterval: 10000
   });
 
@@ -171,7 +180,7 @@ const QueuePage = () => {
   });
 
   const clearPending = useMutation({
-    mutationFn: () => api.delete('/api/queue/clear?status=pending'),
+    mutationFn: () => api.delete(`/api/queue/clear?status=pending&include_manual=${includeManual}`),
     onSuccess: () => {
       setActionNotice({ type: 'success', message: 'Queued items cleared.' });
       refreshQueueViews();
@@ -182,7 +191,7 @@ const QueuePage = () => {
   });
 
   const retryFailed = useMutation({
-    mutationFn: () => api.post('/api/queue/retry-failed'),
+    mutationFn: () => api.post(`/api/queue/retry-failed?include_manual=${includeManual}`),
     onSuccess: () => {
       setActionNotice({ type: 'success', message: 'Failed items were moved back to queue.' });
       refreshQueueViews();
@@ -560,6 +569,12 @@ const QueuePage = () => {
             <SelectItem value="all">All ({queueStats?.total ?? 0})</SelectItem>
           </SelectContent>
         </Select>
+        <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
+          <Switch id="include-manual" checked={includeManual} onCheckedChange={setIncludeManual} />
+          <Label htmlFor="include-manual" className="text-sm">
+            Include manual
+          </Label>
+        </div>
         <span className="w-full text-sm text-muted-foreground sm:w-auto">
           {queueItems.length} item{queueItems.length !== 1 ? 's' : ''}
         </span>
@@ -637,7 +652,9 @@ const QueuePage = () => {
                           ) : null}
                           {item.target_name ? <Badge variant="outline">{item.target_name}</Badge> : null}
                           {item.target_type ? <Badge variant="secondary">{item.target_type}</Badge> : null}
-                          <span className="text-xs text-muted-foreground">{item.schedule_name || 'Automation'}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {item.is_manual ? 'Manual' : item.schedule_name || 'Automation'}
+                          </span>
                         </div>
                         <p className="truncate font-medium">{item.title || 'No title'}</p>
                         <div className="mt-1 flex flex-wrap gap-2">
@@ -965,6 +982,21 @@ const QueuePage = () => {
         </CardContent>
       </Card>
     </div>
+  );
+};
+
+const QueuePage = () => {
+  return (
+    <Suspense
+      fallback={
+        <div className="space-y-2">
+          <h1 className="text-3xl font-bold tracking-tight">Queue</h1>
+          <p className="text-muted-foreground">Loading queue...</p>
+        </div>
+      }
+    >
+      <QueueInner />
+    </Suspense>
   );
 };
 

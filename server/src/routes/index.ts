@@ -15,6 +15,7 @@ const feedItemsRoutes = require('./feedItems');
 const shabbosRoutes = require('./shabbos');
 const queueRoutes = require('./queue');
 const analyticsRoutes = require('./analytics');
+const manualRoutes = require('./manual');
 
 const registerRoutes = (app: Express) => {
   const router = express.Router();
@@ -48,6 +49,7 @@ const registerRoutes = (app: Express) => {
   router.use('/api/shabbos', apiRateLimit, shabbosRoutes());
   router.use('/api/queue', apiRateLimit, queueRoutes());
   router.use('/api/analytics', apiRateLimit, analyticsRoutes());
+  router.use('/api/manual', apiRateLimit, manualRoutes());
 
   app.use(router);
 };

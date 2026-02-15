@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import Link from 'next/link';
 import Image from 'next/image';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
@@ -9,7 +10,19 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/com
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ClipboardList, ExternalLink, Loader2, PauseCircle, PlayCircle } from 'lucide-react';
+import { ClipboardList, ExternalLink, Loader2, PauseCircle, PlayCircle, PenSquare } from 'lucide-react';
+
+const buildComposeHref = (item: FeedItem) => {
+  const params = new URLSearchParams();
+  const title = String(item.title || '').trim();
+  const url = String(item.link || '').trim();
+  const imageUrl = String(item.image_url || '').trim();
+  if (title) params.set('title', title);
+  if (url) params.set('url', url);
+  if (imageUrl) params.set('imageUrl', imageUrl);
+  const query = params.toString();
+  return query ? `/compose?${query}` : '/compose';
+};
 
 const FeedItemsPage = () => {
   const queryClient = useQueryClient();
@@ -170,10 +183,10 @@ const FeedItemsPage = () => {
                     <TableHeaderCell>Title</TableHeaderCell>
                     <TableHeaderCell className="hidden sm:table-cell">Feed</TableHeaderCell>
                     <TableHeaderCell className="hidden md:table-cell">Link</TableHeaderCell>
-                    <TableHeaderCell className="hidden md:table-cell">Image</TableHeaderCell>
-                    <TableHeaderCell className="hidden lg:table-cell">Published</TableHeaderCell>
-                    <TableHeaderCell>Status</TableHeaderCell>
-                    <TableHeaderCell className="hidden lg:table-cell">Actions</TableHeaderCell>
+                  <TableHeaderCell className="hidden md:table-cell">Image</TableHeaderCell>
+                  <TableHeaderCell className="hidden lg:table-cell">Published</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell>
+                    <TableHeaderCell className="text-right">Actions</TableHeaderCell>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -238,8 +251,15 @@ const FeedItemsPage = () => {
                           return <Badge variant={status.variant}>{status.label}</Badge>;
                         })()}
                       </TableCell>
-                      <TableCell className="hidden lg:table-cell">
-                        <div className="flex items-center gap-2">
+                      <TableCell>
+                        <div className="flex items-center justify-end gap-2">
+                          <Button size="sm" variant="outline" asChild title="Compose from story">
+                            <Link href={buildComposeHref(item)}>
+                              <PenSquare className="mr-1 h-3 w-3" />
+                              <span className="hidden md:inline">Compose</span>
+                              <span className="md:hidden sr-only">Compose</span>
+                            </Link>
+                          </Button>
                           <Button
                             size="sm"
                             variant="outline"
@@ -247,7 +267,8 @@ const FeedItemsPage = () => {
                             disabled={pausePost.isPending || resumePost.isPending}
                           >
                             {paused ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
-                            {paused ? 'Resume story' : 'Pause story'}
+                            <span className="hidden md:inline">{paused ? 'Resume story' : 'Pause story'}</span>
+                            <span className="md:hidden sr-only">{paused ? 'Resume story' : 'Pause story'}</span>
                           </Button>
                         </div>
                       </TableCell>

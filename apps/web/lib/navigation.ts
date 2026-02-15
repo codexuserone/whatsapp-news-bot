@@ -1,6 +1,7 @@
 import {
   LayoutGrid,
   MessageCircle,
+  PenSquare,
   Rss,
   Layers,
   Target,
@@ -28,6 +29,7 @@ export const navSections: NavSection[] = [
     title: 'Core',
     items: [
       { label: 'Overview', to: '/', icon: LayoutGrid },
+      { label: 'Compose', to: '/compose', icon: PenSquare },
       { label: 'WhatsApp', to: '/whatsapp', icon: MessageCircle }
     ]
   },

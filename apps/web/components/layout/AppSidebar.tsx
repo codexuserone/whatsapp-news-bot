@@ -69,24 +69,25 @@ const AppSidebar = () => {
                   if (item.children?.length) {
                     return (
                       <SidebarMenuItem key={item.label}>
-                        <Link href={item.to} onClick={closeIfMobile}>
-                          <SidebarMenuButton isActive={isRouteActive(pathname, item.to)} className="w-full">
+                        <SidebarMenuButton asChild isActive={isRouteActive(pathname, item.to)} className="w-full">
+                          <Link href={item.to} onClick={closeIfMobile}>
                             {Icon && <Icon className="h-4 w-4" />}
                             <span>{item.label}</span>
-                          </SidebarMenuButton>
-                        </Link>
+                          </Link>
+                        </SidebarMenuButton>
                         <ul className="ml-4 mt-1 space-y-0.5">
                           {item.children.map((child) => (
                             <li key={child.to}>
-                              <Link href={child.to} onClick={closeIfMobile}>
-                                <SidebarMenuButton
-                                  isActive={pathname === child.to}
-                                  size="sm"
-                                  className="w-full text-muted-foreground hover:text-foreground"
-                                >
+                              <SidebarMenuButton
+                                asChild
+                                isActive={pathname === child.to}
+                                size="sm"
+                                className="w-full text-muted-foreground hover:text-foreground"
+                              >
+                                <Link href={child.to} onClick={closeIfMobile}>
                                   <span>{child.label}</span>
-                                </SidebarMenuButton>
-                              </Link>
+                                </Link>
+                              </SidebarMenuButton>
                             </li>
                           ))}
                         </ul>
@@ -95,12 +96,12 @@ const AppSidebar = () => {
                   }
                   return (
                     <SidebarMenuItem key={item.label}>
-                      <Link href={item.to} onClick={closeIfMobile}>
-                        <SidebarMenuButton isActive={isRouteActive(pathname, item.to)} className="w-full">
+                      <SidebarMenuButton asChild isActive={isRouteActive(pathname, item.to)} className="w-full">
+                        <Link href={item.to} onClick={closeIfMobile}>
                           {Icon && <Icon className="h-4 w-4" />}
                           <span>{item.label}</span>
-                        </SidebarMenuButton>
-                      </Link>
+                        </Link>
+                      </SidebarMenuButton>
                     </SidebarMenuItem>
                   );
                 })}

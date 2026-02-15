@@ -64,7 +64,7 @@ const MainLayout = ({ children }: MainLayoutProps) => {
             </div>
           </div>
         </main>
-        <nav className="fixed inset-x-0 bottom-0 z-40 max-w-full border-t bg-background/95 backdrop-blur md:hidden">
+        <nav className="fixed inset-x-0 bottom-0 z-40 max-w-full border-t bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
           <div className="mx-auto grid max-w-3xl grid-cols-5">
             {mobileNavItems.map((item) => {
               const Icon = item.icon;
@@ -73,7 +73,8 @@ const MainLayout = ({ children }: MainLayoutProps) => {
                 <Link
                   key={item.to}
                   href={item.to}
-                  className={`flex flex-col items-center gap-1 px-2 py-2 text-[11px] ${
+                  aria-current={active ? 'page' : undefined}
+                  className={`flex min-h-14 flex-col items-center gap-1 px-2 py-3 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
                     active ? 'text-primary' : 'text-muted-foreground'
                   }`}
                 >

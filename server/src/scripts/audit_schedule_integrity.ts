@@ -133,7 +133,7 @@ const main = async () => {
         `
           select
             count(*)::int as total,
-            count(*) filter (where status = 'sent')::int as sent,
+            count(*) filter (where status in ('sent','delivered','read','played'))::int as sent,
             count(*) filter (where status = 'failed')::int as failed,
             count(*) filter (where status = 'pending')::int as pending,
             count(*) filter (where status = 'processing')::int as processing
@@ -183,7 +183,7 @@ const main = async () => {
             select id, sent_at
             from message_logs
             where schedule_id = $1
-              and status = 'sent'
+              and status in ('sent','delivered','read','played')
               and sent_at >= now() - ($2::text || ' hours')::interval
             order by sent_at desc
           `,

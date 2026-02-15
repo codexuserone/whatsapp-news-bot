@@ -3,6 +3,8 @@ const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 
+const SUCCESSFUL_SEND_STATUSES = ['sent', 'delivered', 'read', 'played'];
+
 const logRoutes = () => {
   const router = express.Router();
 
@@ -28,7 +30,11 @@ const logRoutes = () => {
         .limit(200);
       
       if (statusFilter) {
-        query = query.eq('status', statusFilter);
+        if (statusFilter === 'sent') {
+          query = query.in('status', SUCCESSFUL_SEND_STATUSES);
+        } else {
+          query = query.eq('status', statusFilter);
+        }
       } else if (!includeQueue) {
         // Logs page is delivery history by default. Queue/processing states belong in /api/queue.
         query = query.not('status', 'in', '("awaiting_approval","pending","processing")');

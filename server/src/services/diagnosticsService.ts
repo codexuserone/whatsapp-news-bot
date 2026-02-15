@@ -5,6 +5,8 @@ const logger = require('../utils/logger');
 const { getErrorMessage } = require('../utils/errorUtils');
 const { escapeWhatsAppFormatting } = require('../utils/messageText');
 
+const SUCCESSFUL_SEND_STATUSES = ['sent', 'delivered', 'read', 'played'];
+
 type FeedItem = {
   id?: string;
   guid?: string;
@@ -212,10 +214,20 @@ const getScheduleDiagnostics = async (scheduleId: string, whatsappClient?: Whats
       return Number(count || 0);
     };
 
+    const countLogsByStatuses = async (statuses: string[]) => {
+      const { count, error } = await supabase
+        .from('message_logs')
+        .select('id', { count: 'exact', head: true })
+        .eq('schedule_id', scheduleId)
+        .in('status', statuses);
+      if (error) throw error;
+      return Number(count || 0);
+    };
+
     const [pendingCount, processingCount, sentCount, failedCount, skippedCount] = await Promise.all([
       countLogsByStatus('pending'),
       countLogsByStatus('processing'),
-      countLogsByStatus('sent'),
+      countLogsByStatuses(SUCCESSFUL_SEND_STATUSES),
       countLogsByStatus('failed'),
       countLogsByStatus('skipped')
     ]);

@@ -10,6 +10,7 @@ const useSupabaseAuthState = require('./authStore');
 const { saveIncomingMessages } = require('../services/messageService');
 const { initSchedulers } = require('../services/schedulerService');
 const { runTargetAutoSyncPass } = require('../services/targetSyncService');
+const { persistReceiptUpdates } = require('../services/receiptService');
 
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict';
 
@@ -339,6 +340,8 @@ class WhatsAppClient {
   waVersionFetchedAtMs: number | null;
   recentSentMessages: Map<string, proto.IWebMessageInfo>;
   recentMessageStatuses: Map<string, MessageStatusSnapshot>;
+  pendingReceiptUpdates: Map<string, MessageStatusSnapshot>;
+  pendingReceiptFlushTimer: NodeJS.Timeout | null;
   newsletterChatCache: Map<string, CachedNewsletterChat>;
   meJid: string | null;
   meName: string | null;
@@ -376,10 +379,39 @@ class WhatsAppClient {
     this.waVersionFetchedAtMs = null;
     this.recentSentMessages = new Map();
     this.recentMessageStatuses = new Map();
+    this.pendingReceiptUpdates = new Map();
+    this.pendingReceiptFlushTimer = null;
     this.newsletterChatCache = new Map();
     this.meJid = null;
     this.meName = null;
     this.hasConnectedOnce = false;
+  }
+
+  scheduleReceiptFlush(): void {
+    if (this.pendingReceiptFlushTimer) return;
+    this.pendingReceiptFlushTimer = setTimeout(() => {
+      this.pendingReceiptFlushTimer = null;
+      void this.flushPendingReceiptUpdates();
+    }, 900);
+  }
+
+  async flushPendingReceiptUpdates(): Promise<void> {
+    if (!this.pendingReceiptUpdates.size) return;
+
+    const updates = Array.from(this.pendingReceiptUpdates.entries()).map(([id, snapshot]) => ({
+      id,
+      status: snapshot.status,
+      statusLabel: snapshot.statusLabel,
+      remoteJid: snapshot.remoteJid,
+      updatedAtMs: snapshot.updatedAtMs
+    }));
+    this.pendingReceiptUpdates.clear();
+
+    try {
+      await persistReceiptUpdates(updates);
+    } catch (error) {
+      logger.warn({ error }, 'Failed to persist delivery receipts');
+    }
   }
 
   async init(): Promise<void> {
@@ -1223,6 +1255,15 @@ class WhatsAppClient {
             };
 
             this.recentMessageStatuses.set(String(id), snapshot);
+
+            if (statusLabel === 'delivered' || statusLabel === 'read' || statusLabel === 'played') {
+              this.pendingReceiptUpdates.set(String(id), snapshot);
+              if (this.pendingReceiptUpdates.size > 2000) {
+                // Guard against unbounded growth if receipts flood while DB is unavailable.
+                this.pendingReceiptUpdates.clear();
+              }
+              this.scheduleReceiptFlush();
+            }
             if (this.recentMessageStatuses.size > 1000) {
               const oldest = this.recentMessageStatuses.keys().next().value;
               if (oldest) {
@@ -2102,6 +2143,11 @@ class WhatsAppClient {
     this.groupMetadataCache.clear();
     this.recentSentMessages.clear();
     this.recentMessageStatuses.clear();
+    this.pendingReceiptUpdates.clear();
+    if (this.pendingReceiptFlushTimer) {
+      clearTimeout(this.pendingReceiptFlushTimer);
+      this.pendingReceiptFlushTimer = null;
+    }
     this.meJid = null;
     this.meName = null;
 
@@ -2136,6 +2182,11 @@ class WhatsAppClient {
     this.groupMetadataCache.clear();
     this.recentSentMessages.clear();
     this.recentMessageStatuses.clear();
+    this.pendingReceiptUpdates.clear();
+    if (this.pendingReceiptFlushTimer) {
+      clearTimeout(this.pendingReceiptFlushTimer);
+      this.pendingReceiptFlushTimer = null;
+    }
     this.meJid = null;
     this.meName = null;
 

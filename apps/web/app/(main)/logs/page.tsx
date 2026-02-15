@@ -16,6 +16,7 @@ const STATUS_COLORS: Record<string, 'success' | 'destructive' | 'warning' | 'sec
   sent: 'success',
   delivered: 'success',
   read: 'success',
+  played: 'success',
   skipped: 'warning',
   failed: 'destructive'
 };
@@ -149,6 +150,7 @@ const LogsPage = () => {
                            log.status === 'pending' ? 'Sending' :
                            log.status === 'delivered' ? 'Delivered' :
                            log.status === 'read' ? 'Read' :
+                           log.status === 'played' ? 'Played' :
                            log.status}
                         </Badge>
                         {getReceiptBadge(log)}

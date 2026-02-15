@@ -9,6 +9,9 @@ const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const { normalizeMessageText } = require('../utils/messageText');
 
 const WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES = 15;
+const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
+
+const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
 
 const normalizeTargetJid = (target: { phone_number?: string | null; type?: string | null }) => {
   const raw = String(target?.phone_number || '').trim();
@@ -107,7 +110,13 @@ const queueRoutes = () => {
           media_type,
           media_sent,
           media_error,
+          approved_at,
+          approved_by,
+          processing_started_at,
           sent_at,
+          delivered_at,
+          read_at,
+          played_at,
           created_at,
           schedule:schedules (
             id,
@@ -130,7 +139,11 @@ const queueRoutes = () => {
         `);
 
       if (shouldFilterByStatus && statusFilter) {
-        query = query.eq('status', statusFilter);
+        if (statusFilter === 'sent') {
+          query = query.in('status', Array.from(SUCCESSFUL_SEND_STATUSES));
+        } else {
+          query = query.eq('status', statusFilter);
+        }
       }
       if (!includeManual) {
         query = query.not('schedule_id', 'is', null);
@@ -195,7 +208,13 @@ const queueRoutes = () => {
           media_type: row.media_type || null,
           media_sent: Boolean(row.media_sent),
           media_error: row.media_error || null,
+          approved_at: row.approved_at || null,
+          approved_by: row.approved_by || null,
+          processing_started_at: row.processing_started_at || null,
           sent_at: row.sent_at,
+          delivered_at: row.delivered_at || null,
+          read_at: row.read_at || null,
+          played_at: row.played_at || null,
           created_at: row.created_at,
           scheduled_for: null
         };
@@ -287,7 +306,12 @@ const queueRoutes = () => {
       const windowStartIso = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
 
       const countByStatus = (status: string, recentOnly = false) => {
-        let query = supabase.from('message_logs').select('*', { count: 'exact', head: true }).eq('status', status);
+        let query = supabase.from('message_logs').select('id', { count: 'exact', head: true });
+        if (status === 'sent') {
+          query = query.in('status', Array.from(SUCCESSFUL_SEND_STATUSES));
+        } else {
+          query = query.eq('status', status);
+        }
         if (!includeManual) {
           query = query.not('schedule_id', 'is', null);
         }
@@ -378,7 +402,7 @@ const queueRoutes = () => {
       }
 
       if (Object.prototype.hasOwnProperty.call(body, 'status')) {
-        if (currentStatus === 'sent') {
+        if (isSuccessfulSendStatus(currentStatus)) {
           return res.status(400).json({ error: 'Cannot change status for a sent message' });
         }
         const status = String(body.status || '').toLowerCase();
@@ -402,7 +426,7 @@ const queueRoutes = () => {
         return res.status(400).json({ error: 'No supported fields provided' });
       }
 
-      if (currentStatus === 'sent') {
+      if (isSuccessfulSendStatus(currentStatus)) {
         if (!Object.prototype.hasOwnProperty.call(body, 'message_content')) {
           return res.status(400).json({ error: 'Only message_content can be updated for sent messages' });
         }
@@ -496,7 +520,7 @@ const queueRoutes = () => {
       }
 
       const currentStatus = String((current as { status?: string }).status || '').toLowerCase();
-      if (currentStatus === 'sent') {
+      if (isSuccessfulSendStatus(currentStatus)) {
         return res.status(400).json({ error: 'Queue item is already sent' });
       }
       if (currentStatus === 'processing') {
@@ -551,7 +575,7 @@ const queueRoutes = () => {
       }
 
       const currentStatus = String((current as { status?: string }).status || '').toLowerCase();
-      if (currentStatus === 'sent') {
+      if (isSuccessfulSendStatus(currentStatus)) {
         return res.status(400).json({ error: 'Queue item is already sent' });
       }
       if (currentStatus === 'processing') {

@@ -77,6 +77,12 @@ export type LogEntry = {
   media_sent?: boolean | null;
   media_error?: string | null;
   sent_at?: string | null;
+  delivered_at?: string | null;
+  read_at?: string | null;
+  played_at?: string | null;
+  approved_at?: string | null;
+  approved_by?: string | null;
+  processing_started_at?: string | null;
   created_at: string;
   target?: { name?: string | null } | null;
   schedule?: { name?: string | null } | null;
@@ -137,6 +143,12 @@ export type QueueItem = {
   media_error?: string | null;
   created_at?: string | null;
   sent_at?: string | null;
+  delivered_at?: string | null;
+  read_at?: string | null;
+  played_at?: string | null;
+  approved_at?: string | null;
+  approved_by?: string | null;
+  processing_started_at?: string | null;
   scheduled_for?: string | null;
   error_message?: string | null;
 };

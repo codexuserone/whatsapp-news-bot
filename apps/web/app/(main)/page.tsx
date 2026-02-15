@@ -11,6 +11,20 @@ import { Switch } from '@/components/ui/switch';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '@/components/ui/table';
 import { Rss, Layers, Target as TargetIcon, CalendarClock, ArrowRight, Send } from 'lucide-react';
 
+type DeliveryAnalytics = {
+  window_hours?: number;
+  window_start?: string;
+  sent: number;
+  delivered: number;
+  read: number;
+  played: number;
+  failed: number;
+  skipped: number;
+  delivered_rate: number;
+  read_rate: number;
+  played_rate: number;
+};
+
 const OverviewPage = () => {
   const queryClient = useQueryClient();
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
@@ -26,6 +40,11 @@ const OverviewPage = () => {
     queryKey: ['queue-stats'],
     queryFn: () => api.get('/api/queue/stats?window_hours=24'),
     refetchInterval: 10000
+  });
+  const { data: deliveryAnalytics } = useQuery<DeliveryAnalytics>({
+    queryKey: ['delivery-analytics'],
+    queryFn: () => api.get('/api/analytics/delivery?window_hours=24'),
+    refetchInterval: 30000
   });
 
   const dispatchAll = useMutation({
@@ -164,6 +183,28 @@ const OverviewPage = () => {
               <span className="text-muted-foreground">Failed ({queueStats?.window_hours ?? 24}h)</span>
               <span className="font-medium">{queueStats?.failed ?? 0}</span>
             </div>
+
+            <div className="pt-2 border-t space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Delivered rate</span>
+                <span className="font-medium">{Math.round((deliveryAnalytics?.delivered_rate ?? 0) * 100)}%</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Read rate</span>
+                <span className="font-medium">{Math.round((deliveryAnalytics?.read_rate ?? 0) * 100)}%</span>
+              </div>
+              {Number(deliveryAnalytics?.played ?? 0) > 0 ? (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Played</span>
+                  <span className="font-medium">{deliveryAnalytics?.played ?? 0}</span>
+                </div>
+              ) : null}
+              <div className="text-[11px] text-muted-foreground">
+                {deliveryAnalytics
+                  ? `${deliveryAnalytics.sent} sent, ${deliveryAnalytics.failed} failed, ${deliveryAnalytics.skipped} skipped`
+                  : 'Loading delivery analytics...'}
+              </div>
+            </div>
             <div className="text-xs text-muted-foreground">
               {feedErrors > 0
                 ? `${feedErrors} feed error${feedErrors !== 1 ? 's' : ''} need attention`
@@ -198,7 +239,7 @@ const OverviewPage = () => {
                     <TableCell>
                       <Badge
                         variant={
-                          log.status === 'sent'
+                          ['sent', 'delivered', 'read', 'played'].includes(String(log.status || '').toLowerCase())
                             ? 'success'
                             : log.status === 'failed'
                               ? 'destructive'

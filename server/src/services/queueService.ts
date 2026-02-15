@@ -79,6 +79,9 @@ const AUTH_ERROR_HINT = 'WhatsApp auth state corrupted. Clear sender keys or re-
 const MANUAL_POST_PAUSE_ERROR = 'Paused for this post';
 const FEED_PAUSED_ERROR = 'Feed paused';
 const NON_REVIVABLE_SKIP_ERRORS = new Set([MANUAL_POST_PAUSE_ERROR, FEED_PAUSED_ERROR]);
+const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
+
+const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
 
 const isDuplicateDispatchConflict = (error: unknown) => {
   const code = String((error as { code?: unknown })?.code || '').trim();
@@ -1239,7 +1242,7 @@ const reconcileUpdatedFeedItems = async (
     .from('message_logs')
     .select('id,feed_item_id,target_id,template_id,sent_at,whatsapp_message_id,message_content')
     .in('feed_item_id', feedItemIds)
-    .eq('status', 'sent')
+    .in('status', Array.from(SUCCESSFUL_SEND_STATUSES))
     .gte('sent_at', correctionCutoffIso)
     .not('target_id', 'is', null);
 
@@ -1855,7 +1858,7 @@ const queueLatestForSchedule = async (
       continue;
     }
 
-    if (existing.status === 'sent' || existing.status === 'processing') {
+    if (isSuccessfulSendStatus(existing.status) || existing.status === 'processing') {
       skipped += 1;
       continue;
     }
@@ -2683,7 +2686,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       message_content?: string | null;
     };
 
-    if (log.status === 'sent') {
+    if (isSuccessfulSendStatus(log.status)) {
       return { ok: false, error: 'Queue item is already sent' };
     }
 

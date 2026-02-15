@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
@@ -55,6 +55,9 @@ const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | nu
   }
 };
 
+const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
+const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
+
 const WHATSAPP_SENT_EDIT_MAX_MINUTES = 15;
 
 const normalizeEditWindowMinutes = (value: unknown) => {
@@ -78,15 +81,16 @@ const deriveDefaultMessage = (item: QueueItem) => {
   return chunks.join('\n\n');
 };
 
-const canEditSentInPlace = (item: QueueItem, editWindowMinutes: number) => {
-  if (item.status !== 'sent') return false;
+const canEditSentInPlace = (item: QueueItem, editWindowMinutes: number, nowMs?: number) => {
+  if (!isSuccessfulSendStatus(item.status)) return false;
   if (item.target_type === 'status' || item.target_type === 'channel') return false;
   if (!String(item.whatsapp_message_id || '').trim()) return false;
   const sentAt = String(item.sent_at || '').trim();
   if (!sentAt) return false;
   const sentMs = Date.parse(sentAt);
   if (!Number.isFinite(sentMs)) return false;
-  const ageMs = Date.now() - sentMs;
+  const now = typeof nowMs === 'number' && Number.isFinite(nowMs) ? nowMs : Date.now();
+  const ageMs = now - sentMs;
   if (ageMs < 0) return false;
   return ageMs <= editWindowMinutes * 60 * 1000;
 };
@@ -98,6 +102,12 @@ const QueuePage = () => {
   const [draftMessage, setDraftMessage] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [actionNotice, setActionNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const { data: settings } = useQuery<{ post_send_edit_window_minutes?: number }>({
     queryKey: ['settings'],
@@ -326,7 +336,7 @@ const QueuePage = () => {
 
   const canEdit = (item: QueueItem) => {
     if (item.status === 'processing') return false;
-    if (item.status === 'sent') return canEditSentInPlace(item, editWindowMinutes);
+    if (isSuccessfulSendStatus(item.status)) return canEditSentInPlace(item, editWindowMinutes, nowMs);
     return true;
   };
 
@@ -363,7 +373,7 @@ const QueuePage = () => {
     }
   };
 
-  const canSendNow = (item: QueueItem) => item.status !== 'sent' && item.status !== 'processing';
+  const canSendNow = (item: QueueItem) => !isSuccessfulSendStatus(item.status) && item.status !== 'processing';
 
   const getStatusBadge = (item: QueueItem) => {
     if (isPostPaused(item)) {
@@ -383,6 +393,12 @@ const QueuePage = () => {
         return <Badge variant="warning">Sending now</Badge>;
       case 'sent':
         return <Badge variant="success">Sent</Badge>;
+      case 'delivered':
+        return <Badge variant="success">Delivered</Badge>;
+      case 'read':
+        return <Badge variant="success">Read</Badge>;
+      case 'played':
+        return <Badge variant="success">Played</Badge>;
       case 'failed':
         return <Badge variant="destructive">Failed - will retry</Badge>;
       case 'skipped':
@@ -442,7 +458,7 @@ const QueuePage = () => {
     const mediaType = String(item.media_type || '').toLowerCase();
     const mediaSent = Boolean(item.media_sent);
 
-    if (item.status === 'sent') {
+    if (isSuccessfulSendStatus(item.status)) {
       if (mediaType === 'image' && mediaSent) {
         return { label: 'Sent as image', tone: 'success' as const };
       }
@@ -581,14 +597,31 @@ const QueuePage = () => {
             <div className="space-y-3">
               {queueItems.map((item, index) => {
                 const mediaCandidate = item.media_url || item.image_url || null;
-                const sentWithImage = item.status === 'sent' && item.media_type === 'image' && Boolean(item.media_sent);
+                const sentWithImage =
+                  isSuccessfulSendStatus(item.status) && item.media_type === 'image' && Boolean(item.media_sent);
                 const imagePreview =
-                  mediaCandidate && isSafeImageSrc(mediaCandidate) && (item.status !== 'sent' || sentWithImage)
+                  mediaCandidate &&
+                  isSafeImageSrc(mediaCandidate) &&
+                  (!isSuccessfulSendStatus(item.status) || sentWithImage)
                     ? mediaCandidate
                     : null;
                 const editing = editingId === item.id;
                 const receiptBadge = getReceiptBadge(item);
                 const deliveryPath = getDeliveryPath(item);
+                const editRemainingMs = (() => {
+                  if (!canEditSentInPlace(item, editWindowMinutes, nowMs)) return null;
+                  const sentAt = String(item.sent_at || '').trim();
+                  if (!sentAt) return null;
+                  const sentMs = Date.parse(sentAt);
+                  if (!Number.isFinite(sentMs)) return null;
+                  const remaining = editWindowMinutes * 60 * 1000 - (nowMs - sentMs);
+                  return remaining > 0 ? remaining : null;
+                })();
+                const editCountdown = editRemainingMs
+                  ? `${Math.floor(Math.ceil(editRemainingMs / 1000) / 60)}:${String(
+                      Math.ceil(editRemainingMs / 1000) % 60
+                    ).padStart(2, '0')}`
+                  : null;
 
                 return (
                   <div key={item.id} className="space-y-3 rounded-lg border p-4">
@@ -765,6 +798,10 @@ const QueuePage = () => {
                       {item.batch_times && item.batch_times.length ? <span>Send windows: {item.batch_times.join(', ')}</span> : null}
                       {item.scheduled_for ? <span>Scheduled: {formatDate(item.scheduled_for)}</span> : null}
                       {item.sent_at ? <span>Sent: {formatDate(item.sent_at)}</span> : null}
+                      {editCountdown ? <span>Editable: {editCountdown} left</span> : null}
+                      {item.delivered_at ? <span>Delivered: {formatDate(item.delivered_at)}</span> : null}
+                      {item.read_at ? <span>Read: {formatDate(item.read_at)}</span> : null}
+                      {item.played_at ? <span>Played: {formatDate(item.played_at)}</span> : null}
                       {item.sent_at && receiptBadge ? (
                         <span className="inline-flex items-center gap-1">
                           <span>Receipt:</span>
@@ -772,7 +809,7 @@ const QueuePage = () => {
                         </span>
                       ) : null}
                       {item.error_message ? <span className="text-destructive">Error: {item.error_message}</span> : null}
-                      {item.status === 'sent' && item.media_type === 'image' && !item.media_sent && item.media_error ? (
+                      {isSuccessfulSendStatus(item.status) && item.media_type === 'image' && !item.media_sent && item.media_error ? (
                         <span className="text-warning-foreground">Sent as text fallback (image unavailable)</span>
                       ) : null}
                       {item.media_error && !item.error_message ? <span className="text-destructive">Media: {item.media_error}</span> : null}
@@ -787,11 +824,12 @@ const QueuePage = () => {
                 const editing = editingId === item.id;
                 const deliveryPath = getDeliveryPath(item);
                 const mediaCandidate = item.media_url || item.image_url || null;
-                const sentWithImage = item.status === 'sent' && item.media_type === 'image' && Boolean(item.media_sent);
+                const sentWithImage =
+                  isSuccessfulSendStatus(item.status) && item.media_type === 'image' && Boolean(item.media_sent);
                 const showPreview =
                   Boolean(mediaCandidate) &&
                   isSafeImageSrc(mediaCandidate) &&
-                  (item.status !== 'sent' || sentWithImage);
+                  (!isSuccessfulSendStatus(item.status) || sentWithImage);
                 return (
                 <div key={item.id} className="relative flex flex-col rounded-lg border bg-card text-card-foreground shadow-sm overflow-hidden h-full">
                   <div className="relative aspect-video bg-muted/30">
@@ -829,6 +867,10 @@ const QueuePage = () => {
                     </p>
                     <p className="text-[11px] text-muted-foreground">{deliveryPath.label}</p>
                     {item.pub_date ? <p className="text-[11px] text-muted-foreground">Published: {formatPublishedDate(item.pub_date, item.pub_precision)}</p> : null}
+                    {item.sent_at ? <p className="text-[11px] text-muted-foreground">Sent: {formatDate(item.sent_at)}</p> : null}
+                    {item.delivered_at ? <p className="text-[11px] text-muted-foreground">Delivered: {formatDate(item.delivered_at)}</p> : null}
+                    {item.read_at ? <p className="text-[11px] text-muted-foreground">Read: {formatDate(item.read_at)}</p> : null}
+                    {item.played_at ? <p className="text-[11px] text-muted-foreground">Played: {formatDate(item.played_at)}</p> : null}
                     {editing ? (
                       <div className="rounded-md border bg-muted/30 p-2 space-y-2">
                         <p className="text-[11px] text-muted-foreground">Edit message text before sending</p>

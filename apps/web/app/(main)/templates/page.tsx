@@ -78,6 +78,7 @@ const TemplatesPage = () => {
   const queryClient = useQueryClient();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [sampleFeedId, setSampleFeedId] = useState<string>('__all');
+  const [sampleItemKey, setSampleItemKey] = useState<'latest' | 'with_image' | 'no_image' | 'long_title' | 'blank'>('latest');
   const [previewTargetKey, setPreviewTargetKey] = useState<string>('');
   const [previewSendNotice, setPreviewSendNotice] = useState<string>('');
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
@@ -142,20 +143,36 @@ const TemplatesPage = () => {
     return 'image';
   };
 
-  const sampleData = feedItems[0]
-    ? {
-      title: feedItems[0].title || 'Sample Title',
-      description: feedItems[0].description || 'Sample description text',
-      content: feedItems[0].content || feedItems[0].description || 'Full content here',
-      link: feedItems[0].link || 'https://example.com/article',
-      url: feedItems[0].link || 'https://example.com/article',
-      author: feedItems[0].author || 'Author Name',
-      pub_date: feedItems[0].pub_date || new Date().toISOString(),
-      image_url: feedItems[0].image_url || '',
-      imageUrl: feedItems[0].image_url || '',
-      categories: feedItems[0].categories || 'News'
+  const sampleItem = React.useMemo(() => {
+    const items = Array.isArray(feedItems) ? feedItems : [];
+    if (sampleItemKey === 'blank') return null;
+    if (!items.length) return null;
+
+    const latest = items[0] || null;
+    const withImage = items.find((item) => Boolean(String(item.image_url || '').trim())) || null;
+    const noImage = items.find((item) => !String(item.image_url || '').trim()) || null;
+    const longTitle =
+      items.reduce((best, item) => {
+        const bestLen = String(best?.title || '').length;
+        const nextLen = String(item?.title || '').length;
+        return nextLen > bestLen ? item : best;
+      }, latest as FeedItem | null) || null;
+
+    switch (sampleItemKey) {
+      case 'with_image':
+        return withImage || latest;
+      case 'no_image':
+        return noImage || latest;
+      case 'long_title':
+        return longTitle || latest;
+      case 'latest':
+      default:
+        return latest;
     }
-    : {
+  }, [feedItems, sampleItemKey]);
+
+  const sampleData = React.useMemo(() => {
+    const fallback = {
       title: 'Sample Article Title',
       description: 'This is a sample description for preview purposes.',
       content: 'Full article content would appear here.',
@@ -167,6 +184,61 @@ const TemplatesPage = () => {
       imageUrl: '',
       categories: 'News, Technology'
     };
+
+    if (sampleItemKey === 'blank') {
+      return {
+        ...fallback,
+        title: '',
+        description: '',
+        content: '',
+        link: '',
+        url: '',
+        author: '',
+        categories: ''
+      };
+    }
+
+    if (!sampleItem) return fallback;
+
+    const rawData =
+      sampleItem.raw_data && typeof sampleItem.raw_data === 'object'
+        ? (sampleItem.raw_data as Record<string, unknown>)
+        : null;
+    const rawExtras = rawData
+      ? Object.fromEntries(
+          Object.entries(rawData).map(([key, value]) => {
+            if (value == null) return [key, ''];
+            if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+              return [key, value];
+            }
+            try {
+              return [key, JSON.stringify(value)];
+            } catch {
+              return [key, String(value)];
+            }
+          })
+        )
+      : {};
+
+    const categories =
+      Array.isArray(sampleItem.categories)
+        ? sampleItem.categories.filter(Boolean).join(', ')
+        : String(sampleItem.categories || '').trim();
+
+    return {
+      title: sampleItem.title || fallback.title,
+      description: sampleItem.description || fallback.description,
+      content: sampleItem.content || sampleItem.description || fallback.content,
+      link: sampleItem.link || fallback.link,
+      url: sampleItem.link || fallback.url,
+      author: sampleItem.author || fallback.author,
+      pub_date: sampleItem.pub_date || fallback.pub_date,
+      image_url: sampleItem.image_url || '',
+      imageUrl: sampleItem.image_url || '',
+      categories: categories || fallback.categories,
+      ...rawExtras
+    };
+  }, [sampleItem, sampleItemKey]);
 
   const form = useForm<TemplateFormValues>({
     resolver: zodResolver(schema),
@@ -463,16 +535,29 @@ const TemplatesPage = () => {
                   <div className="flex flex-wrap gap-2 rounded-lg border p-3">
                     {availableVariables.length > 0 ? (
                       availableVariables.map((variable) => (
+                        (() => {
+                          const key = String(variable.name || '').trim();
+                          const rawValue = (sampleData as Record<string, unknown>)[key];
+                          const sampleValue = rawValue == null ? '' : String(rawValue);
+                          const cleaned = sampleValue.replace(/\s+/g, ' ').trim();
+                          const preview = cleaned.length > 42 ? `${cleaned.slice(0, 42)}...` : cleaned;
+                          return (
                         <Button
                           key={variable.name}
                           type="button"
                           variant="secondary"
                           size="sm"
                           onClick={() => insertVariable(variable.name)}
-                          className="text-xs"
+                          title={cleaned ? `${key}: ${cleaned}` : key}
+                          className="h-auto max-w-full flex-col items-start gap-0.5 px-2 py-1 text-left"
                         >
-                          {variable.name.replace(/_/g, ' ')}
+                          <span className="text-xs font-medium leading-none">{key.replace(/_/g, ' ')}</span>
+                          <span className="w-full truncate text-[10px] leading-none text-muted-foreground">
+                            {preview || 'No sample value'}
+                          </span>
                         </Button>
+                          );
+                        })()
                       ))
                     ) : (
                       <p className="text-sm text-muted-foreground">
@@ -619,6 +704,26 @@ const TemplatesPage = () => {
                   <span className="text-muted-foreground">Show with sample data</span>
                 </label>
               </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Sample item</Label>
+                  <Select value={sampleItemKey} onValueChange={(value) => setSampleItemKey(value as typeof sampleItemKey)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Latest item" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="latest">Latest item</SelectItem>
+                      <SelectItem value="with_image">With image</SelectItem>
+                      <SelectItem value="no_image">No image</SelectItem>
+                      <SelectItem value="long_title">Long title</SelectItem>
+                      <SelectItem value="blank">Blank edge case</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <p className="text-xs text-muted-foreground sm:self-end">
+                  Pick different samples to preview edge cases before automations run.
+                </p>
+              </div>
             </CardHeader>
             <CardContent>
               <div className="rounded-lg bg-emerald-50/70 p-4 dark:bg-emerald-950/40">
@@ -650,11 +755,16 @@ const TemplatesPage = () => {
                 </div>
               </div>
 
-              {previewWithData && feedItems[0] && (
+              {previewWithData ? (
                 <p className="text-xs text-muted-foreground mt-2">
-                  Using data from: &quot;{feedItems[0].title?.slice(0, 40)}...&quot;
+                  Sample:{' '}
+                  {sampleItemKey === 'blank'
+                    ? 'Blank edge case'
+                    : sampleItem?.title
+                      ? `"${String(sampleItem.title).slice(0, 60)}${String(sampleItem.title).length > 60 ? '...' : ''}"`
+                      : 'Fallback example'}
                 </p>
-              )}
+              ) : null}
             </CardContent>
           </Card>
         </div>

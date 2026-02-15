@@ -43,7 +43,7 @@ async function monitorDeployment() {
             const latest = logs[0];
             console.log(`[${new Date().toISOString()}] Latest Log Status: ${latest.status}`);
 
-            if (latest.status === 'sent') {
+            if (['sent', 'delivered', 'read', 'played'].includes(String(latest.status || '').toLowerCase())) {
                 console.log('SUCCESS: Message SENT!');
                 console.log(`Sent At: ${latest.sent_at}`);
                 return;

@@ -55,8 +55,18 @@ const isHttpUrl = (value: string) => {
   }
 };
 
-const downloadImageBuffer = async (url: string) => {
+const toOriginOrUndefined = (value?: string | null) => {
+  if (!value) return undefined;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return undefined;
+  }
+};
+
+const downloadImageBuffer = async (url: string, refererUrl?: string | null) => {
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+  const refererOrigin = toOriginOrUndefined(refererUrl);
   const response = await safeAxiosRequest(url, {
     timeout: DEFAULT_SEND_TIMEOUT_MS,
     responseType: 'arraybuffer',
@@ -66,12 +76,16 @@ const downloadImageBuffer = async (url: string) => {
       'User-Agent': DEFAULT_USER_AGENT,
       // Prefer formats WhatsApp accepts; if the origin still serves AVIF/other formats, we will
       // attempt to transcode them to JPEG via sharp (see below).
-      Accept: 'image/webp,image/apng,image/*,*/*;q=0.8'
+      Accept: 'image/webp,image/apng,image/*,*/*;q=0.8',
+      ...(refererOrigin ? { Referer: refererOrigin } : {})
     }
   });
   const contentType = String(response.headers?.['content-type'] || '').toLowerCase();
   const data = response.data;
   let buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  if (!buffer.length) {
+    throw new Error('Image download returned empty body');
+  }
   if (buffer.length > MAX_IMAGE_BYTES) {
     throw new Error(`Image too large (${buffer.length} bytes)`);
   }
@@ -918,16 +932,17 @@ const whatsappRoutes = () => {
     const videoDataUrl = payload.videoDataUrl ? String(payload.videoDataUrl).trim() : null;
     const disableLinkPreview = payload.disableLinkPreview === true;
     const confirm = payload.confirm;
-    const includeCaption = payload.includeCaption !== false;
-    const captionText = [normalizedMessage, normalizedLink].filter(Boolean).join('\n').trim();
-    if (!captionText && !imageUrl && !imageDataUrl && !videoDataUrl) {
-      throw badRequest('message, linkUrl, imageUrl, imageDataUrl, or videoDataUrl is required');
-    }
+	    const includeCaption = payload.includeCaption !== false;
+	    const captionText = [normalizedMessage, normalizedLink].filter(Boolean).join('\n').trim();
+	    if (!captionText && !imageUrl && !imageDataUrl && !videoDataUrl) {
+	      throw badRequest('message, linkUrl, imageUrl, imageDataUrl, or videoDataUrl is required');
+	    }
 
-    const connected = await ensureConnectedForSend(whatsapp, 'send-test route');
-    if (!connected) {
-      throw badRequest('WhatsApp is not connected');
-    }
+	    let mediaWarning: string | null = null;
+	    const connected = await ensureConnectedForSend(whatsapp, 'send-test route');
+	    if (!connected) {
+	      throw badRequest('WhatsApp is not connected');
+	    }
 
     let content: Record<string, unknown>;
     if (videoDataUrl) {
@@ -940,41 +955,45 @@ const whatsappRoutes = () => {
       content = includeCaption && captionText
         ? { image: buffer, mimetype, caption: captionText }
         : { image: buffer, mimetype };
-    } else if (imageUrl) {
-      if (!isHttpUrl(imageUrl)) {
-        throw badRequest('imageUrl must be an http(s) URL');
-      }
+	    } else if (imageUrl) {
+	      if (!isHttpUrl(imageUrl)) {
+	        throw badRequest('imageUrl must be an http(s) URL');
+	      }
       try {
         await assertSafeOutboundUrl(imageUrl);
-      } catch (error) {
-        throw badRequest(getErrorMessage(error, 'imageUrl is not allowed'));
-      }
-      try {
-        const { buffer, mimetype } = await downloadImageBuffer(imageUrl);
-        content = includeCaption && captionText
-          ? (mimetype
-            ? { image: buffer, mimetype, caption: captionText }
-            : { image: buffer, caption: captionText })
-          : (mimetype
-            ? { image: buffer, mimetype }
-            : { image: buffer });
-      } catch (error) {
-        // Fall back to URL sending (Baileys will attempt to download)
-        content = includeCaption && captionText
-          ? { image: { url: imageUrl }, caption: captionText }
-          : { image: { url: imageUrl } };
-      }
-    } else {
-      content = disableLinkPreview ? { text: captionText, linkPreview: null } : { text: captionText };
-    }
+	      } catch (error) {
+	        throw badRequest(getErrorMessage(error, 'imageUrl is not allowed'));
+	      }
+	      try {
+	        const { buffer, mimetype } = await downloadImageBuffer(imageUrl, normalizedLink || null);
+	        content = includeCaption && captionText
+	          ? (mimetype
+	            ? { image: buffer, mimetype, caption: captionText }
+	            : { image: buffer, caption: captionText })
+	          : (mimetype
+	            ? { image: buffer, mimetype }
+	            : { image: buffer });
+	      } catch (error) {
+	        const message = getErrorMessage(error, 'Failed to download imageUrl');
+	        // Avoid URL-based sends: Baileys fetches without our headers and can end up uploading empty media.
+	        if (!captionText) {
+	          throw badRequest(message);
+	        }
+	        mediaWarning = message;
+	        content = disableLinkPreview ? { text: captionText, linkPreview: null } : { text: captionText };
+	      }
+	    } else {
+	      content = disableLinkPreview ? { text: captionText, linkPreview: null } : { text: captionText };
+	    }
 
-    const results: Array<{
-      jid: string;
-      ok: boolean;
-      messageId?: string | null;
-      confirmation?: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null;
-      error?: string;
-    }> = [];
+	    const results: Array<{
+	      jid: string;
+	      ok: boolean;
+	      messageId?: string | null;
+	      confirmation?: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null;
+	      warning?: string;
+	      error?: string;
+	    }> = [];
 
     for (const normalizedJid of normalizedJids) {
       try {
@@ -1024,13 +1043,13 @@ const whatsappRoutes = () => {
             typeof (imageValue as any).url === 'string' &&
             isHttpUrl(String((imageValue as any).url))
           ) {
-            // If we reached a URL-send fallback, try to prefetch+normalize anyway for newsletters.
-            // This avoids Baileys' internal fetch (no referer/UA) which often fails on hotlink-protected CDNs.
-            try {
-              const { buffer } = await downloadImageBuffer(String((imageValue as any).url));
-              const prepared = await prepareNewsletterImage(buffer, { maxBytes: 8 * 1024 * 1024 });
-              effectiveContent = {
-                ...content,
+	            // If we reached a URL-send fallback, try to prefetch+normalize anyway for newsletters.
+	            // This avoids Baileys' internal fetch (no referer/UA) which often fails on hotlink-protected CDNs.
+	            try {
+	              const { buffer } = await downloadImageBuffer(String((imageValue as any).url), normalizedLink || null);
+	              const prepared = await prepareNewsletterImage(buffer, { maxBytes: 8 * 1024 * 1024 });
+	              effectiveContent = {
+	                ...content,
                 image: prepared.buffer,
                 mimetype: prepared.mimetype || (content as any)?.mimetype,
                 ...(prepared.jpegThumbnail ? { jpegThumbnail: prepared.jpegThumbnail } : {}),
@@ -1062,7 +1081,13 @@ const whatsappRoutes = () => {
           confirmation = await whatsapp.confirmSend(messageId, timeouts);
         }
 
-        results.push({ jid: normalizedJid, ok: true, messageId, confirmation });
+        results.push({
+          jid: normalizedJid,
+          ok: true,
+          messageId,
+          confirmation,
+          ...(mediaWarning ? { warning: mediaWarning } : {})
+        });
       } catch (error) {
         results.push({ jid: normalizedJid, ok: false, error: getErrorMessage(error) });
       }
@@ -1145,31 +1170,37 @@ const whatsappRoutes = () => {
       throw badRequest('WhatsApp is not connected');
     }
 
-    let content: Record<string, unknown>;
-    if (imageUrl) {
-      if (!isHttpUrl(imageUrl)) {
-        throw badRequest('imageUrl must be an http(s) URL');
-      }
+	    let content: Record<string, unknown>;
+	    let mediaWarning: string | null = null;
+	    if (imageUrl) {
+	      if (!isHttpUrl(imageUrl)) {
+	        throw badRequest('imageUrl must be an http(s) URL');
+	      }
       try {
         await assertSafeOutboundUrl(imageUrl);
-      } catch (error) {
-        throw badRequest(getErrorMessage(error, 'imageUrl is not allowed'));
-      }
-      try {
-        const { buffer, mimetype } = await downloadImageBuffer(imageUrl);
-        content = mimetype
-          ? { image: buffer, mimetype, caption: message || '' }
-          : { image: buffer, caption: message || '' };
-      } catch {
-        content = { image: { url: imageUrl }, caption: message || '' };
-      }
-    } else {
-      content = { text: message };
-    }
+	      } catch (error) {
+	        throw badRequest(getErrorMessage(error, 'imageUrl is not allowed'));
+	      }
+	      try {
+	        const { buffer, mimetype } = await downloadImageBuffer(imageUrl, null);
+	        content = mimetype
+	          ? { image: buffer, mimetype, caption: message || '' }
+	          : { image: buffer, caption: message || '' };
+	      } catch (error) {
+	        const warning = getErrorMessage(error, 'Failed to download imageUrl');
+	        if (!message) {
+	          throw badRequest(warning);
+	        }
+	        mediaWarning = warning;
+	        content = { text: message };
+	      }
+	    } else {
+	      content = { text: message };
+	    }
 
-    const result = await whatsapp.sendStatusBroadcast(content);
-    res.json({ ok: true, messageId: result?.key?.id });
-  }));
+	    const result = await whatsapp.sendStatusBroadcast(content);
+	    res.json({ ok: true, messageId: result?.key?.id, ...(mediaWarning ? { warning: mediaWarning } : {}) });
+	  }));
 
   // Get recent outbox: messages the client believes it sent (for debugging ordering/media)
   router.get('/outbox', asyncHandler(async (req: Request, res: Response) => {

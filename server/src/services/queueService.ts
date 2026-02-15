@@ -1031,71 +1031,13 @@ const sendMessageWithTemplate = async (
         if (!allowTextFallback) {
           throw new Error(bufferErrorMessage);
         }
-
-        const normalizedBufferError = bufferErrorMessage.toLowerCase();
-        const shouldTryUrlSend = !(
-          normalizedBufferError.includes('too large') ||
-          normalizedBufferError.includes('maxcontentlength') ||
-          normalizedBufferError.includes('content length') ||
-          normalizedBufferError.includes('expected mp4') ||
-          normalizedBufferError.includes('unsupported')
-        );
-
-        if (!shouldTryUrlSend) {
-          logger.warn({ error, jid, videoUrl: safeUrl }, 'Video buffer send unavailable; using text fallback');
-          const response = await sendText(textWithPreview);
-          return {
-            response,
-            text: textWithPreview,
-            media: { type: 'video', url: safeUrl, sent: false, error: bufferErrorMessage }
-          };
-        }
-
-        logger.warn(
-          { error, jid, videoUrl: safeUrl },
-          'Video buffer send unavailable; trying URL-based send'
-        );
-
-        try {
-          const content: Record<string, unknown> = includeImageCaption
-            ? { video: { url: safeUrl }, caption: renderedText }
-            : { video: { url: safeUrl } };
-          const response =
-            target.type === 'status'
-              ? await withTimeout(
-                whatsappClient.sendStatusBroadcast(content),
-                sendTimeoutMs,
-                'Timed out sending video status message'
-              )
-              : await withTimeout(
-                whatsappClient.sendMessage(jid, content),
-                sendTimeoutMs,
-                'Timed out sending video message'
-              );
-
-          return {
-            response,
-            text: includeImageCaption ? renderedText : '',
-            media: { type: 'video', url: safeUrl, sent: true, error: null }
-          };
-        } catch (urlError) {
-          const urlErrorMessage = getErrorMessage(urlError);
-          logger.info(
-            { error: urlError, jid, videoUrl: safeUrl, bufferError: bufferErrorMessage },
-            'Video URL send rejected; using text fallback'
-          );
-          const response = await sendText(textWithPreview);
-          return {
-            response,
-            text: textWithPreview,
-            media: {
-              type: 'video',
-              url: safeUrl,
-              sent: false,
-              error: `${bufferErrorMessage}; url-send: ${urlErrorMessage}`
-            }
-          };
-        }
+        logger.warn({ error, jid, videoUrl: safeUrl }, 'Video send failed; using text fallback');
+        const response = await sendText(textWithPreview);
+        return {
+          response,
+          text: textWithPreview,
+          media: { type: 'video', url: safeUrl, sent: false, error: bufferErrorMessage }
+        };
       }
     }
 
@@ -1149,74 +1091,30 @@ const sendMessageWithTemplate = async (
       };
     } catch (error) {
       const bufferErrorMessage = getErrorMessage(error);
-      if (
+      const isUnsupportedImage =
         /Unsupported image MIME type for WhatsApp upload|Unsupported or corrupt image data for WhatsApp upload|URL did not return an image/i.test(
           bufferErrorMessage
-        )
-      ) {
-        if (!allowTextFallback) {
-          throw new Error(bufferErrorMessage);
-        }
+        );
+
+      if (!allowTextFallback) {
+        throw new Error(bufferErrorMessage);
+      }
+
+      if (isUnsupportedImage) {
         logger.info(
           { jid, imageUrl: safeUrl, reason: bufferErrorMessage },
           'Skipping unsupported image type and falling back to text'
         );
-        const response = await sendText(textWithPreview);
-        return {
-          response,
-          text: textWithPreview,
-          media: { type: 'image', url: safeUrl, sent: false, error: bufferErrorMessage }
-        };
+      } else {
+        logger.warn({ error, jid, imageUrl: safeUrl }, 'Image send failed; using text fallback');
       }
 
-      logger.warn(
-        { error, jid, imageUrl: safeUrl },
-        'Image buffer send unavailable; trying URL-based send'
-      );
-
-      try {
-        const content: Record<string, unknown> = includeImageCaption
-          ? { image: { url: safeUrl }, caption: renderedText }
-          : { image: { url: safeUrl } };
-        const response =
-          target.type === 'status'
-            ? await withTimeout(
-              whatsappClient.sendStatusBroadcast(content),
-              sendTimeoutMs,
-              'Timed out sending image status message'
-            )
-            : await withTimeout(
-              whatsappClient.sendMessage(jid, content),
-              sendTimeoutMs,
-              'Timed out sending image message'
-            );
-
-        return {
-          response,
-          text: includeImageCaption ? renderedText : '',
-          media: { type: 'image', url: safeUrl, sent: true, error: null }
-        };
-      } catch (urlError) {
-        const urlErrorMessage = getErrorMessage(urlError);
-        if (!allowTextFallback) {
-          throw new Error(`${bufferErrorMessage}; url-send: ${urlErrorMessage}`);
-        }
-        logger.info(
-          { error: urlError, jid, imageUrl: safeUrl, bufferError: bufferErrorMessage },
-          'Image URL send rejected; using text fallback'
-        );
-        const response = await sendText(textWithPreview);
-        return {
-          response,
-          text: textWithPreview,
-          media: {
-            type: 'image',
-            url: safeUrl,
-            sent: false,
-            error: `${bufferErrorMessage}; url-send: ${urlErrorMessage}`
-          }
-        };
-      }
+      const response = await sendText(textWithPreview);
+      return {
+        response,
+        text: textWithPreview,
+        media: { type: 'image', url: safeUrl, sent: false, error: bufferErrorMessage }
+      };
     }
   }
 

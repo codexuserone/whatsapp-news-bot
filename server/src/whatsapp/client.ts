@@ -335,6 +335,7 @@ class WhatsAppClient {
   groupsListCache: GroupSummary[];
   groupsListFetchedAtMs: number;
   groupsListFetchInFlight: Promise<GroupSummary[]> | null;
+  groupsListRateLimitedUntilMs: number;
   processErrorHandlersBound: boolean;
   waVersion: number[] | null;
   waVersionFetchedAtMs: number | null;
@@ -374,6 +375,7 @@ class WhatsAppClient {
     this.groupsListCache = [];
     this.groupsListFetchedAtMs = 0;
     this.groupsListFetchInFlight = null;
+    this.groupsListRateLimitedUntilMs = 0;
     this.processErrorHandlersBound = false;
     this.waVersion = null;
     this.waVersionFetchedAtMs = null;
@@ -687,6 +689,8 @@ class WhatsAppClient {
     const baileysLogger = Object.create(baseLogger);
     const isBenignMediaTrace = (value: string | null) =>
       Boolean(value && /Input file contains unsupported image format/i.test(value));
+    const isThrottleTrace = (value: string | null) =>
+      Boolean(value && /rate-overlimit|too many requests/i.test(value));
     const handleArgs = (args: unknown[]) => {
       const message = this.extractLogMessage(args);
       const errorMessage = this.extractErrorMessage(args);
@@ -706,6 +710,10 @@ class WhatsAppClient {
         );
         return;
       }
+      if (isThrottleTrace(errorMessage) || isThrottleTrace(message)) {
+        baseLogger.debug({ reason: 'throttled' }, 'Baileys request throttled');
+        return;
+      }
       baseLogger.error(...args);
       handleArgs(args);
     };
@@ -717,6 +725,10 @@ class WhatsAppClient {
           { reason: 'unsupported_image_format' },
           'Baileys skipped thumbnail generation for one media payload'
         );
+        return;
+      }
+      if (isThrottleTrace(errorMessage) || isThrottleTrace(message)) {
+        baseLogger.debug({ reason: 'throttled' }, 'Baileys request throttled');
         return;
       }
       baseLogger.warn(...args);
@@ -1047,9 +1059,18 @@ class WhatsAppClient {
         }
       }
 
-      const browser =
-        Browsers?.windows?.('Chrome') || ['Windows', 'Chrome', '120.0.0'];
-      const syncFullHistory = String(process.env.WHATSAPP_SYNC_FULL_HISTORY || 'true').toLowerCase() !== 'false';
+      // Identify this session clearly in WhatsApp "Linked devices" so it doesn't look like a user's browser.
+      // Defaulting to Ubuntu makes it obvious this is the bot (Render runs on Linux) and avoids confusion with
+      // a real "Microsoft Edge (Windows)" session.
+      const deviceLabel = String(process.env.WHATSAPP_DEVICE_NAME || process.env.WHATSAPP_DEVICE_LABEL || 'Anash Bot')
+        .trim()
+        .slice(0, 64) || 'Anash Bot';
+      const browser = Browsers?.ubuntu?.(deviceLabel) || ['Ubuntu', deviceLabel, '22.04.4'];
+
+      // Full history sync is unnecessary for a posting bot and can be heavy; default to OFF.
+      // Set WHATSAPP_SYNC_FULL_HISTORY=true only if you explicitly need message history syncing.
+      const syncFullHistory =
+        String(process.env.WHATSAPP_SYNC_FULL_HISTORY || '').trim().toLowerCase() === 'true';
 
       const socketConfig: Record<string, unknown> = {
         auth: state,
@@ -1497,21 +1518,30 @@ class WhatsAppClient {
   async getGroups(): Promise<GroupSummary[]> {
     const socket = this.socket;
     const now = Date.now();
-    const GROUP_CACHE_TTL_MS = 120000;
+    const GROUP_CACHE_TTL_MS = 15 * 60 * 1000;
+    const RATE_LIMIT_BACKOFF_MS = 10 * 60 * 1000;
+
+    const fallbackGroups = () => {
+      if (this.groupsListCache.length) return this.groupsListCache;
+      const fallbackFromMetadata = this.getGroupsFromMetadataCache();
+      if (fallbackFromMetadata.length) return fallbackFromMetadata;
+      return this.getGroupsFromChatStore();
+    };
 
     if (this.groupsListCache.length && now - this.groupsListFetchedAtMs < GROUP_CACHE_TTL_MS) {
       return this.groupsListCache;
     }
 
-    if (!socket) {
-      if (this.groupsListCache.length) return this.groupsListCache;
-      const fallbackFromMetadata = this.getGroupsFromMetadataCache();
-      if (fallbackFromMetadata.length) return fallbackFromMetadata;
-      return this.getGroupsFromChatStore();
-    }
-
     if (this.groupsListFetchInFlight) {
       return this.groupsListFetchInFlight;
+    }
+
+    if (!socket) {
+      return fallbackGroups();
+    }
+
+    if (this.groupsListRateLimitedUntilMs && now < this.groupsListRateLimitedUntilMs) {
+      return fallbackGroups();
     }
 
     this.groupsListFetchInFlight = (async () => {
@@ -1556,17 +1586,15 @@ class WhatsAppClient {
 
         this.groupsListCache = normalized;
         this.groupsListFetchedAtMs = Date.now();
+        this.groupsListRateLimitedUntilMs = 0;
         return normalized;
       } catch (err) {
-        const fallback = this.groupsListCache.length
-          ? this.groupsListCache
-          : (() => {
-            const metadataFallback = this.getGroupsFromMetadataCache();
-            if (metadataFallback.length) return metadataFallback;
-            return this.getGroupsFromChatStore();
-          })();
+        const fallback = fallbackGroups();
         if (this.isRateOverLimitError(err)) {
-          logger.warn({ err, cachedCount: fallback.length }, 'WhatsApp group fetch rate-limited; using cached groups');
+          this.groupsListCache = fallback;
+          this.groupsListFetchedAtMs = Date.now();
+          this.groupsListRateLimitedUntilMs = Date.now() + RATE_LIMIT_BACKOFF_MS;
+          logger.debug({ cachedCount: fallback.length }, 'WhatsApp group fetch throttled; using cached groups');
           return fallback;
         }
 

@@ -11,6 +11,7 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUP
 const RENDER_API_KEY = process.env.RENDER_API_KEY || '';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 const TEST_GROUP_ID = process.env.TEST_GROUP_ID || '120363407220244757@g.us';
+const TEST_CHANNEL_ID = process.env.TEST_CHANNEL_ID || '120363406955649221@newsletter';
 const KEEP_DEBUG_DATA = String(process.env.KEEP_DEBUG_DATA || '').toLowerCase() === 'true';
 const DEBUG_BASIC_AUTH_USER = process.env.DEBUG_BASIC_AUTH_USER || process.env.BASIC_AUTH_USER || '';
 const DEBUG_BASIC_AUTH_PASS = process.env.DEBUG_BASIC_AUTH_PASS || process.env.BASIC_AUTH_PASS || '';
@@ -18,6 +19,11 @@ const BASIC_AUTH_HEADER =
   DEBUG_BASIC_AUTH_USER && DEBUG_BASIC_AUTH_PASS
     ? `Basic ${Buffer.from(`${DEBUG_BASIC_AUTH_USER}:${DEBUG_BASIC_AUTH_PASS}`).toString('base64')}`
     : '';
+
+// Production-safe by default: this script should not mutate the live app unless explicitly enabled.
+const ALLOW_MUTATIONS = String(process.env.E2E_ALLOW_MUTATIONS || '').trim().toLowerCase() === 'true';
+const ALLOW_WHATSAPP_SENDS =
+  ALLOW_MUTATIONS && String(process.env.E2E_ALLOW_WHATSAPP_SENDS || '').trim().toLowerCase() === 'true';
 
 const now = new Date();
 const stamp = now.toISOString().replace(/[^0-9]/g, '').slice(0, 14);
@@ -56,6 +62,10 @@ const pushStep = (name, ok, data, error) => {
     error: error ? summarize(error) : undefined,
     at: new Date().toISOString()
   });
+};
+
+const skipStep = (name, reason) => {
+  pushStep(name, true, { skipped: true, reason }, null);
 };
 
 const pushFinding = (severity, title, details) => {
@@ -139,7 +149,7 @@ const upsertNamedTarget = async (targets, type, namePattern, fallbackPayload) =>
 
 const cleanupCreatedData = async () => {
   if (KEEP_DEBUG_DATA) {
-    pushFinding('info', 'Cleanup skipped', 'KEEP_DEBUG_DATA=true so temporary debug entities were kept.');
+    // Intentionally silent: callers can opt into KEEP_DEBUG_DATA for local testing.
     return;
   }
 
@@ -230,43 +240,48 @@ const run = async () => {
     );
   }
 
-  const statusUpdatePayload = {
-    default_timezone: 'Asia/Jerusalem',
-    message_delay_ms: 2100,
-    send_timeout_ms: 47000,
-    max_pending_age_hours: 72,
-    dedupeThreshold: 0.91,
-    app_name: `${PREFIX} app`
-  };
-
-  await step('PUT /api/settings (varied configuration test)', async () => {
-    const updated = await apiRequest('PUT', '/api/settings', statusUpdatePayload);
-    return {
-      requested: statusUpdatePayload,
-      persisted: {
-        default_timezone: updated.data.default_timezone,
-        message_delay_ms: updated.data.message_delay_ms,
-        send_timeout_ms: updated.data.send_timeout_ms,
-        max_pending_age_hours: updated.data.max_pending_age_hours,
-        dedupeThreshold: updated.data.dedupeThreshold,
-        app_name: updated.data.app_name
-      }
+  if (ALLOW_MUTATIONS) {
+    const statusUpdatePayload = {
+      default_timezone: 'Asia/Jerusalem',
+      message_delay_ms: 2100,
+      send_timeout_ms: 47000,
+      max_pending_age_hours: 72,
+      dedupeThreshold: 0.91,
+      app_name: `${PREFIX} app`
     };
-  });
 
-  await step('GET /api/settings (verify round-trip)', async () => {
-    const check = await apiRequest('GET', '/api/settings');
-    const current = check.data;
-    const mismatches = Object.entries(statusUpdatePayload)
-      .filter(([key, value]) => String(current?.[key]) !== String(value))
-      .map(([key, value]) => `${key}: expected ${value}, got ${current?.[key]}`);
+    await step('PUT /api/settings (varied configuration test)', async () => {
+      const updated = await apiRequest('PUT', '/api/settings', statusUpdatePayload);
+      return {
+        requested: statusUpdatePayload,
+        persisted: {
+          default_timezone: updated.data.default_timezone,
+          message_delay_ms: updated.data.message_delay_ms,
+          send_timeout_ms: updated.data.send_timeout_ms,
+          max_pending_age_hours: updated.data.max_pending_age_hours,
+          dedupeThreshold: updated.data.dedupeThreshold,
+          app_name: updated.data.app_name
+        }
+      };
+    });
 
-    if (mismatches.length) {
-      pushFinding('warning', 'Settings round-trip mismatch', mismatches.join('; '));
-    }
+    await step('GET /api/settings (verify round-trip)', async () => {
+      const check = await apiRequest('GET', '/api/settings');
+      const current = check.data;
+      const mismatches = Object.entries(statusUpdatePayload)
+        .filter(([key, value]) => String(current?.[key]) !== String(value))
+        .map(([key, value]) => `${key}: expected ${value}, got ${current?.[key]}`);
 
-    return { mismatches };
-  });
+      if (mismatches.length) {
+        pushFinding('warning', 'Settings round-trip mismatch', mismatches.join('; '));
+      }
+
+      return { mismatches };
+    });
+  } else {
+    skipStep('PUT /api/settings (varied configuration test)', 'E2E_ALLOW_MUTATIONS=false');
+    skipStep('GET /api/settings (verify round-trip)', 'E2E_ALLOW_MUTATIONS=false');
+  }
 
   const feedTests = [
     {
@@ -307,19 +322,99 @@ const run = async () => {
     });
   }
 
-  const createdFeedRss = await step('POST /api/feeds - create RSS feed', async () => {
-    const response = await apiRequest('POST', '/api/feeds', {
-      name: `${PREFIX} RSS`,
-      url: 'https://anash.org/feed',
-      type: 'rss',
-      active: true,
-      fetch_interval: 300,
-      cleaning: {
-        stripUtm: true,
-        decodeEntities: true,
-        removePhrases: ['Read More']
+  // Read-only baseline checks for core admin endpoints
+  const feeds = (await step('GET /api/feeds', async () => (await apiRequest('GET', '/api/feeds')).data || [])) || [];
+  const templates =
+    (await step('GET /api/templates', async () => (await apiRequest('GET', '/api/templates')).data || [])) || [];
+  const targets = (await step('GET /api/targets', async () => (await apiRequest('GET', '/api/targets')).data || [])) || [];
+  const schedules =
+    (await step('GET /api/schedules', async () => (await apiRequest('GET', '/api/schedules')).data || [])) || [];
+
+  await step('Config check (prod): no demo artifacts + correct schedule targeting', async () => {
+    const badName = (name) => /(^E2E\b|\[E2E\b)/i.test(String(name || ''));
+    const offenders = {
+      feeds: feeds.filter((f) => badName(f?.name)).map((f) => ({ id: f.id, name: f.name })),
+      templates: templates.filter((t) => badName(t?.name)).map((t) => ({ id: t.id, name: t.name })),
+      schedules: schedules.filter((s) => badName(s?.name)).map((s) => ({ id: s.id, name: s.name }))
+    };
+    if (offenders.feeds.length || offenders.templates.length || offenders.schedules.length) {
+      throw new Error(`Demo artifacts found: ${JSON.stringify(offenders)}`);
+    }
+
+    const normalizeNewsletterJid = (value) => {
+      const raw = String(value || '').trim().toLowerCase();
+      const match = raw.match(/([0-9]+)@newsletter/);
+      return match ? `${match[1]}@newsletter` : raw;
+    };
+
+    const expectedChannelJid = normalizeNewsletterJid(TEST_CHANNEL_ID);
+    const targetById = new Map(targets.map((t) => [String(t?.id || ''), t]));
+    const findSchedule = (needle) => schedules.find((s) => String(s?.name || '') === needle);
+
+    const anash = findSchedule('Anash (standard)');
+    const status = findSchedule('Anash Status (wp-json)');
+    const scheduleRows = [anash, status];
+
+    const scheduleChannels = [];
+
+    for (const row of scheduleRows) {
+      if (!row?.id) {
+        throw new Error(`Missing schedule: ${row === anash ? 'Anash (standard)' : 'Anash Status (wp-json)'}`);
       }
-    }, [200, 201]);
+      if (row.active !== true) throw new Error(`Schedule is not active: ${row.name}`);
+
+      const ids = Array.isArray(row.target_ids) ? row.target_ids.map(String) : [];
+      const channels = ids
+        .map((id) => targetById.get(id))
+        .filter((t) => t?.type === 'channel' && t?.active !== false);
+
+      if (!channels.length) {
+        throw new Error(`Schedule ${row.name} has no active channel targets.`);
+      }
+
+      scheduleChannels.push({
+        scheduleId: row.id,
+        scheduleName: row.name,
+        channels: channels.map((t) => ({ id: t.id, name: t.name, jid: t.phone_number })),
+        includesExpectedChannel: channels.some((t) => normalizeNewsletterJid(t.phone_number) === expectedChannelJid)
+      });
+
+      const template = templates.find((t) => String(t?.id || '') === String(row.template_id || ''));
+      if (!template) throw new Error(`Schedule ${row.name} template missing: ${row.template_id}`);
+      if (template.send_mode !== 'image' || template.send_images !== true) {
+        throw new Error(
+          `Schedule ${row.name} template misconfigured: send_mode=${template.send_mode} send_images=${template.send_images}`
+        );
+      }
+    }
+
+    return { ok: true, expectedChannelJid, scheduleChannels };
+  });
+
+  if (!ALLOW_MUTATIONS) {
+    skipStep(
+      'Mutation suite (create feeds/templates/schedules/queue/send)',
+      'E2E_ALLOW_MUTATIONS=false (production-safe default)'
+    );
+  } else {
+    const createdFeedRss = await step('POST /api/feeds - create RSS feed', async () => {
+      const response = await apiRequest(
+        'POST',
+        '/api/feeds',
+        {
+        name: `${PREFIX} RSS`,
+        url: 'https://anash.org/feed',
+        type: 'rss',
+        active: true,
+        fetch_interval: 300,
+        cleaning: {
+          stripUtm: true,
+          decodeEntities: true,
+          removePhrases: ['Read More']
+        }
+      },
+      [200, 201]
+    );
     if (response.data?.id) created.feeds.push(response.data.id);
     return response.data;
   });
@@ -571,23 +666,33 @@ const run = async () => {
         return response.data;
       });
 
-      await step('POST /api/queue/:id/send-now', async () => {
-        const expected = whatsappStatus?.status === 'connected' ? [200] : [400];
-        const response = await apiRequest('POST', `/api/queue/${queuedItem.id}/send-now`, {}, expected);
-        return response.data;
-      });
+      if (ALLOW_WHATSAPP_SENDS) {
+        await step('POST /api/queue/:id/send-now', async () => {
+          const expected = whatsappStatus?.status === 'connected' ? [200] : [400];
+          const response = await apiRequest('POST', `/api/queue/${queuedItem.id}/send-now`, {}, expected);
+          return response.data;
+        });
+      } else {
+        skipStep('POST /api/queue/:id/send-now', 'E2E_ALLOW_WHATSAPP_SENDS=false');
+      }
     } else {
       pushFinding('warning', 'Queue item not found for immediate schedule', 'queue-latest returned no identifiable queue item.');
     }
 
-    await step('POST /api/schedules/:id/dispatch', async () => {
-      const expected = whatsappStatus?.status === 'connected' ? [200] : [200, 500];
-      const response = await apiRequest('POST', `/api/schedules/${immediateSchedule.id}/dispatch`, {}, expected, 120000);
-      return response.data;
-    });
+    if (ALLOW_WHATSAPP_SENDS) {
+      await step('POST /api/schedules/:id/dispatch', async () => {
+        const expected = whatsappStatus?.status === 'connected' ? [200] : [200, 500];
+        const response = await apiRequest('POST', `/api/schedules/${immediateSchedule.id}/dispatch`, {}, expected, 120000);
+        return response.data;
+      });
+    } else {
+      skipStep('POST /api/schedules/:id/dispatch', 'E2E_ALLOW_WHATSAPP_SENDS=false');
+    }
   }
 
-  if (whatsappStatus?.status === 'connected') {
+  if (!ALLOW_WHATSAPP_SENDS) {
+    skipStep('POST /api/whatsapp/send-test (PM/group/channel)', 'E2E_ALLOW_WHATSAPP_SENDS=false');
+  } else if (whatsappStatus?.status === 'connected') {
     const sendTargets = [
       { label: 'PM (me)', target: pmTarget, payload: { message: `${PREFIX} PM test message`, confirm: true } },
       {
@@ -623,7 +728,7 @@ const run = async () => {
 
     for (const send of sendTargets) {
       if (!send.target?.phone_number) {
-        pushBlocker(`${send.label} send skipped`, 'Target is missing.');
+        skipStep(`POST /api/whatsapp/send-test - ${send.label}`, 'Target is missing.');
         continue;
       }
 
@@ -650,6 +755,7 @@ const run = async () => {
       );
       return response.data;
     });
+  }
   }
 
   await step('GET /api/queue/stats?include_manual=true', async () => {
@@ -687,24 +793,111 @@ const run = async () => {
         auth: { persistSession: false }
       });
 
-      const [targetsRes, feedsRes, templatesRes, schedulesRes, logsRes] = await Promise.all([
+      const normalizeNewsletterJid = (value) => {
+        const raw = String(value || '').trim().toLowerCase();
+        const match = raw.match(/([0-9]+)@newsletter/);
+        return match ? `${match[1]}@newsletter` : raw;
+      };
+
+      const sinceIso = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
+
+      const [e2eTemplateCount, e2eScheduleCount, e2eLogCount] = await Promise.all([
+        supabase.from('templates').select('id', { head: true, count: 'exact' }).ilike('name', 'E2E%'),
+        supabase.from('schedules').select('id', { head: true, count: 'exact' }).ilike('name', 'E2E%'),
+        supabase.from('message_logs').select('id', { head: true, count: 'exact' }).ilike('message_content', '[E2E DEBUG%')
+      ]);
+
+      const demoCounts = {
+        templates: e2eTemplateCount.count || 0,
+        schedules: e2eScheduleCount.count || 0,
+        logs: e2eLogCount.count || 0
+      };
+      if (demoCounts.templates || demoCounts.schedules || demoCounts.logs) {
+        throw new Error(`Demo artifacts present in production DB: ${JSON.stringify(demoCounts)}`);
+      }
+
+      const scheduleNames = ['Anash (standard)', 'Anash Status (wp-json)'];
+      const { data: scheduleRows, error: scheduleError } = await supabase
+        .from('schedules')
+        .select('id,name,target_ids,active')
+        .in('name', scheduleNames);
+      if (scheduleError) throw scheduleError;
+      const scheduleByName = new Map((scheduleRows || []).map((row) => [String(row.name || ''), row]));
+      for (const name of scheduleNames) {
+        const row = scheduleByName.get(name);
+        if (!row?.id) throw new Error(`Schedule missing in DB: ${name}`);
+        if (row.active !== true) throw new Error(`Schedule inactive in DB: ${name}`);
+      }
+
+      const scheduleTargetIds = new Set();
+      for (const row of scheduleRows || []) {
+        for (const id of Array.isArray(row.target_ids) ? row.target_ids : []) {
+          const s = String(id || '').trim();
+          if (s) scheduleTargetIds.add(s);
+        }
+      }
+
+      const { data: scheduleTargets, error: scheduleTargetsError } = await supabase
+        .from('targets')
+        .select('id,name,phone_number,type,active')
+        .in('id', Array.from(scheduleTargetIds));
+      if (scheduleTargetsError) throw scheduleTargetsError;
+
+      const channelTargets = (scheduleTargets || []).filter((t) => t.type === 'channel' && t.active !== false);
+      if (!channelTargets.length) throw new Error('No active channel targets found for Anash schedules.');
+
+      const recentChannelMediaByTarget = [];
+      for (const target of channelTargets) {
+        // eslint-disable-next-line no-await-in-loop
+        const { data: mediaRows, error: mediaError } = await supabase
+          .from('message_logs')
+          .select('id,status,created_at,media_type,media_url,media_sent,target_id')
+          .eq('target_id', target.id)
+          .eq('media_sent', true)
+          .in('status', ['sent', 'delivered', 'read', 'played'])
+          .gte('created_at', sinceIso)
+          .order('created_at', { ascending: false })
+          .limit(3);
+        if (mediaError) throw mediaError;
+        if (!mediaRows?.length) {
+          throw new Error(`No recent channel media posts found for "${target.name}" since ${sinceIso}`);
+        }
+        recentChannelMediaByTarget.push({
+          target: { id: target.id, name: target.name, jid: target.phone_number },
+          media: mediaRows
+        });
+      }
+
+      const { data: recentLogs } = await supabase
+        .from('message_logs')
+        .select('id,status,error_message,whatsapp_message_id,created_at')
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      // If the mutation suite ran, show what it created; otherwise these arrays will be empty.
+      const [debugTargets, debugFeeds, debugTemplates, debugSchedules] = await Promise.all([
         supabase.from('targets').select('id,name,type,phone_number,active').ilike('name', `${PREFIX}%`),
         supabase.from('feeds').select('id,name,type,active,last_error').ilike('name', `${PREFIX}%`),
         supabase.from('templates').select('id,name,send_mode,send_images,active').ilike('name', `${PREFIX}%`),
-        supabase.from('schedules').select('id,name,delivery_mode,batch_times,active').ilike('name', `${PREFIX}%`),
-        supabase.from('message_logs').select('id,status,error_message,whatsapp_message_id,created_at').order('created_at', { ascending: false }).limit(10)
+        supabase.from('schedules').select('id,name,delivery_mode,batch_times,active').ilike('name', `${PREFIX}%`)
       ]);
 
       return {
-        targets: targetsRes.data || [],
-        feeds: feedsRes.data || [],
-        templates: templatesRes.data || [],
-        schedules: schedulesRes.data || [],
-        recentLogs: logsRes.data || []
+        demoCounts,
+        schedulesChecked: scheduleNames,
+        channelTargets,
+        recentChannelMediaByTarget,
+        debug: {
+          targets: debugTargets.data || [],
+          feeds: debugFeeds.data || [],
+          templates: debugTemplates.data || [],
+          schedules: debugSchedules.data || []
+        },
+        recentLogs: recentLogs || []
       };
     });
   } else {
-    pushBlocker('Supabase direct verification skipped', 'SUPABASE_URL or SUPABASE_SERVICE_KEY not provided in environment.');
+    skipStep('Supabase direct verification (service role)', 'SUPABASE_URL or SUPABASE_SERVICE_KEY not provided in environment.');
   }
 
   if (RENDER_API_KEY) {
@@ -751,7 +944,7 @@ const run = async () => {
       };
     });
   } else {
-    pushBlocker('Render log scan skipped', 'RENDER_API_KEY not provided in environment.');
+    skipStep('Render log scan around test window', 'RENDER_API_KEY not provided in environment.');
   }
 
   if (GITHUB_TOKEN) {
@@ -778,10 +971,10 @@ const run = async () => {
       };
     });
   } else {
-    pushBlocker('GitHub verification skipped', 'GITHUB_TOKEN not provided in environment.');
+    skipStep('GitHub main branch verification', 'GITHUB_TOKEN not provided in environment.');
   }
 
-  if (initialSettings) {
+  if (ALLOW_MUTATIONS && initialSettings) {
     await step('PUT /api/settings (restore original values)', async () => {
       const restorePayload = {
         default_timezone: initialSettings.default_timezone,
@@ -794,6 +987,8 @@ const run = async () => {
       const response = await apiRequest('PUT', '/api/settings', restorePayload, [200]);
       return response.data;
     });
+  } else if (initialSettings) {
+    skipStep('PUT /api/settings (restore original values)', 'E2E_ALLOW_MUTATIONS=false');
   }
 
   await cleanupCreatedData();
@@ -817,7 +1012,7 @@ run()
     };
 
     console.log(JSON.stringify({ summary, report }, null, 2));
-    if (summary.failedSteps > 0) {
+    if (summary.failedSteps > 0 || summary.blockers > 0) {
       process.exitCode = 1;
     }
   });

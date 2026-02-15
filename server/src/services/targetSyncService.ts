@@ -49,7 +49,7 @@ type WhatsAppSyncClient = {
 };
 
 const DEFAULT_SYNC_INTERVAL_MS = Math.max(
-  Number(process.env.TARGET_AUTO_SYNC_INTERVAL_MS || 60_000),
+  Number(process.env.TARGET_AUTO_SYNC_INTERVAL_MS || 10 * 60_000),
   15_000
 );
 

@@ -297,20 +297,23 @@ const targetRoutes = () => {
       } | null;
       const forceSync =
         String((req.query.sync ?? req.query.refresh ?? 'false')).toLowerCase() === 'true';
-      const now = Date.now();
-      const shouldSyncNow =
-        forceSync || now - lastOnDemandTargetSyncAtMs >= ON_DEMAND_TARGET_SYNC_MIN_INTERVAL_MS;
 
-      if (shouldSyncNow) {
-        lastOnDemandTargetSyncAtMs = now;
-        try {
-          await syncTargetsFromWhatsApp(whatsapp, {
-            includeStatus: true,
-            skipIfDisconnected: true,
-            strict: true
-          });
-        } catch {
-          // Best-effort sync only; list endpoint should still respond.
+      // Do not auto-sync on every list request. Syncing requires WhatsApp network calls (e.g. groupFetchAllParticipating)
+      // and can trigger throttling. Keep it explicit via POST /api/targets/sync or GET ?sync=true.
+      if (forceSync) {
+        const now = Date.now();
+        const shouldSyncNow = now - lastOnDemandTargetSyncAtMs >= ON_DEMAND_TARGET_SYNC_MIN_INTERVAL_MS;
+        if (shouldSyncNow) {
+          lastOnDemandTargetSyncAtMs = now;
+          try {
+            await syncTargetsFromWhatsApp(whatsapp, {
+              includeStatus: true,
+              skipIfDisconnected: true,
+              strict: true
+            });
+          } catch {
+            // Best-effort sync only; list endpoint should still respond.
+          }
         }
       }
 

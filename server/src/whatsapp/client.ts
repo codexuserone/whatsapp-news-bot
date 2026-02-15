@@ -124,8 +124,9 @@ const normalizeNewsletterJid = (value: unknown, options?: { allowNumeric?: boole
     if (!userRaw) return '';
 
     const strippedPrefix = userRaw.replace(/^(true|false)_/i, '');
+    const hasLetters = /[a-z]/i.test(strippedPrefix);
     const digits = strippedPrefix.replace(/[^0-9]/g, '');
-    const user = digits || strippedPrefix;
+    const user = hasLetters ? strippedPrefix : (digits || strippedPrefix);
     return user ? `${user}@newsletter` : '';
   }
 

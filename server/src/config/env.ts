@@ -8,8 +8,9 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 const isProd = process.env.NODE_ENV === 'production';
+const defaultPort = process.env.PORT || 10000;
 const baseUrl =
-  process.env.BASE_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:10000';
+  process.env.BASE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${defaultPort}`;
 
 const env = {
   PORT: process.env.PORT || 10000,

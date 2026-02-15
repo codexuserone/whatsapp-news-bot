@@ -424,11 +424,11 @@ const start = async () => {
   keepAlive();
   // Reset any logs left in processing state by a crash/restart.
   void resetStuckProcessingLogs();
-  scheduleRetentionCleanup();
-  scheduleProcessingWatchdog();
   if (disableSchedulers) {
     logger.warn('Schedulers are disabled via DISABLE_SCHEDULERS');
   } else {
+    scheduleRetentionCleanup();
+    scheduleProcessingWatchdog();
     // If WhatsApp leasing is supported, only the lease-holder should run polling/schedulers.
     // This avoids duplicate feed polling + queue churn during rolling deploys.
     const status = whatsappClient?.getStatus?.();

@@ -182,12 +182,17 @@ const parseBatchTimes = (value: unknown): string[] => {
 
 const getLocalMinuteOfDay = (timezone?: string | null, date = new Date()) => {
   const tz = String(timezone || 'UTC').trim() || 'UTC';
-  const formatter = new Intl.DateTimeFormat('en-GB', {
-    timeZone: tz,
-    hour12: false,
-    hour: '2-digit',
-    minute: '2-digit'
-  });
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz,
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  } catch {
+    return Number.NaN;
+  }
   const parts = formatter.formatToParts(date);
   const hour = Number(parts.find((part) => part.type === 'hour')?.value || '0');
   const minute = Number(parts.find((part) => part.type === 'minute')?.value || '0');

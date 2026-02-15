@@ -336,6 +336,7 @@ class WhatsAppClient {
   groupsListFetchedAtMs: number;
   groupsListFetchInFlight: Promise<GroupSummary[]> | null;
   groupsListRateLimitedUntilMs: number;
+  presenceOfflineTimer: NodeJS.Timeout | null;
   processErrorHandlersBound: boolean;
   waVersion: number[] | null;
   waVersionFetchedAtMs: number | null;
@@ -376,6 +377,7 @@ class WhatsAppClient {
     this.groupsListFetchedAtMs = 0;
     this.groupsListFetchInFlight = null;
     this.groupsListRateLimitedUntilMs = 0;
+    this.presenceOfflineTimer = null;
     this.processErrorHandlersBound = false;
     this.waVersion = null;
     this.waVersionFetchedAtMs = null;
@@ -395,6 +397,36 @@ class WhatsAppClient {
       this.pendingReceiptFlushTimer = null;
       void this.flushPendingReceiptUpdates();
     }, 900);
+  }
+
+  clearPresenceOfflineHeartbeat(): void {
+    if (!this.presenceOfflineTimer) return;
+    clearInterval(this.presenceOfflineTimer);
+    this.presenceOfflineTimer = null;
+  }
+
+  startPresenceOfflineHeartbeat(): void {
+    this.clearPresenceOfflineHeartbeat();
+
+    const socket = this.socket as any;
+    if (!socket || typeof socket.sendPresenceUpdate !== 'function') return;
+
+    const intervalMs = Math.max(Number(process.env.WHATSAPP_PRESENCE_OFFLINE_INTERVAL_MS || 5 * 60_000) || 0, 0);
+    if (intervalMs <= 0) return;
+
+    const tick = async () => {
+      if (this.status !== 'connected') return;
+      const current = this.socket as any;
+      if (!current || typeof current.sendPresenceUpdate !== 'function') return;
+      try {
+        await current.sendPresenceUpdate('unavailable');
+      } catch (error) {
+        logger.debug({ error }, 'Failed to send offline presence update');
+      }
+    };
+
+    void tick();
+    this.presenceOfflineTimer = setInterval(() => void tick(), Math.max(intervalMs, 60_000));
   }
 
   async flushPendingReceiptUpdates(): Promise<void> {
@@ -1150,6 +1182,7 @@ class WhatsAppClient {
             logger.error({ error }, 'Failed to initialize schedulers after reconnect');
           }
           void runTargetAutoSyncPass(this, { silent: true });
+          this.startPresenceOfflineHeartbeat();
         }
 
         if (connection === 'close') {
@@ -1159,6 +1192,7 @@ class WhatsAppClient {
           const rawReason = disconnectError?.output?.payload?.message || disconnectError?.message;
           const reason = redactSensitiveText(rawReason);
           this.status = 'disconnected';
+          this.clearPresenceOfflineHeartbeat();
           this.meJid = null;
           this.meName = null;
           if (String(rawReason || '').includes('QR refs attempts ended')) {
@@ -2146,6 +2180,7 @@ class WhatsAppClient {
       this.reconnectTimer = null;
     }
 
+    this.clearPresenceOfflineHeartbeat();
     this.stopLeaseRenewal();
     if (this.authStore?.releaseLease) {
       try {
@@ -2196,6 +2231,7 @@ class WhatsAppClient {
       this.reconnectTimer = null;
     }
 
+    this.clearPresenceOfflineHeartbeat();
     // Cleanup existing socket
     if (this.socket) {
       try {

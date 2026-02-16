@@ -25,14 +25,19 @@ const schema = z.object({
   app_paused: z.boolean().default(false),
   default_timezone: z.string().min(1),
   log_retention_days: z.coerce.number().min(1),
-  message_delay_ms: z.coerce.number().min(100),
-  max_retries: z.coerce.number().min(0).max(25),
+  message_delay_ms: z.coerce.number().min(0),
+  max_retries: z.coerce.number().min(0).max(50),
   defaultInterTargetDelaySec: z.coerce.number().min(0),
   defaultIntraTargetDelaySec: z.coerce.number().min(0),
   post_send_edit_window_minutes: z.coerce.number().min(1).max(WHATSAPP_EDIT_MAX_MINUTES),
   post_send_correction_window_minutes: z.coerce.number().min(1).max(CORRECTION_SCAN_MAX_MINUTES),
-  processingTimeoutMinutes: z.coerce.number().min(1),
-  dedupeThreshold: z.coerce.number().min(0).max(1).optional()
+  processingTimeoutMinutes: z.coerce.number().min(5),
+  dedupeThreshold: z.coerce.number().min(0).max(1).optional(),
+  authRetentionDays: z.coerce.number().min(1).max(3650),
+  initial_fetch_limit: z.coerce.number().min(1).max(50),
+  max_pending_age_hours: z.coerce.number().min(1).max(336),
+  send_timeout_ms: z.coerce.number().min(10000).max(180000),
+  reconcile_queue_lookback_hours: z.coerce.number().min(1).max(168)
 }).superRefine((value, ctx) => {
   if (value.post_send_correction_window_minutes < value.post_send_edit_window_minutes) {
     ctx.addIssue({
@@ -44,6 +49,10 @@ const schema = z.object({
 });
 
 type SettingsFormValues = z.infer<typeof schema>;
+type BackendSettings = SettingsFormValues & {
+  whatsapp_paused?: boolean;
+  whatsapp_paused_at?: string | null;
+};
 
 const PRESET_LOCATIONS = [
   { name: 'New York', latitude: 40.7128, longitude: -74.006, tzid: 'America/New_York' },
@@ -71,7 +80,7 @@ const COMMON_TIMEZONES = [
 
 const SettingsPage = () => {
   const queryClient = useQueryClient();
-  const { data: settings } = useQuery<SettingsFormValues>({ queryKey: ['settings'], queryFn: () => api.get('/api/settings') });
+  const { data: settings } = useQuery<BackendSettings>({ queryKey: ['settings'], queryFn: () => api.get('/api/settings') });
   const { data: shabbosStatus } = useQuery<ShabbosStatus>({
     queryKey: ['shabbos-status'],
     queryFn: () => api.get('/api/shabbos/status'),
@@ -99,7 +108,12 @@ const SettingsPage = () => {
       post_send_edit_window_minutes: 15,
       post_send_correction_window_minutes: 15,
       processingTimeoutMinutes: 30,
-      dedupeThreshold: 0.88
+      dedupeThreshold: 0.88,
+      authRetentionDays: 60,
+      initial_fetch_limit: 1,
+      max_pending_age_hours: 48,
+      send_timeout_ms: 45000,
+      reconcile_queue_lookback_hours: 12
     }
   });
   const appPaused = useWatch({ control: form.control, name: 'app_paused' });
@@ -264,7 +278,12 @@ const SettingsPage = () => {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2" id="delays">
                 <Label htmlFor="message_delay_ms">Gap Between Messages (ms)</Label>
-                <Input id="message_delay_ms" type="number" {...form.register('message_delay_ms', { valueAsNumber: true })} />
+                <Input
+                  id="message_delay_ms"
+                  type="number"
+                  min={0}
+                  {...form.register('message_delay_ms', { valueAsNumber: true })}
+                />
                 <p className="text-xs text-muted-foreground">Higher value = slower and safer sending.</p>
               </div>
               <div className="space-y-2" id="retention">
@@ -279,7 +298,13 @@ const SettingsPage = () => {
               <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <div className="space-y-2">
                   <Label htmlFor="max_retries">Max Retries</Label>
-                  <Input id="max_retries" type="number" {...form.register('max_retries', { valueAsNumber: true })} />
+                  <Input
+                    id="max_retries"
+                    type="number"
+                    min={0}
+                    max={50}
+                    {...form.register('max_retries', { valueAsNumber: true })}
+                  />
                   <p className="text-xs text-muted-foreground">Retries before a message is marked failed.</p>
                 </div>
                 <div className="space-y-2">
@@ -303,6 +328,7 @@ const SettingsPage = () => {
                   <Input
                     id="processingTimeoutMinutes"
                     type="number"
+                    min={5}
                     {...form.register('processingTimeoutMinutes', { valueAsNumber: true })}
                   />
                 </div>
@@ -359,6 +385,78 @@ const SettingsPage = () => {
               <p className="text-xs text-muted-foreground">
                 Default 0.88. Lower catches more near-duplicates.
               </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card id="advanced">
+          <CardHeader>
+            <CardTitle>Advanced</CardTitle>
+            <CardDescription>Additional backend queue and retention controls.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="space-y-2">
+                <Label htmlFor="send_timeout_ms">Send Timeout (ms)</Label>
+                <Input
+                  id="send_timeout_ms"
+                  type="number"
+                  min={10000}
+                  max={180000}
+                  {...form.register('send_timeout_ms', { valueAsNumber: true })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="max_pending_age_hours">Max Pending Age (hours)</Label>
+                <Input
+                  id="max_pending_age_hours"
+                  type="number"
+                  min={1}
+                  max={336}
+                  {...form.register('max_pending_age_hours', { valueAsNumber: true })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="reconcile_queue_lookback_hours">Queue Reconcile Lookback (hours)</Label>
+                <Input
+                  id="reconcile_queue_lookback_hours"
+                  type="number"
+                  min={1}
+                  max={168}
+                  {...form.register('reconcile_queue_lookback_hours', { valueAsNumber: true })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="initial_fetch_limit">Initial Feed Fetch Limit</Label>
+                <Input
+                  id="initial_fetch_limit"
+                  type="number"
+                  min={1}
+                  max={50}
+                  {...form.register('initial_fetch_limit', { valueAsNumber: true })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="authRetentionDays">Auth State Retention (days)</Label>
+                <Input
+                  id="authRetentionDays"
+                  type="number"
+                  min={1}
+                  max={3650}
+                  {...form.register('authRetentionDays', { valueAsNumber: true })}
+                />
+              </div>
+            </div>
+
+            <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+              <p>WhatsApp paused flag: <strong>{settings?.whatsapp_paused ? 'paused' : 'running'}</strong></p>
+              <p>
+                WhatsApp paused at:{' '}
+                <strong>
+                  {settings?.whatsapp_paused_at ? new Date(settings.whatsapp_paused_at).toLocaleString() : 'n/a'}
+                </strong>
+              </p>
+              <p className="mt-1">Use the WhatsApp page Pause/Resume buttons to change this operational state.</p>
             </div>
           </CardContent>
         </Card>

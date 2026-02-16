@@ -1,18 +1,17 @@
 
-const API_URL = 'https://whatsapp-news-bot-3-69qh.onrender.com';
-const USER = 'anashreporter';
-const PASS = 'HJkNHX0Fs9CJZ-i3HBdgl_bWzd9Ew_1o';
-const AUTH = 'Basic ' + Buffer.from(USER + ':' + PASS).toString('base64');
-const TARGET_JID = '120363407220244757@g.us'; // Feed for Anash WhatsApp
+import { loadApiAuth } from './lib/apiAuth.mjs';
+
+const { apiUrl, authHeaders } = loadApiAuth();
+const TARGET_JID = String(process.env.TEST_TARGET_JID || '120363407220244757@g.us').trim();
 
 async function main() {
     console.log(`Sending test message to ${TARGET_JID}...`);
 
     try {
-        const res = await fetch(`${API_URL}/api/whatsapp/send-test`, {
+        const res = await fetch(`${apiUrl}/api/whatsapp/send-test`, {
             method: 'POST',
             headers: {
-                'Authorization': AUTH,
+                ...authHeaders,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({

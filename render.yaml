@@ -56,5 +56,17 @@ services:
         value: "false"
       - key: WHATSAPP_SESSION_ID
         value: primary
+      - key: WHATSAPP_DEVICE_NAME
+        value: Anash Bot
+      - key: WHATSAPP_SYNC_FULL_HISTORY
+        value: "false"
+      - key: WHATSAPP_PRESENCE_OFFLINE_INTERVAL_MS
+        value: "300000"
+      - key: WHATSAPP_STATUS_AUDIENCE_JIDS
+        sync: false
+      - key: WHATSAPP_ALLOW_EMPTY_STATUS_AUDIENCE
+        value: "false"
+      - key: WHATSAPP_MAX_VIDEO_BYTES
+        value: "33554432"
     healthCheckPath: /health
     autoDeploy: true

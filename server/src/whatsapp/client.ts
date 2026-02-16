@@ -7,6 +7,7 @@ const logger = require('../utils/logger');
 const withTimeout = require('../utils/withTimeout');
 const { getErrorMessage } = require('../utils/errorUtils');
 const useSupabaseAuthState = require('./authStore');
+const { getSupabaseClient } = require('../db/supabase');
 const { saveIncomingMessages } = require('../services/messageService');
 const { initSchedulers } = require('../services/schedulerService');
 const { runTargetAutoSyncPass } = require('../services/targetSyncService');
@@ -174,14 +175,78 @@ const normalizeGroupJid = (value: unknown) => {
   return cleaned ? `${cleaned}@g.us` : '';
 };
 
-const normalizeIndividualJid = (value: unknown) => {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  if (raw.toLowerCase().endsWith('@s.whatsapp.net')) return raw;
+const normalizePersonJidForCompare = (value: unknown) => {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw || raw === 'status@broadcast') return '';
+
+  if (raw.endsWith('@s.whatsapp.net') || raw.endsWith('@lid')) {
+    const atIndex = raw.lastIndexOf('@');
+    const server = atIndex > 0 ? raw.slice(atIndex + 1) : '';
+    const userRaw = atIndex > 0 ? raw.slice(0, atIndex) : '';
+    const userBase = String(userRaw.split(':')[0] || '').trim();
+    if (!userBase) return '';
+
+    const digits = userBase.replace(/[^0-9]/g, '');
+    if (digits.length >= 7) {
+      return `${digits}@s.whatsapp.net`;
+    }
+
+    const safeUser = userBase.replace(/[^a-z0-9._-]/g, '');
+    if (!safeUser) return '';
+    if (server === 'lid') return `${safeUser}@lid`;
+    if (server === 's.whatsapp.net') return `${safeUser}@s.whatsapp.net`;
+    return '';
+  }
+
   if (raw.includes('@')) return '';
+
   const digits = raw.replace(/[^0-9]/g, '');
   if (digits.length < 7) return '';
   return `${digits}@s.whatsapp.net`;
+};
+
+const isSamePersonJid = (left: unknown, right: unknown) => {
+  const normalizedLeft = normalizePersonJidForCompare(left);
+  const normalizedRight = normalizePersonJidForCompare(right);
+  if (normalizedLeft && normalizedRight) {
+    return normalizedLeft === normalizedRight;
+  }
+  return String(left || '').trim().toLowerCase() === String(right || '').trim().toLowerCase();
+};
+
+const normalizeIndividualJid = (value: unknown) => {
+  return normalizePersonJidForCompare(value);
+};
+
+const normalizeStatusAudienceJid = (value: unknown) => {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw || raw === 'status@broadcast') return '';
+
+  if (raw.endsWith('@lid')) {
+    const atIndex = raw.lastIndexOf('@');
+    const userRaw = atIndex > 0 ? raw.slice(0, atIndex) : '';
+    const userBase = String(userRaw.split(':')[0] || '').trim();
+    const safeUser = userBase.replace(/[^a-z0-9._-]/g, '');
+    return safeUser ? `${safeUser}@lid` : '';
+  }
+
+  if (!raw.includes('@')) {
+    const digits = raw.replace(/[^0-9]/g, '');
+    return digits.length >= 6 ? `${digits}@s.whatsapp.net` : '';
+  }
+
+  if (raw.endsWith('@c.us')) {
+    const atIndex = raw.lastIndexOf('@');
+    const userRaw = atIndex > 0 ? raw.slice(0, atIndex) : '';
+    const userBase = String(userRaw.split(':')[0] || '').trim();
+    const digits = userBase.replace(/[^0-9]/g, '');
+    return digits.length >= 6 ? `${digits}@s.whatsapp.net` : '';
+  }
+
+  const normalized = normalizePersonJidForCompare(raw);
+  if (!normalized || normalized === 'status@broadcast') return '';
+  if (normalized.endsWith('@s.whatsapp.net') || normalized.endsWith('@lid')) return normalized;
+  return '';
 };
 
 const stripTargetTypeTags = (value: string) =>
@@ -584,8 +649,9 @@ class WhatsAppClient {
       const sizeCandidate = Number(metadata?.size);
       const size = Number.isFinite(sizeCandidate) ? sizeCandidate : participants.length;
       const meJid = this.meJid || (this.socket as any)?.user?.id || null;
+      const meComparable = normalizePersonJidForCompare(meJid);
       const meRow = meJid
-        ? participants.find((participant: any) => String(participant?.id || '') === String(meJid))
+        ? participants.find((participant: any) => isSamePersonJid(participant?.id, meComparable || meJid))
         : null;
       const adminRaw = meRow?.admin ? String(meRow.admin) : null;
       groups.push({
@@ -597,7 +663,7 @@ class WhatsAppClient {
         restrict: Boolean(metadata?.restrict),
         participantCount: participants.length,
         me: {
-          jid: meJid,
+          jid: meComparable || (meJid ? String(meJid) : null),
           isAdmin: Boolean(adminRaw),
           admin: adminRaw
         }
@@ -623,8 +689,9 @@ class WhatsAppClient {
         const participants = Array.isArray(chat?.participants) ? chat.participants : [];
         const size = Number.isFinite(sizeRaw) ? sizeRaw : participants.length;
         const meJid = this.meJid || socket?.user?.id || null;
+        const meComparable = normalizePersonJidForCompare(meJid);
         const meRow = meJid
-          ? participants.find((participant: any) => String(participant?.id || '') === String(meJid))
+          ? participants.find((participant: any) => isSamePersonJid(participant?.id, meComparable || meJid))
           : null;
         const adminRaw = meRow?.admin ? String(meRow.admin) : null;
         map.set(jid, {
@@ -636,7 +703,7 @@ class WhatsAppClient {
           restrict: Boolean(chat?.restrict),
           participantCount: participants.length,
           me: {
-            jid: meJid,
+            jid: meComparable || (meJid ? String(meJid) : null),
             isAdmin: Boolean(adminRaw),
             admin: adminRaw
           }
@@ -655,48 +722,209 @@ class WhatsAppClient {
    * without it, the status may only be visible to a random subset of contacts or
    * silently fail for most recipients.
    */
-  getStatusParticipants(): string[] {
-    if (!this.socket) return [];
-    try {
-      const jids: string[] = [];
+  private resolveStatusAudience(): {
+    participants: string[];
+    sources: {
+      contactsCache: number;
+      storeContacts: number;
+      storeChats: number;
+      groupMetadata: number;
+      env: number;
+      me: number;
+      dbTargets: number;
+      dbChatMessages: number;
+    };
+    warnings: string[];
+  } {
+    const socket = this.socket as any;
+    const participants = new Set<string>();
+    const sources = {
+      contactsCache: 0,
+      storeContacts: 0,
+      storeChats: 0,
+      groupMetadata: 0,
+      env: 0,
+      me: 0,
+      dbTargets: 0,
+      dbChatMessages: 0
+    };
+    const warnings: string[] = [];
 
-      // Primary source: our contacts cache (populated from contacts.upsert/update events)
-      for (const [jid] of this.contactsCache) {
-        if (jid.endsWith('@s.whatsapp.net') && jid !== 'status@broadcast') {
-          jids.push(jid);
+    const addCandidate = (value: unknown, source: keyof typeof sources) => {
+      const normalized = normalizeStatusAudienceJid(value);
+      if (!normalized) return;
+      if (participants.has(normalized)) return;
+      participants.add(normalized);
+      sources[source] += 1;
+    };
+
+    try {
+      for (const [jid] of this.contactsCache.entries()) {
+        addCandidate(jid, 'contactsCache');
+      }
+
+      const storeContacts = socket?.store?.contacts;
+      if (Array.isArray(storeContacts)) {
+        for (const contact of storeContacts) {
+          const row = contact as Record<string, unknown>;
+          addCandidate(row.id || row.jid, 'storeContacts');
+          addCandidate(row.phone, 'storeContacts');
+        }
+      } else if (storeContacts && typeof storeContacts === 'object') {
+        for (const [jid, contact] of Object.entries(storeContacts as Record<string, unknown>)) {
+          addCandidate(jid, 'storeContacts');
+          const row = (contact || {}) as Record<string, unknown>;
+          addCandidate(row.id || row.jid, 'storeContacts');
+          addCandidate(row.phone, 'storeContacts');
         }
       }
 
-      // Fallback: try socket.store.contacts if our cache is empty
-      if (!jids.length) {
-        const socket = this.socket as any;
-        const contacts = socket.store?.contacts || {};
-        for (const [jid, contact] of Object.entries(contacts || {})) {
-          if (
-            jid.endsWith('@s.whatsapp.net') &&
-            jid !== 'status@broadcast' &&
-            (contact as any)?.name
-          ) {
-            jids.push(jid);
+      const chatsRaw = socket?.store?.chats?.all?.() || socket?.store?.chats || [];
+      const chats = Array.isArray(chatsRaw) ? chatsRaw : Object.values(chatsRaw || {});
+      for (const chat of chats as Array<Record<string, unknown>>) {
+        addCandidate(chat?.id || chat?.jid, 'storeChats');
+      }
+
+      for (const raw of this.groupMetadataCache.values()) {
+        const participantsRaw = Array.isArray((raw as { participants?: unknown[] })?.participants)
+          ? (raw as { participants?: unknown[] }).participants || []
+          : [];
+        for (const participant of participantsRaw as Array<Record<string, unknown>>) {
+          addCandidate(participant?.id, 'groupMetadata');
+        }
+      }
+
+      const envAudience = String(
+        process.env.WHATSAPP_STATUS_AUDIENCE_JIDS || process.env.WHATSAPP_STATUS_JID_LIST || ''
+      )
+        .split(',')
+        .map((value) => String(value || '').trim())
+        .filter(Boolean);
+      for (const candidate of envAudience) {
+        addCandidate(candidate, 'env');
+      }
+
+      addCandidate(this.meJid || socket?.user?.id, 'me');
+    } catch (error) {
+      warnings.push(`status-audience-resolution-error:${getErrorMessage(error)}`);
+    }
+
+    const resolved = Array.from(participants.values()).sort();
+    if (!resolved.length) {
+      warnings.push('No status recipients resolved from contacts/cache/store');
+    }
+
+    return { participants: resolved, sources, warnings };
+  }
+
+  private async resolveStatusAudienceWithFallback(): Promise<{
+    participants: string[];
+    sources: {
+      contactsCache: number;
+      storeContacts: number;
+      storeChats: number;
+      groupMetadata: number;
+      env: number;
+      me: number;
+      dbTargets: number;
+      dbChatMessages: number;
+    };
+    warnings: string[];
+  }> {
+    const baseAudience = this.resolveStatusAudience();
+    if (baseAudience.participants.length) {
+      return baseAudience;
+    }
+
+    const noAudienceWarning = 'No status recipients resolved from contacts/cache/store';
+    const participants = new Set(baseAudience.participants);
+    const sources = { ...baseAudience.sources };
+    const warnings = [...baseAudience.warnings];
+    const addCandidate = (value: unknown, source: 'dbTargets' | 'dbChatMessages') => {
+      const normalized = normalizeStatusAudienceJid(value);
+      if (!normalized) return;
+      if (participants.has(normalized)) return;
+      participants.add(normalized);
+      sources[source] += 1;
+    };
+
+    try {
+      const supabase = getSupabaseClient();
+      if (!supabase) {
+        warnings.push('status-audience-db-unavailable');
+      } else {
+        const [targetsResult, chatMessagesResult] = await Promise.all([
+          supabase
+            .from('targets')
+            .select('phone_number')
+            .eq('active', true)
+            .eq('type', 'individual')
+            .limit(5000),
+          supabase
+            .from('chat_messages')
+            .select('remote_jid')
+            .order('timestamp', { ascending: false })
+            .limit(5000)
+        ]);
+
+        if (targetsResult.error) {
+          warnings.push(`status-audience-db-targets-error:${getErrorMessage(targetsResult.error)}`);
+        } else {
+          for (const row of targetsResult.data || []) {
+            addCandidate((row as { phone_number?: unknown }).phone_number, 'dbTargets');
+          }
+        }
+
+        if (chatMessagesResult.error) {
+          warnings.push(`status-audience-db-chat-messages-error:${getErrorMessage(chatMessagesResult.error)}`);
+        } else {
+          for (const row of chatMessagesResult.data || []) {
+            addCandidate((row as { remote_jid?: unknown }).remote_jid, 'dbChatMessages');
           }
         }
       }
-
-      // Always include own JID so the sender can see their own status.
-      if (this.meJid) {
-        const ownIndividual = this.meJid.includes(':')
-          ? this.meJid.split(':')[0] + '@s.whatsapp.net'
-          : this.meJid;
-        if (!jids.includes(ownIndividual)) {
-          jids.push(ownIndividual);
-        }
-      }
-
-      logger.debug({ participantCount: jids.length, cacheSize: this.contactsCache.size }, 'Status participants resolved');
-      return jids;
-    } catch {
-      return this.meJid ? [this.meJid] : [];
+    } catch (error) {
+      warnings.push(`status-audience-db-fallback-error:${getErrorMessage(error)}`);
     }
+
+    const resolved = Array.from(participants.values()).sort();
+    if (resolved.length) {
+      return {
+        participants: resolved,
+        sources,
+        warnings: warnings.filter((warning) => warning !== noAudienceWarning)
+      };
+    }
+
+    if (!warnings.includes('No status recipients resolved from contacts/cache/store/db')) {
+      warnings.push('No status recipients resolved from contacts/cache/store/db');
+    }
+
+    return { participants: resolved, sources, warnings };
+  }
+
+  getStatusParticipants(): string[] {
+    const audience = this.resolveStatusAudience();
+    logger.debug(
+      {
+        participantCount: audience.participants.length,
+        sources: audience.sources,
+        warnings: audience.warnings
+      },
+      'Status participants resolved'
+    );
+    return audience.participants;
+  }
+
+  async getStatusAudience(options?: { sampleSize?: number }) {
+    const audience = await this.resolveStatusAudienceWithFallback();
+    const sampleSize = Math.max(1, Math.min(Number(options?.sampleSize || 25), 200));
+    return {
+      participantCount: audience.participants.length,
+      sample: audience.participants.slice(0, sampleSize),
+      sources: audience.sources,
+      warnings: audience.warnings
+    };
   }
 
   async handleCorruptedAuthState(err: unknown): Promise<void> {
@@ -1441,8 +1669,9 @@ class WhatsAppClient {
 
       socket.ev.on('contacts.upsert', (contacts) => {
         for (const contact of contacts) {
-          const jid = String(contact.id || '');
-          if (jid && jid.endsWith('@s.whatsapp.net') && jid !== 'status@broadcast') {
+          const row = contact as unknown as Record<string, unknown>;
+          const jid = normalizeStatusAudienceJid(row.id || row.jid || row.phone);
+          if (jid) {
             const contactName = contact.name || contact.notify || '';
             this.contactsCache.set(jid, contactName ? { name: contactName } : {});
           }
@@ -1452,8 +1681,9 @@ class WhatsAppClient {
 
       socket.ev.on('contacts.update', (updates) => {
         for (const update of updates) {
-          const jid = String(update.id || '');
-          if (jid && jid.endsWith('@s.whatsapp.net') && jid !== 'status@broadcast') {
+          const row = update as Record<string, unknown>;
+          const jid = normalizeStatusAudienceJid(row.id || row.jid || row.phone);
+          if (jid) {
             const existing = this.contactsCache.get(jid) || {};
             const updatedName = update.name || update.notify || existing.name || '';
             this.contactsCache.set(jid, updatedName ? { ...existing, name: updatedName } : existing);
@@ -1672,7 +1902,8 @@ class WhatsAppClient {
       const meta = await withTimeout(socket.groupMetadata(jid), timeoutMs, 'Timed out fetching group metadata');
       const participants = Array.isArray(meta?.participants) ? meta.participants : [];
       const meJid = this.meJid || socket?.user?.id || null;
-      const meRow = meJid ? participants.find((p: any) => p?.id === meJid) : null;
+      const meComparable = normalizePersonJidForCompare(meJid);
+      const meRow = meJid ? participants.find((p: any) => isSamePersonJid(p?.id, meComparable || meJid)) : null;
       const adminLevel = meRow?.admin ? String(meRow.admin) : null;
       const isAdmin = Boolean(adminLevel);
 
@@ -1684,7 +1915,7 @@ class WhatsAppClient {
         restrict: Boolean(meta?.restrict),
         ephemeralDuration: typeof meta?.ephemeralDuration === 'number' ? meta.ephemeralDuration : null,
         participantCount: participants.length,
-        me: { jid: meJid, isAdmin, admin: adminLevel }
+        me: { jid: meComparable || (meJid ? String(meJid) : null), isAdmin, admin: adminLevel }
       };
     } catch (error) {
       logger.warn({ jid, error: getErrorMessage(error) }, 'Failed to load group metadata');
@@ -1834,20 +2065,21 @@ class WhatsAppClient {
             size: group.size || 0,
             announce: Boolean((group as any).announce),
             restrict: Boolean((group as any).restrict),
-            participantCount: Array.isArray((group as any).participants) ? (group as any).participants.length : Number(group.size || 0),
-            me: (() => {
-              const meJid = this.meJid || (socket as any)?.user?.id || null;
-              const participants = Array.isArray((group as any).participants) ? (group as any).participants : [];
-              const meRow = meJid
-                ? participants.find((participant: any) => String(participant?.id || '') === String(meJid))
-                : null;
-              const adminRaw = meRow?.admin ? String(meRow.admin) : null;
-              return {
-                jid: meJid,
-                isAdmin: Boolean(adminRaw),
-                admin: adminRaw
-              };
-            })()
+        participantCount: Array.isArray((group as any).participants) ? (group as any).participants.length : Number(group.size || 0),
+        me: (() => {
+          const meJid = this.meJid || (socket as any)?.user?.id || null;
+          const meComparable = normalizePersonJidForCompare(meJid);
+          const participants = Array.isArray((group as any).participants) ? (group as any).participants : [];
+          const meRow = meJid
+            ? participants.find((participant: any) => isSamePersonJid(participant?.id, meComparable || meJid))
+            : null;
+          const adminRaw = meRow?.admin ? String(meRow.admin) : null;
+          return {
+            jid: meComparable || (meJid ? String(meJid) : null),
+            isAdmin: Boolean(adminRaw),
+            admin: adminRaw
+          };
+        })()
           }))
           .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -2090,6 +2322,7 @@ class WhatsAppClient {
     const normalizedInput = rawInput.toLowerCase();
 
     const meJid = this.meJid || socket?.user?.id || null;
+    const meComparable = normalizePersonJidForCompare(meJid);
 
     if (forceType === 'status' || normalizedInput === 'status' || normalizedInput === 'status@broadcast') {
       return {
@@ -2114,7 +2347,7 @@ class WhatsAppClient {
           if (!jid) return null;
           const participants = Array.isArray(metadata?.participants) ? metadata.participants : [];
           const meRow = meJid
-            ? participants.find((participant: any) => String(participant?.id || '') === String(meJid))
+            ? participants.find((participant: any) => isSamePersonJid(participant?.id, meComparable || meJid))
             : null;
           const adminRaw = meRow?.admin ? String(meRow.admin) : null;
           return {
@@ -2128,7 +2361,7 @@ class WhatsAppClient {
             announce: Boolean(metadata?.announce),
             restrict: Boolean(metadata?.restrict),
             me: {
-              jid: meJid,
+              jid: meComparable || (meJid ? String(meJid) : null),
               isAdmin: Boolean(adminRaw),
               admin: adminRaw
             },
@@ -2298,13 +2531,38 @@ class WhatsAppClient {
     if (!this.socket) throw new Error('WhatsApp not connected');
     if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
     try {
-      if (!options.statusJidList) {
-        const participants = this.getStatusParticipants();
-        if (participants.length) {
-          options = { ...options, statusJidList: participants };
-          logger.debug({ participantCount: participants.length }, 'Auto-populated statusJidList for status broadcast');
-        }
+      const explicitStatusJids = Array.isArray((options as { statusJidList?: unknown[] }).statusJidList)
+        ? ((options as { statusJidList?: unknown[] }).statusJidList || [])
+            .map((value) => normalizeStatusAudienceJid(value))
+            .filter(Boolean)
+        : [];
+      const dedupedExplicit = Array.from(new Set(explicitStatusJids));
+
+      const resolvedAudience = await this.resolveStatusAudienceWithFallback();
+      const statusJidList = dedupedExplicit.length ? dedupedExplicit : resolvedAudience.participants;
+      const allowEmptyAudience =
+        String(process.env.WHATSAPP_ALLOW_EMPTY_STATUS_AUDIENCE || '')
+          .trim()
+          .toLowerCase() === 'true';
+
+      if (!statusJidList.length && !allowEmptyAudience) {
+        throw new Error(
+          'No status recipients resolved. Open WhatsApp contacts/chats first or set WHATSAPP_STATUS_AUDIENCE_JIDS.'
+        );
       }
+
+      options = { ...options, broadcast: true };
+      if (statusJidList.length) options = { ...options, statusJidList };
+      logger.debug(
+        {
+          participantCount: statusJidList.length,
+          explicitCount: dedupedExplicit.length,
+          sources: resolvedAudience.sources,
+          warnings: resolvedAudience.warnings
+        },
+        'Sending status broadcast'
+      );
+
       const msg = await this.socket.sendMessage('status@broadcast', content, options);
 
       try {

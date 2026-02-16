@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 const { createClient } = require('@supabase/supabase-js');
+const { getErrorMessage } = require('../utils/errorUtils');
 
 let supabaseClient: SupabaseClient | null = null;
 
@@ -37,8 +38,9 @@ function getSupabaseClient(): SupabaseClient | null {
 
 function handleSupabaseError(error: { message?: string } | null, context = ''): void {
   if (error) {
-    console.error(`Supabase error${context ? ` in ${context}` : ''}:`, error.message || error);
-    throw new Error(error.message || 'Supabase error');
+    const message = getErrorMessage(error, 'Supabase error');
+    console.error(`Supabase error${context ? ` in ${context}` : ''}:`, message);
+    throw new Error(message);
   }
 }
 
@@ -54,7 +56,7 @@ async function testConnection(): Promise<boolean> {
     console.log('Supabase connection successful');
     return true;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = getErrorMessage(error, 'Unknown Supabase connection error');
     console.error('Supabase connection failed:', message);
     return false;
   }

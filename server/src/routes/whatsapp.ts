@@ -930,6 +930,7 @@ const whatsappRoutes = () => {
       videoUrl?: string | null;
       imageDataUrl?: string | null;
       videoDataUrl?: string | null;
+      statusJidList?: string[] | null;
       includeCaption?: boolean;
       disableLinkPreview?: boolean;
       confirm?: boolean;
@@ -957,6 +958,9 @@ const whatsappRoutes = () => {
     const videoUrl = payload.videoUrl ? String(payload.videoUrl).trim() : null;
     const imageDataUrl = payload.imageDataUrl ? String(payload.imageDataUrl).trim() : null;
     const videoDataUrl = payload.videoDataUrl ? String(payload.videoDataUrl).trim() : null;
+    const explicitStatusJidList = Array.isArray(payload.statusJidList)
+      ? payload.statusJidList.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
     const disableLinkPreview = payload.disableLinkPreview === true;
     const confirm = payload.confirm;
 	    const includeCaption = payload.includeCaption !== false;
@@ -1115,7 +1119,10 @@ const whatsappRoutes = () => {
         }
 
         const sendPromise = isStatusBroadcast(normalizedJid)
-          ? whatsapp.sendStatusBroadcast(effectiveContent)
+          ? whatsapp.sendStatusBroadcast(
+            effectiveContent,
+            explicitStatusJidList.length ? { statusJidList: explicitStatusJidList } : undefined
+          )
           : whatsapp.sendMessage(normalizedJid, effectiveContent);
         const result = await withTimeout(
           sendPromise,
@@ -1211,9 +1218,42 @@ const whatsappRoutes = () => {
   }));
 
   // Send to status broadcast
+  router.get('/status-audience', asyncHandler(async (req: Request, res: Response) => {
+    const whatsapp = req.app.locals.whatsapp as {
+      getStatusAudience?: (options?: { sampleSize?: number }) => Promise<unknown> | unknown;
+    } | null;
+    if (!whatsapp || typeof whatsapp.getStatusAudience !== 'function') {
+      return res.json({
+        participantCount: 0,
+        sample: [],
+        sources: {
+          contactsCache: 0,
+          storeContacts: 0,
+          storeChats: 0,
+          groupMetadata: 0,
+          env: 0,
+          me: 0,
+          dbTargets: 0,
+          dbChatMessages: 0
+        },
+        warnings: ['WhatsApp client not available']
+      });
+    }
+
+    const rawSample = Number(req.query.sample || 25);
+    const sampleSize = Number.isFinite(rawSample) ? Math.min(Math.max(Math.floor(rawSample), 1), 200) : 25;
+    const audience = await Promise.resolve(whatsapp.getStatusAudience({ sampleSize }));
+    return res.json(audience);
+  }));
+
+  // Send to status broadcast
   router.post('/send-status', validate(schemas.statusMessage), asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
-    const { message, imageUrl } = req.body;
+    const { message, imageUrl, statusJidList } = req.body as {
+      message?: string | null;
+      imageUrl?: string | null;
+      statusJidList?: string[] | null;
+    };
 
     if (!message && !imageUrl) {
       throw badRequest('message or imageUrl is required');
@@ -1253,7 +1293,13 @@ const whatsappRoutes = () => {
 	      content = { text: message };
 	    }
 
-	    const result = await whatsapp.sendStatusBroadcast(content);
+	    const explicitStatusJids = Array.isArray(statusJidList)
+	      ? statusJidList.map((value) => String(value || '').trim()).filter(Boolean)
+	      : [];
+	    const result = await whatsapp.sendStatusBroadcast(
+        content,
+        explicitStatusJids.length ? { statusJidList: explicitStatusJids } : undefined
+      );
 	    res.json({ ok: true, messageId: result?.key?.id, ...(mediaWarning ? { warning: mediaWarning } : {}) });
 	  }));
 

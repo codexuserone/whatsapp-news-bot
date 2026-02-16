@@ -51,6 +51,12 @@ const spec = {
     '/api/whatsapp/channels': {
       get: { tags: ['whatsapp'], summary: 'List WhatsApp channels', responses: { 200: { description: 'OK' } } }
     },
+    '/api/whatsapp/channels/diagnostics': {
+      get: { tags: ['whatsapp'], summary: 'Get channel discovery diagnostics', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/whatsapp/channels/discover': {
+      post: { tags: ['whatsapp'], summary: 'Run channel discovery refresh', responses: { 200: { description: 'OK' } } }
+    },
     '/api/whatsapp/resolve-target': {
       post: { tags: ['whatsapp'], summary: 'Resolve WhatsApp link/JID to target', responses: { 200: { description: 'OK' } } }
     },
@@ -69,11 +75,20 @@ const spec = {
     '/api/whatsapp/takeover': {
       post: { tags: ['whatsapp'], summary: 'Take over WhatsApp session lease', responses: { 200: { description: 'OK' } } }
     },
+    '/api/whatsapp/clear-sender-keys': {
+      post: { tags: ['whatsapp'], summary: 'Clear WhatsApp sender keys and reconnect', responses: { 200: { description: 'OK' } } }
+    },
     '/api/whatsapp/send-test': {
       post: { tags: ['whatsapp'], summary: 'Send test message', responses: { 200: { description: 'OK' } } }
     },
+    '/api/whatsapp/status-audience': {
+      get: { tags: ['whatsapp'], summary: 'Inspect resolved status recipients', responses: { 200: { description: 'OK' } } }
+    },
     '/api/whatsapp/send-status': {
       post: { tags: ['whatsapp'], summary: 'Send status broadcast', responses: { 200: { description: 'OK' } } }
+    },
+    '/api/whatsapp/outbox': {
+      get: { tags: ['whatsapp'], summary: 'Get recent WhatsApp outbox snapshots', responses: { 200: { description: 'OK' } } }
     },
     '/api/feeds': {
       get: { tags: ['feeds'], summary: 'List feeds', responses: { 200: { description: 'OK' } } },

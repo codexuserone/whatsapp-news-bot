@@ -1,16 +1,15 @@
 
 import fs from 'fs';
-const API_URL = 'https://whatsapp-news-bot-3-69qh.onrender.com';
-const USER = 'anashreporter';
-const PASS = 'HJkNHX0Fs9CJZ-i3HBdgl_bWzd9Ew_1o';
-const AUTH = 'Basic ' + Buffer.from(USER + ':' + PASS).toString('base64');
+import { loadApiAuth } from './lib/apiAuth.mjs';
+
+const { apiUrl, authHeaders } = loadApiAuth();
 
 async function main() {
-    console.log('Fetching groups from:', API_URL);
+    console.log('Fetching groups from:', apiUrl);
 
     try {
-        const res = await fetch(`${API_URL}/api/whatsapp/groups`, {
-            headers: { 'Authorization': AUTH }
+        const res = await fetch(`${apiUrl}/api/whatsapp/groups`, {
+            headers: authHeaders
         });
 
         if (!res.ok) {

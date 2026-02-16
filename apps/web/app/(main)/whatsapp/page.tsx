@@ -4,7 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Target, WhatsAppChannel, WhatsAppGroup, WhatsAppStatus } from '@/lib/types';
+import type { Target, WhatsAppChannel, WhatsAppGroup, WhatsAppStatus, WhatsAppStatusAudience } from '@/lib/types';
 import { dedupeTargets, formatTargetLabel, normalizeDisplayText, normalizeTargetName } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,7 @@ import { Switch } from '@/components/ui/switch';
 type SendTestPayload = {
   jid?: string;
   jids?: string[];
+  statusJidList?: string[];
   message?: string;
   linkUrl?: string;
   imageUrl?: string;
@@ -74,6 +75,13 @@ const WhatsAppPage = () => {
     queryFn: () => api.get('/api/whatsapp/qr'),
     refetchInterval: 3000,
     enabled: status?.status !== 'connected' && status?.status !== 'paused'
+  });
+
+  const { data: statusAudience } = useQuery<WhatsAppStatusAudience>({
+    queryKey: ['whatsapp-status-audience'],
+    queryFn: () => api.get('/api/whatsapp/status-audience'),
+    refetchInterval: 15000,
+    enabled: status?.status === 'connected'
   });
 
   const { data: groupsRaw, error: groupsError } = useQuery<unknown>({
@@ -212,6 +220,28 @@ const WhatsAppPage = () => {
   const isConnected = status?.status === 'connected';
   const isPaused = status?.status === 'paused';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
+  const statusAudienceWarnings = React.useMemo(() => {
+    if (!Array.isArray(statusAudience?.warnings)) return [];
+    return statusAudience.warnings.filter((value): value is string => Boolean(String(value || '').trim()));
+  }, [statusAudience]);
+  const statusAudienceSourceSummary = React.useMemo(() => {
+    const sources = statusAudience?.sources;
+    if (!sources) return '';
+    const entries: Array<[string, number]> = [
+      ['contacts cache', Number(sources.contactsCache || 0)],
+      ['store contacts', Number(sources.storeContacts || 0)],
+      ['store chats', Number(sources.storeChats || 0)],
+      ['group metadata', Number(sources.groupMetadata || 0)],
+      ['env', Number(sources.env || 0)],
+      ['me', Number(sources.me || 0)],
+      ['db targets', Number(sources.dbTargets || 0)],
+      ['db chats', Number(sources.dbChatMessages || 0)]
+    ];
+    return entries
+      .filter(([, value]) => value > 0)
+      .map(([label, value]) => `${label}: ${value}`)
+      .join(' | ');
+  }, [statusAudience]);
   const activeTargets = React.useMemo(() => {
     return existingTargets.filter((target) => target.active);
   }, [existingTargets]);
@@ -390,7 +420,33 @@ const WhatsAppPage = () => {
                 <span className="text-muted-foreground">Account</span>
                 <span className="font-medium">{status?.me?.name || (isConnected ? 'Connected account' : 'Not connected')}</span>
               </div>
+              {isConnected ? (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Status audience</span>
+                  <span className="font-medium">{Number(statusAudience?.participantCount || 0)} recipients</span>
+                </div>
+              ) : null}
             </div>
+
+            {isConnected && Number(statusAudience?.participantCount || 0) === 0 ? (
+              <div className="rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
+                Status recipients are empty. Send/receive at least one direct chat first, or set
+                <code className="mx-1 rounded bg-background px-1 py-0.5 text-xs">WHATSAPP_STATUS_AUDIENCE_JIDS</code>
+                on the backend.
+              </div>
+            ) : null}
+
+            {isConnected && statusAudienceSourceSummary ? (
+              <div className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
+                Sources: {statusAudienceSourceSummary}
+              </div>
+            ) : null}
+
+            {isConnected && statusAudienceWarnings.length > 0 ? (
+              <div className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
+                {statusAudienceWarnings.slice(0, 2).join(' | ')}
+              </div>
+            ) : null}
 
             {status?.lastError ? (
               <div

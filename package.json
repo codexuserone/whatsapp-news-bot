@@ -17,6 +17,7 @@
     "build:client": "npm run build:web:static",
     "build:web": "npm run build --prefix apps/web",
     "build:web:static": "node tools/build-web-static.mjs",
+    "api:check": "node tools/check-api-alignment.mjs",
     "db:migrate": "npm run migrate --prefix server",
     "db:check": "node tools/check-migrations.mjs",
     "smoke": "node tools/smoke.mjs"

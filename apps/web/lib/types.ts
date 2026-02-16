@@ -186,6 +186,14 @@ export type WhatsAppStatus = {
   lastError?: string | null;
   lastSeenAt?: string | null;
   hasQr?: boolean;
+  instanceId?: string;
+  sessionId?: string;
+  lease?: {
+    supported?: boolean;
+    held?: boolean;
+    ownerId?: string | null;
+    expiresAt?: string | null;
+  };
   me?: {
     jid?: string | null;
     name?: string | null;
@@ -228,6 +236,22 @@ export type WhatsAppGroup = {
     isAdmin?: boolean;
     admin?: string | null;
   };
+};
+
+export type WhatsAppStatusAudience = {
+  participantCount: number;
+  sample: string[];
+  sources: {
+    contactsCache: number;
+    storeContacts: number;
+    storeChats: number;
+    groupMetadata: number;
+    env: number;
+    me: number;
+    dbTargets: number;
+    dbChatMessages: number;
+  };
+  warnings?: string[];
 };
 
 export type WhatsAppChannel = {

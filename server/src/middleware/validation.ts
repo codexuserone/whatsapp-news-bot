@@ -5,7 +5,10 @@ const { badRequest } = require('../core/errors');
 const cron = require('node-cron');
 const { DEFAULT_BATCH_TIMES } = require('../constants/scheduling');
 
-const JID_PATTERN = /^([0-9+\s\-\(\)]+|status@broadcast|[0-9\-]+@g\.us|[0-9]+@s\.whatsapp\.net|[a-z0-9._-]+@newsletter(?:_[a-z0-9]+)?)$/i;
+const JID_PATTERN =
+  /^([0-9+\s\-\(\)]+|status@broadcast|[0-9\-]+@g\.us|[0-9]+(?::[0-9]+)?@s\.whatsapp\.net|[a-z0-9._-]+(?::[0-9]+)?@lid|[a-z0-9._-]+@newsletter(?:_[a-z0-9]+)?)$/i;
+const STATUS_AUDIENCE_JID_PATTERN =
+  /^([0-9]{6,}|[0-9]+(?::[0-9]+)?@s\.whatsapp\.net|[a-z0-9._-]+(?::[0-9]+)?@lid)$/i;
 
 // Validation schemas
 const normalizeOptional = (value: string | null | undefined) => (value === '' ? null : value);
@@ -163,6 +166,7 @@ const schemas = {
       imageDataUrl: z.string().max(12_000_000).optional().nullable().transform(normalizeOptional),
       // Base64 video payloads are large; keep this bounded even if JSON_BODY_LIMIT_LARGE is higher.
       videoDataUrl: z.string().max(35_000_000).optional().nullable().transform(normalizeOptional),
+      statusJidList: z.array(z.string().regex(STATUS_AUDIENCE_JID_PATTERN)).max(2000).optional(),
       includeCaption: z.boolean().optional().default(true),
       disableLinkPreview: z.boolean().optional().default(false),
       confirm: z.boolean().optional()
@@ -193,7 +197,8 @@ const schemas = {
   statusMessage: z
     .object({
       message: z.string().max(4096).optional().nullable().transform(normalizeOptional),
-      imageUrl: z.string().url().optional().nullable().transform(normalizeOptional)
+      imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      statusJidList: z.array(z.string().regex(STATUS_AUDIENCE_JID_PATTERN)).max(2000).optional()
     })
     .refine(
       (value: { message?: string | null; imageUrl?: string | null }) => Boolean(value.message || value.imageUrl),

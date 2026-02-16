@@ -14,7 +14,7 @@ Production-ready WhatsApp bot that fetches RSS/Atom feeds and sends formatted ne
 
 ## Tech Stack
 - **Backend**: Express.js 4.x, TypeScript, Baileys (WhatsApp Web), Supabase PostgreSQL
-- **Frontend**: Next.js 16 (App Router), React 18, Tailwind CSS, shadcn/ui
+- **Frontend**: Next.js 16 (App Router), React 19, Tailwind CSS, shadcn/ui
 - **Infrastructure**: Render hosting, Supabase database, cron-job.org for backup
 
 ## Project Structure
@@ -91,7 +91,7 @@ Required in `server/.env`:
 ```bash
 DATABASE_URL=postgresql://user:pass@host:port/dbname
 SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your-supabase-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 CORS_ORIGINS=https://yourdomain.com
 ```
 
@@ -108,6 +108,14 @@ TRUST_PROXY_HOPS=1
 HSTS_MAX_AGE_SECONDS=15552000
 SKIP_WHATSAPP_LEASE=false
 WHATSAPP_SESSION_ID=primary
+WHATSAPP_DEVICE_NAME=Anash Bot
+WHATSAPP_SYNC_FULL_HISTORY=false
+WHATSAPP_PRESENCE_OFFLINE_INTERVAL_MS=300000
+# Optional status audience override (comma-separated raw numbers / @s.whatsapp.net / @lid JIDs)
+# WHATSAPP_STATUS_AUDIENCE_JIDS=972501234567@s.whatsapp.net,anon_contact_123@lid,972509876543
+# Allow status sends with empty audience (not recommended)
+# WHATSAPP_ALLOW_EMPTY_STATUS_AUDIENCE=false
+WHATSAPP_MAX_VIDEO_BYTES=33554432
 ```
 ### Environment URLs
 - Backend API: `http://localhost:10000` (with Swagger docs at `/api-docs`)
@@ -134,7 +142,7 @@ This script:
 ```bash
 DATABASE_URL=postgresql://user:pass@host:port/dbname
 SUPABASE_URL=https://your-project.supabase.co  
-SUPABASE_KEY=your-supabase-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 BASE_URL=https://your-app.onrender.com
 ```
 
@@ -151,6 +159,14 @@ TRUST_PROXY_HOPS=1
 HSTS_MAX_AGE_SECONDS=15552000
 CORS_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 WHATSAPP_SESSION_ID=primary
+WHATSAPP_DEVICE_NAME=Anash Bot
+WHATSAPP_SYNC_FULL_HISTORY=false
+WHATSAPP_PRESENCE_OFFLINE_INTERVAL_MS=300000
+# Optional status audience override (comma-separated raw numbers / @s.whatsapp.net / @lid JIDs)
+# WHATSAPP_STATUS_AUDIENCE_JIDS=972501234567@s.whatsapp.net,anon_contact_123@lid,972509876543
+# Allow status sends with empty audience (not recommended)
+# WHATSAPP_ALLOW_EMPTY_STATUS_AUDIENCE=false
+WHATSAPP_MAX_VIDEO_BYTES=33554432
 ```
 
 When `REQUIRE_BASIC_AUTH=true`, all routes require authentication except uptime probes:
@@ -193,6 +209,7 @@ curl https://your-app.onrender.com/api/debug/queue
 - **Instance conflicts**: Run `npm run db:migrate` to apply lease system
 - **WhatsApp disconnected**: Clear auth_state and reconnect via UI  
 - **Messages not sending**: Check targets, templates, schedules are configured
+- **Status posts not visible**: Check `/api/whatsapp/status-audience`; if recipients are `0`, add direct chats or set `WHATSAPP_STATUS_AUDIENCE_JIDS`
 - **Feeds erroring**: Verify URLs are public and have valid SSL
 
 ## Documentation
@@ -214,6 +231,7 @@ Key endpoints:
 - `/api/schedules` - Automation rules
 - `/api/logs` - Message history
 - `/api/whatsapp/*` - WhatsApp connection & auth
+  - includes `/api/whatsapp/status-audience` for debugging status recipient resolution
 
 ## Security Features
 

@@ -680,51 +680,51 @@ const resolveMediaUrlForFeedItem = async (
   try {
     const scraped = await scrapeImageFromPage(link);
     const nowIso = new Date().toISOString();
-      if (scraped) {
-        try {
-          await assertSafeOutboundUrl(scraped);
-        } catch (error) {
-          const message = getErrorMessage(error);
-          feedItem.image_scraped_at = nowIso;
-          feedItem.image_scrape_error = message;
-          await maybeUpdateFeedItemImage(supabase, feedItem.id, {
-            image_scraped_at: nowIso,
-            image_scrape_error: message
-          });
-          return { url: null, kind: null, source: null, scraped: true, error: message };
-        }
-
-        feedItem.image_url = scraped;
-        feedItem.image_source = 'page';
+    if (scraped) {
+      try {
+        await assertSafeOutboundUrl(scraped);
+      } catch (error) {
+        const message = getErrorMessage(error);
         feedItem.image_scraped_at = nowIso;
-        feedItem.image_scrape_error = null;
+        feedItem.image_scrape_error = message;
         await maybeUpdateFeedItemImage(supabase, feedItem.id, {
-          image_url: scraped,
-          image_source: 'page',
           image_scraped_at: nowIso,
-          image_scrape_error: null
+          image_scrape_error: message
         });
-        return { url: scraped, kind: 'image', source: 'page', scraped: true, error: null };
+        return { url: null, kind: null, source: null, scraped: true, error: message };
       }
 
+      feedItem.image_url = scraped;
+      feedItem.image_source = 'page';
       feedItem.image_scraped_at = nowIso;
-      feedItem.image_scrape_error = 'No image found on page';
+      feedItem.image_scrape_error = null;
       await maybeUpdateFeedItemImage(supabase, feedItem.id, {
+        image_url: scraped,
+        image_source: 'page',
         image_scraped_at: nowIso,
-        image_scrape_error: 'No image found on page'
+        image_scrape_error: null
       });
-      return { url: null, kind: null, source: null, scraped: true, error: 'No image found on page' };
-    } catch (error) {
-      const message = getErrorMessage(error);
-      const nowIso = new Date().toISOString();
-      feedItem.image_scraped_at = nowIso;
-      feedItem.image_scrape_error = message;
-      await maybeUpdateFeedItemImage(supabase, feedItem.id, {
-        image_scraped_at: nowIso,
-        image_scrape_error: message
-      });
-      return { url: null, kind: null, source: null, scraped: true, error: message };
+      return { url: scraped, kind: 'image', source: 'page', scraped: true, error: null };
     }
+
+    feedItem.image_scraped_at = nowIso;
+    feedItem.image_scrape_error = 'No image found on page';
+    await maybeUpdateFeedItemImage(supabase, feedItem.id, {
+      image_scraped_at: nowIso,
+      image_scrape_error: 'No image found on page'
+    });
+    return { url: null, kind: null, source: null, scraped: true, error: 'No image found on page' };
+  } catch (error) {
+    const message = getErrorMessage(error);
+    const nowIso = new Date().toISOString();
+    feedItem.image_scraped_at = nowIso;
+    feedItem.image_scrape_error = message;
+    await maybeUpdateFeedItemImage(supabase, feedItem.id, {
+      image_scraped_at: nowIso,
+      image_scrape_error: message
+    });
+    return { url: null, kind: null, source: null, scraped: true, error: message };
+  }
 };
 
 const normalizeTargetJid = (target: Target) => {
@@ -954,7 +954,10 @@ const sendMessageWithTemplate = async (
               ...(typeof prepared.height === 'number' ? { height: prepared.height } : {})
             };
           } catch (error) {
-            logger.warn({ error, jid }, 'Failed to normalize newsletter video; sending original buffer');
+            logger.warn(
+              { error, jid, originalSize: buffer.length, maxBytes: 32 * 1024 * 1024 },
+              'Failed to normalize newsletter video; sending original buffer (may fail if too large)'
+            );
           }
         }
 
@@ -1017,7 +1020,10 @@ const sendMessageWithTemplate = async (
             ...(typeof prepared.height === 'number' ? { height: prepared.height } : {})
           };
         } catch (error) {
-          logger.warn({ error, jid }, 'Failed to normalize newsletter image; sending original buffer');
+          logger.warn(
+            { error, jid, originalSize: buffer.length, maxBytes: 8 * 1024 * 1024 },
+            'Failed to normalize newsletter image; sending original buffer (may fail if too large)'
+          );
         }
       }
 
@@ -1314,10 +1320,10 @@ const reconcileUpdatedFeedItems = async (
       String(log.whatsapp_message_id || '').trim()
     );
 
-          if (hasEditCandidate) {
-          try {
-            await withGlobalSendLock(async () => {
-            await waitForDelays(target as Target, settings);
+    if (hasEditCandidate) {
+      try {
+        await withGlobalSendLock(async () => {
+          await waitForDelays(target as Target, settings);
           await withTimeout(
             whatsappClient.editMessage!(
               jid,
@@ -1517,40 +1523,40 @@ const queueSinceLastRunForSchedule = async (
       .select('schedule_id,feed_item_id,target_id')
       .eq('schedule_id', schedule.id)
       .gte('created_at', since);
-    
+
     existingCombos.clear();
     for (const row of (existing || [])) {
       const key = `${row.schedule_id}:${row.feed_item_id}:${row.target_id}`;
       existingCombos.add(key);
     }
   };
-  
+
   await refreshExistingCombos();
 
   const flushBatch = async (batch: Array<Record<string, unknown>>) => {
     if (!batch.length) return 0;
-    
+
     // Filter out any that we know already exist
     const filtered = batch.filter(item => {
       const key = `${item.schedule_id}:${item.feed_item_id}:${item.target_id}`;
       return !existingCombos.has(key);
     });
-    
+
     if (!filtered.length) return 0;
-    
+
     const inserted = await upsertPendingDispatchRows(
       supabase,
       filtered,
       schedule.id,
       'Failed to queue items since last run'
     );
-    
+
     // Add newly inserted to our tracking set
     for (const item of filtered) {
       const key = `${item.schedule_id}:${item.feed_item_id}:${item.target_id}`;
       existingCombos.add(key);
     }
-    
+
     return inserted;
   };
 
@@ -2385,14 +2391,14 @@ const sendQueuedForSchedule = async (
           continue;
         }
 
-          try {
-            const sendResult = await withGlobalSendLock(async () => {
-              await waitForDelays(target as Target, settings);
-              const result = await sendMessageWithTemplate(whatsappClient, target, template, feedItem, {
-                supabase,
-                sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
-                overrideText: typeof log.message_content === 'string' ? log.message_content : null
-              });
+        try {
+          const sendResult = await withGlobalSendLock(async () => {
+            await waitForDelays(target as Target, settings);
+            const result = await sendMessageWithTemplate(whatsappClient, target, template, feedItem, {
+              supabase,
+              sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+              overrideText: typeof log.message_content === 'string' ? log.message_content : null
+            });
             const nowMs = Date.now();
             globalLastSentAtMs = nowMs;
             globalLastTargetId = String(target.id);
@@ -2405,8 +2411,8 @@ const sendQueuedForSchedule = async (
           const response = sendResult?.response;
 
           const messageId = response?.key?.id;
-            if (messageId) {
-              if (whatsappClient.confirmSend) {
+          if (messageId) {
+            if (whatsappClient.confirmSend) {
               const isMedia =
                 (sendResult?.media?.type === 'image' || sendResult?.media?.type === 'video') &&
                 Boolean(sendResult?.media?.sent);
@@ -3215,13 +3221,13 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
     for (const scheduleId of scheduleIds) {
       const schedule = scheduleById.get(scheduleId) as
         | {
-            delivery_mode?: string | null;
-            next_run_at?: string | null;
-            batch_times?: string[] | null;
-            timezone?: string | null;
-            active?: boolean;
-            state?: string | null;
-          }
+          delivery_mode?: string | null;
+          next_run_at?: string | null;
+          batch_times?: string[] | null;
+          timezone?: string | null;
+          active?: boolean;
+          state?: string | null;
+        }
         | undefined;
       if (schedule && !isScheduleRunning(schedule)) {
         continue;

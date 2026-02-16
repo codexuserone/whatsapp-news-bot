@@ -647,6 +647,43 @@ class WhatsAppClient {
     }
   }
 
+  /**
+   * Collects individual contact JIDs for status broadcasts.
+   * Baileys requires a `statusJidList` option when sending to `status@broadcast`;
+   * without it, the status may only be visible to a random subset of contacts or
+   * silently fail for most recipients.
+   */
+  getStatusParticipants(): string[] {
+    if (!this.socket) return [];
+    try {
+      const socket = this.socket as any;
+      const store = socket.store;
+      const contacts = store?.contacts || {};
+      const jids: string[] = [];
+      for (const [jid, contact] of Object.entries(contacts || {})) {
+        if (
+          jid.endsWith('@s.whatsapp.net') &&
+          jid !== 'status@broadcast' &&
+          (contact as any)?.name
+        ) {
+          jids.push(jid);
+        }
+      }
+      // Always include own JID so the sender can see their own status.
+      if (this.meJid) {
+        const ownIndividual = this.meJid.includes(':')
+          ? this.meJid.split(':')[0] + '@s.whatsapp.net'
+          : this.meJid;
+        if (!jids.includes(ownIndividual)) {
+          jids.push(ownIndividual);
+        }
+      }
+      return jids;
+    } catch {
+      return this.meJid ? [this.meJid] : [];
+    }
+  }
+
   async handleCorruptedAuthState(err: unknown): Promise<void> {
     if (this.isHandlingAuthCorruption) return;
     this.isHandlingAuthCorruption = true;
@@ -663,7 +700,7 @@ class WhatsAppClient {
 
       if (looksLikeSenderKeyCorruption && this.authStore?.clearKeys) {
         const now = Date.now();
-        if (this.lastSenderKeyResetAt && now - this.lastSenderKeyResetAt < 60_000) {
+        if (this.lastSenderKeyResetAt && now - this.lastSenderKeyResetAt < 15_000) {
           logger.warn({ err }, 'Sender-key reset already attempted recently - escalating to full reset');
         } else {
           this.lastSenderKeyResetAt = now;
@@ -1188,16 +1225,11 @@ class WhatsAppClient {
         }
       }
 
-      // Identify this session clearly in WhatsApp "Linked devices" so it doesn't look like a user's browser.
-      // Defaulting to Ubuntu makes it obvious this is the bot (Render runs on Linux) and avoids confusion with
-      // a real "Microsoft Edge (Windows)" session.
       const deviceLabel = String(process.env.WHATSAPP_DEVICE_NAME || process.env.WHATSAPP_DEVICE_LABEL || 'Anash Bot')
         .trim()
         .slice(0, 64) || 'Anash Bot';
       const browser = Browsers?.ubuntu?.(deviceLabel) || ['Ubuntu', deviceLabel, '22.04.4'];
 
-      // Full history sync is unnecessary for a posting bot and can be heavy; default to OFF.
-      // Set WHATSAPP_SYNC_FULL_HISTORY=true only if you explicitly need message history syncing.
       const syncFullHistory =
         String(process.env.WHATSAPP_SYNC_FULL_HISTORY || '').trim().toLowerCase() === 'true';
 
@@ -1877,7 +1909,7 @@ class WhatsAppClient {
       new Set(
         (Array.isArray(seedJids) ? seedJids : [])
           .map((value) => normalizeNewsletterJid(value, { allowNumeric: true }))
-        .filter(Boolean)
+          .filter(Boolean)
       )
     );
     diagnostics.seeded.provided = normalizedSeedJids.length;
@@ -2228,6 +2260,13 @@ class WhatsAppClient {
     if (!this.socket) throw new Error('WhatsApp not connected');
     if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
     try {
+      if (!options.statusJidList) {
+        const participants = this.getStatusParticipants();
+        if (participants.length) {
+          options = { ...options, statusJidList: participants };
+          logger.debug({ participantCount: participants.length }, 'Auto-populated statusJidList for status broadcast');
+        }
+      }
       const msg = await this.socket.sendMessage('status@broadcast', content, options);
 
       try {

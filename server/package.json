@@ -6,6 +6,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "jest --passWithNoTests",
     "migrate": "tsx src/scripts/migrate.ts",
     "audit:scheduling": "tsx src/scripts/audit_schedule_integrity.ts",
     "start": "node dist/index.js"

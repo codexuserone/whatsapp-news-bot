@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils';
 const titleCase = (value: string) => value.replace(/-/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
 
 const Breadcrumbs = () => {
-  const pathname = usePathname();
+  const pathname = usePathname() || '';
   const segments = pathname.split('/').filter(Boolean);
   const crumbs = [{ label: navLookup['/'] || 'Overview', to: '/' }];
 

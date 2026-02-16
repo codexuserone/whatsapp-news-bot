@@ -38,7 +38,7 @@ const isPathActive = (pathname: string, to: string) => {
 };
 
 const MainLayout = ({ children }: MainLayoutProps) => {
-  const pathname = usePathname();
+  const pathname = usePathname() || '/';
   const mobileTitle = getMobileTitle(pathname);
 
   return (
@@ -76,9 +76,8 @@ const MainLayout = ({ children }: MainLayoutProps) => {
                   key={item.to}
                   href={item.to}
                   aria-current={active ? 'page' : undefined}
-                  className={`flex min-h-14 flex-col items-center gap-1 px-2 py-3 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
-                    active ? 'text-primary' : 'text-muted-foreground'
-                  }`}
+                  className={`flex min-h-14 flex-col items-center gap-1 px-2 py-3 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${active ? 'text-primary' : 'text-muted-foreground'
+                    }`}
                 >
                   <Icon className="h-4 w-4" />
                   <span>{item.label}</span>

@@ -24,7 +24,7 @@ const isRouteActive = (pathname: string, to: string) => {
 };
 
 const AppSidebar = () => {
-  const pathname = usePathname();
+  const pathname = usePathname() || '/';
   const { isMobile, setOpen } = useSidebar();
   const closeIfMobile = () => {
     if (isMobile) {

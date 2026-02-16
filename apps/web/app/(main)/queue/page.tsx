@@ -102,7 +102,7 @@ const QueueInner = () => {
   const queryClient = useQueryClient();
   const searchParams = useSearchParams();
   const [statusFilter, setStatusFilter] = useState('all');
-  const [includeManual, setIncludeManual] = useState(() => String(searchParams.get('include_manual') || '').toLowerCase() === 'true');
+  const [includeManual, setIncludeManual] = useState(() => String(searchParams?.get('include_manual') || '').toLowerCase() === 'true');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftMessage, setDraftMessage] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
@@ -582,11 +582,10 @@ const QueueInner = () => {
 
       {actionNotice ? (
         <div
-          className={`rounded-md border px-3 py-2 text-sm ${
-            actionNotice.type === 'success'
+          className={`rounded-md border px-3 py-2 text-sm ${actionNotice.type === 'success'
               ? 'border-emerald-300/70 bg-emerald-50 text-emerald-900'
               : 'border-red-300/70 bg-red-50 text-red-900'
-          }`}
+            }`}
         >
           {actionNotice.message}
         </div>
@@ -616,8 +615,8 @@ const QueueInner = () => {
                   isSuccessfulSendStatus(item.status) && item.media_type === 'image' && Boolean(item.media_sent);
                 const imagePreview =
                   mediaCandidate &&
-                  isSafeImageSrc(mediaCandidate) &&
-                  (!isSuccessfulSendStatus(item.status) || sentWithImage)
+                    isSafeImageSrc(mediaCandidate) &&
+                    (!isSuccessfulSendStatus(item.status) || sentWithImage)
                     ? mediaCandidate
                     : null;
                 const editing = editingId === item.id;
@@ -634,8 +633,8 @@ const QueueInner = () => {
                 })();
                 const editCountdown = editRemainingMs
                   ? `${Math.floor(Math.ceil(editRemainingMs / 1000) / 60)}:${String(
-                      Math.ceil(editRemainingMs / 1000) % 60
-                    ).padStart(2, '0')}`
+                    Math.ceil(editRemainingMs / 1000) % 60
+                  ).padStart(2, '0')}`
                   : null;
 
                 return (
@@ -848,9 +847,9 @@ const QueueInner = () => {
                   isSafeImageSrc(mediaCandidate) &&
                   (!isSuccessfulSendStatus(item.status) || sentWithImage);
                 return (
-                <div key={item.id} className="relative flex flex-col rounded-lg border bg-card text-card-foreground shadow-sm overflow-hidden h-full">
-                  <div className="relative aspect-video bg-muted/30">
-                    {showPreview ? (
+                  <div key={item.id} className="relative flex flex-col rounded-lg border bg-card text-card-foreground shadow-sm overflow-hidden h-full">
+                    <div className="relative aspect-video bg-muted/30">
+                      {showPreview ? (
                         <Image
                           src={mediaCandidate || ''}
                           alt="Queue media"
@@ -858,125 +857,126 @@ const QueueInner = () => {
                           className="object-contain"
                           unoptimized
                         />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-muted-foreground">
-                        <span className="text-xs">No media</span>
-                      </div>
-                    )}
-                    <div className="absolute top-2 right-2 flex gap-1">
-                      {getStatusBadge(item)}
-                    </div>
-                  </div>
-                  <div className="p-3 flex-1 flex flex-col gap-2">
-                    <div className="flex items-start justify-between">
-                      <p className="font-medium text-sm truncate flex-1">{item.title || 'No title'}</p>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-6 w-6 text-destructive hover:text-destructive shrink-0"
-                        onClick={() => deleteItem.mutate(item.id)}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground line-clamp-3 flex-1">
-                      {item.rendered_content || deriveDefaultMessage(item) || 'No content'}
-                    </p>
-                    <p className="text-[11px] text-muted-foreground">{deliveryPath.label}</p>
-                    {item.pub_date ? <p className="text-[11px] text-muted-foreground">Published: {formatPublishedDate(item.pub_date, item.pub_precision)}</p> : null}
-                    {item.sent_at ? <p className="text-[11px] text-muted-foreground">Sent: {formatDate(item.sent_at)}</p> : null}
-                    {item.delivered_at ? <p className="text-[11px] text-muted-foreground">Delivered: {formatDate(item.delivered_at)}</p> : null}
-                    {item.read_at ? <p className="text-[11px] text-muted-foreground">Read: {formatDate(item.read_at)}</p> : null}
-                    {item.played_at ? <p className="text-[11px] text-muted-foreground">Played: {formatDate(item.played_at)}</p> : null}
-                    {editing ? (
-                      <div className="rounded-md border bg-muted/30 p-2 space-y-2">
-                        <p className="text-[11px] text-muted-foreground">Edit message text before sending</p>
-                        <Textarea
-                          value={draftMessage}
-                          onChange={(event) => setDraftMessage(event.target.value)}
-                          className="min-h-[88px] text-xs"
-                        />
-                        <div className="flex flex-wrap gap-1">
-                          <Button size="sm" className="h-7 text-xs px-2" onClick={saveEdit} disabled={updateItem.isPending}>
-                            {updateItem.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Save className="mr-1 h-3 w-3" />}
-                            Save
-                          </Button>
-                          <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={cancelEdit}>
-                            <X className="mr-1 h-3 w-3" />
-                            Cancel
-                          </Button>
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-muted-foreground">
+                          <span className="text-xs">No media</span>
                         </div>
+                      )}
+                      <div className="absolute top-2 right-2 flex gap-1">
+                        {getStatusBadge(item)}
                       </div>
-                    ) : null}
-                    <div className="flex flex-wrap gap-1 mt-auto pt-2">
-                      {editing ? null : (
+                    </div>
+                    <div className="p-3 flex-1 flex flex-col gap-2">
+                      <div className="flex items-start justify-between">
+                        <p className="font-medium text-sm truncate flex-1">{item.title || 'No title'}</p>
                         <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-xs px-2"
-                          onClick={() => requestEdit(item)}
-                          disabled={!canEdit(item)}
-                          title={canEdit(item) ? 'Edit message text (queued or recent sent in-place)' : 'Can edit queued items or recently sent items still inside WhatsApp edit window'}
+                          size="icon"
+                          variant="ghost"
+                          className="h-6 w-6 text-destructive hover:text-destructive shrink-0"
+                          onClick={() => deleteItem.mutate(item.id)}
                         >
-                          <Pencil className="mr-1 h-3 w-3" /> Edit
+                          <Trash2 className="h-3 w-3" />
                         </Button>
-                      )}
-                      {item.status === 'awaiting_approval' ? (
-                        <>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs px-2"
-                            onClick={() => approveItem.mutate(item.id)}
-                            disabled={approveItem.isPending}
-                          >
-                            <PlayCircle className="mr-1 h-3 w-3" />
-                            Approve
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs px-2"
-                            onClick={() => rejectItem.mutate(item.id)}
-                            disabled={rejectItem.isPending}
-                          >
-                            <X className="mr-1 h-3 w-3" />
-                            Reject
-                          </Button>
-                        </>
+                      </div>
+                      <p className="text-xs text-muted-foreground line-clamp-3 flex-1">
+                        {item.rendered_content || deriveDefaultMessage(item) || 'No content'}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">{deliveryPath.label}</p>
+                      {item.pub_date ? <p className="text-[11px] text-muted-foreground">Published: {formatPublishedDate(item.pub_date, item.pub_precision)}</p> : null}
+                      {item.sent_at ? <p className="text-[11px] text-muted-foreground">Sent: {formatDate(item.sent_at)}</p> : null}
+                      {item.delivered_at ? <p className="text-[11px] text-muted-foreground">Delivered: {formatDate(item.delivered_at)}</p> : null}
+                      {item.read_at ? <p className="text-[11px] text-muted-foreground">Read: {formatDate(item.read_at)}</p> : null}
+                      {item.played_at ? <p className="text-[11px] text-muted-foreground">Played: {formatDate(item.played_at)}</p> : null}
+                      {editing ? (
+                        <div className="rounded-md border bg-muted/30 p-2 space-y-2">
+                          <p className="text-[11px] text-muted-foreground">Edit message text before sending</p>
+                          <Textarea
+                            value={draftMessage}
+                            onChange={(event) => setDraftMessage(event.target.value)}
+                            className="min-h-[88px] text-xs"
+                          />
+                          <div className="flex flex-wrap gap-1">
+                            <Button size="sm" className="h-7 text-xs px-2" onClick={saveEdit} disabled={updateItem.isPending}>
+                              {updateItem.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Save className="mr-1 h-3 w-3" />}
+                              Save
+                            </Button>
+                            <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={cancelEdit}>
+                              <X className="mr-1 h-3 w-3" />
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
                       ) : null}
-                      {canToggleItemPause(item) && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-xs px-2"
-                          onClick={() => toggleItemPause(item)}
-                          disabled={pauseItem.isPending || resumeItem.isPending}
-                        >
-                          {canResume(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
-                          {canResume(item) ? 'Resume target' : 'Pause target'}
+                      <div className="flex flex-wrap gap-1 mt-auto pt-2">
+                        {editing ? null : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs px-2"
+                            onClick={() => requestEdit(item)}
+                            disabled={!canEdit(item)}
+                            title={canEdit(item) ? 'Edit message text (queued or recent sent in-place)' : 'Can edit queued items or recently sent items still inside WhatsApp edit window'}
+                          >
+                            <Pencil className="mr-1 h-3 w-3" /> Edit
+                          </Button>
+                        )}
+                        {item.status === 'awaiting_approval' ? (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs px-2"
+                              onClick={() => approveItem.mutate(item.id)}
+                              disabled={approveItem.isPending}
+                            >
+                              <PlayCircle className="mr-1 h-3 w-3" />
+                              Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs px-2"
+                              onClick={() => rejectItem.mutate(item.id)}
+                              disabled={rejectItem.isPending}
+                            >
+                              <X className="mr-1 h-3 w-3" />
+                              Reject
+                            </Button>
+                          </>
+                        ) : null}
+                        {canToggleItemPause(item) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs px-2"
+                            onClick={() => toggleItemPause(item)}
+                            disabled={pauseItem.isPending || resumeItem.isPending}
+                          >
+                            {canResume(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
+                            {canResume(item) ? 'Resume target' : 'Pause target'}
+                          </Button>
+                        )}
+                        {canTogglePostPause(item) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs px-2"
+                            onClick={() => togglePostPause(item)}
+                            disabled={pausePost.isPending || resumePost.isPending}
+                            title={canResumePost(item) ? 'Resume this story for all targets' : 'Pause this story for all targets'}
+                          >
+                            {canResumePost(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
+                            {canResumePost(item) ? 'Resume story (all)' : 'Pause story (all)'}
+                          </Button>
+                        )}
+                        <Button size="sm" variant="outline" className="h-7 text-xs px-2 ml-auto" onClick={() => sendNowItem.mutate(item.id)} disabled={!canSendNow(item)}>
+                          <Send className="h-3 w-3" />
                         </Button>
-                      )}
-                      {canTogglePostPause(item) && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-xs px-2"
-                          onClick={() => togglePostPause(item)}
-                          disabled={pausePost.isPending || resumePost.isPending}
-                          title={canResumePost(item) ? 'Resume this story for all targets' : 'Pause this story for all targets'}
-                        >
-                          {canResumePost(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
-                          {canResumePost(item) ? 'Resume story (all)' : 'Pause story (all)'}
-                        </Button>
-                      )}
-                      <Button size="sm" variant="outline" className="h-7 text-xs px-2 ml-auto" onClick={() => sendNowItem.mutate(item.id)} disabled={!canSendNow(item)}>
-                        <Send className="h-3 w-3" />
-                      </Button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )})}
+                )
+              })}
             </div>
           )}
         </CardContent>

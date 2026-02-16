@@ -67,9 +67,9 @@ const ComposeInner = () => {
   const [draftName, setDraftName] = useState('');
 
   const prefill = useMemo(() => {
-    const title = String(searchParams.get('title') || '').trim();
-    const url = String(searchParams.get('url') || '').trim();
-    const prefillImageUrl = String(searchParams.get('imageUrl') || '').trim();
+    const title = String(searchParams?.get('title') || '').trim();
+    const url = String(searchParams?.get('url') || '').trim();
+    const prefillImageUrl = String(searchParams?.get('imageUrl') || '').trim();
     const header = title ? `*${title}*` : '';
     const nextMessage = [header, url].filter(Boolean).join('\n\n');
     return {
@@ -374,11 +374,10 @@ const ComposeInner = () => {
 
       {notice ? (
         <div
-          className={`rounded-md border px-3 py-2 text-sm ${
-            notice.type === 'success'
+          className={`rounded-md border px-3 py-2 text-sm ${notice.type === 'success'
               ? 'border-emerald-300/70 bg-emerald-50 text-emerald-900'
               : 'border-red-300/70 bg-red-50 text-red-900'
-          }`}
+            }`}
         >
           <div className="flex items-start gap-2">
             {notice.type === 'success' ? <CheckCircle2 className="mt-0.5 h-4 w-4" /> : <XCircle className="mt-0.5 h-4 w-4" />}

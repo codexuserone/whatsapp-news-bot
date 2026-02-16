@@ -259,7 +259,7 @@ const syncTargetsFromWhatsApp = async (
     }
 
     const patch: Partial<SyncCandidate> = {};
-    if (current.name !== candidate.name) patch.name = candidate.name;
+    if (current.name !== candidate.name && candidate.type !== 'status') patch.name = candidate.name;
     if (current.type !== candidate.type) patch.type = candidate.type;
     if (current.active !== true) patch.active = true;
     if (String(current.notes || '') !== String(candidate.notes || '')) patch.notes = candidate.notes || null;
@@ -277,7 +277,7 @@ const syncTargetsFromWhatsApp = async (
     updated += 1;
   }
 
-    if (strict) {
+  if (strict) {
     const discoveredGroups = new Set(
       candidates
         .filter((candidate) => candidate.type === 'group')
@@ -297,9 +297,9 @@ const syncTargetsFromWhatsApp = async (
             ?.failedJids
         )
           ? (
-              (channelsWithDiagnostics?.diagnostics as { seeded?: { failedJids?: unknown[] } } | undefined)?.seeded
-                ?.failedJids || []
-            )
+            (channelsWithDiagnostics?.diagnostics as { seeded?: { failedJids?: unknown[] } } | undefined)?.seeded
+              ?.failedJids || []
+          )
           : []
       )
         .map((jid) => normalizeChannelJid(String(jid || '').trim()))
@@ -420,4 +420,4 @@ module.exports = {
   stopTargetAutoSync
 };
 
-export {};
+export { };

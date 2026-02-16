@@ -11,7 +11,7 @@
     "start:server": "npm run start --prefix server",
     "start:client": "npm run start:web",
     "start:web": "npm run start --prefix apps/web",
-    "build": "npm run build:server && npm run build:web:static",
+    "build": "npm run setup && npm run build:server && npm run build:web:static",
     "build:all": "npm run build",
     "build:server": "npm run build --prefix server",
     "build:client": "npm run build:web:static",

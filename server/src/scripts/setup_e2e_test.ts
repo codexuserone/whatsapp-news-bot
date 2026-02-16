@@ -7,35 +7,67 @@ const dotenv = require('dotenv');
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
-const TEST_GROUP_ID = '120363407220244757@g.us';
-const ANASH_FEED_URL = 'https://anash.org/feed/';
+const TEST_GROUP_ID = String(process.env.TEST_GROUP_ID || '').trim();
+const E2E_FEED_URL = String(process.env.E2E_FEED_URL || process.env.TEST_FEED_URL || '').trim();
+const E2E_TEMPLATE_NAME = String(process.env.E2E_TEMPLATE_NAME || 'E2E Test Template').trim();
+const E2E_SCHEDULE_NAME = String(process.env.E2E_SCHEDULE_NAME || 'E2E Test Schedule (Immediate)').trim();
+const E2E_FEED_NAME = String(process.env.E2E_FEED_NAME || 'E2E Test Feed').trim();
 
 async function setupTestSchedule() {
     const supabase = getSupabaseClient();
     if (!supabase) throw new Error('No DB connection');
+    if (!TEST_GROUP_ID) throw new Error('TEST_GROUP_ID is required');
+    if (!E2E_FEED_URL) throw new Error('E2E_FEED_URL (or TEST_FEED_URL) is required');
 
     console.log('--- SETTING UP E2E TEST SCHEDULE ---');
 
     // 1. Get/Create Feed
     let feedId;
-    const { data: feeds } = await supabase.from('feeds').select('id, url').eq('url', ANASH_FEED_URL).limit(1);
+    const { data: feeds } = await supabase.from('feeds').select('id, url').eq('url', E2E_FEED_URL).limit(1);
 
     if (feeds && feeds.length > 0) {
         feedId = feeds[0].id;
-        console.log(`Found existing Anash feed: ${feedId}`);
+        console.log(`Found existing E2E feed: ${feedId}`);
         // Activate it
         await supabase.from('feeds').update({ active: true }).eq('id', feedId);
     } else {
-        console.log('Creating new Anash feed...');
+        console.log('Creating new E2E feed...');
         const { data: newFeed, error } = await supabase.from('feeds').insert({
-            url: ANASH_FEED_URL,
-            name: 'Anash.org E2E Test',
+            url: E2E_FEED_URL,
+            name: E2E_FEED_NAME,
             type: 'rss',
             active: true,
-            fetch_interval_minutes: 5
+            fetch_interval: 300
         }).select().single();
         if (error) throw error;
         feedId = newFeed.id;
+    }
+
+    // 2. Get/Create Template
+    let templateId;
+    const { data: templates } = await supabase
+        .from('templates')
+        .select('id')
+        .eq('name', E2E_TEMPLATE_NAME)
+        .limit(1);
+    if (templates && templates.length > 0) {
+        templateId = templates[0].id;
+        console.log(`Found existing E2E template: ${templateId}`);
+    } else {
+        const { data: newTemplate, error: templateError } = await supabase
+            .from('templates')
+            .insert({
+                name: E2E_TEMPLATE_NAME,
+                content: '*{{title}}*\\n\\n{{link}}',
+                active: true,
+                send_mode: 'image',
+                send_images: true
+            })
+            .select()
+            .single();
+        if (templateError) throw templateError;
+        templateId = newTemplate.id;
+        console.log(`Created E2E template: ${templateId}`);
     }
 
     // 2. Create Target
@@ -57,11 +89,9 @@ async function setupTestSchedule() {
     }
 
     // 3. Create (or Reset) Immediate Schedule
-    // We want a schedule that sends "Immediately" so we can trigger it.
-    const scheduleName = 'E2E Test Schedule (Immediate)';
 
     // Clean old test schedules to avoid duplicates
-    await supabase.from('schedules').delete().eq('name', scheduleName);
+    await supabase.from('schedules').delete().eq('name', E2E_SCHEDULE_NAME);
 
     console.log('Creating immediate schedule...');
     const { data: schedule, error: schError } = await supabase.from('schedules').insert({
@@ -69,8 +99,9 @@ async function setupTestSchedule() {
         target_ids: [targetId],
         delivery_mode: 'immediate',
         active: true,
-        name: scheduleName,
-        template_id: null // Use default simple template
+        state: 'active',
+        name: E2E_SCHEDULE_NAME,
+        template_id: templateId
     }).select().single();
 
     if (schError) throw schError;

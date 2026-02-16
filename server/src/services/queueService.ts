@@ -17,6 +17,8 @@ const { parseManualMessageContent } = require('../utils/manualMeta');
 const { ensureWhatsAppConnected } = require('./whatsappConnection');
 const { isScheduleRunning } = require('./scheduleState');
 const { withScheduleLock } = require('./scheduleLockService');
+const { buildDefaultUserAgent } = require('../utils/httpClientIdentity');
+const { normalizeTargetJidForSend } = require('../utils/targetJid');
 
 type Target = {
   id?: string;
@@ -303,10 +305,7 @@ const isVideoUrl = (url: string): boolean => {
   return videoExtensions.some(hasExt);
 };
 
-const DEFAULT_USER_AGENT =
-  process.env.MEDIA_FETCH_USER_AGENT ||
-  process.env.FEED_USER_AGENT ||
-  'Mozilla/5.0 (compatible; AnashNewsBot/1.0; +https://whatsapp-news-bot-3-69qh.onrender.com)';
+const DEFAULT_USER_AGENT = buildDefaultUserAgent();
 
 const normalizeUrlCandidate = (candidate?: string | null, baseUrl?: string | null) => {
   const raw = String(candidate || '').trim();
@@ -728,71 +727,12 @@ const resolveMediaUrlForFeedItem = async (
     }
 };
 
-const normalizeNewsletterJidForSend = (value: unknown, options?: { allowNumeric?: boolean }) => {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-
-  // Baileys treats newsletters as "...@newsletter". Some UIs expose decorated ids like
-  // "true_123@newsletter_ABC..."; canonicalize those to a Baileys-safe jid.
-  const lower = raw.toLowerCase();
-  if (lower.includes('@newsletter')) {
-    const match = lower.match(/([a-z0-9._-]+)@newsletter/i);
-    const userRaw = String(match?.[1] || '').trim();
-    if (!userRaw) return '';
-
-    const strippedPrefix = userRaw.replace(/^(true|false)_/i, '');
-    const hasLetters = /[a-z]/i.test(strippedPrefix);
-    const digits = strippedPrefix.replace(/[^0-9]/g, '');
-    const user = hasLetters ? strippedPrefix : (digits || strippedPrefix);
-    return user ? `${user}@newsletter` : '';
-  }
-
-  if (raw.includes('@')) return '';
-  if (!options?.allowNumeric) return '';
-  const digits = raw.replace(/[^0-9]/g, '');
-  return digits ? `${digits}@newsletter` : '';
-};
-
 const normalizeTargetJid = (target: Target) => {
-  if (!target?.phone_number) {
-    throw new Error('Target phone number missing');
+  const normalized = normalizeTargetJidForSend(target);
+  if (!normalized) {
+    throw new Error('Target destination is invalid');
   }
-
-  const raw = String(target.phone_number).trim();
-  const lower = raw.toLowerCase();
-  if (lower === 'status@broadcast') {
-    return 'status@broadcast';
-  }
-  if (lower.includes('@g.us') || lower.includes('@s.whatsapp.net')) {
-    return raw;
-  }
-  if (target.type === 'status') {
-    return 'status@broadcast';
-  }
-
-  if (target.type === 'group') {
-    const groupId = raw.replace(/[^0-9-]/g, '');
-    if (!groupId) {
-      throw new Error('Group ID invalid');
-    }
-    return `${groupId}@g.us`;
-  }
-
-  if (target.type === 'channel') {
-    const normalized = normalizeNewsletterJidForSend(raw, { allowNumeric: true });
-    if (!normalized) throw new Error('Channel ID invalid');
-    return normalized;
-  }
-
-  if (lower.includes('@newsletter')) {
-    return normalizeNewsletterJidForSend(raw, { allowNumeric: false }) || raw;
-  }
-
-  const phoneDigits = raw.replace(/[^0-9]/g, '');
-  if (!phoneDigits) {
-    throw new Error('Phone number invalid');
-  }
-  return `${phoneDigits}@s.whatsapp.net`;
+  return normalized;
 };
 
 const buildMessageData = (feedItem: FeedItem) => ({

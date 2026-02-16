@@ -123,8 +123,14 @@ const SettingsPage = () => {
 
   const saveSettings = useMutation({
     mutationFn: (payload: SettingsFormValues) => api.put('/api/settings', payload),
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       queryClient.setQueryData(['settings'], data);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['schedules'] }),
+        queryClient.invalidateQueries({ queryKey: ['queue'] }),
+        queryClient.invalidateQueries({ queryKey: ['queue-stats'] }),
+        queryClient.invalidateQueries({ queryKey: ['feed-items'] })
+      ]);
     }
   });
 

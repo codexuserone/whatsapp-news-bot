@@ -5,13 +5,23 @@ import { execSync } from 'child_process';
 const requireFromServer = createRequire(path.resolve('server/package.json'));
 const { createClient } = requireFromServer('@supabase/supabase-js');
 
-const BASE_URL = process.env.DEBUG_BASE_URL || 'https://whatsapp-news-bot-3-69qh.onrender.com';
+const BASE_URL = process.env.DEBUG_BASE_URL || process.env.BASE_URL || 'http://localhost:10000';
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const RENDER_API_KEY = process.env.RENDER_API_KEY || '';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
-const TEST_GROUP_ID = process.env.TEST_GROUP_ID || '120363407220244757@g.us';
-const TEST_CHANNEL_ID = process.env.TEST_CHANNEL_ID || '120363406955649221@newsletter';
+const TEST_GROUP_ID = process.env.TEST_GROUP_ID || '';
+const TEST_CHANNEL_ID = process.env.TEST_CHANNEL_ID || '';
+const E2E_RSS_FEED_URL = process.env.E2E_RSS_FEED_URL || process.env.E2E_FEED_URL || '';
+const E2E_STATUS_FEED_URL = process.env.E2E_STATUS_FEED_URL || '';
+const E2E_LINK_URL = process.env.E2E_LINK_URL || '';
+const E2E_IMAGE_URL = process.env.E2E_IMAGE_URL || '';
+const E2E_VIDEO_URL = process.env.E2E_VIDEO_URL || '';
+const E2E_EXPECTED_STANDARD_SCHEDULE_NAME = process.env.E2E_EXPECTED_STANDARD_SCHEDULE_NAME || '';
+const E2E_EXPECTED_STATUS_SCHEDULE_NAME = process.env.E2E_EXPECTED_STATUS_SCHEDULE_NAME || '';
+const RENDER_SERVICE_ID = process.env.RENDER_SERVICE_ID || '';
+const RENDER_OWNER_ID = process.env.RENDER_OWNER_ID || '';
+const GITHUB_REPO = process.env.GITHUB_REPO || '';
 const KEEP_DEBUG_DATA = String(process.env.KEEP_DEBUG_DATA || '').toLowerCase() === 'true';
 const DEBUG_BASIC_AUTH_USER = process.env.DEBUG_BASIC_AUTH_USER || process.env.BASIC_AUTH_USER || '';
 const DEBUG_BASIC_AUTH_PASS = process.env.DEBUG_BASIC_AUTH_PASS || process.env.BASIC_AUTH_PASS || '';
@@ -283,16 +293,19 @@ const run = async () => {
     skipStep('GET /api/settings (verify round-trip)', 'E2E_ALLOW_MUTATIONS=false');
   }
 
-  const feedTests = [
-    {
-      label: 'RSS - Anash main feed',
-      payload: { url: 'https://anash.org/feed', type: 'rss' },
+  const feedTests = [];
+  if (E2E_RSS_FEED_URL) {
+    feedTests.push({
+      label: 'RSS feed',
+      payload: { url: E2E_RSS_FEED_URL, type: 'rss' },
       expectedStatuses: [200]
-    },
-    {
-      label: 'JSON - Anash status API (custom parse config)',
+    });
+  }
+  if (E2E_STATUS_FEED_URL) {
+    feedTests.push({
+      label: 'JSON status feed (custom parse config)',
       payload: {
-        url: 'https://anash.org/wp-json/wp/v2/anash_status?_embed=1',
+        url: E2E_STATUS_FEED_URL,
         type: 'json',
         parse_config: {
           titlePath: 'title.rendered',
@@ -302,7 +315,9 @@ const run = async () => {
         }
       },
       expectedStatuses: [200]
-    },
+    });
+  }
+  feedTests.push(
     {
       label: 'Safety - private URL must be blocked',
       payload: { url: 'http://127.0.0.1/feed', type: 'rss' },
@@ -313,7 +328,7 @@ const run = async () => {
       payload: { url: 'https://example.invalid/feed', type: 'rss' },
       expectedStatuses: [400, 404, 500]
     }
-  ];
+  );
 
   for (const testCase of feedTests) {
     await step(`POST /api/feeds/test - ${testCase.label}`, async () => {
@@ -347,19 +362,20 @@ const run = async () => {
       return match ? `${match[1]}@newsletter` : raw;
     };
 
-    const expectedChannelJid = normalizeNewsletterJid(TEST_CHANNEL_ID);
     const targetById = new Map(targets.map((t) => [String(t?.id || ''), t]));
     const findSchedule = (needle) => schedules.find((s) => String(s?.name || '') === needle);
+    const expectedScheduleNames = [
+      E2E_EXPECTED_STANDARD_SCHEDULE_NAME,
+      E2E_EXPECTED_STATUS_SCHEDULE_NAME
+    ].filter(Boolean);
 
-    const anash = findSchedule('Anash (standard)');
-    const status = findSchedule('Anash Status (wp-json)');
-    const scheduleRows = [anash, status];
-
+    const expectedChannelJid = TEST_CHANNEL_ID ? normalizeNewsletterJid(TEST_CHANNEL_ID) : '';
     const scheduleChannels = [];
 
-    for (const row of scheduleRows) {
+    for (const scheduleName of expectedScheduleNames) {
+      const row = findSchedule(scheduleName);
       if (!row?.id) {
-        throw new Error(`Missing schedule: ${row === anash ? 'Anash (standard)' : 'Anash Status (wp-json)'}`);
+        throw new Error(`Missing schedule: ${scheduleName}`);
       }
       if (row.active !== true) throw new Error(`Schedule is not active: ${row.name}`);
 
@@ -376,7 +392,9 @@ const run = async () => {
         scheduleId: row.id,
         scheduleName: row.name,
         channels: channels.map((t) => ({ id: t.id, name: t.name, jid: t.phone_number })),
-        includesExpectedChannel: channels.some((t) => normalizeNewsletterJid(t.phone_number) === expectedChannelJid)
+        includesExpectedChannel: expectedChannelJid
+          ? channels.some((t) => normalizeNewsletterJid(t.phone_number) === expectedChannelJid)
+          : null
       });
 
       const template = templates.find((t) => String(t?.id || '') === String(row.template_id || ''));
@@ -388,7 +406,12 @@ const run = async () => {
       }
     }
 
-    return { ok: true, expectedChannelJid, scheduleChannels };
+    return {
+      ok: true,
+      expectedChannelJid: expectedChannelJid || null,
+      scheduleChecksApplied: expectedScheduleNames.length,
+      scheduleChannels
+    };
   });
 
   if (!ALLOW_MUTATIONS) {
@@ -397,45 +420,62 @@ const run = async () => {
       'E2E_ALLOW_MUTATIONS=false (production-safe default)'
     );
   } else {
-    const createdFeedRss = await step('POST /api/feeds - create RSS feed', async () => {
-      const response = await apiRequest(
-        'POST',
-        '/api/feeds',
-        {
-        name: `${PREFIX} RSS`,
-        url: 'https://anash.org/feed',
-        type: 'rss',
-        active: true,
-        fetch_interval: 300,
-        cleaning: {
-          stripUtm: true,
-          decodeEntities: true,
-          removePhrases: ['Read More']
-        }
-      },
-      [200, 201]
-    );
-    if (response.data?.id) created.feeds.push(response.data.id);
-    return response.data;
-  });
+    const createdFeedRss = E2E_RSS_FEED_URL
+      ? await step('POST /api/feeds - create RSS feed', async () => {
+          const response = await apiRequest(
+            'POST',
+            '/api/feeds',
+            {
+              name: `${PREFIX} RSS`,
+              url: E2E_RSS_FEED_URL,
+              type: 'rss',
+              active: true,
+              fetch_interval: 300,
+              cleaning: {
+                stripUtm: true,
+                decodeEntities: true,
+                removePhrases: ['Read More']
+              }
+            },
+            [200, 201]
+          );
+          if (response.data?.id) created.feeds.push(response.data.id);
+          return response.data;
+        })
+      : null;
 
-  const createdFeedJson = await step('POST /api/feeds - create JSON feed', async () => {
-    const response = await apiRequest('POST', '/api/feeds', {
-      name: `${PREFIX} JSON`,
-      url: 'https://anash.org/wp-json/wp/v2/anash_status?_embed=1',
-      type: 'json',
-      active: true,
-      fetch_interval: 600,
-      parse_config: {
-        titlePath: 'title.rendered',
-        descriptionPath: 'excerpt.rendered',
-        linkPath: 'link',
-        imagePath: '_embedded.wp:featuredmedia.0.source_url'
-      }
-    }, [200, 201]);
-    if (response.data?.id) created.feeds.push(response.data.id);
-    return response.data;
-  });
+    if (!E2E_RSS_FEED_URL) {
+      skipStep('POST /api/feeds - create RSS feed', 'E2E_RSS_FEED_URL is not set');
+    }
+
+    const createdFeedJson = E2E_STATUS_FEED_URL
+      ? await step('POST /api/feeds - create JSON feed', async () => {
+          const response = await apiRequest(
+            'POST',
+            '/api/feeds',
+            {
+              name: `${PREFIX} JSON`,
+              url: E2E_STATUS_FEED_URL,
+              type: 'json',
+              active: true,
+              fetch_interval: 600,
+              parse_config: {
+                titlePath: 'title.rendered',
+                descriptionPath: 'excerpt.rendered',
+                linkPath: 'link',
+                imagePath: '_embedded.wp:featuredmedia.0.source_url'
+              }
+            },
+            [200, 201]
+          );
+          if (response.data?.id) created.feeds.push(response.data.id);
+          return response.data;
+        })
+      : null;
+
+    if (!E2E_STATUS_FEED_URL) {
+      skipStep('POST /api/feeds - create JSON feed', 'E2E_STATUS_FEED_URL is not set');
+    }
 
   for (const feed of [createdFeedRss, createdFeedJson].filter(Boolean)) {
     await step(`POST /api/feeds/${feed.id}/refresh`, async () => {
@@ -700,7 +740,7 @@ const run = async () => {
         target: groupTarget,
         payload: {
           message: `${PREFIX} group test message`,
-          linkUrl: 'https://anash.org',
+          ...(E2E_LINK_URL ? { linkUrl: E2E_LINK_URL } : {}),
           confirm: true
         }
       },
@@ -709,7 +749,7 @@ const run = async () => {
         target: channelTarget,
         payload: {
           message: `${PREFIX} channel test message`,
-          imageUrl: 'https://files.anash.org/uploads/2026/02/283A2988-768x512.jpg',
+          ...(E2E_IMAGE_URL ? { imageUrl: E2E_IMAGE_URL } : {}),
           includeCaption: true,
           confirm: true
         }
@@ -719,7 +759,7 @@ const run = async () => {
         target: channelTarget,
         payload: {
           message: `${PREFIX} channel test video`,
-          videoUrl: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+          ...(E2E_VIDEO_URL ? { videoUrl: E2E_VIDEO_URL } : {}),
           includeCaption: true,
           confirm: true
         }
@@ -743,18 +783,23 @@ const run = async () => {
       await sleep(2000);
     }
   } else {
-    await step('POST /api/whatsapp/send-test while disconnected', async () => {
-      const response = await apiRequest(
-        'POST',
-        '/api/whatsapp/send-test',
-        {
-          jid: groupTarget?.phone_number || TEST_GROUP_ID,
-          message: `${PREFIX} disconnected-state test`
-        },
-        [400]
-      );
-      return response.data;
-    });
+    const fallbackJid = groupTarget?.phone_number || TEST_GROUP_ID;
+    if (!fallbackJid) {
+      skipStep('POST /api/whatsapp/send-test while disconnected', 'No TEST_GROUP_ID or group target available');
+    } else {
+      await step('POST /api/whatsapp/send-test while disconnected', async () => {
+        const response = await apiRequest(
+          'POST',
+          '/api/whatsapp/send-test',
+          {
+            jid: fallbackJid,
+            message: `${PREFIX} disconnected-state test`
+          },
+          [400]
+        );
+        return response.data;
+      });
+    }
   }
   }
 
@@ -816,12 +861,19 @@ const run = async () => {
         throw new Error(`Demo artifacts present in production DB: ${JSON.stringify(demoCounts)}`);
       }
 
-      const scheduleNames = ['Anash (standard)', 'Anash Status (wp-json)'];
-      const { data: scheduleRows, error: scheduleError } = await supabase
-        .from('schedules')
-        .select('id,name,target_ids,active')
-        .in('name', scheduleNames);
-      if (scheduleError) throw scheduleError;
+      const scheduleNames = [
+        E2E_EXPECTED_STANDARD_SCHEDULE_NAME,
+        E2E_EXPECTED_STATUS_SCHEDULE_NAME
+      ].filter(Boolean);
+      let scheduleRows = [];
+      if (scheduleNames.length) {
+        const { data, error: scheduleError } = await supabase
+          .from('schedules')
+          .select('id,name,target_ids,active')
+          .in('name', scheduleNames);
+        if (scheduleError) throw scheduleError;
+        scheduleRows = data || [];
+      }
       const scheduleByName = new Map((scheduleRows || []).map((row) => [String(row.name || ''), row]));
       for (const name of scheduleNames) {
         const row = scheduleByName.get(name);
@@ -844,7 +896,9 @@ const run = async () => {
       if (scheduleTargetsError) throw scheduleTargetsError;
 
       const channelTargets = (scheduleTargets || []).filter((t) => t.type === 'channel' && t.active !== false);
-      if (!channelTargets.length) throw new Error('No active channel targets found for Anash schedules.');
+      if (scheduleNames.length && !channelTargets.length) {
+        throw new Error('No active channel targets found for configured expected schedules.');
+      }
 
       const recentChannelMediaByTarget = [];
       for (const target of channelTargets) {
@@ -900,11 +954,9 @@ const run = async () => {
     skipStep('Supabase direct verification (service role)', 'SUPABASE_URL or SUPABASE_SERVICE_KEY not provided in environment.');
   }
 
-  if (RENDER_API_KEY) {
+  if (RENDER_API_KEY && RENDER_SERVICE_ID && RENDER_OWNER_ID) {
     await step('Render log scan around test window', async () => {
-      const serviceId = 'srv-d5ve1n7fte5s73clqk40';
-      const ownerId = 'tea-d5s8bu7gi27c73dov380';
-      const url = `https://api.render.com/v1/logs?ownerId=${ownerId}&resource=${serviceId}&limit=500`;
+      const url = `https://api.render.com/v1/logs?ownerId=${RENDER_OWNER_ID}&resource=${RENDER_SERVICE_ID}&limit=500`;
       const response = await fetch(url, {
         headers: {
           authorization: `Bearer ${RENDER_API_KEY}`,
@@ -944,13 +996,16 @@ const run = async () => {
       };
     });
   } else {
-    skipStep('Render log scan around test window', 'RENDER_API_KEY not provided in environment.');
+    skipStep(
+      'Render log scan around test window',
+      'RENDER_API_KEY, RENDER_SERVICE_ID, or RENDER_OWNER_ID not provided in environment.'
+    );
   }
 
-  if (GITHUB_TOKEN) {
+  if (GITHUB_TOKEN && GITHUB_REPO) {
     await step('GitHub main branch verification', async () => {
       const localHead = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
-      const response = await fetch('https://api.github.com/repos/codexuserone/whatsapp-news-bot/branches/main', {
+      const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/branches/main`, {
         headers: {
           authorization: `Bearer ${GITHUB_TOKEN}`,
           accept: 'application/vnd.github+json'
@@ -971,7 +1026,7 @@ const run = async () => {
       };
     });
   } else {
-    skipStep('GitHub main branch verification', 'GITHUB_TOKEN not provided in environment.');
+    skipStep('GitHub main branch verification', 'GITHUB_TOKEN or GITHUB_REPO not provided in environment.');
   }
 
   if (ALLOW_MUTATIONS && initialSettings) {

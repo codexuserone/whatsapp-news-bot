@@ -10,7 +10,10 @@ async function monitorDeployment() {
     const supabase = getSupabaseClient();
     if (!supabase) throw new Error('No DB connection');
 
-    const TEST_GROUP_ID = '120363407220244757@g.us';
+    const TEST_GROUP_ID = String(process.env.TEST_GROUP_ID || '').trim();
+    if (!TEST_GROUP_ID) {
+        throw new Error('TEST_GROUP_ID is required for verify_deployment');
+    }
     console.log(`--- MONITORING DISPATCH TO ${TEST_GROUP_ID} ---`);
 
     // 1. Check if Target Exists

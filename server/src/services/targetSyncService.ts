@@ -1,6 +1,7 @@
 const { getSupabaseClient } = require('../db/supabase');
 const logger = require('../utils/logger');
 const { getErrorMessage } = require('../utils/errorUtils');
+const { normalizeChannelJid, normalizePhoneForType } = require('../utils/targetJid');
 
 type SyncCandidate = {
   name: string;
@@ -67,33 +68,8 @@ const isNumericOnlyLabel = (value: string) => /^\d{6,}$/.test(String(value || ''
 const hasOnlyDigitsAndSeparators = (value: string) => /^[\d\s._-]{6,}$/.test(String(value || '').trim());
 const isPlaceholderChannelName = (value: string) => /^channel[\s_-]*\d+$/i.test(String(value || '').trim());
 
-const normalizeChannelJid = (value: string) => {
-  const trimmed = String(value || '').trim();
-  if (!trimmed) return trimmed;
-  const lower = trimmed.toLowerCase();
-  if (lower.includes('@newsletter')) {
-    // Baileys treats newsletters as "...@newsletter". Some UIs surface decorated ids like
-    // "true_123@newsletter_ABC..."; canonicalize those to a Baileys-safe jid.
-    const match = lower.match(/([a-z0-9._-]+)@newsletter/i);
-    const userRaw = String(match?.[1] || '').trim();
-    if (!userRaw) return trimmed;
-
-    const strippedPrefix = userRaw.replace(/^(true|false)_/i, '');
-    const hasLetters = /[a-z]/i.test(strippedPrefix);
-    const digits = strippedPrefix.replace(/[^0-9]/g, '');
-    const user = hasLetters ? strippedPrefix : (digits || strippedPrefix);
-    return user ? `${user}@newsletter` : trimmed;
-  }
-  const compact = trimmed.replace(/\s+/g, '');
-  if (/^[a-z0-9._-]{6,}$/i.test(compact)) {
-    return `${compact.toLowerCase()}@newsletter`;
-  }
-  const digits = trimmed.replace(/[^0-9]/g, '');
-  return digits ? `${digits}@newsletter` : trimmed;
-};
-
 const buildFriendlyChannelName = (name: string, jid: string) => {
-  const normalizedJid = normalizeChannelJid(jid);
+  const normalizedJid = normalizeChannelJid(jid, { allowNumericFallback: true, returnEmptyOnInvalid: true });
   let rawName = normalizeDisplayText(name);
   if (!rawName || rawName.toLowerCase() === normalizedJid.toLowerCase()) return '';
   const repeatedTypeMentions = (rawName.match(/\((group|channel|status|individual)\)/gi) || []).length;
@@ -110,9 +86,7 @@ const buildFriendlyChannelName = (name: string, jid: string) => {
 };
 
 const normalizePhoneByType = (type: string, phone: string) => {
-  const normalizedPhone = String(phone || '').trim();
-  if (type === 'channel') return normalizeChannelJid(normalizedPhone);
-  return normalizedPhone;
+  return normalizePhoneForType(type, phone);
 };
 
 const buildTargetKey = (type: string, phone: string) => `${String(type || '').trim()}:${normalizePhoneByType(type, phone)}`;

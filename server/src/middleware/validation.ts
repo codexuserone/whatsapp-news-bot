@@ -3,6 +3,7 @@ import type { ZodIssue, ZodTypeAny } from 'zod';
 const { z } = require('zod');
 const { badRequest } = require('../core/errors');
 const cron = require('node-cron');
+const { DEFAULT_BATCH_TIMES } = require('../constants/scheduling');
 
 const JID_PATTERN = /^([0-9+\s\-\(\)]+|status@broadcast|[0-9\-]+@g\.us|[0-9]+@s\.whatsapp\.net|[a-z0-9._-]+@newsletter(?:_[a-z0-9]+)?)$/i;
 
@@ -46,7 +47,7 @@ const schemas = {
     active: z.boolean().optional(),
     state: z.enum(['active', 'paused', 'stopped', 'draft']).optional(),
     delivery_mode: z.enum(['immediate', 'batch', 'batched']).default('immediate'),
-    batch_times: z.array(z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/)).default(['07:00', '15:00', '22:00']),
+    batch_times: z.array(z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/)).default(DEFAULT_BATCH_TIMES),
     approval_required: z.boolean().optional().default(false)
   }).superRefine((value: {
     delivery_mode?: 'immediate' | 'batch' | 'batched';

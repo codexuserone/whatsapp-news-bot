@@ -3,6 +3,7 @@ const cheerio = require('cheerio');
 const he = require('he');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { safeAxiosRequest } = require('../utils/safeAxios');
+const { buildDefaultUserAgent } = require('../utils/httpClientIdentity');
 
 const parser = new Parser({
   customFields: {
@@ -22,8 +23,7 @@ type FetchMeta = {
   discoveredFromUrl?: string;
 };
 
-const DEFAULT_USER_AGENT =
-  'Mozilla/5.0 (compatible; WhatsAppNewsBot/0.2; +https://example.invalid)';
+const DEFAULT_USER_AGENT = buildDefaultUserAgent();
 
 const getPath = (obj: Record<string, unknown>, path?: string) => {
   if (!path) return undefined;
@@ -613,8 +613,7 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
   const headers: Record<string, string> = {};
   if (feed.etag) headers['If-None-Match'] = String(feed.etag);
   if (feed.last_modified) headers['If-Modified-Since'] = String(feed.last_modified);
-  // User Agent: Pretend to be Chrome to avoid blocking
-  headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  headers['User-Agent'] = DEFAULT_USER_AGENT;
   headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8';
 
   const response = await safeAxiosRequest(feed.url, {

@@ -8,6 +8,7 @@ const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const { normalizeMessageText } = require('../utils/messageText');
 const { stripManualMeta } = require('../utils/manualMeta');
+const { normalizeTargetJidForSend } = require('../utils/targetJid');
 
 const WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES = 15;
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
@@ -15,14 +16,7 @@ const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']
 const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
 
 const normalizeTargetJid = (target: { phone_number?: string | null; type?: string | null }) => {
-  const raw = String(target?.phone_number || '').trim();
-  const type = String(target?.type || '').trim().toLowerCase();
-  if (!raw) return '';
-  if (raw.includes('@')) return raw;
-  if (type === 'status') return 'status@broadcast';
-  if (type === 'channel') return `${raw}@newsletter`;
-  if (type === 'group') return raw.endsWith('@g.us') ? raw : `${raw}@g.us`;
-  return `${raw.replace(/[^\d]/g, '')}@s.whatsapp.net`;
+  return normalizeTargetJidForSend(target);
 };
 
 const resolveEditWindowMinutes = (settings: Record<string, unknown>) => {

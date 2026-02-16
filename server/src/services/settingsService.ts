@@ -40,6 +40,32 @@ const clampNumber = (value: unknown, fallback: number, min: number, max: number)
   return Math.min(Math.max(Math.floor(parsed), min), max);
 };
 
+const clampFloat = (value: unknown, fallback: number, min: number, max: number) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, min), max);
+};
+
+const normalizeBoolean = (value: unknown, fallback = false) => {
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+};
+
+const normalizeTimezone = (value: unknown, fallback: string) => {
+  const tz = String(value || '').trim();
+  if (!tz) return fallback;
+  try {
+    Intl.DateTimeFormat('en-US', { timeZone: tz }).format(new Date());
+    return tz;
+  } catch {
+    return fallback;
+  }
+};
+
 const normalizeSettingsPatch = (updates: Record<string, unknown>) => {
   const next = { ...updates };
 
@@ -90,12 +116,85 @@ const normalizeSettingsPatch = (updates: Record<string, unknown>) => {
     next.post_send_correction_window_minutes = next.post_send_edit_window_minutes;
   }
 
+  if (Object.prototype.hasOwnProperty.call(next, 'app_name')) {
+    const normalizedName = String(next.app_name || '').replace(/\s+/g, ' ').trim();
+    next.app_name = normalizedName || DEFAULTS.app_name;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'default_timezone')) {
+    next.default_timezone = normalizeTimezone(next.default_timezone, DEFAULTS.default_timezone);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'message_delay_ms')) {
+    next.message_delay_ms = clampNumber(next.message_delay_ms, DEFAULTS.message_delay_ms, 0, 60_000);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'max_retries')) {
+    next.max_retries = clampNumber(next.max_retries, DEFAULTS.max_retries, 0, 50);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'authRetentionDays')) {
+    next.authRetentionDays = clampNumber(next.authRetentionDays, DEFAULTS.authRetentionDays, 1, 3650);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'defaultInterTargetDelaySec')) {
+    next.defaultInterTargetDelaySec = clampNumber(
+      next.defaultInterTargetDelaySec,
+      DEFAULTS.defaultInterTargetDelaySec,
+      0,
+      600
+    );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'defaultIntraTargetDelaySec')) {
+    next.defaultIntraTargetDelaySec = clampNumber(
+      next.defaultIntraTargetDelaySec,
+      DEFAULTS.defaultIntraTargetDelaySec,
+      0,
+      600
+    );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'initial_fetch_limit')) {
+    next.initial_fetch_limit = clampNumber(next.initial_fetch_limit, DEFAULTS.initial_fetch_limit, 1, 50);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'max_pending_age_hours')) {
+    next.max_pending_age_hours = clampNumber(next.max_pending_age_hours, DEFAULTS.max_pending_age_hours, 1, 336);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'send_timeout_ms')) {
+    next.send_timeout_ms = clampNumber(next.send_timeout_ms, DEFAULTS.send_timeout_ms, 10_000, 180_000);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'reconcile_queue_lookback_hours')) {
+    next.reconcile_queue_lookback_hours = clampNumber(
+      next.reconcile_queue_lookback_hours,
+      DEFAULTS.reconcile_queue_lookback_hours,
+      1,
+      168
+    );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'dedupeThreshold')) {
+    next.dedupeThreshold = clampFloat(next.dedupeThreshold, DEFAULTS.dedupeThreshold, 0, 1);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'processingTimeoutMinutes')) {
+    next.processingTimeoutMinutes = clampNumber(
+      next.processingTimeoutMinutes,
+      DEFAULTS.processingTimeoutMinutes,
+      5,
+      240
+    );
+  }
+
   if (Object.prototype.hasOwnProperty.call(next, 'app_paused')) {
-    next.app_paused = next.app_paused === true;
+    next.app_paused = normalizeBoolean(next.app_paused, false);
   }
 
   if (Object.prototype.hasOwnProperty.call(next, 'whatsapp_paused')) {
-    next.whatsapp_paused = next.whatsapp_paused === true;
+    next.whatsapp_paused = normalizeBoolean(next.whatsapp_paused, false);
   }
 
   if (Object.prototype.hasOwnProperty.call(next, 'whatsapp_paused_at')) {
@@ -105,6 +204,12 @@ const normalizeSettingsPatch = (updates: Record<string, unknown>) => {
     } else {
       const parsed = Date.parse(String(raw));
       next.whatsapp_paused_at = Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+    }
+  }
+
+  for (const key of Object.keys(next)) {
+    if (next[key] === undefined) {
+      delete next[key];
     }
   }
 
@@ -177,18 +282,7 @@ const getSettings = async () => {
       delete data.send_images;
     }
 
-    Object.assign(
-      data,
-      normalizeSettingsPatch({
-        retentionDays: data.retentionDays,
-        log_retention_days: data.log_retention_days,
-        post_send_edit_window_minutes: data.post_send_edit_window_minutes,
-        post_send_correction_window_minutes: data.post_send_correction_window_minutes,
-        app_paused: data.app_paused,
-        whatsapp_paused: data.whatsapp_paused,
-        whatsapp_paused_at: (data as Record<string, unknown>).whatsapp_paused_at
-      })
-    );
+    Object.assign(data, normalizeSettingsPatch({ ...data }));
 
     return data;
   } catch (error) {
@@ -203,7 +297,7 @@ const updateSettings = async (updates: Record<string, unknown>) => {
   const normalizedUpdates = normalizeSettingsPatch(updates || {});
   
   try {
-    const keys = Object.keys(normalizedUpdates || {});
+    const keys = Object.keys(normalizedUpdates || {}).filter((key) => normalizedUpdates[key] !== undefined);
     await Promise.all(
       keys.map(async (key) => {
         const { error } = await supabase

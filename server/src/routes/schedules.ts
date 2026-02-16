@@ -8,6 +8,7 @@ const { applyScheduleStatePayload, isScheduleRunning, resolveScheduleState } = r
 const { validate, schemas } = require('../middleware/validation');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
+const { DEFAULT_BATCH_TIMES } = require('../constants/scheduling');
 
 const scheduleRoutes = () => {
   const router = express.Router();
@@ -47,7 +48,7 @@ const scheduleRoutes = () => {
     const next = { ...payload } as Record<string, unknown>;
     delete next.id;
     const mode = next.delivery_mode === 'batch' || next.delivery_mode === 'batched' ? 'batched' : 'immediate';
-    const defaultBatchTimes = ['07:00', '15:00', '22:00'];
+    const defaultBatchTimes = DEFAULT_BATCH_TIMES;
     const batchTimes = normalizeBatchTimes(next.batch_times);
     const cronExpression = normalizeCronExpression(next.cron_expression);
     const state = applyScheduleStatePayload(next, options?.fallback || null);

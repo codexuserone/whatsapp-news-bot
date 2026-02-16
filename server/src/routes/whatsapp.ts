@@ -11,12 +11,11 @@ const { getSupabaseClient } = require('../db/supabase');
 const { normalizeMessageText } = require('../utils/messageText');
 const { ensureWhatsAppConnected } = require('../services/whatsappConnection');
 const { isNewsletterJid, prepareNewsletterImage, prepareNewsletterVideo } = require('../utils/whatsappMedia');
+const { buildDefaultUserAgent } = require('../utils/httpClientIdentity');
+const { normalizeChannelJid, isValidChannelJid } = require('../utils/targetJid');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
-const DEFAULT_USER_AGENT =
-  process.env.MEDIA_FETCH_USER_AGENT ||
-  process.env.FEED_USER_AGENT ||
-  'Mozilla/5.0 (compatible; AnashNewsBot/1.0; +https://whatsapp-news-bot-3-69qh.onrender.com)';
+const DEFAULT_USER_AGENT = buildDefaultUserAgent();
 const SUPPORTED_WHATSAPP_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 const detectImageMimeTypeFromBuffer = (value: Buffer): string | null => {
@@ -209,34 +208,6 @@ const parseVideoDataUrl = (value: string) => {
   const finalMime = mimetype === 'video/mp4' ? mimetype : 'video/mp4';
   return { buffer, mimetype: finalMime };
 };
-
-const normalizeChannelJid = (value: string) => {
-  const raw = String(value || '').trim();
-  if (!raw) return raw;
-  const lower = raw.toLowerCase();
-  if (lower.includes('@newsletter')) {
-    // Baileys treats newsletters as "...@newsletter". Some UIs surface decorated ids like
-    // "true_123@newsletter_ABC..."; canonicalize those to a Baileys-safe jid.
-    const match = lower.match(/([a-z0-9._-]+)@newsletter/i);
-    const userRaw = String(match?.[1] || '').trim();
-    if (!userRaw) return raw;
-
-    const strippedPrefix = userRaw.replace(/^(true|false)_/i, '');
-    const hasLetters = /[a-z]/i.test(strippedPrefix);
-    const digits = strippedPrefix.replace(/[^0-9]/g, '');
-    const user = hasLetters ? strippedPrefix : (digits || strippedPrefix);
-    return user ? `${user}@newsletter` : raw;
-  }
-  const compact = raw.replace(/\s+/g, '');
-  if (/^[a-z0-9._-]{6,}$/i.test(compact)) {
-    return `${compact.toLowerCase()}@newsletter`;
-  }
-  const digits = raw.replace(/[^0-9]/g, '');
-  return digits ? `${digits}@newsletter` : raw;
-};
-
-const isValidChannelJid = (value: string) =>
-  /^[a-z0-9._-]+@newsletter$/i.test(String(value || '').trim());
 
 const normalizeDisplayText = (value: unknown) => String(value || '').replace(/\s+/g, ' ').trim();
 

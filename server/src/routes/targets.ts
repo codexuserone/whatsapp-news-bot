@@ -1,10 +1,11 @@
 import type { Request, Response } from 'express';
 const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
-const { validate, schemas, sanitizePhoneNumber } = require('../middleware/validation');
+const { validate, schemas } = require('../middleware/validation');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const { syncTargetsFromWhatsApp } = require('../services/targetSyncService');
+const { inferTargetType, normalizePhoneForType } = require('../utils/targetJid');
 
 type TargetRow = {
   id?: string;
@@ -32,66 +33,11 @@ const stripTargetTypeTags = (value: string) =>
 const isNumericOnlyLabel = (value: unknown) => /^\d{6,}$/.test(String(value || '').trim());
 
 const normalizeTargetType = (type: unknown, phoneNumber: unknown) => {
-  const rawType = String(type || '').trim().toLowerCase();
-  const rawPhone = String(phoneNumber || '').trim().toLowerCase();
-  if (rawPhone === 'status@broadcast') return 'status';
-  if (rawPhone.includes('@newsletter')) return 'channel';
-  if (rawPhone.endsWith('@g.us')) return 'group';
-  if (rawPhone.endsWith('@s.whatsapp.net') || rawPhone.endsWith('@lid')) return 'individual';
-  if (rawType === 'status' || rawType === 'channel' || rawType === 'group' || rawType === 'individual') {
-    return rawType;
-  }
-  return 'individual';
-};
-
-const normalizeChannelJidForKey = (phoneNumber: string) => {
-  const trimmed = String(phoneNumber || '').trim();
-  if (!trimmed) return '';
-  const lower = trimmed.toLowerCase();
-  if (lower.includes('@newsletter')) {
-    // Baileys treats newsletters as "...@newsletter". Some UIs surface decorated ids like
-    // "true_123@newsletter_ABC..."; canonicalize those to a Baileys-safe jid.
-    const match = lower.match(/([a-z0-9._-]+)@newsletter/i);
-    const userRaw = String(match?.[1] || '').trim();
-    if (!userRaw) return lower;
-
-    const strippedPrefix = userRaw.replace(/^(true|false)_/i, '');
-    const hasLetters = /[a-z]/i.test(strippedPrefix);
-    const digits = strippedPrefix.replace(/[^0-9]/g, '');
-    const user = hasLetters ? strippedPrefix : (digits || strippedPrefix);
-    return user ? `${user}@newsletter` : lower;
-  }
-  const compact = trimmed.replace(/\s+/g, '');
-  if (/^[a-z0-9._-]{6,}$/i.test(compact)) {
-    return `${compact.toLowerCase()}@newsletter`;
-  }
-  const digits = trimmed.replace(/[^0-9]/g, '');
-  return digits ? `${digits}@newsletter` : lower;
-};
-
-const normalizeGroupJidForKey = (phoneNumber: string) => {
-  const trimmed = String(phoneNumber || '').trim();
-  if (!trimmed) return '';
-  if (trimmed.toLowerCase().endsWith('@g.us')) return trimmed.toLowerCase();
-  const cleaned = trimmed.replace(/[^0-9-]/g, '');
-  return cleaned ? `${cleaned}@g.us` : trimmed.toLowerCase();
-};
-
-const normalizeIndividualJidForKey = (phoneNumber: string) => {
-  const trimmed = String(phoneNumber || '').trim();
-  if (!trimmed) return '';
-  if (trimmed.includes('@')) return trimmed.toLowerCase();
-  const cleaned = sanitizePhoneNumber(trimmed).replace(/[^0-9]/g, '');
-  return cleaned ? `${cleaned}@s.whatsapp.net` : trimmed.toLowerCase();
+  return inferTargetType(type, phoneNumber);
 };
 
 const normalizePhoneForKey = (type: string, phoneNumber: string) => {
-  const raw = String(phoneNumber || '').trim();
-  if (!raw) return '';
-  if (type === 'status') return 'status@broadcast';
-  if (type === 'group') return normalizeGroupJidForKey(raw);
-  if (type === 'channel') return normalizeChannelJidForKey(raw);
-  return normalizeIndividualJidForKey(raw);
+  return normalizePhoneForType(type, phoneNumber);
 };
 
 const isPlaceholderChannelName = (name: unknown) => /^channel[\s_-]*\d+$/i.test(String(name || '').trim());
@@ -332,58 +278,33 @@ const targetRoutes = () => {
     }
   });
 
-  const normalizeGroupJid = (phoneNumber: string) => {
-    const cleaned = phoneNumber.replace(/[^0-9-]/g, '');
-    return cleaned ? `${cleaned}@g.us` : phoneNumber;
-  };
-
-  const normalizeChannelJid = (phoneNumber: string) => {
-    const trimmed = String(phoneNumber || '').trim();
-    if (!trimmed) return trimmed;
-    const lower = trimmed.toLowerCase();
-    if (lower.includes('@newsletter')) {
-      const match = lower.match(/([a-z0-9._-]+)@newsletter/i);
-      const userRaw = String(match?.[1] || '').trim();
-      if (!userRaw) return trimmed;
-
-      const strippedPrefix = userRaw.replace(/^(true|false)_/i, '');
-      const hasLetters = /[a-z]/i.test(strippedPrefix);
-      const digits = strippedPrefix.replace(/[^0-9]/g, '');
-      const user = hasLetters ? strippedPrefix : (digits || strippedPrefix);
-      return user ? `${user}@newsletter` : trimmed;
-    }
-    const compact = trimmed.replace(/\s+/g, '');
-    if (/^[a-z0-9._-]{6,}$/i.test(compact)) {
-      return `${compact.toLowerCase()}@newsletter`;
-    }
-    const cleaned = trimmed.replace(/[^0-9]/g, '');
-    return cleaned ? `${cleaned}@newsletter` : trimmed;
-  };
-
-  const normalizeIndividualJid = (phoneNumber: string) => {
-    const cleaned = sanitizePhoneNumber(phoneNumber).replace(/[^0-9]/g, '');
-    return cleaned ? `${cleaned}@s.whatsapp.net` : phoneNumber;
-  };
-
   const normalizeTargetPayload = (payload: Record<string, unknown>) => {
     const next = { ...payload } as Record<string, unknown> & { type?: string; phone_number?: string };
-    if (next.type === 'status') {
-      next.phone_number = 'status@broadcast';
-      return next;
-    }
     if (typeof next.phone_number === 'string') {
       const trimmed = next.phone_number.trim();
-      if (next.type === 'individual') {
-        next.phone_number = normalizeIndividualJid(trimmed);
-      } else if (next.type === 'group') {
-        next.phone_number = normalizeGroupJid(trimmed);
-      } else if (next.type === 'channel') {
-        next.phone_number = normalizeChannelJid(trimmed);
-      } else {
-        next.phone_number = trimmed;
-      }
+      const normalized = normalizePhoneForType(next.type || 'individual', trimmed);
+      next.phone_number = normalized || trimmed;
     }
     return next;
+  };
+
+  const validateAndNormalizeTargetPayload = (
+    payload: Record<string, unknown> & { type?: string; phone_number?: string }
+  ): { ok: true; payload: Record<string, unknown> & { type: string; phone_number: string } } | { ok: false; error: string } => {
+    const computedType = normalizeTargetType(payload.type, payload.phone_number);
+    const normalizedPhone = normalizePhoneForKey(computedType, String(payload.phone_number || ''));
+    if (!isValidPhoneForType(computedType, normalizedPhone)) {
+      return { ok: false, error: `Invalid destination for type "${computedType}"` };
+    }
+
+    return {
+      ok: true,
+      payload: {
+        ...payload,
+        type: computedType,
+        phone_number: normalizedPhone
+      }
+    };
   };
 
   router.post('/sync', async (req: Request, res: Response) => {
@@ -411,9 +332,13 @@ const targetRoutes = () => {
   router.post('/', validate(schemas.target), async (req: Request, res: Response) => {
     try {
       const payload = normalizeTargetPayload(req.body);
+      const normalized = validateAndNormalizeTargetPayload(payload);
+      if (!normalized.ok) {
+        return res.status(400).json({ error: normalized.error });
+      }
       const { data: target, error } = await getDb()
         .from('targets')
-        .insert(payload)
+        .insert(normalized.payload)
         .select()
         .single();
       
@@ -428,9 +353,13 @@ const targetRoutes = () => {
   router.put('/:id', validate(schemas.target), async (req: Request, res: Response) => {
     try {
       const payload = normalizeTargetPayload(req.body);
+      const normalized = validateAndNormalizeTargetPayload(payload);
+      if (!normalized.ok) {
+        return res.status(400).json({ error: normalized.error });
+      }
       const { data: target, error } = await getDb()
         .from('targets')
-        .update(payload)
+        .update(normalized.payload)
         .eq('id', req.params.id)
         .select()
         .single();

@@ -29,7 +29,9 @@ const DEFAULTS = {
   dedupeThreshold: 0.88,
   processingTimeoutMinutes: Number(process.env.PROCESSING_TIMEOUT_MINUTES || 30),
   app_paused: false,
-  whatsapp_paused: false
+  whatsapp_paused: false,
+  // ISO timestamp for operator visibility. Null when not paused.
+  whatsapp_paused_at: null
 };
 
 const clampNumber = (value: unknown, fallback: number, min: number, max: number) => {
@@ -94,6 +96,16 @@ const normalizeSettingsPatch = (updates: Record<string, unknown>) => {
 
   if (Object.prototype.hasOwnProperty.call(next, 'whatsapp_paused')) {
     next.whatsapp_paused = next.whatsapp_paused === true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'whatsapp_paused_at')) {
+    const raw = next.whatsapp_paused_at;
+    if (raw == null || String(raw).trim() === '') {
+      next.whatsapp_paused_at = null;
+    } else {
+      const parsed = Date.parse(String(raw));
+      next.whatsapp_paused_at = Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+    }
   }
 
   return next;
@@ -173,7 +185,8 @@ const getSettings = async () => {
         post_send_edit_window_minutes: data.post_send_edit_window_minutes,
         post_send_correction_window_minutes: data.post_send_correction_window_minutes,
         app_paused: data.app_paused,
-        whatsapp_paused: data.whatsapp_paused
+        whatsapp_paused: data.whatsapp_paused,
+        whatsapp_paused_at: (data as Record<string, unknown>).whatsapp_paused_at
       })
     );
 

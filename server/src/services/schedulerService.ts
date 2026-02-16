@@ -308,12 +308,7 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
   if (!supabase) return;
 
   const status = whatsappClient?.getStatus?.();
-  const dispatchClient: WhatsAppClient =
-    status?.status === 'connected'
-      ? (whatsappClient as WhatsAppClient)
-      : {
-          getStatus: () => ({ status: 'disconnected' })
-        };
+  const dispatchClient: WhatsAppClient | undefined = status?.status === 'connected' ? (whatsappClient as WhatsAppClient) : undefined;
 
   try {
     const { data: schedules, error } = await supabase

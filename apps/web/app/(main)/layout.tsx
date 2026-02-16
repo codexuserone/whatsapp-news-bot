@@ -7,6 +7,7 @@ import { SidebarProvider, SidebarInset, SidebarTrigger } from '@/components/ui/s
 import { Separator } from '@/components/ui/separator';
 import Breadcrumbs from '@/components/layout/Breadcrumbs';
 import ThemeToggle from '@/components/layout/ThemeToggle';
+import GlobalStatusBanner from '@/components/layout/GlobalStatusBanner';
 import { navLookup } from '@/lib/navigation';
 import { Home, Rss, ListOrdered, ClipboardList, MessageSquare } from 'lucide-react';
 
@@ -59,6 +60,7 @@ const MainLayout = ({ children }: MainLayoutProps) => {
         </header>
         <main className="relative min-w-0 max-w-full flex-1 overflow-y-auto overflow-x-hidden px-4 pb-24 pt-6 md:px-8 md:pb-8">
           <div className="mx-auto min-w-0 w-full max-w-6xl">
+            <GlobalStatusBanner />
             <div key={pathname} className="animate-in fade-in-0 slide-in-from-bottom-2 duration-300">
               {children}
             </div>

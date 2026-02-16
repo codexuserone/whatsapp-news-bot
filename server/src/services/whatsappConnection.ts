@@ -34,6 +34,13 @@ const ensureWhatsAppConnected = async (
     if (status === 'connected') {
       return true;
     }
+    if (status === 'paused') {
+      return false;
+    }
+    if (status === 'qr' || status === 'qr_ready') {
+      // Cannot auto-recover; requires a human to scan the QR code.
+      return false;
+    }
 
     const takeoverLease = whatsappClient.takeoverLease;
     const shouldAttemptTakeover =

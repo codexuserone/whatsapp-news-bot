@@ -1982,9 +1982,15 @@ const sendQueuedForSchedule = async (
       });
       if (!connectedForManualDispatch) {
         const whatsappStatus = whatsappClient.getStatus();
-        logger.warn({ scheduleId, whatsappStatus: whatsappStatus?.status || 'unknown' },
-          'Skipping send - WhatsApp not connected');
-        return { sent: 0, queued: 0, skipped: true, reason: 'WhatsApp not connected' };
+        const statusLabel = whatsappStatus?.status || 'unknown';
+        const reason =
+          statusLabel === 'paused'
+            ? 'WhatsApp is paused'
+            : statusLabel === 'qr' || statusLabel === 'qr_ready'
+              ? 'WhatsApp requires QR scan'
+              : 'WhatsApp not connected';
+        logger.warn({ scheduleId, whatsappStatus: statusLabel }, 'Skipping send - WhatsApp not connected');
+        return { sent: 0, queued: 0, skipped: true, reason };
       }
 
       logger.warn({ scheduleId }, 'Schedule has no feed_id - manual dispatch only');
@@ -2238,9 +2244,15 @@ const sendQueuedForSchedule = async (
     });
     if (!connectedForDispatch) {
       const whatsappStatus = whatsappClient.getStatus();
-      logger.warn({ scheduleId, whatsappStatus: whatsappStatus?.status || 'unknown' },
-        'Skipping send - WhatsApp not connected');
-      return { sent: 0, queued: queuedCount, skipped: true, reason: 'WhatsApp not connected' };
+      const statusLabel = whatsappStatus?.status || 'unknown';
+      const reason =
+        statusLabel === 'paused'
+          ? 'WhatsApp is paused'
+          : statusLabel === 'qr' || statusLabel === 'qr_ready'
+            ? 'WhatsApp requires QR scan'
+            : 'WhatsApp not connected';
+      logger.warn({ scheduleId, whatsappStatus: statusLabel }, 'Skipping send - WhatsApp not connected');
+      return { sent: 0, queued: queuedCount, skipped: true, reason };
     }
 
     const maxPendingAgeHours = Math.max(Number(settings.max_pending_age_hours || 48), 1);
@@ -2658,7 +2670,14 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
   });
 
   if (!connected) {
-    return { ok: false, error: 'WhatsApp not connected' };
+    const statusLabel = String(whatsappClient?.getStatus?.()?.status || 'unknown');
+    const error =
+      statusLabel === 'paused'
+        ? 'WhatsApp is paused'
+        : statusLabel === 'qr' || statusLabel === 'qr_ready'
+          ? 'WhatsApp requires QR scan'
+          : 'WhatsApp not connected';
+    return { ok: false, error };
   }
 
   const activeWhatsappClient = whatsappClient;

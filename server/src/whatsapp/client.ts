@@ -464,6 +464,29 @@ class WhatsAppClient {
           this.isConnecting = false;
           this.status = 'paused';
           this.lastError = 'WhatsApp session paused.';
+          // Keep the cross-instance lease while paused so only one instance continues
+          // feed polling + queue work (and so deploy overlaps don't start a second bot).
+          try {
+            const store = this.authStore;
+            const skipLease = String(process.env.SKIP_WHATSAPP_LEASE || 'false').toLowerCase() === 'true';
+            if (!skipLease && store?.acquireLease) {
+              const lease = await store.acquireLease(this.instanceId, 90_000);
+              this.leaseSupported = lease.supported;
+              this.leaseHeld = lease.ok;
+              this.leaseOwnerId = lease.ownerId;
+              this.leaseExpiresAt = lease.expiresAt;
+              if (lease.supported && lease.ok) {
+                this.startLeaseRenewal(90_000);
+              }
+            } else {
+              this.leaseSupported = false;
+              this.leaseHeld = true;
+              this.leaseOwnerId = null;
+              this.leaseExpiresAt = null;
+            }
+          } catch (error) {
+            logger.warn({ error }, 'Failed to acquire WhatsApp lease while paused');
+          }
           return;
         }
       } catch (error) {
@@ -819,6 +842,20 @@ class WhatsAppClient {
         if (!lease.ok) {
           logger.warn({ leaseOwner: lease.ownerId, leaseExpiresAt: lease.expiresAt }, 'Lost WhatsApp lease');
           this.stopLeaseRenewal();
+          if (this.isPaused) {
+            // While paused we only want to stop being the active instance; keep the UI in "paused"
+            // instead of flipping to a confusing conflict state.
+            if (this.socket) {
+              try {
+                this.cleanupSocket();
+                this.socket.end(new Error('Lease lost'));
+              } catch {
+                // ignore
+              }
+              this.socket = null;
+            }
+            return;
+          }
           this.status = 'conflict';
           this.lastError =
             'Another bot instance took over this WhatsApp session. This instance will stay idle.';
@@ -926,6 +963,26 @@ class WhatsAppClient {
       this.reconnectTimer = null;
       this.connect();
     }, delay);
+  }
+
+  async reconnect(): Promise<void> {
+    if (this.isPaused) {
+      this.status = 'paused';
+      this.lastError = this.lastError || 'WhatsApp session paused.';
+      return;
+    }
+
+    const currentStatus = String(this.status || 'unknown');
+    if (currentStatus === 'connected' || currentStatus === 'connecting') {
+      return;
+    }
+
+    // If a reconnect is already scheduled, let that timer fire.
+    if (this.reconnectTimer) {
+      return;
+    }
+
+    await this.connect();
   }
 
   cleanupSocket(): void {
@@ -1079,17 +1136,7 @@ class WhatsAppClient {
         this.isConnecting = false;
         this.status = 'paused';
         this.lastError = 'WhatsApp session paused.';
-        this.stopLeaseRenewal();
-        if (authStore.releaseLease) {
-          try {
-            await authStore.releaseLease(this.instanceId);
-          } catch (error) {
-            logger.warn({ error }, 'Failed to release WhatsApp lease while pausing connect');
-          }
-        }
-        this.leaseHeld = false;
-        this.leaseOwnerId = null;
-        this.leaseExpiresAt = null;
+        // Pause only affects the WhatsApp socket; keep the lease so schedulers can continue on a single instance.
         return;
       }
 
@@ -1177,17 +1224,7 @@ class WhatsAppClient {
         this.isConnecting = false;
         this.status = 'paused';
         this.lastError = 'WhatsApp session paused.';
-        this.stopLeaseRenewal();
-        if (authStore.releaseLease) {
-          try {
-            await authStore.releaseLease(this.instanceId);
-          } catch (error) {
-            logger.warn({ error }, 'Failed to release WhatsApp lease while pausing connect');
-          }
-        }
-        this.leaseHeld = false;
-        this.leaseOwnerId = null;
-        this.leaseExpiresAt = null;
+        // Pause only affects the WhatsApp socket; keep the lease so schedulers can continue on a single instance.
         return;
       }
 
@@ -1212,17 +1249,7 @@ class WhatsAppClient {
         this.status = 'paused';
         this.lastError = 'WhatsApp session paused.';
         this.clearPresenceOfflineHeartbeat();
-        this.stopLeaseRenewal();
-        if (authStore.releaseLease) {
-          try {
-            await authStore.releaseLease(this.instanceId);
-          } catch (error) {
-            logger.warn({ error }, 'Failed to release WhatsApp lease while pausing connect');
-          }
-        }
-        this.leaseHeld = false;
-        this.leaseOwnerId = null;
-        this.leaseExpiresAt = null;
+        // Pause only affects the WhatsApp socket; keep the lease so schedulers can continue on a single instance.
         return;
       }
 
@@ -2301,7 +2328,10 @@ class WhatsAppClient {
     try {
       const settingsService = require('../services/settingsService');
       if (typeof settingsService?.updateSettings !== 'function') return;
-      await settingsService.updateSettings({ whatsapp_paused: paused });
+      await settingsService.updateSettings({
+        whatsapp_paused: paused,
+        whatsapp_paused_at: paused ? new Date().toISOString() : null
+      });
     } catch (error) {
       logger.warn({ error }, 'Failed to persist WhatsApp pause setting');
     }
@@ -2319,7 +2349,7 @@ class WhatsAppClient {
     await this.persistPauseSetting(true);
 
     try {
-      await this.disconnect();
+      await this.disconnect({ releaseLease: false });
     } catch (error) {
       logger.warn({ error }, 'Failed to disconnect WhatsApp while pausing');
     }
@@ -2346,7 +2376,9 @@ class WhatsAppClient {
     await this.connect();
   }
 
-  async disconnect(): Promise<void> {
+  async disconnect(options?: { releaseLease?: boolean }): Promise<void> {
+    const releaseLease = options?.releaseLease !== false;
+
     // Disconnect without logging out (keeps auth state so reconnect doesn't require QR)
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -2354,17 +2386,19 @@ class WhatsAppClient {
     }
 
     this.clearPresenceOfflineHeartbeat();
-    this.stopLeaseRenewal();
-    if (this.authStore?.releaseLease) {
-      try {
-        await this.authStore.releaseLease(this.instanceId);
-      } catch (error) {
-        logger.warn({ error }, 'Failed to release WhatsApp lease');
+    if (releaseLease) {
+      this.stopLeaseRenewal();
+      if (this.authStore?.releaseLease) {
+        try {
+          await this.authStore.releaseLease(this.instanceId);
+        } catch (error) {
+          logger.warn({ error }, 'Failed to release WhatsApp lease');
+        }
       }
+      this.leaseHeld = false;
+      this.leaseOwnerId = null;
+      this.leaseExpiresAt = null;
     }
-    this.leaseHeld = false;
-    this.leaseOwnerId = null;
-    this.leaseExpiresAt = null;
 
     if (this.socket) {
       try {

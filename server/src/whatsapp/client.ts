@@ -341,6 +341,7 @@ class WhatsAppClient {
   processErrorHandlersBound: boolean;
   waVersion: number[] | null;
   waVersionFetchedAtMs: number | null;
+  contactsCache: Map<string, { name?: string }>;
   recentSentMessages: Map<string, proto.IWebMessageInfo>;
   recentMessageStatuses: Map<string, MessageStatusSnapshot>;
   pendingReceiptUpdates: Map<string, MessageStatusSnapshot>;
@@ -383,6 +384,7 @@ class WhatsAppClient {
     this.processErrorHandlersBound = false;
     this.waVersion = null;
     this.waVersionFetchedAtMs = null;
+    this.contactsCache = new Map();
     this.recentSentMessages = new Map();
     this.recentMessageStatuses = new Map();
     this.pendingReceiptUpdates = new Map();
@@ -656,19 +658,30 @@ class WhatsAppClient {
   getStatusParticipants(): string[] {
     if (!this.socket) return [];
     try {
-      const socket = this.socket as any;
-      const store = socket.store;
-      const contacts = store?.contacts || {};
       const jids: string[] = [];
-      for (const [jid, contact] of Object.entries(contacts || {})) {
-        if (
-          jid.endsWith('@s.whatsapp.net') &&
-          jid !== 'status@broadcast' &&
-          (contact as any)?.name
-        ) {
+
+      // Primary source: our contacts cache (populated from contacts.upsert/update events)
+      for (const [jid] of this.contactsCache) {
+        if (jid.endsWith('@s.whatsapp.net') && jid !== 'status@broadcast') {
           jids.push(jid);
         }
       }
+
+      // Fallback: try socket.store.contacts if our cache is empty
+      if (!jids.length) {
+        const socket = this.socket as any;
+        const contacts = socket.store?.contacts || {};
+        for (const [jid, contact] of Object.entries(contacts || {})) {
+          if (
+            jid.endsWith('@s.whatsapp.net') &&
+            jid !== 'status@broadcast' &&
+            (contact as any)?.name
+          ) {
+            jids.push(jid);
+          }
+        }
+      }
+
       // Always include own JID so the sender can see their own status.
       if (this.meJid) {
         const ownIndividual = this.meJid.includes(':')
@@ -678,6 +691,8 @@ class WhatsAppClient {
           jids.push(ownIndividual);
         }
       }
+
+      logger.debug({ participantCount: jids.length, cacheSize: this.contactsCache.size }, 'Status participants resolved');
       return jids;
     } catch {
       return this.meJid ? [this.meJid] : [];
@@ -1423,6 +1438,29 @@ class WhatsAppClient {
       });
 
       socket.ev.on('creds.update', saveCreds);
+
+      socket.ev.on('contacts.upsert', (contacts) => {
+        for (const contact of contacts) {
+          const jid = String(contact.id || '');
+          if (jid && jid.endsWith('@s.whatsapp.net') && jid !== 'status@broadcast') {
+            const contactName = contact.name || contact.notify || '';
+            this.contactsCache.set(jid, contactName ? { name: contactName } : {});
+          }
+        }
+        logger.debug({ count: contacts.length, cacheSize: this.contactsCache.size }, 'Contacts upserted into cache');
+      });
+
+      socket.ev.on('contacts.update', (updates) => {
+        for (const update of updates) {
+          const jid = String(update.id || '');
+          if (jid && jid.endsWith('@s.whatsapp.net') && jid !== 'status@broadcast') {
+            const existing = this.contactsCache.get(jid) || {};
+            const updatedName = update.name || update.notify || existing.name || '';
+            this.contactsCache.set(jid, updatedName ? { ...existing, name: updatedName } : existing);
+          }
+        }
+        logger.debug({ count: updates.length, cacheSize: this.contactsCache.size }, 'Contacts updated in cache');
+      });
 
       socket.ev.on('messages.upsert', async ({ type, messages }) => {
         const list = Array.isArray(messages) ? messages : [];
@@ -2462,6 +2500,7 @@ class WhatsAppClient {
     }
 
     this.groupMetadataCache.clear();
+    this.contactsCache.clear();
     this.recentSentMessages.clear();
     this.recentMessageStatuses.clear();
     this.pendingReceiptUpdates.clear();

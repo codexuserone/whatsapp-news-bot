@@ -1500,6 +1500,18 @@ class WhatsAppClient {
       if (this.isAuthStateCorrupted(message)) {
         logger.warn('Auth state corrupted, clearing and retrying');
         await this.handleCorruptedAuthState(error);
+        return;
+      }
+
+      // Non-auth failures can happen before the socket emits connection.update (e.g. during init).
+      // Schedule a bounded reconnect so the bot can self-heal without manual intervention.
+      if (!this.isPaused && this.reconnectAttempts < this.maxReconnectAttempts) {
+        this.reconnectAttempts++;
+        const baseDelay = Math.min(5000 * Math.pow(2, this.reconnectAttempts), 60000);
+        const jitter = Math.random() * 5000;
+        const delay = baseDelay + jitter;
+        logger.info({ attempt: this.reconnectAttempts, delay }, 'Scheduling reconnect after WhatsApp connect failure');
+        this.scheduleReconnect(delay);
       }
     }
   }

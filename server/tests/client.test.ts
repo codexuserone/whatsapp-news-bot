@@ -25,11 +25,6 @@ jest.mock('../src/whatsapp/authStore', () => {
     }));
 });
 
-jest.mock('../src/db/supabase', () => ({
-    getSupabaseClient: jest.fn(() => null)
-}));
-
-const { getSupabaseClient } = require('../src/db/supabase');
 const WhatsAppClient = require('../src/whatsapp/client');
 
 describe('WhatsAppClient', () => {
@@ -37,7 +32,6 @@ describe('WhatsAppClient', () => {
 
     beforeEach(() => {
         jest.clearAllMocks();
-        (getSupabaseClient as jest.Mock).mockReturnValue(null);
         client = WhatsAppClient();
     });
 
@@ -138,77 +132,16 @@ describe('WhatsAppClient', () => {
         );
     });
 
-    it('should fall back to database recipients when runtime audience is empty', async () => {
-        const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-5' } }));
-        client.socket = { sendMessage };
-        client.contactsCache.clear();
-        client.groupMetadataCache.clear();
-        client.meJid = null;
-
-        const mockSupabase = {
-            from: jest.fn((table: string) => {
-                if (table === 'targets') {
-                    return {
-                        select: jest.fn(() => ({
-                            eq: jest.fn(() => ({
-                                eq: jest.fn(() => ({
-                                    limit: jest.fn(async () => ({
-                                        data: [{ phone_number: '972501234567' }],
-                                        error: null
-                                    }))
-                                }))
-                            }))
-                        }))
-                    };
-                }
-
-                if (table === 'chat_messages') {
-                    return {
-                        select: jest.fn(() => ({
-                            order: jest.fn(() => ({
-                                limit: jest.fn(async () => ({
-                                    data: [
-                                        { remote_jid: '103140015788103@lid' },
-                                        { remote_jid: '120363407220244757@g.us' }
-                                    ],
-                                    error: null
-                                }))
-                            }))
-                        }))
-                    };
-                }
-
-                throw new Error(`Unexpected table ${table}`);
-            })
-        };
-        (getSupabaseClient as jest.Mock).mockReturnValue(mockSupabase);
-
-        await client.sendStatusBroadcast({ text: 'hello' });
-
-        const options = sendMessage.mock.calls[0]?.[2] || {};
-        expect(options.statusJidList).toEqual(expect.arrayContaining(['103140015788103@lid', '972501234567@s.whatsapp.net']));
-        expect(options.statusJidList).not.toContain('120363407220244757@g.us');
-    });
-
-    it('should fail status send when audience is empty and empty audience is not allowed', async () => {
+    it('should fail status send when audience is empty', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-2' } }));
         client.socket = { sendMessage };
         client.contactsCache.clear();
         client.groupMetadataCache.clear();
         client.meJid = null;
 
-        const previous = process.env.WHATSAPP_ALLOW_EMPTY_STATUS_AUDIENCE;
-        delete process.env.WHATSAPP_ALLOW_EMPTY_STATUS_AUDIENCE;
-
         await expect(client.sendStatusBroadcast({ text: 'hello' }))
             .rejects
             .toThrow('No status recipients resolved');
         expect(sendMessage).not.toHaveBeenCalled();
-
-        if (previous === undefined) {
-            delete process.env.WHATSAPP_ALLOW_EMPTY_STATUS_AUDIENCE;
-        } else {
-            process.env.WHATSAPP_ALLOW_EMPTY_STATUS_AUDIENCE = previous;
-        }
     });
 });

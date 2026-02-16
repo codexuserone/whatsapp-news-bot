@@ -9,6 +9,7 @@ const JID_PATTERN =
   /^([0-9+\s\-\(\)]+|status@broadcast|[0-9\-]+@g\.us|[0-9]+(?::[0-9]+)?@s\.whatsapp\.net|[a-z0-9._-]+(?::[0-9]+)?@lid|[a-z0-9._-]+@newsletter(?:_[a-z0-9]+)?)$/i;
 const STATUS_AUDIENCE_JID_PATTERN =
   /^([0-9]{6,}|[0-9]+(?::[0-9]+)?@s\.whatsapp\.net|[a-z0-9._-]+(?::[0-9]+)?@lid)$/i;
+const HEX_COLOR_PATTERN = /^#?[0-9a-f]{6}$/i;
 
 // Validation schemas
 const normalizeOptional = (value: string | null | undefined) => (value === '' ? null : value);
@@ -198,12 +199,44 @@ const schemas = {
     .object({
       message: z.string().max(4096).optional().nullable().transform(normalizeOptional),
       imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      imageDataUrl: z.string().max(12_000_000).optional().nullable().transform(normalizeOptional),
+      videoUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      videoDataUrl: z.string().max(35_000_000).optional().nullable().transform(normalizeOptional),
+      backgroundColor: z
+        .string()
+        .regex(HEX_COLOR_PATTERN, 'backgroundColor must be a hex color like #0f172a')
+        .optional()
+        .nullable()
+        .transform(normalizeOptional),
+      font: optionalInt(0, 8),
+      mediaUploadTimeoutMs: optionalInt(1000, 180000),
       statusJidList: z.array(z.string().regex(STATUS_AUDIENCE_JID_PATTERN)).max(2000).optional()
     })
     .refine(
-      (value: { message?: string | null; imageUrl?: string | null }) => Boolean(value.message || value.imageUrl),
+      (value: {
+        message?: string | null;
+        imageUrl?: string | null;
+        imageDataUrl?: string | null;
+        videoUrl?: string | null;
+        videoDataUrl?: string | null;
+      }) => Boolean(value.message || value.imageUrl || value.imageDataUrl || value.videoUrl || value.videoDataUrl),
       {
-        message: 'message or imageUrl is required'
+        message: 'message, imageUrl, imageDataUrl, videoUrl, or videoDataUrl is required'
+      }
+    )
+    .refine(
+      (value: {
+        imageUrl?: string | null;
+        imageDataUrl?: string | null;
+        videoUrl?: string | null;
+        videoDataUrl?: string | null;
+      }) => {
+        const imageCount = Number(Boolean(value.imageUrl)) + Number(Boolean(value.imageDataUrl));
+        const videoCount = Number(Boolean(value.videoUrl)) + Number(Boolean(value.videoDataUrl));
+        return imageCount + videoCount <= 1;
+      },
+      {
+        message: 'Provide at most one media source (image or video)'
       }
     ),
 

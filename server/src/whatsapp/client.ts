@@ -7,7 +7,6 @@ const logger = require('../utils/logger');
 const withTimeout = require('../utils/withTimeout');
 const { getErrorMessage } = require('../utils/errorUtils');
 const useSupabaseAuthState = require('./authStore');
-const { getSupabaseClient } = require('../db/supabase');
 const { saveIncomingMessages } = require('../services/messageService');
 const { initSchedulers } = require('../services/schedulerService');
 const { runTargetAutoSyncPass } = require('../services/targetSyncService');
@@ -731,8 +730,6 @@ class WhatsAppClient {
       groupMetadata: number;
       env: number;
       me: number;
-      dbTargets: number;
-      dbChatMessages: number;
     };
     warnings: string[];
   } {
@@ -744,9 +741,7 @@ class WhatsAppClient {
       storeChats: 0,
       groupMetadata: 0,
       env: 0,
-      me: 0,
-      dbTargets: 0,
-      dbChatMessages: 0
+      me: 0
     };
     const warnings: string[] = [];
 
@@ -817,92 +812,6 @@ class WhatsAppClient {
     return { participants: resolved, sources, warnings };
   }
 
-  private async resolveStatusAudienceWithFallback(): Promise<{
-    participants: string[];
-    sources: {
-      contactsCache: number;
-      storeContacts: number;
-      storeChats: number;
-      groupMetadata: number;
-      env: number;
-      me: number;
-      dbTargets: number;
-      dbChatMessages: number;
-    };
-    warnings: string[];
-  }> {
-    const baseAudience = this.resolveStatusAudience();
-    if (baseAudience.participants.length) {
-      return baseAudience;
-    }
-
-    const noAudienceWarning = 'No status recipients resolved from contacts/cache/store';
-    const participants = new Set(baseAudience.participants);
-    const sources = { ...baseAudience.sources };
-    const warnings = [...baseAudience.warnings];
-    const addCandidate = (value: unknown, source: 'dbTargets' | 'dbChatMessages') => {
-      const normalized = normalizeStatusAudienceJid(value);
-      if (!normalized) return;
-      if (participants.has(normalized)) return;
-      participants.add(normalized);
-      sources[source] += 1;
-    };
-
-    try {
-      const supabase = getSupabaseClient();
-      if (!supabase) {
-        warnings.push('status-audience-db-unavailable');
-      } else {
-        const [targetsResult, chatMessagesResult] = await Promise.all([
-          supabase
-            .from('targets')
-            .select('phone_number')
-            .eq('active', true)
-            .eq('type', 'individual')
-            .limit(5000),
-          supabase
-            .from('chat_messages')
-            .select('remote_jid')
-            .order('timestamp', { ascending: false })
-            .limit(5000)
-        ]);
-
-        if (targetsResult.error) {
-          warnings.push(`status-audience-db-targets-error:${getErrorMessage(targetsResult.error)}`);
-        } else {
-          for (const row of targetsResult.data || []) {
-            addCandidate((row as { phone_number?: unknown }).phone_number, 'dbTargets');
-          }
-        }
-
-        if (chatMessagesResult.error) {
-          warnings.push(`status-audience-db-chat-messages-error:${getErrorMessage(chatMessagesResult.error)}`);
-        } else {
-          for (const row of chatMessagesResult.data || []) {
-            addCandidate((row as { remote_jid?: unknown }).remote_jid, 'dbChatMessages');
-          }
-        }
-      }
-    } catch (error) {
-      warnings.push(`status-audience-db-fallback-error:${getErrorMessage(error)}`);
-    }
-
-    const resolved = Array.from(participants.values()).sort();
-    if (resolved.length) {
-      return {
-        participants: resolved,
-        sources,
-        warnings: warnings.filter((warning) => warning !== noAudienceWarning)
-      };
-    }
-
-    if (!warnings.includes('No status recipients resolved from contacts/cache/store/db')) {
-      warnings.push('No status recipients resolved from contacts/cache/store/db');
-    }
-
-    return { participants: resolved, sources, warnings };
-  }
-
   getStatusParticipants(): string[] {
     const audience = this.resolveStatusAudience();
     logger.debug(
@@ -917,7 +826,7 @@ class WhatsAppClient {
   }
 
   async getStatusAudience(options?: { sampleSize?: number }) {
-    const audience = await this.resolveStatusAudienceWithFallback();
+    const audience = this.resolveStatusAudience();
     const sampleSize = Math.max(1, Math.min(Number(options?.sampleSize || 25), 200));
     return {
       participantCount: audience.participants.length,
@@ -2538,21 +2447,16 @@ class WhatsAppClient {
         : [];
       const dedupedExplicit = Array.from(new Set(explicitStatusJids));
 
-      const resolvedAudience = await this.resolveStatusAudienceWithFallback();
+      const resolvedAudience = this.resolveStatusAudience();
       const statusJidList = dedupedExplicit.length ? dedupedExplicit : resolvedAudience.participants;
-      const allowEmptyAudience =
-        String(process.env.WHATSAPP_ALLOW_EMPTY_STATUS_AUDIENCE || '')
-          .trim()
-          .toLowerCase() === 'true';
 
-      if (!statusJidList.length && !allowEmptyAudience) {
+      if (!statusJidList.length) {
         throw new Error(
           'No status recipients resolved. Open WhatsApp contacts/chats first or set WHATSAPP_STATUS_AUDIENCE_JIDS.'
         );
       }
 
-      options = { ...options, broadcast: true };
-      if (statusJidList.length) options = { ...options, statusJidList };
+      options = { ...options, broadcast: true, statusJidList };
       logger.debug(
         {
           participantCount: statusJidList.length,

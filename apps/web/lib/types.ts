@@ -248,8 +248,6 @@ export type WhatsAppStatusAudience = {
     groupMetadata: number;
     env: number;
     me: number;
-    dbTargets: number;
-    dbChatMessages: number;
   };
   warnings?: string[];
 };

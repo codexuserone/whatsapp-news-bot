@@ -233,9 +233,7 @@ const WhatsAppPage = () => {
       ['store chats', Number(sources.storeChats || 0)],
       ['group metadata', Number(sources.groupMetadata || 0)],
       ['env', Number(sources.env || 0)],
-      ['me', Number(sources.me || 0)],
-      ['db targets', Number(sources.dbTargets || 0)],
-      ['db chats', Number(sources.dbChatMessages || 0)]
+      ['me', Number(sources.me || 0)]
     ];
     return entries
       .filter(([, value]) => value > 0)

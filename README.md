@@ -113,8 +113,6 @@ WHATSAPP_SYNC_FULL_HISTORY=false
 WHATSAPP_PRESENCE_OFFLINE_INTERVAL_MS=300000
 # Optional status audience override (comma-separated raw numbers / @s.whatsapp.net / @lid JIDs)
 # WHATSAPP_STATUS_AUDIENCE_JIDS=972501234567@s.whatsapp.net,anon_contact_123@lid,972509876543
-# Allow status sends with empty audience (not recommended)
-# WHATSAPP_ALLOW_EMPTY_STATUS_AUDIENCE=false
 WHATSAPP_MAX_VIDEO_BYTES=33554432
 ```
 ### Environment URLs
@@ -164,8 +162,6 @@ WHATSAPP_SYNC_FULL_HISTORY=false
 WHATSAPP_PRESENCE_OFFLINE_INTERVAL_MS=300000
 # Optional status audience override (comma-separated raw numbers / @s.whatsapp.net / @lid JIDs)
 # WHATSAPP_STATUS_AUDIENCE_JIDS=972501234567@s.whatsapp.net,anon_contact_123@lid,972509876543
-# Allow status sends with empty audience (not recommended)
-# WHATSAPP_ALLOW_EMPTY_STATUS_AUDIENCE=false
 WHATSAPP_MAX_VIDEO_BYTES=33554432
 ```
 

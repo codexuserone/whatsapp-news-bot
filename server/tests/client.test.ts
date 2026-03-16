@@ -207,4 +207,28 @@ describe('WhatsAppClient', () => {
             {}
         );
     });
+
+    it('should treat invalid account signature as auth corruption', () => {
+        expect(client.isAuthStateCorrupted('Invalid account signature')).toBe(true);
+    });
+
+    it('should clear auth state when invalid account signature is detected', async () => {
+        const clearState = jest.fn(async () => {});
+        const updateStatus = jest.fn(async () => {});
+        client.authStore = {
+            ...client.authStore,
+            clearState,
+            updateStatus
+        };
+
+        client.scheduleReconnect = jest.fn();
+        client.cleanupSocket = jest.fn();
+        client.socket = { end: jest.fn() };
+
+        await client.handleCorruptedAuthState(new Error('Invalid account signature'));
+
+        expect(clearState).toHaveBeenCalled();
+        expect((updateStatus as any).mock.calls[0]?.[0]).toBe('error');
+        expect(client.scheduleReconnect).toHaveBeenCalledWith(5000);
+    });
 });

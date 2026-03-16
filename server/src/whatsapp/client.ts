@@ -657,6 +657,7 @@ class WhatsAppClient {
       'authenticate data',
       'unsupported state',
       'incorrect private key length',
+      'invalid account signature',
       'senderkeyrecord.deserialize',
       'sender key record',
       'not valid json'

@@ -129,13 +129,8 @@ type CachedNewsletterChat = {
 
 const HARD_REFRESH_RECENT_CONNECTION_GRACE_MS = 2 * 60 * 1000;
 
-const resolveQrTimeoutMs = () => {
-  const parsed = Number(process.env.WHATSAPP_QR_TIMEOUT_MS || '');
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return 90_000;
-  }
-  return Math.min(Math.max(Math.trunc(parsed), 30_000), 300_000);
-};
+const INITIAL_QR_TTL_MS = 60_000;
+const ROTATED_QR_TTL_MS = 20_000;
 
 const redactSensitiveText = (value?: string | null) => {
   const text = String(value || '');
@@ -420,7 +415,7 @@ class WhatsAppClient {
   qrCode: string | null;
   qrGeneratedAtMs: number | null;
   qrExpiresAtMs: number | null;
-  qrTimeoutMs: number;
+  qrGenerationCount: number;
   lastError: string | null;
   lastSeenAt: Date | null;
   instanceId: string;
@@ -488,7 +483,7 @@ class WhatsAppClient {
     this.qrCode = null;
     this.qrGeneratedAtMs = null;
     this.qrExpiresAtMs = null;
-    this.qrTimeoutMs = resolveQrTimeoutMs();
+    this.qrGenerationCount = 0;
     this.lastError = null;
     this.lastSeenAt = null;
     this.instanceId = randomUUID();
@@ -532,6 +527,15 @@ class WhatsAppClient {
     this.qrCode = null;
     this.qrGeneratedAtMs = null;
     this.qrExpiresAtMs = null;
+  }
+
+  resetQrLifecycle(): void {
+    this.clearQrState();
+    this.qrGenerationCount = 0;
+  }
+
+  resolveIncomingQrTtlMs(): number {
+    return this.qrGenerationCount > 0 ? ROTATED_QR_TTL_MS : INITIAL_QR_TTL_MS;
   }
 
   getQrState(): {
@@ -1494,6 +1498,8 @@ class WhatsAppClient {
       const syncFullHistory =
         String(process.env.WHATSAPP_SYNC_FULL_HISTORY || '').trim().toLowerCase() === 'true';
 
+      this.resetQrLifecycle();
+
       const socketConfig: Record<string, unknown> = {
         auth: state,
         printQRInTerminal: false,
@@ -1501,7 +1507,6 @@ class WhatsAppClient {
         markOnlineOnConnect: false,
         emitOwnEvents: true,
         browser,
-        qrTimeout: this.qrTimeoutMs,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: undefined,
         keepAliveIntervalMs: 30000,
@@ -1558,13 +1563,15 @@ class WhatsAppClient {
 
         if (qr) {
           try {
+            const qrTtlMs = this.resolveIncomingQrTtlMs();
             this.qrCode = await qrcode.toDataURL(qr);
             this.qrGeneratedAtMs = Date.now();
-            this.qrExpiresAtMs = this.qrGeneratedAtMs + this.qrTimeoutMs;
+            this.qrExpiresAtMs = this.qrGeneratedAtMs + qrTtlMs;
+            this.qrGenerationCount += 1;
             this.status = 'qr';
             this.lastError = null;
             this.reconnectAttempts = 0;
-            logger.info({ qrTimeoutMs: this.qrTimeoutMs }, 'QR code generated');
+            logger.info({ qrTtlMs, qrGenerationCount: this.qrGenerationCount }, 'QR code generated');
             await authStore.updateStatus('qr_ready', this.qrCode);
           } catch (e) {
             logger.error({ e }, 'Error generating QR code');
@@ -1580,7 +1587,7 @@ class WhatsAppClient {
         if (connection === 'open') {
           this.isConnecting = false;
           this.status = 'connected';
-          this.clearQrState();
+          this.resetQrLifecycle();
           this.lastError = null;
           this.lastSeenAt = new Date();
           this.reconnectAttempts = 0;
@@ -1613,7 +1620,7 @@ class WhatsAppClient {
 
         if (connection === 'close') {
           this.isConnecting = false;
-          this.clearQrState();
+          this.resetQrLifecycle();
           if (this.isPaused) {
             this.status = 'paused';
             this.lastError = 'WhatsApp session paused.';
@@ -2947,7 +2954,7 @@ class WhatsAppClient {
     this.meName = null;
 
     this.status = 'disconnected';
-    this.clearQrState();
+    this.resetQrLifecycle();
     this.lastError = null;
     this.lastSeenAt = null;
 
@@ -3002,7 +3009,7 @@ class WhatsAppClient {
     this.isConnecting = false;
     this.reconnectAttempts = 0;
     this.status = 'disconnected';
-    this.clearQrState();
+    this.resetQrLifecycle();
     this.lastError = null;
 
     // Stop renewing while we clear/recreate auth state.

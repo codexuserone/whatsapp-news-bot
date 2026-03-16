@@ -85,15 +85,21 @@ describe('WhatsAppClient', () => {
         const now = Date.now();
         client.qrCode = 'data:image/png;base64,abc';
         client.qrGeneratedAtMs = now;
-        client.qrExpiresAtMs = now + 90_000;
+        client.qrExpiresAtMs = now + 60_000;
 
         const qrState = client.getQrState();
 
         expect(qrState.qr).toBe('data:image/png;base64,abc');
         expect(qrState.generatedAt).toBe(new Date(now).toISOString());
-        expect(qrState.expiresAt).toBe(new Date(now + 90_000).toISOString());
-        expect(qrState.ttlMs).toBe(90_000);
+        expect(qrState.expiresAt).toBe(new Date(now + 60_000).toISOString());
+        expect(qrState.ttlMs).toBe(60_000);
         expect(typeof qrState.remainingMs).toBe('number');
+    });
+
+    it('should use Baileys default QR lifetimes for initial and rotated codes', () => {
+        expect(client.resolveIncomingQrTtlMs()).toBe(60_000);
+        client.qrGenerationCount = 1;
+        expect(client.resolveIncomingQrTtlMs()).toBe(20_000);
     });
 
     it('should clear expired QR state on read', () => {

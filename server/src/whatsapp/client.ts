@@ -1052,6 +1052,10 @@ class WhatsAppClient {
       baseLogger.warn(...args);
       handleArgs(args);
     };
+    baileysLogger.info = (...args: unknown[]) => {
+      baseLogger.info(...args);
+      handleArgs(args);
+    };
     return baileysLogger;
   }
 

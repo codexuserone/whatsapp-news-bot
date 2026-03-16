@@ -232,6 +232,24 @@ describe('WhatsAppClient', () => {
         expect(client.scheduleReconnect).toHaveBeenCalledWith(5000);
     });
 
+    it('should treat info-level pairing traces as auth corruption', async () => {
+        const corrupted = jest.fn(async () => {});
+        client.handleCorruptedAuthState = corrupted;
+
+        const baileysLogger = client.createBaileysLogger();
+        baileysLogger.info(
+            {
+                trace: 'Error: Invalid account signature\n    at configureSuccessfulPairing (...)'
+            },
+            'error in pairing'
+        );
+
+        await Promise.resolve();
+
+        expect((corrupted as any).mock.calls.length).toBe(1);
+        expect((corrupted as any).mock.calls[0][0].message).toContain('Invalid account signature');
+    });
+
     it('should refuse hard refresh while connected', async () => {
         const clearState = jest.fn(async () => {});
         client.authStore = {

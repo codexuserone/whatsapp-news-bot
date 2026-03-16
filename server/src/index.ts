@@ -400,10 +400,18 @@ const start = async () => {
   app.use(errorHandler);
 
   // SPA fallback - serve index.html for non-API routes
-  app.get('*', (_req: Request, res: Response) => {
-    const indexPath = path.join(publicPath, 'index.html');
-    if (fs.existsSync(indexPath)) {
-      res.sendFile(indexPath);
+  app.get('*', (req: Request, res: Response) => {
+    const requestPath = String(req.path || '/').trim();
+    const normalizedRoute = requestPath === '/' ? 'index' : requestPath.replace(/^\/+|\/+$/g, '');
+    const candidates = [
+      path.join(publicPath, `${normalizedRoute}.html`),
+      path.join(publicPath, normalizedRoute, 'index.html'),
+      path.join(publicPath, 'index.html')
+    ];
+    const pagePath = candidates.find((candidate) => fs.existsSync(candidate));
+
+    if (pagePath) {
+      res.sendFile(pagePath);
     } else {
       res.status(503).send(`
         <!DOCTYPE html>

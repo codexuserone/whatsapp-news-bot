@@ -81,6 +81,34 @@ describe('WhatsAppClient', () => {
         expect(client.lastError).toBeNull();
     });
 
+    it('should expose QR metadata for active QR state', () => {
+        const now = Date.now();
+        client.qrCode = 'data:image/png;base64,abc';
+        client.qrGeneratedAtMs = now;
+        client.qrExpiresAtMs = now + 90_000;
+
+        const qrState = client.getQrState();
+
+        expect(qrState.qr).toBe('data:image/png;base64,abc');
+        expect(qrState.generatedAt).toBe(new Date(now).toISOString());
+        expect(qrState.expiresAt).toBe(new Date(now + 90_000).toISOString());
+        expect(qrState.ttlMs).toBe(90_000);
+        expect(typeof qrState.remainingMs).toBe('number');
+    });
+
+    it('should clear expired QR state on read', () => {
+        client.qrCode = 'data:image/png;base64,expired';
+        client.qrGeneratedAtMs = Date.now() - 120_000;
+        client.qrExpiresAtMs = Date.now() - 1_000;
+
+        const qrState = client.getQrState();
+
+        expect(qrState.qr).toBeNull();
+        expect(client.qrCode).toBeNull();
+        expect(client.qrGeneratedAtMs).toBeNull();
+        expect(client.qrExpiresAtMs).toBeNull();
+    });
+
     it('should resolve status audience from cache/store metadata and own jid', async () => {
         client.contactsCache.set('972501234567@s.whatsapp.net', {});
         client.groupMetadataCache.set('120363000000000000@g.us', {

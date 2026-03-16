@@ -708,7 +708,15 @@ const whatsappRoutes = () => {
   router.get('/qr', asyncHandler(async (req: Request, res: Response) => {
     setNoStoreHeaders(res);
     const whatsapp = req.app.locals.whatsapp;
-    res.json({ qr: whatsapp?.getQrCode() || null });
+    res.json(
+      whatsapp?.getQrState?.() || {
+        qr: null,
+        generatedAt: null,
+        expiresAt: null,
+        ttlMs: null,
+        remainingMs: null
+      }
+    );
   }));
 
   router.get('/groups', asyncHandler(async (req: Request, res: Response) => {

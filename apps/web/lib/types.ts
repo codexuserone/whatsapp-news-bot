@@ -195,6 +195,12 @@ export type WhatsAppStatus = {
   lastError?: string | null;
   lastSeenAt?: string | null;
   hasQr?: boolean;
+  qr?: {
+    generatedAt?: string | null;
+    expiresAt?: string | null;
+    ttlMs?: number | null;
+    remainingMs?: number | null;
+  };
   instanceId?: string;
   sessionId?: string;
   lease?: {
@@ -207,6 +213,14 @@ export type WhatsAppStatus = {
     jid?: string | null;
     name?: string | null;
   };
+};
+
+export type WhatsAppQrState = {
+  qr: string | null;
+  generatedAt?: string | null;
+  expiresAt?: string | null;
+  ttlMs?: number | null;
+  remainingMs?: number | null;
 };
 
 export type WhatsAppOutboxMessage = {

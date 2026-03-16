@@ -129,6 +129,14 @@ type CachedNewsletterChat = {
 
 const HARD_REFRESH_RECENT_CONNECTION_GRACE_MS = 2 * 60 * 1000;
 
+const resolveQrTimeoutMs = () => {
+  const parsed = Number(process.env.WHATSAPP_QR_TIMEOUT_MS || '');
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 90_000;
+  }
+  return Math.min(Math.max(Math.trunc(parsed), 30_000), 300_000);
+};
+
 const redactSensitiveText = (value?: string | null) => {
   const text = String(value || '');
   if (!text) return '';
@@ -410,6 +418,9 @@ class WhatsAppClient {
   status: WhatsAppStatus;
   isPaused: boolean;
   qrCode: string | null;
+  qrGeneratedAtMs: number | null;
+  qrExpiresAtMs: number | null;
+  qrTimeoutMs: number;
   lastError: string | null;
   lastSeenAt: Date | null;
   instanceId: string;
@@ -475,6 +486,9 @@ class WhatsAppClient {
     this.status = 'disconnected';
     this.isPaused = false;
     this.qrCode = null;
+    this.qrGeneratedAtMs = null;
+    this.qrExpiresAtMs = null;
+    this.qrTimeoutMs = resolveQrTimeoutMs();
     this.lastError = null;
     this.lastSeenAt = null;
     this.instanceId = randomUUID();
@@ -512,6 +526,37 @@ class WhatsAppClient {
     this.meJid = null;
     this.meName = null;
     this.hasConnectedOnce = false;
+  }
+
+  clearQrState(): void {
+    this.qrCode = null;
+    this.qrGeneratedAtMs = null;
+    this.qrExpiresAtMs = null;
+  }
+
+  getQrState(): {
+    qr: string | null;
+    generatedAt: string | null;
+    expiresAt: string | null;
+    ttlMs: number | null;
+    remainingMs: number | null;
+  } {
+    if (this.qrExpiresAtMs && this.qrExpiresAtMs <= Date.now()) {
+      this.clearQrState();
+    }
+
+    const remainingMs =
+      this.qrExpiresAtMs && this.qrExpiresAtMs > Date.now()
+        ? Math.max(this.qrExpiresAtMs - Date.now(), 0)
+        : null;
+
+    return {
+      qr: this.qrCode,
+      generatedAt: this.qrGeneratedAtMs ? new Date(this.qrGeneratedAtMs).toISOString() : null,
+      expiresAt: this.qrExpiresAtMs ? new Date(this.qrExpiresAtMs).toISOString() : null,
+      ttlMs: this.qrGeneratedAtMs && this.qrExpiresAtMs ? Math.max(this.qrExpiresAtMs - this.qrGeneratedAtMs, 0) : null,
+      remainingMs
+    };
   }
 
   scheduleReceiptFlush(): void {
@@ -1456,6 +1501,7 @@ class WhatsAppClient {
         markOnlineOnConnect: false,
         emitOwnEvents: true,
         browser,
+        qrTimeout: this.qrTimeoutMs,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: undefined,
         keepAliveIntervalMs: 30000,
@@ -1513,10 +1559,12 @@ class WhatsAppClient {
         if (qr) {
           try {
             this.qrCode = await qrcode.toDataURL(qr);
+            this.qrGeneratedAtMs = Date.now();
+            this.qrExpiresAtMs = this.qrGeneratedAtMs + this.qrTimeoutMs;
             this.status = 'qr';
             this.lastError = null;
             this.reconnectAttempts = 0;
-            logger.info('QR code generated');
+            logger.info({ qrTimeoutMs: this.qrTimeoutMs }, 'QR code generated');
             await authStore.updateStatus('qr_ready', this.qrCode);
           } catch (e) {
             logger.error({ e }, 'Error generating QR code');
@@ -1526,13 +1574,13 @@ class WhatsAppClient {
         if (connection === 'connecting') {
           this.status = 'connecting';
           logger.info('WhatsApp connecting...');
-          await authStore.updateStatus('connecting');
+          await authStore.updateStatus('connecting', null);
         }
 
         if (connection === 'open') {
           this.isConnecting = false;
           this.status = 'connected';
-          this.qrCode = null;
+          this.clearQrState();
           this.lastError = null;
           this.lastSeenAt = new Date();
           this.reconnectAttempts = 0;
@@ -1565,12 +1613,14 @@ class WhatsAppClient {
 
         if (connection === 'close') {
           this.isConnecting = false;
+          this.clearQrState();
           if (this.isPaused) {
             this.status = 'paused';
             this.lastError = 'WhatsApp session paused.';
             this.clearPresenceOfflineHeartbeat();
             this.meJid = null;
             this.meName = null;
+            await authStore.updateStatus('paused', null);
             return;
           }
           const disconnectError = lastDisconnect?.error as { output?: { statusCode?: number; payload?: { message?: string } }; message?: string } | undefined;
@@ -1603,7 +1653,7 @@ class WhatsAppClient {
             logger.info('Restart required, reconnecting');
             this.lastError = null;
             this.status = 'connecting';
-            await authStore.updateStatus('connecting');
+            await authStore.updateStatus('connecting', null);
             this.scheduleReconnect(2000);
             return;
           }
@@ -1632,7 +1682,7 @@ class WhatsAppClient {
             return;
           }
 
-          await authStore.updateStatus('disconnected');
+          await authStore.updateStatus('disconnected', null);
 
           // Auto-reconnect with exponential backoff for other errors
           if (this.reconnectAttempts < this.maxReconnectAttempts) {
@@ -1803,11 +1853,18 @@ class WhatsAppClient {
     lastError: string | null;
     lastSeenAt: Date | null;
     hasQr: boolean;
+    qr: {
+      generatedAt: string | null;
+      expiresAt: string | null;
+      ttlMs: number | null;
+      remainingMs: number | null;
+    };
     me: { jid: string | null; name: string | null };
     instanceId: string;
     sessionId: string;
     lease: { supported: boolean; held: boolean; ownerId: string | null; expiresAt: string | null };
   } {
+    const qrState = this.getQrState();
     if (this.isPaused) {
       this.status = 'paused';
       if (!this.lastError) {
@@ -1817,7 +1874,13 @@ class WhatsAppClient {
         status: this.status,
         lastError: this.lastError,
         lastSeenAt: this.lastSeenAt,
-        hasQr: Boolean(this.qrCode),
+        hasQr: Boolean(qrState.qr),
+        qr: {
+          generatedAt: qrState.generatedAt,
+          expiresAt: qrState.expiresAt,
+          ttlMs: qrState.ttlMs,
+          remainingMs: qrState.remainingMs
+        },
         me: { jid: this.meJid, name: this.meName },
         instanceId: this.instanceId,
         sessionId: this.sessionId,
@@ -1844,7 +1907,13 @@ class WhatsAppClient {
       status: this.status,
       lastError: this.lastError,
       lastSeenAt: this.lastSeenAt,
-      hasQr: Boolean(this.qrCode),
+      hasQr: Boolean(qrState.qr),
+      qr: {
+        generatedAt: qrState.generatedAt,
+        expiresAt: qrState.expiresAt,
+        ttlMs: qrState.ttlMs,
+        remainingMs: qrState.remainingMs
+      },
       me: { jid: this.meJid, name: this.meName },
       instanceId: this.instanceId,
       sessionId: this.sessionId,
@@ -2059,7 +2128,7 @@ class WhatsAppClient {
   }
 
   getQrCode(): string | null {
-    return this.qrCode;
+    return this.getQrState().qr;
   }
 
   async getGroups(): Promise<GroupSummary[]> {
@@ -2878,12 +2947,12 @@ class WhatsAppClient {
     this.meName = null;
 
     this.status = 'disconnected';
-    this.qrCode = null;
+    this.clearQrState();
     this.lastError = null;
     this.lastSeenAt = null;
 
     if (this.authStore?.updateStatus) {
-      await this.authStore.updateStatus('disconnected');
+      await this.authStore.updateStatus('disconnected', null);
     }
   }
 
@@ -2933,7 +3002,7 @@ class WhatsAppClient {
     this.isConnecting = false;
     this.reconnectAttempts = 0;
     this.status = 'disconnected';
-    this.qrCode = null;
+    this.clearQrState();
     this.lastError = null;
 
     // Stop renewing while we clear/recreate auth state.

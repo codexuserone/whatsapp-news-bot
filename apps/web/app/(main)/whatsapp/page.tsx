@@ -4,7 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Target, WhatsAppChannel, WhatsAppGroup, WhatsAppStatus } from '@/lib/types';
+import type { Target, WhatsAppChannel, WhatsAppGroup, WhatsAppQrState, WhatsAppStatus } from '@/lib/types';
 import { dedupeTargets, formatTargetLabel, normalizeDisplayText, normalizeTargetName } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -59,6 +59,19 @@ const isSafeImageSrc = (value: unknown) => {
 
 const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : '');
 
+const formatQrCountdown = (remainingMs: number | null | undefined) => {
+  if (!Number.isFinite(remainingMs) || Number(remainingMs) <= 0) {
+    return 'Refreshing QR...';
+  }
+  const totalSeconds = Math.ceil(Number(remainingMs) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) {
+    return `Expires in ${seconds}s`;
+  }
+  return `Expires in ${minutes}m ${seconds}s`;
+};
+
 const WhatsAppPage = () => {
   const queryClient = useQueryClient();
   const [selectedTargets, setSelectedTargets] = React.useState<string[]>([]);
@@ -70,6 +83,7 @@ const WhatsAppPage = () => {
   const [attachmentMimeType, setAttachmentMimeType] = React.useState('');
   const [attachmentName, setAttachmentName] = React.useState('');
   const [showAdvancedRecovery, setShowAdvancedRecovery] = React.useState(false);
+  const [qrTickMs, setQrTickMs] = React.useState(() => Date.now());
 
   const { data: status, isLoading: statusLoading } = useQuery<WhatsAppStatus>({
     queryKey: ['whatsapp-status'],
@@ -77,12 +91,20 @@ const WhatsAppPage = () => {
     refetchInterval: 3000
   });
 
-  const { data: qr } = useQuery<{ qr: string | null }>({
+  const { data: qr } = useQuery<WhatsAppQrState>({
     queryKey: ['whatsapp-qr'],
     queryFn: () => api.get('/api/whatsapp/qr'),
     refetchInterval: 3000,
     enabled: status?.status !== 'connected' && status?.status !== 'paused'
   });
+
+  React.useEffect(() => {
+    if (!qr?.qr) return undefined;
+    const timer = window.setInterval(() => {
+      setQrTickMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [qr?.qr]);
 
   const { data: groupsRaw, error: groupsError } = useQuery<unknown>({
     queryKey: ['whatsapp-groups'],
@@ -221,6 +243,12 @@ const WhatsAppPage = () => {
   const isConnected = status?.status === 'connected';
   const isPaused = status?.status === 'paused';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
+  const qrExpiresAtMs = qr?.expiresAt ? Date.parse(qr.expiresAt) : Number.NaN;
+  const qrRemainingMs = Number.isFinite(qrExpiresAtMs) ? Math.max(qrExpiresAtMs - qrTickMs, 0) : qr?.remainingMs ?? null;
+  const qrRemainingMsValue = qrRemainingMs ?? 0;
+  const isQrExpired = Boolean(qr?.qr) && ((Number.isFinite(qrExpiresAtMs) && qrRemainingMsValue <= 0) || (!Number.isFinite(qrExpiresAtMs) && Number(qr?.remainingMs || 0) <= 0));
+  const activeQr = isQrExpired ? null : qr?.qr || null;
+  const qrCountdownLabel = formatQrCountdown(isQrExpired ? 0 : qrRemainingMsValue);
   const activeTargets = React.useMemo(() => {
     return existingTargets.filter((target) => target.active && target.type !== 'status');
   }, [existingTargets]);
@@ -480,11 +508,18 @@ const WhatsAppPage = () => {
                 </div>
                 <p className="text-sm text-muted-foreground">Session is active</p>
               </div>
-            ) : qr?.qr && isSafeImageSrc(qr.qr) ? (
+            ) : activeQr && isSafeImageSrc(activeQr) ? (
               <div className="space-y-3 text-center">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={qr.qr} alt="WhatsApp QR Code" className="h-56 w-56 rounded-lg border bg-white p-2 object-contain" />
-                <p className="text-sm text-muted-foreground">Scan with your phone</p>
+                <img src={activeQr} alt="WhatsApp QR Code" className="h-56 w-56 rounded-lg border bg-white p-2 object-contain" />
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Scan with your phone</p>
+                  <p className="text-xs text-muted-foreground">{qrCountdownLabel}</p>
+                </div>
+              </div>
+            ) : qr?.qr && isQrExpired ? (
+              <div className="space-y-3 text-center">
+                <p className="text-sm text-muted-foreground">QR expired. Waiting for the next fresh code...</p>
               </div>
             ) : qr?.qr ? (
               <div className="space-y-3 text-center">

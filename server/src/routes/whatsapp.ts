@@ -2,14 +2,14 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const { validate, schemas } = require('../middleware/validation');
 const asyncHandler = require('../middleware/asyncHandler');
-const { badRequest } = require('../core/errors');
+const { badRequest, conflict } = require('../core/errors');
 const withTimeout = require('../utils/withTimeout');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { safeAxiosRequest } = require('../utils/safeAxios');
 const { getErrorMessage } = require('../utils/errorUtils');
 const { getSupabaseClient } = require('../db/supabase');
 const { normalizeMessageText } = require('../utils/messageText');
-const { ensureWhatsAppConnected } = require('../services/whatsappConnection');
+const { ensureWhatsAppConnected, ensureWhatsAppReadyForOutbound } = require('../services/whatsappConnection');
 const { ensureFreshStatusRecipients, getStatusRecipientSnapshot, refreshStatusRecipients } = require('../services/statusAudienceService');
 const { isNewsletterJid, prepareNewsletterImage, prepareNewsletterVideo } = require('../utils/whatsappMedia');
 const { buildDefaultUserAgent } = require('../utils/httpClientIdentity');
@@ -959,7 +959,15 @@ const whatsappRoutes = () => {
 
   router.post('/hard-refresh', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
-    await whatsapp?.hardRefresh();
+    const force = Boolean((req.body as { force?: unknown } | undefined)?.force);
+    const refreshState =
+      typeof whatsapp?.getHardRefreshState === 'function'
+        ? whatsapp.getHardRefreshState(force)
+        : { allowed: true, reason: null };
+    if (!refreshState.allowed) {
+      throw conflict(refreshState.reason || 'Hard refresh is not allowed right now.');
+    }
+    await whatsapp?.hardRefresh({ force });
     res.json({ ok: true });
   }));
 
@@ -991,36 +999,6 @@ const whatsappRoutes = () => {
   };
 
   const isStatusBroadcast = (jid: string) => jid === 'status@broadcast';
-
-  const ensureConnectedForSend = async (
-    whatsapp: {
-      hardRefresh?: () => Promise<void> | void;
-    } | null | undefined,
-    context: string
-  ) => {
-    const fastPath = await ensureWhatsAppConnected(whatsapp, {
-      attempts: 8,
-      delayMs: 900,
-      triggerReconnect: true,
-      triggerTakeover: true,
-      logContext: context
-    });
-    if (fastPath) return true;
-
-    try {
-      await Promise.resolve(whatsapp?.hardRefresh?.());
-    } catch {
-      // Best effort only.
-    }
-
-    return ensureWhatsAppConnected(whatsapp, {
-      attempts: 20,
-      delayMs: 1000,
-      triggerReconnect: true,
-      triggerTakeover: true,
-      logContext: `${context} (post hard-refresh)`
-    });
-  };
 
   // Send a test message
   router.post('/send-test', validate(schemas.testMessage), asyncHandler(async (req: Request, res: Response) => {
@@ -1100,7 +1078,13 @@ const whatsappRoutes = () => {
                 : null;
 	    const requestedMediaUrl = videoUrl || audioUrl || documentUrl || imageUrl || null;
 	    let mediaWarning: string | null = null;
-	    const connected = await ensureConnectedForSend(whatsapp, 'send-test route');
+	    const connected = await ensureWhatsAppReadyForOutbound(whatsapp, {
+	      attempts: 8,
+	      delayMs: 900,
+	      triggerReconnect: true,
+	      triggerTakeover: true,
+	      logContext: 'send-test route'
+	    });
 	    if (!connected) {
 	      throw badRequest('WhatsApp is not connected');
 	    }
@@ -1486,7 +1470,13 @@ const whatsappRoutes = () => {
     };
     const normalizedMessage = normalizeMessageText(String(message || ''));
 
-    const connected = await ensureConnectedForSend(whatsapp, 'send-status route');
+    const connected = await ensureWhatsAppReadyForOutbound(whatsapp, {
+      attempts: 8,
+      delayMs: 900,
+      triggerReconnect: true,
+      triggerTakeover: true,
+      logContext: 'send-status route'
+    });
 
     if (!connected) {
       throw badRequest('WhatsApp is not connected');

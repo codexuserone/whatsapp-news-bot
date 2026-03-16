@@ -127,6 +127,8 @@ type CachedNewsletterChat = {
   updatedAtMs: number;
 };
 
+const HARD_REFRESH_RECENT_CONNECTION_GRACE_MS = 2 * 60 * 1000;
+
 const redactSensitiveText = (value?: string | null) => {
   const text = String(value || '');
   if (!text) return '';
@@ -2524,11 +2526,45 @@ class WhatsAppClient {
           name: normalizedIndividual.replace('@s.whatsapp.net', ''),
           source: 'individual_jid',
           exists
-        };
-      }
+      };
     }
+  }
 
     return null;
+  }
+
+  getHardRefreshState(force = false): { allowed: boolean; reason: string | null } {
+    if (force) {
+      return { allowed: true, reason: null };
+    }
+
+    const currentStatus = String(this.status || 'unknown');
+    if (currentStatus === 'connected') {
+      return {
+        allowed: false,
+        reason: 'WhatsApp is already connected. Use reconnect or takeover instead of hard refresh.'
+      };
+    }
+
+    if (currentStatus === 'connecting') {
+      return {
+        allowed: false,
+        reason: 'WhatsApp is still connecting. Wait before forcing a new QR.'
+      };
+    }
+
+    const lastSeenAtMs = this.lastSeenAt instanceof Date ? this.lastSeenAt.getTime() : Number.NaN;
+    const recentlyConnected =
+      Number.isFinite(lastSeenAtMs) && Date.now() - lastSeenAtMs < HARD_REFRESH_RECENT_CONNECTION_GRACE_MS;
+
+    if (recentlyConnected) {
+      return {
+        allowed: false,
+        reason: 'WhatsApp connected recently. Wait before forcing a new QR.'
+      };
+    }
+
+    return { allowed: true, reason: null };
   }
 
   async sendMessage(jid: string, content: AnyMessageContent, options: Record<string, unknown> = {}) {
@@ -2840,12 +2876,19 @@ class WhatsAppClient {
     }
   }
 
-  async hardRefresh(): Promise<void> {
+  async hardRefresh(options?: { force?: boolean }): Promise<void> {
     if (this.isPaused) {
       this.status = 'paused';
       this.lastError = 'WhatsApp is paused. Resume before hard refresh.';
       return;
     }
+
+    const refreshState = this.getHardRefreshState(Boolean(options?.force));
+    if (!refreshState.allowed) {
+      this.lastError = refreshState.reason;
+      throw new Error(refreshState.reason || 'Hard refresh is not allowed right now.');
+    }
+
     // Clear any pending reconnect
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);

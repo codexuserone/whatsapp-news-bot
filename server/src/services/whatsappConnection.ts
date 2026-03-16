@@ -2,7 +2,7 @@ const sleep = require('../utils/sleep');
 const logger = require('../utils/logger');
 
 type WhatsAppLikeClient = {
-  getStatus?: () => { status?: string };
+  getStatus?: () => { status?: string; lastSeenAt?: Date | null };
   reconnect?: () => Promise<void> | void;
   takeoverLease?: (
     ttlMs?: number
@@ -84,6 +84,28 @@ const ensureWhatsAppConnected = async (
   return false;
 };
 
+const ensureWhatsAppReadyForOutbound = async (
+  whatsappClient?: WhatsAppLikeClient | null,
+  options?: EnsureConnectedOptions
+) => {
+  if (!whatsappClient) return false;
+
+  const fastPath = await ensureWhatsAppConnected(whatsappClient, options);
+  if (fastPath) return true;
+
+  const status = String(whatsappClient.getStatus?.().status || 'unknown');
+  if (status === 'paused' || status === 'qr' || status === 'qr_ready') {
+    return false;
+  }
+
+  return ensureWhatsAppConnected(whatsappClient, {
+    ...options,
+    attempts: Math.max(Number(options?.attempts || 1), 12),
+    delayMs: Math.max(Number(options?.delayMs || 1000), 1000)
+  });
+};
+
 module.exports = {
-  ensureWhatsAppConnected
+  ensureWhatsAppConnected,
+  ensureWhatsAppReadyForOutbound
 };

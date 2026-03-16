@@ -231,4 +231,56 @@ describe('WhatsAppClient', () => {
         expect((updateStatus as any).mock.calls[0]?.[0]).toBe('error');
         expect(client.scheduleReconnect).toHaveBeenCalledWith(5000);
     });
+
+    it('should refuse hard refresh while connected', async () => {
+        const clearState = jest.fn(async () => {});
+        client.authStore = {
+            ...client.authStore,
+            clearState
+        };
+        client.status = 'connected';
+        client.lastSeenAt = new Date();
+        client.connect = jest.fn();
+
+        await expect(client.hardRefresh()).rejects.toThrow(
+            'WhatsApp is already connected. Use reconnect or takeover instead of hard refresh.'
+        );
+
+        expect(clearState).not.toHaveBeenCalled();
+        expect(client.connect).not.toHaveBeenCalled();
+    });
+
+    it('should refuse hard refresh shortly after a successful connection', async () => {
+        const clearState = jest.fn(async () => {});
+        client.authStore = {
+            ...client.authStore,
+            clearState
+        };
+        client.status = 'disconnected';
+        client.lastSeenAt = new Date(Date.now() - 30_000);
+        client.connect = jest.fn();
+
+        await expect(client.hardRefresh()).rejects.toThrow(
+            'WhatsApp connected recently. Wait before forcing a new QR.'
+        );
+
+        expect(clearState).not.toHaveBeenCalled();
+        expect(client.connect).not.toHaveBeenCalled();
+    });
+
+    it('should allow forced hard refresh shortly after a successful connection', async () => {
+        const clearState = jest.fn(async () => {});
+        client.authStore = {
+            ...client.authStore,
+            clearState
+        };
+        client.status = 'disconnected';
+        client.lastSeenAt = new Date(Date.now() - 30_000);
+        client.connect = jest.fn(async () => {});
+
+        await client.hardRefresh({ force: true });
+
+        expect(clearState).toHaveBeenCalled();
+        expect(client.connect).toHaveBeenCalled();
+    });
 });

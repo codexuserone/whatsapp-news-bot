@@ -41,6 +41,34 @@ describe('WhatsAppClient', () => {
         expect(client.instanceId).toBeDefined();
     });
 
+    it('should default browser tuples to a real browser name', () => {
+        const originalPlatform = process.env.WHATSAPP_BROWSER_PLATFORM;
+        const originalBrowserName = process.env.WHATSAPP_BROWSER_NAME;
+
+        process.env.WHATSAPP_BROWSER_PLATFORM = 'ubuntu';
+        delete process.env.WHATSAPP_BROWSER_NAME;
+
+        const tuple = WhatsAppClient.resolveBrowserTuple(
+            {
+                ubuntu: (name: string) => ['Ubuntu', name, '22.04.4']
+            },
+            'Chrome'
+        );
+
+        expect(tuple).toEqual(['Ubuntu', 'Chrome', '22.04.4']);
+
+        if (originalPlatform === undefined) {
+            delete process.env.WHATSAPP_BROWSER_PLATFORM;
+        } else {
+            process.env.WHATSAPP_BROWSER_PLATFORM = originalPlatform;
+        }
+        if (originalBrowserName === undefined) {
+            delete process.env.WHATSAPP_BROWSER_NAME;
+        } else {
+            process.env.WHATSAPP_BROWSER_NAME = originalBrowserName;
+        }
+    });
+
     it('should have a clean initial state', () => {
         expect(client.qrCode).toBeNull();
         expect(client.lastError).toBeNull();

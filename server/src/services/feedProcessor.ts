@@ -5,6 +5,7 @@ const { isDuplicateFeedItem } = require('./dedupeService');
 const { isScheduleRunning } = require('./scheduleState');
 const settingsService = require('./settingsService');
 const { getErrorMessage } = require('../utils/errorUtils');
+const { normalizeFeedMedia } = require('../utils/feedMedia');
 
 type FeedConfig = {
   id: string;
@@ -29,6 +30,8 @@ type FeedItemInput = {
   content?: string;
   author?: string;
   imageUrl?: string;
+  mediaUrl?: string;
+  mediaKind?: 'image' | 'video';
   publishedAt?: string | Date;
   categories?: string[];
   raw?: Record<string, unknown>;
@@ -188,6 +191,15 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
         ? item.categories.map((entry) => String(entry || '')).filter(Boolean)
         : [];
       const normalizedPubDate = normalizeIso(item.publishedAt);
+      const normalizedMedia = normalizeFeedMedia({
+        mediaUrl: item.mediaUrl,
+        mediaKind: item.mediaKind,
+        imageUrl: item.imageUrl,
+        rawData: rawInput
+      });
+      if (normalizedMedia.mediaUrl) rawData.media_url = normalizedMedia.mediaUrl;
+      if (normalizedMedia.mediaKind) rawData.media_kind = normalizedMedia.mediaKind;
+      if (normalizedMedia.imageUrl) rawData.image_url = normalizedMedia.imageUrl;
 
       for (const [key, value] of Object.entries(rawInput)) {
         if (value == null) continue;
@@ -201,8 +213,8 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
         title: item.title || null,
         link: item.url || null,
         description: descriptionForStorage || null,
-        image_url: item.imageUrl || null,
-        image_source: item.imageUrl ? 'feed' : null,
+        image_url: normalizedMedia.imageUrl || null,
+        image_source: normalizedMedia.mediaUrl ? 'feed' : null,
         pub_date: normalizedPubDate,
         normalized_url: normalizedUrlValue || null,
         content_hash: contentHash || null,
@@ -254,6 +266,10 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
 
       if (existingItem) {
         const existingRecord = existingItem as Record<string, unknown>;
+        const existingRawData =
+          existingRecord.raw_data && typeof existingRecord.raw_data === 'object'
+            ? (existingRecord.raw_data as Record<string, unknown>)
+            : {};
         const hasChanges =
           normalizeComparableText(existingRecord.title) !== normalizeComparableText(incomingPayload.title) ||
           normalizeComparableText(existingRecord.link) !== normalizeComparableText(incomingPayload.link) ||
@@ -261,6 +277,8 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
           normalizeComparableText(existingRecord.content) !== normalizeComparableText(incomingPayload.content) ||
           normalizeComparableText(existingRecord.author) !== normalizeComparableText(incomingPayload.author) ||
           normalizeComparableText(existingRecord.image_url) !== normalizeComparableText(incomingPayload.image_url) ||
+          normalizeComparableText(existingRawData.media_url) !== normalizeComparableText(rawData.media_url) ||
+          normalizeComparableText(existingRawData.media_kind) !== normalizeComparableText(rawData.media_kind) ||
           normalizeIso(existingRecord.pub_date as string | Date | null | undefined) !== normalizeIso(normalizedPubDate) ||
           normalizeComparableText(existingRecord.content_hash) !== normalizeComparableText(incomingPayload.content_hash) ||
           normalizeComparableList(existingRecord.categories).join('|') !==

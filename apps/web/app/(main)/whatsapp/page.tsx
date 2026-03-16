@@ -4,7 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Target, WhatsAppChannel, WhatsAppGroup, WhatsAppStatus, WhatsAppStatusAudience } from '@/lib/types';
+import type { Target, WhatsAppChannel, WhatsAppGroup, WhatsAppStatus } from '@/lib/types';
 import { dedupeTargets, formatTargetLabel, normalizeDisplayText, normalizeTargetName } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -63,6 +63,7 @@ const WhatsAppPage = () => {
   const [attachmentDataUrl, setAttachmentDataUrl] = React.useState('');
   const [attachmentMimeType, setAttachmentMimeType] = React.useState('');
   const [attachmentName, setAttachmentName] = React.useState('');
+  const [showAdvancedRecovery, setShowAdvancedRecovery] = React.useState(false);
 
   const { data: status, isLoading: statusLoading } = useQuery<WhatsAppStatus>({
     queryKey: ['whatsapp-status'],
@@ -75,13 +76,6 @@ const WhatsAppPage = () => {
     queryFn: () => api.get('/api/whatsapp/qr'),
     refetchInterval: 3000,
     enabled: status?.status !== 'connected' && status?.status !== 'paused'
-  });
-
-  const { data: statusAudience } = useQuery<WhatsAppStatusAudience>({
-    queryKey: ['whatsapp-status-audience'],
-    queryFn: () => api.get('/api/whatsapp/status-audience'),
-    refetchInterval: 15000,
-    enabled: status?.status === 'connected'
   });
 
   const { data: groupsRaw, error: groupsError } = useQuery<unknown>({
@@ -98,7 +92,8 @@ const WhatsAppPage = () => {
 
   const { data: existingTargetsRaw } = useQuery<unknown>({
     queryKey: ['targets'],
-    queryFn: () => api.get('/api/targets')
+    queryFn: () => api.get('/api/targets'),
+    refetchInterval: status?.status === 'connected' ? 10000 : 30000
   });
 
   const groups = React.useMemo<WhatsAppGroup[]>(() => {
@@ -220,42 +215,20 @@ const WhatsAppPage = () => {
   const isConnected = status?.status === 'connected';
   const isPaused = status?.status === 'paused';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
-  const statusAudienceWarnings = React.useMemo(() => {
-    if (!Array.isArray(statusAudience?.warnings)) return [];
-    return statusAudience.warnings.filter((value): value is string => Boolean(String(value || '').trim()));
-  }, [statusAudience]);
-  const statusAudienceSourceSummary = React.useMemo(() => {
-    const sources = statusAudience?.sources;
-    if (!sources) return '';
-    const entries: Array<[string, number]> = [
-      ['contacts cache', Number(sources.contactsCache || 0)],
-      ['store contacts', Number(sources.storeContacts || 0)],
-      ['store chats', Number(sources.storeChats || 0)],
-      ['group metadata', Number(sources.groupMetadata || 0)],
-      ['env', Number(sources.env || 0)],
-      ['me', Number(sources.me || 0)]
-    ];
-    return entries
-      .filter(([, value]) => value > 0)
-      .map(([label, value]) => `${label}: ${value}`)
-      .join(' | ');
-  }, [statusAudience]);
   const activeTargets = React.useMemo(() => {
-    return existingTargets.filter((target) => target.active);
+    return existingTargets.filter((target) => target.active && target.type !== 'status');
   }, [existingTargets]);
   const groupedTargets = React.useMemo(() => {
     const groups = activeTargets.filter((target) => target.type === 'group');
     const channels = activeTargets.filter((target) => target.type === 'channel');
-    const statusTargets = activeTargets.filter((target) => target.type === 'status');
     const individuals = activeTargets.filter((target) => target.type === 'individual');
-    return { groups, channels, statusTargets, individuals };
+    return { groups, channels, individuals };
   }, [activeTargets]);
   const targetBuckets = React.useMemo(
     () => ({
       all: activeTargets.map((target) => target.phone_number),
       group: groupedTargets.groups.map((target) => target.phone_number),
       channel: groupedTargets.channels.map((target) => target.phone_number),
-      status: groupedTargets.statusTargets.map((target) => target.phone_number),
       individual: groupedTargets.individuals.map((target) => target.phone_number)
     }),
     [activeTargets, groupedTargets]
@@ -385,20 +358,8 @@ const WhatsAppPage = () => {
               {pauseSession.isPending ? 'Pausing...' : 'Pause'}
             </Button>
           )}
-          {!isConnected && !isPaused ? (
-            <Button onClick={() => refreshQr.mutate()} disabled={refreshQr.isPending}>
-              <RefreshCw className={`mr-2 h-4 w-4 ${refreshQr.isPending ? 'animate-spin' : ''}`} />
-              {refreshQr.isPending ? 'Refreshing QR...' : 'Get QR code'}
-            </Button>
-          ) : null}
-          {/* Keep disconnect available for advanced recovery, but prefer Pause/Resume for phone sync issues. */}
-          <Button
-            variant="ghost"
-            onClick={() => disconnect.mutate()}
-            disabled={disconnect.isPending || !isConnected}
-            className="hidden sm:inline-flex"
-          >
-            {disconnect.isPending ? 'Disconnecting...' : 'Disconnect'}
+          <Button type="button" variant="ghost" onClick={() => setShowAdvancedRecovery((current) => !current)}>
+            {showAdvancedRecovery ? 'Hide recovery tools' : 'Advanced recovery'}
           </Button>
         </div>
       </div>
@@ -418,33 +379,11 @@ const WhatsAppPage = () => {
                 <span className="text-muted-foreground">Account</span>
                 <span className="font-medium">{status?.me?.name || (isConnected ? 'Connected account' : 'Not connected')}</span>
               </div>
-              {isConnected ? (
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Status audience</span>
-                  <span className="font-medium">{Number(statusAudience?.participantCount || 0)} recipients</span>
-                </div>
-              ) : null}
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Synced destinations</span>
+                <span className="font-medium">{activeTargets.length}</span>
+              </div>
             </div>
-
-            {isConnected && Number(statusAudience?.participantCount || 0) === 0 ? (
-              <div className="rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
-                Status recipients are empty. Send/receive at least one direct chat first, or set
-                <code className="mx-1 rounded bg-background px-1 py-0.5 text-xs">WHATSAPP_STATUS_AUDIENCE_JIDS</code>
-                on the backend.
-              </div>
-            ) : null}
-
-            {isConnected && statusAudienceSourceSummary ? (
-              <div className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
-                Sources: {statusAudienceSourceSummary}
-              </div>
-            ) : null}
-
-            {isConnected && statusAudienceWarnings.length > 0 ? (
-              <div className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
-                {statusAudienceWarnings.slice(0, 2).join(' | ')}
-              </div>
-            ) : null}
 
             {status?.lastError ? (
               <div
@@ -465,6 +404,30 @@ const WhatsAppPage = () => {
             ) : !isConnected && !isQrReady ? (
               <div className="rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
                 Tap <strong>Get QR code</strong> to request a fresh login QR.
+              </div>
+            ) : null}
+
+            {showAdvancedRecovery ? (
+              <div className="space-y-2 rounded-lg border p-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Recovery tools</p>
+                <div className="flex flex-wrap gap-2">
+                  {!isConnected && !isPaused ? (
+                    <Button onClick={() => refreshQr.mutate()} disabled={refreshQr.isPending} variant="outline">
+                      <RefreshCw className={`mr-2 h-4 w-4 ${refreshQr.isPending ? 'animate-spin' : ''}`} />
+                      {refreshQr.isPending ? 'Refreshing QR...' : 'Get QR code'}
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="outline"
+                    onClick={() => disconnect.mutate()}
+                    disabled={disconnect.isPending || !isConnected}
+                  >
+                    {disconnect.isPending ? 'Disconnecting...' : 'Disconnect'}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Use these only if pause/resume does not recover the session.
+                </p>
               </div>
             ) : null}
           </CardContent>
@@ -574,15 +537,6 @@ const WhatsAppPage = () => {
                   type="button"
                   size="sm"
                   variant="outline"
-                  onClick={() => setSelectedTargets(targetBuckets.status)}
-                  disabled={!targetBuckets.status.length}
-                >
-                  Status ({targetBuckets.status.length})
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
                   onClick={() => setSelectedTargets(targetBuckets.individual)}
                   disabled={!targetBuckets.individual.length}
                 >
@@ -597,7 +551,6 @@ const WhatsAppPage = () => {
                     {[
                       { label: 'Channels', items: groupedTargets.channels },
                       { label: 'Groups', items: groupedTargets.groups },
-                      { label: 'Status', items: groupedTargets.statusTargets },
                       { label: 'Individuals', items: groupedTargets.individuals }
                     ].map((group) =>
                       group.items.length ? (

@@ -494,7 +494,7 @@ const QueueInner = () => {
           <h1 className="text-3xl font-bold tracking-tight">Outgoing Queue</h1>
           <p className="text-muted-foreground">Review what is waiting to send, fix items, or send one right away.</p>
           <p className="text-xs text-muted-foreground">Queued items are shown in send order (oldest publish time first).</p>
-          <p className="text-xs text-muted-foreground mt-1">Feed Items = fetched stories, Queue = editable pending sends, Logs = sent history.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Stories appear in Feed Items first. This page shows only the sendable queue and recent delivery results.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button

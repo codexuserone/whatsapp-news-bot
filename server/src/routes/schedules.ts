@@ -59,7 +59,7 @@ const scheduleRoutes = () => {
     next.state = state.state;
     next.active = state.active;
 
-    if (options?.forInsert && mode === 'batched') {
+    if (options?.forInsert) {
       next.last_queued_at = new Date().toISOString();
     }
 
@@ -69,11 +69,6 @@ const scheduleRoutes = () => {
   const dispatchImmediate = (scheduleId: string, whatsappClient: unknown) =>
     runAsync(`Dispatch schedule ${scheduleId}`, async () => {
       await sendQueuedForSchedule(scheduleId, whatsappClient as never);
-    });
-
-  const primeQueue = (scheduleId: string) =>
-    runAsync(`Prime queue ${scheduleId}`, async () => {
-      await queueLatestForSchedule(scheduleId);
     });
 
   const getDb = () => {
@@ -162,9 +157,6 @@ const scheduleRoutes = () => {
         schedule?.delivery_mode !== 'batch'
       ) {
         dispatchImmediate(schedule.id, req.app.locals.whatsapp);
-      } else if (isScheduleRunning(schedule)) {
-        // Scheduled/batch automations should still show pending queue rows right away.
-        primeQueue(schedule.id);
       }
       res.json({
         ...schedule,
@@ -249,8 +241,6 @@ const scheduleRoutes = () => {
         schedule?.delivery_mode !== 'batch'
       ) {
         dispatchImmediate(schedule.id, req.app.locals.whatsapp);
-      } else if (isScheduleRunning(schedule)) {
-        primeQueue(schedule.id);
       }
       res.json({
         ...schedule,
@@ -311,6 +301,8 @@ const scheduleRoutes = () => {
       };
       if (nextState.state !== 'active') {
         updatePayload.next_run_at = null;
+      } else if (!String((currentSchedule as { last_queued_at?: string | null }).last_queued_at || '').trim()) {
+        updatePayload.last_queued_at = new Date().toISOString();
       }
 
       let warning: string | null = null;
@@ -367,8 +359,6 @@ const scheduleRoutes = () => {
         schedule?.delivery_mode !== 'batch'
       ) {
         dispatchImmediate(schedule.id, req.app.locals.whatsapp);
-      } else if (isScheduleRunning(schedule)) {
-        primeQueue(schedule.id);
       }
 
       res.json({

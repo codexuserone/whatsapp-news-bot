@@ -82,12 +82,13 @@ type DiscoverChannelsResponse = {
 const TargetsPage = () => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
-  const [filterType, setFilterType] = useState<'all' | Target['type']>('all');
+  const [filterType, setFilterType] = useState<'all' | Exclude<Target['type'], 'status'>>('all');
   const [addValue, setAddValue] = useState('');
   const [addNotice, setAddNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [discoveryNotice, setDiscoveryNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Target | null>(null);
   const [editingTargetId, setEditingTargetId] = useState<string | null>(null);
+  const [showAdvancedTools, setShowAdvancedTools] = useState(false);
   const [delayDraft, setDelayDraft] = useState<{
     message_delay_ms_override: string;
     inter_target_delay_sec_override: string;
@@ -100,7 +101,8 @@ const TargetsPage = () => {
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
     queryKey: ['targets'],
-    queryFn: () => api.get('/api/targets')
+    queryFn: () => api.get('/api/targets'),
+    refetchInterval: 15000
   });
 
   const { data: waStatus } = useQuery<WhatsAppStatus>({
@@ -113,13 +115,15 @@ const TargetsPage = () => {
   const { data: waGroupsRaw } = useQuery<unknown>({
     queryKey: ['whatsapp-groups'],
     queryFn: () => api.get('/api/whatsapp/groups'),
-    enabled: isConnected
+    enabled: isConnected,
+    refetchInterval: isConnected ? 15000 : false
   });
 
   const { data: waChannelsRaw } = useQuery<unknown>({
     queryKey: ['whatsapp-channels'],
     queryFn: () => api.get('/api/whatsapp/channels'),
-    enabled: isConnected
+    enabled: isConnected,
+    refetchInterval: isConnected ? 15000 : false
   });
 
   const { data: channelDiagnosticsRaw, refetch: refetchChannelDiagnostics } = useQuery<ChannelDiagnosticsResponse>({
@@ -204,7 +208,9 @@ const TargetsPage = () => {
     }
   });
 
-  const filteredTargets = targets.filter((target) => {
+  const visibleTargets = targets.filter((target) => target.type !== 'status');
+
+  const filteredTargets = visibleTargets.filter((target) => {
     const matchesSearch =
       !search ||
       target.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -213,12 +219,11 @@ const TargetsPage = () => {
     return matchesSearch && matchesType;
   });
 
-  const counts: Record<'all' | Target['type'], number> = {
-    all: targets.length,
-    group: targets.filter((target) => target.type === 'group').length,
-    channel: targets.filter((target) => target.type === 'channel').length,
-    status: targets.filter((target) => target.type === 'status').length,
-    individual: targets.filter((target) => target.type === 'individual').length
+  const counts: Record<'all' | Exclude<Target['type'], 'status'>, number> = {
+    all: visibleTargets.length,
+    group: visibleTargets.filter((target) => target.type === 'group').length,
+    channel: visibleTargets.filter((target) => target.type === 'channel').length,
+    individual: visibleTargets.filter((target) => target.type === 'individual').length
   };
 
   return (
@@ -237,7 +242,7 @@ const TargetsPage = () => {
             <div className="flex-1">
               <h3 className="font-medium">WhatsApp not connected</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                Connect WhatsApp once. Groups/channels/status will sync here automatically.
+                Connect WhatsApp once. Groups and channels will sync here automatically.
               </p>
               <Button variant="outline" size="sm" className="mt-3" asChild>
                 <Link href="/whatsapp">Open WhatsApp Console</Link>
@@ -256,15 +261,8 @@ const TargetsPage = () => {
                 </CardTitle>
                 <CardDescription>Groups and channels are discovered from your live WhatsApp session.</CardDescription>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => discoverChannels.mutate()}
-                disabled={discoverChannels.isPending}
-              >
-                {discoverChannels.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-                Discover channels now
+              <Button type="button" variant="ghost" size="sm" onClick={() => setShowAdvancedTools((current) => !current)}>
+                {showAdvancedTools ? 'Hide advanced tools' : 'Advanced tools'}
               </Button>
             </div>
           </CardHeader>
@@ -307,38 +305,54 @@ const TargetsPage = () => {
                 <p className="mt-1">{channelMethodErrors.join(' | ')}</p>
               </div>
             ) : null}
-            <div className="space-y-2 rounded-lg border p-3">
-              <p className="text-sm font-medium">Add from WhatsApp link or JID</p>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <Input
-                  placeholder="Paste link/JID: chat.whatsapp.com/... or whatsapp.com/channel/..."
-                  value={addValue}
-                  onChange={(event) => setAddValue(event.target.value)}
-                  className="min-w-0 flex-1"
-                />
-                <Button
-                  type="button"
-                  onClick={() => {
-                    const value = String(addValue || '').trim();
-                    if (!value) return;
-                    addResolvedTarget.mutate(value);
-                  }}
-                  disabled={addResolvedTarget.isPending || !String(addValue || '').trim()}
-                >
-                  {addResolvedTarget.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
-                  Add
-                </Button>
+            {showAdvancedTools ? (
+              <div className="space-y-3 rounded-lg border p-3">
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => discoverChannels.mutate()}
+                    disabled={discoverChannels.isPending}
+                  >
+                    {discoverChannels.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                    Discover channels now
+                  </Button>
+                </div>
+                <div className="space-y-2 rounded-lg border p-3">
+                  <p className="text-sm font-medium">Add from WhatsApp link or JID</p>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      placeholder="Paste link/JID: chat.whatsapp.com/... or whatsapp.com/channel/..."
+                      value={addValue}
+                      onChange={(event) => setAddValue(event.target.value)}
+                      className="min-w-0 flex-1"
+                    />
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        const value = String(addValue || '').trim();
+                        if (!value) return;
+                        addResolvedTarget.mutate(value);
+                      }}
+                      disabled={addResolvedTarget.isPending || !String(addValue || '').trim()}
+                    >
+                      {addResolvedTarget.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
+                      Add
+                    </Button>
+                  </div>
+                  {addNotice ? (
+                    <p className={addNotice.type === 'success' ? 'text-xs text-success' : 'text-xs text-destructive'}>
+                      {addNotice.message}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Use this only if automatic sync missed a destination.
+                    </p>
+                  )}
+                </div>
               </div>
-              {addNotice ? (
-                <p className={addNotice.type === 'success' ? 'text-xs text-success' : 'text-xs text-destructive'}>
-                  {addNotice.message}
-                </p>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Works with group links, channel links, direct JIDs, status, or phone numbers.
-                </p>
-              )}
-            </div>
+            ) : null}
           </CardContent>
         </Card>
       )}
@@ -362,7 +376,7 @@ const TargetsPage = () => {
           </div>
 
           <div className="flex flex-wrap gap-1 pt-2">
-            {(['all', 'group', 'channel', 'status', 'individual'] as const).map((type) => (
+            {(['all', 'group', 'channel', 'individual'] as const).map((type) => (
               <Button
                 key={type}
                 size="sm"
@@ -384,7 +398,7 @@ const TargetsPage = () => {
             </div>
           ) : filteredTargets.length === 0 ? (
             <div className="py-8 text-center text-muted-foreground">
-              {targets.length === 0 ? 'No targets yet. Connect WhatsApp and wait for auto sync.' : 'No targets match your search.'}
+              {visibleTargets.length === 0 ? 'No targets yet. Connect WhatsApp and wait for auto sync.' : 'No targets match your search.'}
             </div>
           ) : (
             <div className="overflow-x-auto">

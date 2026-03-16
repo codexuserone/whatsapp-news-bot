@@ -99,6 +99,8 @@ export type FeedItem = {
   pub_date?: string | null;
   raw_data?: Record<string, unknown> | null;
   image_url?: string | null;
+  media_url?: string | null;
+  media_kind?: 'image' | 'video' | null | string;
   categories?: string[] | string | null;
   sent?: boolean | null;
   delivery?: {
@@ -137,6 +139,7 @@ export type QueueItem = {
   pub_date?: string | null;
   pub_precision?: 'date' | 'datetime' | null | string;
   image_url?: string | null;
+  media_kind?: 'image' | 'video' | null | string;
   rendered_content?: string | null;
   media_url?: string | null;
   media_type?: string | null;

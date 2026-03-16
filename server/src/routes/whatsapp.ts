@@ -13,6 +13,7 @@ const { ensureWhatsAppConnected } = require('../services/whatsappConnection');
 const { isNewsletterJid, prepareNewsletterImage, prepareNewsletterVideo } = require('../utils/whatsappMedia');
 const { buildDefaultUserAgent } = require('../utils/httpClientIdentity');
 const { normalizeChannelJid, isValidChannelJid } = require('../utils/targetJid');
+const { WHATSAPP_STATUS_ENABLED, WHATSAPP_STATUS_DISABLED_REASON } = require('../config/features');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const DEFAULT_USER_AGENT = buildDefaultUserAgent();
@@ -952,6 +953,9 @@ const whatsappRoutes = () => {
     }
 
     const normalizedJids = Array.from(new Set(requestedJids.map((jid) => normalizeTestJid(jid)).filter(Boolean)));
+    if (!WHATSAPP_STATUS_ENABLED && normalizedJids.some((jid) => isStatusBroadcast(jid))) {
+      throw badRequest(WHATSAPP_STATUS_DISABLED_REASON);
+    }
     const normalizedMessage = normalizeMessageText(String(payload.message || ''));
     const normalizedLink = String(payload.linkUrl || '').trim();
     const imageUrl = payload.imageUrl ? String(payload.imageUrl).trim() : null;
@@ -1219,6 +1223,21 @@ const whatsappRoutes = () => {
 
   // Send to status broadcast
   router.get('/status-audience', asyncHandler(async (req: Request, res: Response) => {
+    if (!WHATSAPP_STATUS_ENABLED) {
+      return res.json({
+        participantCount: 0,
+        sample: [],
+        sources: {
+          contactsCache: 0,
+          storeContacts: 0,
+          storeChats: 0,
+          groupMetadata: 0,
+          env: 0,
+          me: 0
+        },
+        warnings: [WHATSAPP_STATUS_DISABLED_REASON]
+      });
+    }
     const whatsapp = req.app.locals.whatsapp as {
       getStatusAudience?: (options?: { sampleSize?: number }) => Promise<unknown> | unknown;
     } | null;
@@ -1246,6 +1265,9 @@ const whatsappRoutes = () => {
 
   // Send to status broadcast
   router.post('/send-status', validate(schemas.statusMessage), asyncHandler(async (req: Request, res: Response) => {
+    if (!WHATSAPP_STATUS_ENABLED) {
+      throw badRequest(WHATSAPP_STATUS_DISABLED_REASON);
+    }
     const whatsapp = req.app.locals.whatsapp;
     const {
       message,

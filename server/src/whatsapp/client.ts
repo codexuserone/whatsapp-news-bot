@@ -534,8 +534,7 @@ class WhatsAppClient {
           // feed polling + queue work (and so deploy overlaps don't start a second bot).
           try {
             const store = this.authStore;
-            const skipLease = String(process.env.SKIP_WHATSAPP_LEASE || 'false').toLowerCase() === 'true';
-            if (!skipLease && store?.acquireLease) {
+            if (store?.acquireLease) {
               const lease = await store.acquireLease(this.instanceId, 90_000);
               this.leaseSupported = lease.supported;
               this.leaseHeld = lease.ok;
@@ -1221,12 +1220,10 @@ class WhatsAppClient {
 
       // Acquire a cross-instance lease so only one bot connects at a time.
       // This prevents WhatsApp "conflict/replaced" errors during rolling deploys.
-      // Keep lease protection ON by default so deploy overlaps don't fight for the same WA session.
-      const skipLease = String(process.env.SKIP_WHATSAPP_LEASE || 'false').toLowerCase() === 'true';
       // Auto-takeover is intentionally opt-in: forcing takeovers during deploy overlaps can
       // cause WhatsApp "conflict/replaced" churn. Use POST /api/whatsapp/takeover when needed.
       const allowAutoTakeover = String(process.env.WHATSAPP_LEASE_AUTO_TAKEOVER || '').toLowerCase() === 'true';
-      if (!skipLease && authStore.acquireLease) {
+      if (authStore.acquireLease) {
         try {
           const lease = await authStore.acquireLease(this.instanceId, 90_000);
           this.leaseSupported = lease.supported;
@@ -1313,12 +1310,9 @@ class WhatsAppClient {
           return;
         }
       } else {
-        // Lease disabled or not supported - just connect
+        // No lease helper available - proceed without coordinated ownership.
         this.leaseSupported = false;
         this.leaseHeld = true;
-        if (skipLease) {
-          logger.info('WhatsApp lease system disabled via SKIP_WHATSAPP_LEASE');
-        }
       }
 
       if (this.isPaused) {

@@ -19,6 +19,8 @@ const { isScheduleRunning } = require('./scheduleState');
 const { withScheduleLock } = require('./scheduleLockService');
 const { buildDefaultUserAgent } = require('../utils/httpClientIdentity');
 const { normalizeTargetJidForSend } = require('../utils/targetJid');
+const { normalizeFeedMedia } = require('../utils/feedMedia');
+const { WHATSAPP_STATUS_ENABLED, WHATSAPP_STATUS_DISABLED_REASON } = require('../config/features');
 
 type Target = {
   id?: string;
@@ -51,6 +53,7 @@ type FeedItem = {
   image_scrape_error?: string | null;
   pub_date?: string | Date;
   categories?: string[];
+  raw_data?: Record<string, unknown> | null;
 };
 
 type WhatsAppClient = {
@@ -639,16 +642,29 @@ const resolveMediaUrlForFeedItem = async (
   }
 
   let existingUrlIssue: string | null = null;
-  const existing = typeof feedItem.image_url === 'string' ? feedItem.image_url : null;
+  const normalizedMedia = normalizeFeedMedia({
+    mediaUrl:
+      feedItem?.raw_data && typeof feedItem.raw_data === 'object'
+        ? (feedItem.raw_data as Record<string, unknown>).media_url
+        : null,
+    mediaKind:
+      feedItem?.raw_data && typeof feedItem.raw_data === 'object'
+        ? (feedItem.raw_data as Record<string, unknown>).media_kind
+        : null,
+    imageUrl: typeof feedItem.image_url === 'string' ? feedItem.image_url : null,
+    rawData: feedItem.raw_data || null
+  });
+  const existing = normalizedMedia.mediaUrl || null;
   if (existing && isHttpUrl(existing)) {
-    if (isImageUrl(existing)) {
+    const normalizedKind = normalizedMedia.mediaKind || (isVideoUrl(existing) ? 'video' : isImageUrl(existing) ? 'image' : null);
+    if (normalizedKind === 'image') {
       try {
         await assertSafeOutboundUrl(existing);
         return { url: existing, kind: 'image', source: feedItem.image_source || 'feed', scraped: false, error: null };
       } catch (error) {
         existingUrlIssue = getErrorMessage(error);
       }
-    } else if (isVideoUrl(existing)) {
+    } else if (normalizedKind === 'video') {
       try {
         await assertSafeOutboundUrl(existing);
         return { url: existing, kind: 'video', source: feedItem.image_source || 'feed', scraped: false, error: null };
@@ -746,6 +762,22 @@ const buildMessageData = (feedItem: FeedItem) => ({
   author: feedItem.author,
   image_url: feedItem.image_url,
   imageUrl: feedItem.image_url,
+  media_url:
+    typeof feedItem.raw_data === 'object' && feedItem.raw_data
+      ? (feedItem.raw_data as Record<string, unknown>).media_url
+      : '',
+  mediaUrl:
+    typeof feedItem.raw_data === 'object' && feedItem.raw_data
+      ? (feedItem.raw_data as Record<string, unknown>).media_url
+      : '',
+  media_kind:
+    typeof feedItem.raw_data === 'object' && feedItem.raw_data
+      ? (feedItem.raw_data as Record<string, unknown>).media_kind
+      : '',
+  mediaKind:
+    typeof feedItem.raw_data === 'object' && feedItem.raw_data
+      ? (feedItem.raw_data as Record<string, unknown>).media_kind
+      : '',
   normalized_url: (feedItem as unknown as { normalized_url?: string }).normalized_url,
   normalizedUrl: (feedItem as unknown as { normalized_url?: string }).normalized_url,
   content_hash: (feedItem as unknown as { content_hash?: string }).content_hash,
@@ -865,6 +897,9 @@ const sendMessageWithTemplate = async (
 
   if (!target?.phone_number) {
     throw new Error('Target phone number missing');
+  }
+  if (target.type === 'status' && !WHATSAPP_STATUS_ENABLED) {
+    throw new Error(WHATSAPP_STATUS_DISABLED_REASON);
   }
 
   const jid = normalizeTargetJid(target);
@@ -1393,6 +1428,7 @@ type Schedule = {
 type SendQueuedOptions = {
   skipFeedRefresh?: boolean;
   allowOverdueBatchDispatch?: boolean;
+  skipQueueGeneration?: boolean;
 };
 
 const parseBatchTimes = (value: unknown): string[] => {
@@ -1497,8 +1533,11 @@ const queueSinceLastRunForSchedule = async (
   targets: Target[]
 ): Promise<{ queued: number; feedItemCount: number; cursorAt: string | null }> => {
   if (!schedule.feed_id) return { queued: 0, feedItemCount: 0, cursorAt: null };
-  const sinceIso = schedule.last_queued_at || schedule.last_run_at;
-  if (!sinceIso) return { queued: 0, feedItemCount: 0, cursorAt: null };
+  const sinceIso =
+    schedule.last_queued_at ||
+    schedule.last_run_at ||
+    schedule.created_at ||
+    new Date().toISOString();
   if (!targets.length) return { queued: 0, feedItemCount: 0, cursorAt: null };
 
   const targetIds = targets.map((t) => t.id).filter(Boolean) as string[];
@@ -2025,35 +2064,17 @@ const sendQueuedForSchedule = async (
     }
 
     let queuedCount = 0;
-    let queueCursorAt: string | null = null;
+    let queueCursorAt: string | null =
+      schedule.last_queued_at ||
+      schedule.last_run_at ||
+      schedule.created_at ||
+      null;
 
-    if (deliveryMode === 'batched') {
-      const initialCursor =
-        schedule.last_queued_at ||
-        schedule.last_run_at ||
-        schedule.created_at ||
-        new Date().toISOString();
-
-      const scheduleForQueue: Schedule =
-        schedule.last_queued_at || schedule.last_run_at
-          ? schedule
-          : { ...schedule, last_queued_at: initialCursor };
-
-      const sinceResult = await queueSinceLastRunForSchedule(supabase, scheduleForQueue, targets);
-      queuedCount += sinceResult.queued;
-      queueCursorAt = sinceResult.cursorAt || initialCursor;
-    } else if (schedule.last_queued_at || schedule.last_run_at) {
+    if (!options?.skipQueueGeneration) {
       const sinceResult = await queueSinceLastRunForSchedule(supabase, schedule, targets);
       queuedCount += sinceResult.queued;
-      queueCursorAt = sinceResult.cursorAt;
-    } else {
-      const latestResult = await queueLatestForSchedule(scheduleId, { schedule, targets });
-      queuedCount += latestResult.queued;
-      queueCursorAt = latestResult.cursorAt || null;
+      queueCursorAt = sinceResult.cursorAt || queueCursorAt;
     }
-
-    const lookbackHours = Math.max(Number(settings.reconcile_queue_lookback_hours || 12), 1);
-    queuedCount += await queueRecentMissingForSchedule(supabase, schedule, targets, lookbackHours);
 
     // Persist the queue cursor even if we skip sending (e.g. WhatsApp disconnected or Shabbos).
     // This avoids re-scanning the same feed items on every retry.
@@ -3275,7 +3296,8 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
         scheduleId,
         async () =>
           sendQueuedForSchedule(scheduleId, whatsappClient, {
-            allowOverdueBatchDispatch: true
+            allowOverdueBatchDispatch: true,
+            skipQueueGeneration: true
           }),
         { timeoutMs: 300000, skipIfLocked: true }
       );

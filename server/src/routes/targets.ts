@@ -6,6 +6,7 @@ const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const { syncTargetsFromWhatsApp } = require('../services/targetSyncService');
 const { inferTargetType, normalizePhoneForType } = require('../utils/targetJid');
+const { WHATSAPP_STATUS_ENABLED, WHATSAPP_STATUS_DISABLED_REASON } = require('../config/features');
 
 type TargetRow = {
   id?: string;
@@ -198,6 +199,7 @@ const sanitizeStoredTargets = async (supabase: ReturnType<typeof getSupabaseClie
     const shouldDeactivate =
       !normalizedPhone ||
       !isValidPhoneForType(computedType, normalizedPhone) ||
+      (!WHATSAPP_STATUS_ENABLED && computedType === 'status') ||
       (computedType === 'channel' && !normalizedName) ||
       (computedType === 'status' && normalizedPhone !== 'status@broadcast');
 
@@ -253,7 +255,7 @@ const targetRoutes = () => {
           lastOnDemandTargetSyncAtMs = now;
           try {
             await syncTargetsFromWhatsApp(whatsapp, {
-              includeStatus: true,
+              includeStatus: WHATSAPP_STATUS_ENABLED,
               skipIfDisconnected: true,
               strict: true
             });
@@ -296,6 +298,9 @@ const targetRoutes = () => {
     if (!isValidPhoneForType(computedType, normalizedPhone)) {
       return { ok: false, error: `Invalid destination for type "${computedType}"` };
     }
+    if (computedType === 'status' && !WHATSAPP_STATUS_ENABLED) {
+      return { ok: false, error: WHATSAPP_STATUS_DISABLED_REASON };
+    }
 
     return {
       ok: true,
@@ -313,6 +318,7 @@ const targetRoutes = () => {
         getStatus?: () => { status?: string };
       } | null;
       const includeStatus =
+        WHATSAPP_STATUS_ENABLED &&
         String((req.body as { includeStatus?: unknown })?.includeStatus ?? req.query.includeStatus ?? 'true').toLowerCase() !==
         'false';
       const strict =

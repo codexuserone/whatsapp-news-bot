@@ -16,10 +16,12 @@ const buildComposeHref = (item: FeedItem) => {
   const params = new URLSearchParams();
   const title = String(item.title || '').trim();
   const url = String(item.link || '').trim();
-  const imageUrl = String(item.image_url || '').trim();
+  const mediaKind = String(item.media_kind || '').trim().toLowerCase();
+  const mediaUrl = String(item.media_url || item.image_url || '').trim();
   if (title) params.set('title', title);
   if (url) params.set('url', url);
-  if (imageUrl) params.set('imageUrl', imageUrl);
+  if (mediaUrl && mediaKind === 'video') params.set('videoUrl', mediaUrl);
+  if (mediaUrl && mediaKind !== 'video') params.set('imageUrl', mediaUrl);
   const query = params.toString();
   return query ? `/compose?${query}` : '/compose';
 };
@@ -183,7 +185,7 @@ const FeedItemsPage = () => {
                     <TableHeaderCell>Title</TableHeaderCell>
                     <TableHeaderCell className="hidden sm:table-cell">Feed</TableHeaderCell>
                     <TableHeaderCell className="hidden md:table-cell">Link</TableHeaderCell>
-                  <TableHeaderCell className="hidden md:table-cell">Image</TableHeaderCell>
+                  <TableHeaderCell className="hidden md:table-cell">Media</TableHeaderCell>
                   <TableHeaderCell className="hidden lg:table-cell">Published</TableHeaderCell>
                   <TableHeaderCell>Status</TableHeaderCell>
                     <TableHeaderCell className="text-right">Actions</TableHeaderCell>
@@ -216,26 +218,32 @@ const FeedItemsPage = () => {
                         )}
                       </TableCell>
                       <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
-                        {item.image_url ? (
+                        {item.media_url || item.image_url ? (
                           <a
-                            href={item.image_url}
+                            href={item.media_url || item.image_url || '#'}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="flex items-center gap-2"
                           >
-                            <span className="relative h-10 w-10 shrink-0 overflow-hidden rounded border bg-muted">
-                              <Image
-                                src={item.image_url}
-                                alt=""
-                                fill
-                                sizes="40px"
-                                className="object-cover"
-                                unoptimized
-                              />
-                            </span>
+                            {String(item.media_kind || '').toLowerCase() === 'image' && item.image_url ? (
+                              <span className="relative h-10 w-10 shrink-0 overflow-hidden rounded border bg-muted">
+                                <Image
+                                  src={item.image_url}
+                                  alt=""
+                                  fill
+                                  sizes="40px"
+                                  className="object-cover"
+                                  unoptimized
+                                />
+                              </span>
+                            ) : (
+                              <span className="inline-flex h-10 min-w-10 items-center justify-center rounded border bg-muted px-2 text-[10px] font-medium uppercase text-muted-foreground">
+                                {String(item.media_kind || 'media')}
+                              </span>
+                            )}
                             <span className="flex items-center gap-1 text-primary hover:underline">
                               <ExternalLink className="h-3 w-3" />
-                              Image
+                              {String(item.media_kind || '').toLowerCase() === 'video' ? 'Video' : 'Media'}
                             </span>
                           </a>
                         ) : (

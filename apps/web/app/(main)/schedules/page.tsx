@@ -84,20 +84,28 @@ const SchedulesPage = () => {
   const queryClient = useQueryClient();
   const [batchTimeInput, setBatchTimeInput] = React.useState('09:00');
   const [automationNotice, setAutomationNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [showAdvancedOptions, setShowAdvancedOptions] = React.useState(false);
   const { data: schedules = [] } = useQuery<Schedule[]>({
     queryKey: ['schedules'],
     queryFn: () => api.get('/api/schedules'),
     refetchInterval: 5000
   });
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
-  const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
+  const { data: targets = [] } = useQuery<Target[]>({
+    queryKey: ['targets'],
+    queryFn: () => api.get('/api/targets'),
+    refetchInterval: 15000
+  });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
   const { data: settings } = useQuery<{ default_timezone?: string }>({
     queryKey: ['settings'],
     queryFn: () => api.get('/api/settings')
   });
   const [active, setActive] = useState<Schedule | null>(null);
-  const activeTargets = React.useMemo(() => dedupeTargets(targets, { activeOnly: true }), [targets]);
+  const activeTargets = React.useMemo(
+    () => dedupeTargets(targets, { activeOnly: true }).filter((target) => target.type !== 'status'),
+    [targets]
+  );
 
   const formatDateTime = (value?: string | null) => {
     if (!value) return '-';
@@ -549,7 +557,7 @@ const SchedulesPage = () => {
               </div>
 
               <div className="space-y-2">
-                <Label>Dispatch mode</Label>
+                <Label>Send style</Label>
                 <div className="grid grid-cols-2 gap-2">
                   <Button
                     type="button"
@@ -576,7 +584,7 @@ const SchedulesPage = () => {
               {deliveryMode === 'immediate' ? (
                 <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="timing_mode">Send timing</Label>
+                  <Label htmlFor="timing_mode">When should it send?</Label>
                   <Controller
                     control={form.control}
                     name="timing_mode"
@@ -715,30 +723,43 @@ const SchedulesPage = () => {
                 </div>
               )}
 
-              <p className="text-xs text-muted-foreground">First run sends the latest item. Future runs catch up on new items automatically.</p>
+              <p className="text-xs text-muted-foreground">
+                This automation starts from now. Older feed stories stay in history unless you queue them on purpose.
+              </p>
 
-              <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-3">
-                <Controller
-                  control={form.control}
-                  name="approval_required"
-                  render={({ field }) => (
-                    <Checkbox
-                      id="approval_required"
-                      checked={field.value === true}
-                      onCheckedChange={(checked) => field.onChange(checked === true)}
-                    />
-                  )}
-                />
+              <div className="flex items-center justify-between rounded-lg border bg-muted/20 p-3">
                 <div className="space-y-1">
-                  <Label htmlFor="approval_required" className="cursor-pointer">
-                    Require approval before sending
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    New queue items will be created as <span className="font-medium">Awaiting approval</span> and will
-                    not send until you approve them in Queue.
-                  </p>
+                  <p className="text-sm font-medium">Advanced options</p>
+                  <p className="text-xs text-muted-foreground">Use this only if you want manual review before sending.</p>
                 </div>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setShowAdvancedOptions((current) => !current)}>
+                  {showAdvancedOptions ? 'Hide advanced' : 'Show advanced'}
+                </Button>
               </div>
+
+              {showAdvancedOptions ? (
+                <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-3">
+                  <Controller
+                    control={form.control}
+                    name="approval_required"
+                    render={({ field }) => (
+                      <Checkbox
+                        id="approval_required"
+                        checked={field.value === true}
+                        onCheckedChange={(checked) => field.onChange(checked === true)}
+                      />
+                    )}
+                  />
+                  <div className="space-y-1">
+                    <Label htmlFor="approval_required" className="cursor-pointer">
+                      Review each queued message before sending
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      New queue items wait for manual approval in Queue instead of sending automatically.
+                    </p>
+                  </div>
+                </div>
+              ) : null}
 
               <div className="space-y-2">
                 <Label htmlFor="feed_id">Feed</Label>
@@ -778,7 +799,7 @@ const SchedulesPage = () => {
               </div>
 
               <div className="space-y-2">
-                <Label>Targets (Groups, Channels)</Label>
+                <Label>Destinations</Label>
                 <Controller
                   control={form.control}
                   name="target_ids"
@@ -786,7 +807,7 @@ const SchedulesPage = () => {
                     const all = activeTargets;
                     const groups = all.filter(t => t.type === 'group');
                     const channels = all.filter(t => t.type === 'channel');
-                    const others = all.filter(t => t.type !== 'group' && t.type !== 'channel');
+                    const individuals = all.filter(t => t.type === 'individual');
 
                     const renderGroup = (title: string, items: Target[]) => {
                       if (!items.length) return null;
@@ -808,7 +829,6 @@ const SchedulesPage = () => {
                                 }}
                               />
                               <span className="min-w-0 flex-1 truncate">{formatTargetLabel(target)}</span>
-                              {target.type === 'status' && <Badge variant="warning" className="ml-auto text-[10px] h-5">Status</Badge>}
                             </label>
                           ))}
                         </div>
@@ -818,12 +838,14 @@ const SchedulesPage = () => {
                     return (
                       <div className="rounded-lg border p-2 max-h-60 overflow-y-auto space-y-3">
                         {all.length === 0 ? (
-                          <p className="text-sm text-muted-foreground p-2">No active targets found.</p>
+                          <p className="text-sm text-muted-foreground p-2">
+                            No active destinations yet. Connect WhatsApp and wait for sync.
+                          </p>
                         ) : (
                           <>
                             {renderGroup('Channels', channels)}
                             {renderGroup('Groups', groups)}
-                            {renderGroup('Other', others)}
+                            {renderGroup('People', individuals)}
                           </>
                         )}
                       </div>
@@ -927,7 +949,7 @@ const SchedulesPage = () => {
                           <span className="text-warning-foreground">Feed disabled</span>
                         ) : null}
                         {schedule.approval_required ? (
-                          <span className="text-warning-foreground">Approval required</span>
+                          <span className="text-warning-foreground">Manual review on</span>
                         ) : null}
                       </div>
                     </div>

@@ -4,6 +4,7 @@ const he = require('he');
 const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const { safeAxiosRequest } = require('../utils/safeAxios');
 const { buildDefaultUserAgent } = require('../utils/httpClientIdentity');
+const { normalizeFeedMedia } = require('../utils/feedMedia');
 
 const parser = new Parser({
   customFields: {
@@ -256,6 +257,8 @@ type FeedItemResult = {
   content?: string | undefined;
   author?: string | undefined;
   imageUrl?: string | undefined;
+  mediaUrl?: string | undefined;
+  mediaKind?: 'image' | 'video' | undefined;
   publishedAt?: string | Date | undefined;
   categories?: string[] | undefined;
   raw?: Record<string, unknown>;
@@ -434,7 +437,10 @@ const toTextLike = (value: unknown): string | undefined => {
   );
 };
 
-const extractJsonRawFields = (item: Record<string, unknown>, imageUrl?: string) => {
+const extractJsonRawFields = (
+  item: Record<string, unknown>,
+  media?: { mediaUrl?: string; mediaKind?: 'image' | 'video' | null; imageUrl?: string }
+) => {
   const raw: Record<string, unknown> = {};
   const set = (key: string, value: unknown) => {
     const text = toTextLike(value);
@@ -450,8 +456,14 @@ const extractJsonRawFields = (item: Record<string, unknown>, imageUrl?: string) 
   set('wp_featured_media', getPath(item, 'featured_media'));
   set('wp_date', getPath(item, 'date'));
   set('wp_modified', getPath(item, 'modified'));
-  if (imageUrl) {
-    raw.wp_featured_image = imageUrl;
+  if (media?.imageUrl) {
+    raw.wp_featured_image = media.imageUrl;
+  }
+  if (media?.mediaUrl) {
+    raw.media_url = media.mediaUrl;
+  }
+  if (media?.mediaKind) {
+    raw.media_kind = media.mediaKind;
   }
 
   const tags = getPath(item, 'tags');
@@ -540,6 +552,17 @@ const mapJsonFeedItem = (feed: FeedConfig, item: Record<string, unknown>): FeedI
     toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].source_url')),
     toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.full.source_url'))
   );
+  const mediaCandidate = pickFirstUrl(
+    toTextLike(getPath(item, 'video_url')),
+    toTextLike(getPath(item, 'videoUrl')),
+    toTextLike(getPath(item, 'media_url')),
+    toTextLike(getPath(item, 'mediaUrl')),
+    toTextLike(getPath(item, 'enclosure.url'))
+  );
+  const normalizedMedia = normalizeFeedMedia({
+    mediaUrl: mediaCandidate,
+    imageUrl: imageCandidate
+  });
 
   const publishedCandidate =
     toTextLike(getPath(item, 'date_published')) ||
@@ -547,7 +570,11 @@ const mapJsonFeedItem = (feed: FeedConfig, item: Record<string, unknown>): FeedI
     toTextLike(getPath(item, 'pubDate')) ||
     toTextLike(getPath(item, 'publishedAt'));
   const published = parsePublishedAt(publishedCandidate);
-  const rawData = extractJsonRawFields(item, imageCandidate);
+  const rawData = extractJsonRawFields(item, {
+    mediaUrl: normalizedMedia.mediaUrl || undefined,
+    mediaKind: normalizedMedia.mediaKind,
+    imageUrl: normalizedMedia.imageUrl || undefined
+  });
   if (published.original) rawData.published_input = published.original;
   if (published.precision) rawData.published_precision = published.precision;
 
@@ -558,7 +585,9 @@ const mapJsonFeedItem = (feed: FeedConfig, item: Record<string, unknown>): FeedI
     description,
     content,
     author: toTextLike(getPath(item, 'author.name')) || toTextLike(getPath(item, 'author')),
-    imageUrl: imageCandidate,
+    imageUrl: normalizedMedia.imageUrl || undefined,
+    mediaUrl: normalizedMedia.mediaUrl || undefined,
+    mediaKind: normalizedMedia.mediaKind || undefined,
     publishedAt: published.value || publishedCandidate,
     categories: Array.isArray(getPath(item, 'tags'))
       ? (getPath(item, 'tags') as unknown[]).map((value) => String(value))
@@ -593,9 +622,20 @@ const fetchRssItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
         description: toStringValue(rssItem.contentSnippet || rssItem.content || rssItem['content:encoded']),
         content: toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet),
         author: toStringValue(rssItem.creator || rssItem.author || rssItem['dc:creator']),
-        imageUrl: toStringValue(
-          rssItem.enclosure?.url || rssItem['media:content']?.$?.url || rssItem['media:content']?.url
-        ),
+        ...(() => {
+          const explicitImageCandidate = undefined;
+          const normalizedMedia = normalizeFeedMedia({
+            mediaUrl: toStringValue(rssItem.enclosure?.url || rssItem['media:content']?.$?.url || rssItem['media:content']?.url),
+            imageUrl: explicitImageCandidate
+          });
+          if (normalizedMedia.mediaUrl) raw.media_url = normalizedMedia.mediaUrl;
+          if (normalizedMedia.mediaKind) raw.media_kind = normalizedMedia.mediaKind;
+          return {
+            imageUrl: normalizedMedia.imageUrl || undefined,
+            mediaUrl: normalizedMedia.mediaUrl || undefined,
+            mediaKind: normalizedMedia.mediaKind || undefined
+          };
+        })(),
         publishedAt: published.value || toStringValue(rssItem.pubDate || rssItem.isoDate),
         categories: Array.isArray(rssItem.categories) ? rssItem.categories.map((value) => String(value)) : [],
         raw
@@ -661,15 +701,23 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
     const htmlImage = extractFirstImageFromHtml(
       toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet)
     );
-    const imageUrl = pickFirstUrl(
-      toStringValue(rssItem.enclosure?.url),
-      toStringValue(rssItem['media:content']?.$?.url || rssItem['media:content']?.url),
+    const explicitImageCandidate = pickFirstUrl(
       toStringValue(rssItem['media:thumbnail']?.$?.url || rssItem['media:thumbnail']?.url),
       toStringValue(rssItem['itunes:image']?.href || rssItem['itunes:image']?.url),
       toStringValue((rssItem.image as { url?: string })?.url || (rssItem.image as { href?: string })?.href),
       toStringValue(typeof rssItem.image === 'string' ? rssItem.image : undefined),
       htmlImage
     );
+    const mediaCandidate = pickFirstUrl(
+      toStringValue(rssItem.enclosure?.url),
+      toStringValue(rssItem['media:content']?.$?.url || rssItem['media:content']?.url)
+    );
+    const normalizedMedia = normalizeFeedMedia({
+      mediaUrl: mediaCandidate,
+      imageUrl: explicitImageCandidate
+    });
+    if (normalizedMedia.mediaUrl) raw.media_url = normalizedMedia.mediaUrl;
+    if (normalizedMedia.mediaKind) raw.media_kind = normalizedMedia.mediaKind;
     return {
       guid: guidValue,
       title: toStringValue(rssItem.title),
@@ -677,7 +725,9 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
       description: toStringValue(rssItem.contentSnippet || rssItem.content || rssItem['content:encoded']),
       content: toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet),
       author: toStringValue(rssItem.creator || rssItem.author || rssItem['dc:creator']),
-      imageUrl,
+      imageUrl: normalizedMedia.imageUrl || undefined,
+      mediaUrl: normalizedMedia.mediaUrl || undefined,
+      mediaKind: normalizedMedia.mediaKind || undefined,
       publishedAt: published.value || toStringValue(rssItem.pubDate || rssItem.isoDate),
       categories: Array.isArray(rssItem.categories) ? rssItem.categories.map((value) => String(value)) : [],
       raw

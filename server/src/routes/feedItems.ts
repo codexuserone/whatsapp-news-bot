@@ -4,6 +4,7 @@ const { getSupabaseClient } = require('../db/supabase');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const { isScheduleRunning } = require('../services/scheduleState');
+const { normalizeFeedMedia } = require('../utils/feedMedia');
 
 const MANUAL_POST_PAUSE_REASON = 'Paused for this post';
 
@@ -160,6 +161,10 @@ const feedItemRoutes = () => {
         const activeAutomationCount = runningAutomationCountByFeedId.get(feedId) || 0;
         const dispatchableAutomationCount = dispatchableAutomationCountByFeedId.get(feedId) || 0;
         const queueCursorMs = queueCursorByFeedId.get(feedId) || 0;
+        const normalizedMedia = normalizeFeedMedia({
+          imageUrl: item.image_url,
+          rawData: item.raw_data as Record<string, unknown> | null
+        });
         const itemCreatedMs = Date.parse(String(item.created_at || item.pub_date || ''));
         const outsideCursorWindow =
           Number.isFinite(itemCreatedMs) &&
@@ -193,6 +198,9 @@ const feedItemRoutes = () => {
                           : 'no_automation';
         return {
           ...item,
+          image_url: normalizedMedia.imageUrl || null,
+          media_url: normalizedMedia.mediaUrl || null,
+          media_kind: normalizedMedia.mediaKind || null,
           sent: Boolean(item.sent) || delivery.sent > 0,
           delivery: { ...delivery, total },
           delivery_status,
@@ -223,7 +231,20 @@ const feedItemRoutes = () => {
         .limit(100);
       
       if (error) throw error;
-      res.json(items);
+      res.json(
+        (items || []).map((item: Record<string, unknown>) => {
+          const normalizedMedia = normalizeFeedMedia({
+            imageUrl: item.image_url,
+            rawData: item.raw_data as Record<string, unknown> | null
+          });
+          return {
+            ...item,
+            image_url: normalizedMedia.imageUrl || null,
+            media_url: normalizedMedia.mediaUrl || null,
+            media_kind: normalizedMedia.mediaKind || null
+          };
+        })
+      );
     } catch (error) {
       console.error('Error fetching feed items by feed:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
@@ -366,7 +387,7 @@ const feedItemRoutes = () => {
       if (error) throw error;
       
       // Extract all unique fields from items
-      const fields = new Set(['title', 'description', 'content', 'link', 'author', 'pub_date', 'image_url']);
+      const fields = new Set(['title', 'description', 'content', 'link', 'author', 'pub_date', 'image_url', 'media_url', 'media_kind']);
       
       items.forEach((item: Record<string, unknown>) => {
         // Add fields from raw_data if available

@@ -2026,6 +2026,8 @@ class WhatsAppClient {
     }
 
     let ephemeralExpiration: number | null = null;
+    const resolutionStartedAt = Date.now();
+    const isGroup = normalizedJid.endsWith('@g.us');
 
     if (normalizedJid.endsWith('@g.us')) {
       const cached = this.groupMetadataCache.get(normalizedJid) as Record<string, unknown> | undefined;
@@ -2036,6 +2038,18 @@ class WhatsAppClient {
       }
     } else {
       ephemeralExpiration = this.resolveDirectChatEphemeralExpiration(normalizedJid);
+    }
+
+    if (isGroup) {
+      logger.info(
+        {
+          jid: normalizedJid,
+          resolutionMs: Date.now() - resolutionStartedAt,
+          cachedMetadata: this.groupMetadataCache.has(normalizedJid),
+          ephemeralExpiration
+        },
+        'Resolved group send options'
+      );
     }
 
     if (!ephemeralExpiration) {
@@ -2657,9 +2671,32 @@ class WhatsAppClient {
   async sendMessage(jid: string, content: AnyMessageContent, options: Record<string, unknown> = {}) {
     if (!this.socket) throw new Error('WhatsApp not connected');
     if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
+    const normalizedJid = String(jid || '').trim();
+    const isGroup = normalizedJid.endsWith('@g.us');
+    const sendStartedAt = Date.now();
     try {
       const effectiveOptions = await this.resolveSendOptions(jid, options);
+      if (isGroup) {
+        logger.info(
+          {
+            jid: normalizedJid,
+            preparationMs: Date.now() - sendStartedAt,
+            optionKeys: Object.keys(effectiveOptions || {}).sort()
+          },
+          'Starting group send'
+        );
+      }
       const msg = await this.socket.sendMessage(jid, content, effectiveOptions);
+      if (isGroup) {
+        logger.info(
+          {
+            jid: normalizedJid,
+            totalMs: Date.now() - sendStartedAt,
+            messageId: msg?.key?.id || null
+          },
+          'Group send resolved'
+        );
+      }
 
       try {
         const id = msg?.key?.id;
@@ -2678,7 +2715,7 @@ class WhatsAppClient {
 
       return msg;
     } catch (err) {
-      logger.error({ err, jid }, 'Failed to send message');
+      logger.error({ err, jid, totalMs: Date.now() - sendStartedAt }, 'Failed to send message');
       const message = err instanceof Error ? err.message : String(err);
       if (this.isAuthStateCorrupted(message)) {
         void this.handleCorruptedAuthState(err);

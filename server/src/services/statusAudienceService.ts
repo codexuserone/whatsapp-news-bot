@@ -21,6 +21,8 @@ type StatusAudienceSnapshot = {
   warnings: string[];
 };
 
+type StatusAudienceSources = StatusAudienceSnapshot['sources'];
+
 type RefreshResult = StatusAudienceSnapshot & {
   recipients: string[];
 };
@@ -44,6 +46,9 @@ type StatusAudienceClient = {
 const SESSION_ID = 'primary';
 const DEFAULT_REFRESH_CRON = '*/15 * * * *';
 const SUCCESSFUL_SEND_STATUSES = ['sent', 'delivered', 'read', 'played'];
+const MAX_PRESERVED_SNAPSHOT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const MIN_PRESERVED_SNAPSHOT_PARTICIPANTS = 25;
+const MAX_COLD_START_PARTICIPANTS = 10;
 
 let refreshJob: { stop?: () => void } | null = null;
 
@@ -58,6 +63,35 @@ const emptySources = () => ({
   me: 0,
   recentSuccessfulDirectRecipients: 0
 });
+
+const uniqueStrings = (values: unknown[]) =>
+  Array.from(
+    new Set(
+      values
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+    )
+  );
+
+const mergeSources = (...sourceSets: Array<Partial<StatusAudienceSources> | null | undefined>): StatusAudienceSources => {
+  const merged = emptySources();
+  for (const sourceSet of sourceSets) {
+    if (!sourceSet || typeof sourceSet !== 'object') continue;
+    for (const key of Object.keys(merged) as Array<keyof StatusAudienceSources>) {
+      const value = Number(sourceSet[key]);
+      if (!Number.isFinite(value)) continue;
+      merged[key] = Math.max(merged[key], Math.max(0, Math.floor(value)));
+    }
+  }
+  return merged;
+};
+
+const getWarmAudienceSignalCount = (sources: Partial<StatusAudienceSources> | null | undefined) =>
+  Math.max(0, Math.floor(Number(sources?.contactsCache || 0))) +
+  Math.max(0, Math.floor(Number(sources?.storeContacts || 0))) +
+  Math.max(0, Math.floor(Number(sources?.storeChats || 0))) +
+  Math.max(0, Math.floor(Number(sources?.groupMetadata || 0))) +
+  Math.max(0, Math.floor(Number(sources?.env || 0)));
 
 const buildSample = (recipients: string[], sampleSize = 25) =>
   recipients.slice(0, Math.max(1, Math.min(Math.floor(sampleSize || 25), 200)));
@@ -104,6 +138,91 @@ const getRecentSuccessfulDirectRecipients = async (supabase: SupabaseClient): Pr
         .filter(Boolean)
     )
   );
+};
+
+const shouldPreserveStoredSnapshot = (
+  stored: RefreshResult,
+  freshParticipantCount: number,
+  freshSources: Partial<StatusAudienceSources> | null | undefined
+) => {
+  if (stored.participantCount < MIN_PRESERVED_SNAPSHOT_PARTICIPANTS) return false;
+  if (!stored.recipients.length) return false;
+  const storedRefreshedAtMs = stored.refreshedAt ? Date.parse(stored.refreshedAt) : Number.NaN;
+  if (!Number.isFinite(storedRefreshedAtMs)) return false;
+  const snapshotAgeMs = Date.now() - storedRefreshedAtMs;
+  if (snapshotAgeMs < 0 || snapshotAgeMs > MAX_PRESERVED_SNAPSHOT_AGE_MS) return false;
+
+  const warmSignals = getWarmAudienceSignalCount(freshSources);
+  if (warmSignals > 0) return false;
+
+  const maxColdStartParticipants = Math.max(
+    MAX_COLD_START_PARTICIPANTS,
+    Math.floor(stored.participantCount * 0.1)
+  );
+
+  return freshParticipantCount <= maxColdStartParticipants;
+};
+
+const persistStatusRecipientsSnapshot = async (
+  supabase: SupabaseClient,
+  recipients: string[],
+  options: {
+    refreshedAt: string;
+    sources: StatusAudienceSources;
+    warnings: string[];
+    recentDirectRecipients?: string[];
+    preservedFromStored?: boolean;
+  }
+) => {
+  const normalizedRecipients = Array.from(
+    new Set(recipients.map((recipient) => normalizeRecipientJid(recipient)).filter(Boolean))
+  ).sort();
+  const recentDirectRecipientSet = new Set(
+    Array.isArray(options.recentDirectRecipients)
+      ? options.recentDirectRecipients.map((recipient) => normalizeRecipientJid(recipient)).filter(Boolean)
+      : []
+  );
+
+  const upsertRows = normalizedRecipients.map((recipientJid) => ({
+    session_id: SESSION_ID,
+    recipient_jid: recipientJid,
+    display_name: null,
+    source_tags: uniqueStrings([
+      options.preservedFromStored ? 'preserved_snapshot' : '',
+      recentDirectRecipientSet.has(recipientJid) ? 'recent_success' : ''
+    ]),
+    sources: options.sources,
+    warnings: options.warnings,
+    refreshed_at: options.refreshedAt
+  }));
+
+  if (upsertRows.length) {
+    const { error: upsertError } = await supabase
+      .from('status_recipients')
+      .upsert(upsertRows, { onConflict: 'session_id,recipient_jid' });
+    if (upsertError) {
+      logger.warn({ error: upsertError }, 'Failed to upsert status recipients snapshot');
+    }
+  }
+
+  if (normalizedRecipients.length) {
+    const { error: deleteError } = await supabase
+      .from('status_recipients')
+      .delete()
+      .eq('session_id', SESSION_ID)
+      .lt('refreshed_at', options.refreshedAt);
+    if (deleteError) {
+      logger.warn({ error: deleteError }, 'Failed to prune stale status recipients');
+    }
+  } else {
+    const { error: clearError } = await supabase
+      .from('status_recipients')
+      .delete()
+      .eq('session_id', SESSION_ID);
+    if (clearError) {
+      logger.warn({ error: clearError }, 'Failed to clear empty status recipients snapshot');
+    }
+  }
 };
 
 const getStoredRecipients = async (
@@ -172,9 +291,10 @@ const refreshStatusRecipients = async (
     };
   }
 
+  const stored = await getStoredRecipients(supabase, options?.sampleSize);
+
   const connectionStatus = String(whatsappClient?.getStatus?.()?.status || '').trim().toLowerCase();
   if (!whatsappClient || connectionStatus !== 'connected') {
-    const stored = await getStoredRecipients(supabase, options?.sampleSize);
     const warnings = [...stored.warnings];
     warnings.push('WhatsApp is not connected, using the last stored status audience snapshot.');
     return { ...stored, warnings };
@@ -206,49 +326,43 @@ const refreshStatusRecipients = async (
       ? audienceRaw.sources as Record<string, unknown>
       : {};
   const warnings = Array.isArray(audienceRaw?.warnings) ? audienceRaw!.warnings.map((value) => String(value || '').trim()).filter(Boolean) : [];
-  const sources = {
-    ...emptySources(),
-    ...baseSources,
+  const sources = mergeSources(baseSources as Partial<StatusAudienceSources>, {
     recentSuccessfulDirectRecipients: recentDirectRecipients.length
-  };
+  });
 
-  const upsertRows = participants.map((recipientJid) => ({
-    session_id: SESSION_ID,
-    recipient_jid: recipientJid,
-    display_name: null,
-    source_tags: recipientJid && recentDirectRecipients.includes(recipientJid) ? ['recent_success'] : [],
+  if (shouldPreserveStoredSnapshot(stored, participants.length, sources)) {
+    const preservedRecipients = Array.from(new Set([...stored.recipients, ...participants])).sort();
+    const preservedSources = mergeSources(stored.sources, sources);
+    const preservedWarnings = uniqueStrings([
+      ...stored.warnings,
+      ...warnings,
+      `Preserved the previous status audience snapshot because the current WhatsApp audience is still warming up (${participants.length} resolved, ${stored.participantCount} stored).`
+    ]);
+
+    await persistStatusRecipientsSnapshot(supabase, preservedRecipients, {
+      refreshedAt,
+      sources: preservedSources,
+      warnings: preservedWarnings,
+      recentDirectRecipients,
+      preservedFromStored: true
+    });
+
+    return {
+      participantCount: preservedRecipients.length,
+      recipients: preservedRecipients,
+      sample: buildSample(preservedRecipients, options?.sampleSize),
+      refreshedAt,
+      sources: preservedSources,
+      warnings: preservedWarnings
+    };
+  }
+
+  await persistStatusRecipientsSnapshot(supabase, participants, {
+    refreshedAt,
     sources,
     warnings,
-    refreshed_at: refreshedAt
-  }));
-
-  if (upsertRows.length) {
-    const { error: upsertError } = await supabase
-      .from('status_recipients')
-      .upsert(upsertRows, { onConflict: 'session_id,recipient_jid' });
-    if (upsertError) {
-      logger.warn({ error: upsertError }, 'Failed to upsert status recipients snapshot');
-    }
-  }
-
-  if (participants.length) {
-    const { error: deleteError } = await supabase
-      .from('status_recipients')
-      .delete()
-      .eq('session_id', SESSION_ID)
-      .lt('refreshed_at', refreshedAt);
-    if (deleteError) {
-      logger.warn({ error: deleteError }, 'Failed to prune stale status recipients');
-    }
-  } else {
-    const { error: clearError } = await supabase
-      .from('status_recipients')
-      .delete()
-      .eq('session_id', SESSION_ID);
-    if (clearError) {
-      logger.warn({ error: clearError }, 'Failed to clear empty status recipients snapshot');
-    }
-  }
+    recentDirectRecipients
+  });
 
   return {
     participantCount: participants.length,

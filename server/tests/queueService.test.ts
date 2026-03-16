@@ -89,6 +89,11 @@ describe('queueService __testUtils', () => {
     expect(testUtils.computeStaleProcessingThresholdMs(90000)).toBe(225000);
   });
 
+  it('computes an uncertain retry threshold with a hard minimum', () => {
+    expect(testUtils.computeUncertainRetryDelayMs(15000)).toBe(120000);
+    expect(testUtils.computeUncertainRetryDelayMs(90000)).toBe(180000);
+  });
+
   it('requeues only stale rows that do not already have a sent sibling', () => {
     const rows = [
       { id: 'log-1', schedule_id: 'schedule-1', target_id: 'target-1', feed_item_id: 'feed-1' },
@@ -101,5 +106,47 @@ describe('queueService __testUtils', () => {
       toPending: ['log-1', 'log-3'],
       toFailed: ['log-2']
     });
+  });
+
+  it('infers the outbound media kind from normalized chat envelopes', () => {
+    expect(
+      testUtils.inferChatMessageMediaKind({
+        raw_message: { messageType: 'imageMessage' }
+      })
+    ).toBe('image');
+    expect(
+      testUtils.inferChatMessageMediaKind({
+        raw_message: { messageType: 'videoMessage' }
+      })
+    ).toBe('video');
+    expect(testUtils.inferChatMessageMediaKind({ raw_message: { messageType: 'conversation' } })).toBeNull();
+  });
+
+  it('matches uncertain delivery candidates by normalized text and media type', () => {
+    expect(
+      testUtils.doesChatMessageMatchExpectedAttempt(
+        {
+          content: 'Hello   world',
+          raw_message: { messageType: 'imageMessage' }
+        },
+        {
+          text: 'Hello world',
+          mediaType: 'image'
+        }
+      )
+    ).toBe(true);
+
+    expect(
+      testUtils.doesChatMessageMatchExpectedAttempt(
+        {
+          content: 'Hello world',
+          raw_message: { messageType: 'videoMessage' }
+        },
+        {
+          text: 'Hello world',
+          mediaType: 'image'
+        }
+      )
+    ).toBe(false);
   });
 });

@@ -95,6 +95,10 @@ const DEFAULT_POST_SEND_EDIT_WINDOW_MINUTES = 15;
 const DEFAULT_POST_SEND_CORRECTION_WINDOW_MINUTES = 15;
 const MAX_POST_SEND_EDIT_WINDOW_MINUTES = 15;
 const MAX_POST_SEND_CORRECTION_WINDOW_MINUTES = 15;
+const DEFAULT_UNCERTAIN_RETRY_DELAY_MS = 120000;
+const UNCERTAIN_MATCH_LOOKBACK_MS = 30000;
+const UNCERTAIN_MATCH_GRACE_MS = 30000;
+const MAX_UNCERTAIN_LOGS_PER_PASS = 100;
 const AUTH_ERROR_HINT = 'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
 const MANUAL_POST_PAUSE_ERROR = 'Paused for this post';
 const FEED_PAUSED_ERROR = 'Feed paused';
@@ -108,6 +112,67 @@ const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has
 const getStatusSendTimeoutMs = (kind: 'text' | 'media', fallbackMs: number) => {
   const baseline = Math.max(Number(fallbackMs || DEFAULT_SEND_TIMEOUT_MS), 10000);
   return kind === 'media' ? Math.max(baseline, 90000) : Math.max(baseline, 60000);
+};
+
+const computeUncertainRetryDelayMs = (sendTimeoutMs: number) =>
+  Math.max(Math.round(Math.max(sendTimeoutMs, 10000) * 2), DEFAULT_UNCERTAIN_RETRY_DELAY_MS);
+
+const isUnknownDeliveryTimeout = (message: unknown) => /timed out sending/i.test(String(message || ''));
+
+const buildUncertainErrorMessage = (message: string) =>
+  `Send result is uncertain. Verifying delivery before retrying. ${String(message || '').trim()}`.trim();
+
+const normalizeComparableText = (value: unknown) =>
+  String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+type ChatMessageRow = {
+  id?: string;
+  whatsapp_id?: string | null;
+  remote_jid?: string | null;
+  from_me?: boolean | null;
+  content?: string | null;
+  message_type?: string | null;
+  media_url?: string | null;
+  timestamp?: string | null;
+  created_at?: string | null;
+  raw_message?: Record<string, unknown> | null;
+};
+
+const inferChatMessageMediaKind = (row: ChatMessageRow): 'image' | 'video' | 'audio' | 'document' | null => {
+  const raw = row?.raw_message && typeof row.raw_message === 'object'
+    ? row.raw_message as Record<string, unknown>
+    : null;
+  const messageType = String(raw?.messageType || row?.message_type || '').toLowerCase();
+  if (messageType.includes('image')) return 'image';
+  if (messageType.includes('video')) return 'video';
+  if (messageType.includes('audio')) return 'audio';
+  if (messageType.includes('document')) return 'document';
+  return null;
+};
+
+const doesChatMessageMatchExpectedAttempt = (
+  row: ChatMessageRow,
+  expected: { text?: string | null; mediaType?: string | null }
+) => {
+  const expectedText = normalizeComparableText(expected?.text);
+  const candidateText = normalizeComparableText(row?.content);
+  const expectedMediaType = String(expected?.mediaType || '').trim().toLowerCase() || null;
+  const candidateMediaType = inferChatMessageMediaKind(row);
+  const textMatches = !expectedText || candidateText === expectedText || candidateText.includes(expectedText) || expectedText.includes(candidateText);
+  const mediaMatches = expectedMediaType ? candidateMediaType === expectedMediaType : candidateMediaType === null;
+
+  if (expectedText && expectedMediaType) {
+    return textMatches && mediaMatches;
+  }
+  if (expectedText) {
+    return textMatches;
+  }
+  if (expectedMediaType) {
+    return mediaMatches;
+  }
+  return true;
 };
 
 const isDuplicateDispatchConflict = (error: unknown) => {
@@ -300,7 +365,7 @@ const recoverStaleProcessingLogs = async (
     await supabase
       .from('message_logs')
       .update({
-        status: 'failed',
+        status: 'uncertain',
         processing_started_at: null,
         error_message: 'Recovered stale in-progress send after reconnect/redeploy. Delivery status is uncertain because another send record already exists.'
       })
@@ -319,6 +384,198 @@ const recoverStaleProcessingLogs = async (
   );
 
   return { recoveredPending: toPending.length, recoveredFailed: toFailed.length };
+};
+
+const resolveAttemptWindowStartMs = (row: {
+  processing_started_at?: string | null;
+  updated_at?: string | null;
+  created_at?: string | null;
+}) => {
+  const candidates = [row?.processing_started_at, row?.updated_at, row?.created_at];
+  for (const value of candidates) {
+    const ts = Date.parse(String(value || ''));
+    if (Number.isFinite(ts)) {
+      return ts;
+    }
+  }
+  return Date.now();
+};
+
+const reconcileUncertainMessageLogs = async (supabase: SupabaseClient, settings: Record<string, unknown>) => {
+  const sendTimeoutMs = Math.max(Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS), 10000);
+  const retryDelayMs = computeUncertainRetryDelayMs(sendTimeoutMs);
+  const maxRetries = Number(settings.max_retries || 3);
+
+  const { data: uncertainRows, error: uncertainRowsError } = await supabase
+    .from('message_logs')
+    .select(
+      'id,status,schedule_id,target_id,feed_item_id,message_content,media_url,media_type,whatsapp_message_id,processing_started_at,created_at,updated_at,retry_count'
+    )
+    .eq('status', 'uncertain')
+    .order('created_at', { ascending: true })
+    .limit(MAX_UNCERTAIN_LOGS_PER_PASS);
+
+  if (uncertainRowsError) {
+    logger.warn({ error: uncertainRowsError }, 'Failed to load uncertain queue rows for reconciliation');
+    return { resolvedSent: 0, requeuedPending: 0, terminalFailed: 0, pendingReview: 0 };
+  }
+
+  const rows = Array.isArray(uncertainRows) ? uncertainRows : [];
+  if (!rows.length) {
+    return { resolvedSent: 0, requeuedPending: 0, terminalFailed: 0, pendingReview: 0 };
+  }
+
+  const targetIds = Array.from(new Set(rows.map((row) => String(row?.target_id || '').trim()).filter(Boolean)));
+  const { data: targetRows, error: targetRowsError } = targetIds.length
+    ? await supabase.from('targets').select('id,phone_number,type').in('id', targetIds)
+    : { data: [], error: null };
+  if (targetRowsError) {
+    logger.warn({ error: targetRowsError }, 'Failed to load targets for uncertain queue reconciliation');
+    return { resolvedSent: 0, requeuedPending: 0, terminalFailed: 0, pendingReview: rows.length };
+  }
+
+  const targetById = new Map(
+    (targetRows || []).map((row: { id?: string }) => [String(row.id || ''), row] as const).filter((entry) => Boolean(entry[0]))
+  );
+
+  let resolvedSent = 0;
+  let requeuedPending = 0;
+  let terminalFailed = 0;
+  let pendingReview = 0;
+
+  for (const row of rows as Array<{
+    id?: string;
+    schedule_id?: string | null;
+    target_id?: string | null;
+    feed_item_id?: string | null;
+    message_content?: string | null;
+    media_type?: string | null;
+    whatsapp_message_id?: string | null;
+    processing_started_at?: string | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+    retry_count?: number | null;
+  }>) {
+    const id = String(row?.id || '').trim();
+    if (!id) continue;
+
+    const target = targetById.get(String(row?.target_id || '').trim()) as Target | undefined;
+    const targetJid = target ? normalizeTargetJid(target) : '';
+    const startedAtMs = resolveAttemptWindowStartMs(row);
+    const lowerBoundIso = new Date(startedAtMs - UNCERTAIN_MATCH_LOOKBACK_MS).toISOString();
+    const upperBoundIso = new Date(Math.min(Date.now(), startedAtMs + sendTimeoutMs + UNCERTAIN_MATCH_GRACE_MS)).toISOString();
+
+    if (!targetJid) {
+      pendingReview += 1;
+      continue;
+    }
+
+    const { data: chatRows, error: chatRowsError } = await supabase
+      .from('chat_messages')
+      .select('id,whatsapp_id,remote_jid,from_me,content,message_type,media_url,timestamp,created_at,raw_message')
+      .eq('remote_jid', targetJid)
+      .eq('from_me', true)
+      .gte('created_at', lowerBoundIso)
+      .lte('created_at', upperBoundIso)
+      .order('created_at', { ascending: true })
+      .limit(20);
+
+    if (chatRowsError) {
+      logger.warn({ error: chatRowsError, logId: id, targetJid }, 'Failed to inspect local WhatsApp messages for uncertain delivery');
+      pendingReview += 1;
+      continue;
+    }
+
+    const candidates = (chatRows || []) as ChatMessageRow[];
+    const explicitMessageId = String(row?.whatsapp_message_id || '').trim();
+    let matchedCandidate =
+      explicitMessageId
+        ? candidates.find((candidate) => String(candidate?.whatsapp_id || '').trim() === explicitMessageId) || null
+        : null;
+
+    if (!matchedCandidate) {
+      const expected = {
+        text: String(row?.message_content || '').trim(),
+        mediaType: String(row?.media_type || '').trim().toLowerCase() || null
+      };
+      const matchingCandidates = candidates.filter((candidate) => doesChatMessageMatchExpectedAttempt(candidate, expected));
+      if (matchingCandidates.length === 1) {
+        matchedCandidate = matchingCandidates[0] || null;
+      } else if (!expected.text && !expected.mediaType && candidates.length === 1) {
+        matchedCandidate = candidates[0] || null;
+      }
+    }
+
+    if (matchedCandidate) {
+      const sentAtIso = String(matchedCandidate.timestamp || matchedCandidate.created_at || new Date().toISOString());
+      await supabase
+        .from('message_logs')
+        .update({
+          status: 'sent',
+          sent_at: sentAtIso,
+          processing_started_at: null,
+          error_message: null,
+          whatsapp_message_id: String(matchedCandidate.whatsapp_id || '').trim() || null
+        })
+        .eq('id', id);
+
+      const feedItemId = String(row?.feed_item_id || '').trim();
+      if (feedItemId) {
+        await supabase
+          .from('feed_items')
+          .update({ sent: true, sent_at: sentAtIso })
+          .eq('id', feedItemId)
+          .eq('sent', false);
+      }
+
+      resolvedSent += 1;
+      continue;
+    }
+
+    const ageMs = Date.now() - startedAtMs;
+    if (ageMs < retryDelayMs) {
+      pendingReview += 1;
+      continue;
+    }
+
+    const currentRetry = Number(row?.retry_count || 0);
+    const canAutoRetry = Boolean(String(row?.schedule_id || '').trim() && String(row?.feed_item_id || '').trim());
+
+    if (canAutoRetry && currentRetry < maxRetries) {
+      await supabase
+        .from('message_logs')
+        .update({
+          status: 'pending',
+          processing_started_at: null,
+          error_message: `Retry ${currentRetry + 1}/${maxRetries}: delivery was not observed locally after the uncertain-send verification window`,
+          retry_count: currentRetry + 1
+        })
+        .eq('id', id);
+      requeuedPending += 1;
+      continue;
+    }
+
+    await supabase
+      .from('message_logs')
+      .update({
+        status: 'failed',
+        processing_started_at: null,
+        error_message: canAutoRetry
+          ? `Max retries (${maxRetries}) exceeded after uncertain send verification`
+          : 'Delivery was not observed locally after the uncertain-send verification window'
+      })
+      .eq('id', id);
+    terminalFailed += 1;
+  }
+
+  if (resolvedSent || requeuedPending || terminalFailed) {
+    logger.info(
+      { resolvedSent, requeuedPending, terminalFailed, pendingReview },
+      'Reconciled uncertain queue rows'
+    );
+  }
+
+  return { resolvedSent, requeuedPending, terminalFailed, pendingReview };
 };
 
 let globalLastTargetId: string | null = null;
@@ -2813,7 +3070,17 @@ const sendQueuedForSchedule = async (
         }
 
         let didClaim = false;
+        let expectedRender: ReturnType<typeof renderTemplateMessage> | null = null;
+        let expectedMedia: { url: string | null; kind: 'image' | 'video' | 'audio' | 'document' | null } = {
+          url: null,
+          kind: null
+        };
         try {
+          expectedRender = renderTemplateMessage(template, feedItem, typeof log.message_content === 'string' ? log.message_content : null);
+          expectedMedia =
+            expectedRender.sendMode === 'auto_media' || expectedRender.sendMode === 'media_only'
+              ? await resolveMediaUrlForFeedItem(supabase, feedItem, true)
+              : { url: null, kind: null };
           const sendResult = await withTargetSendLock(target as Target, async () => {
             const { data: claimedRows, error: claimError } = await supabase
               .from('message_logs')
@@ -2917,7 +3184,7 @@ const sendQueuedForSchedule = async (
           const errorMessage = authError
             ? `${AUTH_ERROR_HINT} (${rawErrorMessage || 'unknown auth error'})`
             : rawErrorMessage;
-          const timeoutUnknownDelivery = /timed out sending/i.test(rawErrorMessage);
+          const timeoutUnknownDelivery = isUnknownDeliveryTimeout(rawErrorMessage);
           const nonRetryable = [
             'Template rendered empty message',
             'Target phone number missing',
@@ -2927,18 +3194,29 @@ const sendQueuedForSchedule = async (
             'Image-only mode'
           ].some((needle) => rawErrorMessage.includes(needle));
 
-          const shouldNotRetry = nonRetryable || timeoutUnknownDelivery;
+          if (timeoutUnknownDelivery) {
+            await supabase
+              .from('message_logs')
+              .update({
+                status: 'uncertain',
+                error_message: buildUncertainErrorMessage(errorMessage),
+                message_content: expectedRender?.outboundText || null,
+                media_url: expectedMedia.url || null,
+                media_type: expectedMedia.kind || null,
+                media_sent: false,
+                media_error: errorMessage
+              })
+              .eq('id', log.id);
+            continue;
+          }
 
-          if (shouldNotRetry) {
-            const finalErrorMessage = timeoutUnknownDelivery
-              ? `Timed out while sending (delivery may have succeeded). Not auto-retrying to avoid duplicates. ${errorMessage}`
-              : errorMessage;
+          if (nonRetryable) {
             await supabase
               .from('message_logs')
               .update({
                 status: 'failed',
                 processing_started_at: null,
-                error_message: finalErrorMessage,
+                error_message: errorMessage,
                 media_url: null,
                 media_type: null,
                 media_sent: false,
@@ -3104,6 +3382,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       media_type?: string | null;
       disable_link_preview?: boolean | null;
       include_caption?: boolean | null;
+      processing_started_at?: string | null;
     };
 
     if (isSuccessfulSendStatus(log.status)) {
@@ -3132,7 +3411,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       .from('message_logs')
       .update(claimPatch)
       .eq('id', log.id)
-      .in('status', ['awaiting_approval', 'pending', 'failed', 'skipped'])
+      .in('status', ['awaiting_approval', 'pending', 'failed', 'skipped', 'uncertain'])
       .select('id');
 
     if (claimError) {
@@ -3243,6 +3522,9 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       typeof log.include_caption === 'boolean'
         ? log.include_caption !== false
         : parsedManual.meta.includeCaption !== false;
+    let uncertainMessageContent = normalizeMessageText(String(parsedManual.text || '')).trim() || null;
+    let uncertainMediaUrl = String(log.media_url || '').trim() || null;
+    let uncertainMediaType = String(log.media_type || '').trim().toLowerCase() || null;
 
     const sendTextManual = async (text: string) => {
       const content: Record<string, unknown> = disableLinkPreview ? { text, linkPreview: null } : { text };
@@ -3327,6 +3609,19 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             .eq('id', log.id);
           return { ok: false, error: 'Template not found' };
         }
+
+        const expectedRender = renderTemplateMessage(
+          template as Template,
+          feedItemRes.data as FeedItem,
+          typeof log.message_content === 'string' ? log.message_content : null
+        );
+        const expectedMedia =
+          expectedRender.sendMode === 'auto_media' || expectedRender.sendMode === 'media_only'
+            ? await resolveMediaUrlForFeedItem(supabase, feedItemRes.data as FeedItem, true)
+            : { url: null, kind: null };
+        uncertainMessageContent = expectedRender.outboundText || null;
+        uncertainMediaUrl = expectedMedia.url || null;
+        uncertainMediaType = expectedMedia.kind || null;
 
         const sendResult = await withTargetSendLock(targetRow, async () => {
           await waitForDelays(targetRow, settings);
@@ -3431,8 +3726,10 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
                     : isDocumentUrl(safeUrl)
                       ? 'document'
                   : isImageUrl(safeUrl)
-                    ? 'image'
-                    : null;
+                  ? 'image'
+                : null;
+        uncertainMediaType = inferredKind;
+        uncertainMediaUrl = safeUrl;
 
         if (!inferredKind) {
           throw new Error('Unsupported media URL (expected image, video, audio, or document)');
@@ -3672,20 +3969,21 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       const errorMessage = authError
         ? `${AUTH_ERROR_HINT} (${rawErrorMessage || 'unknown auth error'})`
         : rawErrorMessage;
-      const timedOut = /timed out/i.test(String(rawErrorMessage || ''));
-      const terminalStatus = targetRow.type === 'status' && timedOut ? 'uncertain' : 'failed';
+      const timedOut = isUnknownDeliveryTimeout(rawErrorMessage);
+      const terminalStatus = timedOut ? 'uncertain' : 'failed';
 
       const keepMedia = !isAutomationBacked && Boolean(String(log.media_url || '').trim());
       await supabase
         .from('message_logs')
         .update({
           status: terminalStatus,
-          processing_started_at: null,
-          error_message: errorMessage,
-          media_url: keepMedia ? log.media_url || null : null,
-          media_type: keepMedia ? log.media_type || null : null,
+          processing_started_at: timedOut ? log.processing_started_at || new Date().toISOString() : null,
+          error_message: timedOut ? buildUncertainErrorMessage(errorMessage) : errorMessage,
+          message_content: timedOut ? uncertainMessageContent : log.message_content || null,
+          media_url: timedOut ? uncertainMediaUrl : keepMedia ? log.media_url || null : null,
+          media_type: timedOut ? uncertainMediaType : keepMedia ? log.media_type || null : null,
           media_sent: false,
-          media_error: keepMedia ? errorMessage : null
+          media_error: timedOut || keepMedia ? errorMessage : null
         })
         .eq('id', log.id);
 
@@ -3713,6 +4011,7 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
     await recoverStaleProcessingLogs(supabase, settings, {
       context: 'Recovered stale processing rows before pending-send catch-up pass'
     });
+    const uncertainReconcile = await reconcileUncertainMessageLogs(supabase, settings);
 
     const orphanCleanupCutoffIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const { data: orphanPendingRows, error: orphanPendingError } = await supabase
@@ -3853,10 +4152,10 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
     }
 
     logger.info(
-      { scheduleCount: scheduleIds.length, skippedBatch, totalSent, totalQueued },
+      { scheduleCount: scheduleIds.length, skippedBatch, totalSent, totalQueued, uncertainReconcile },
       'Processed pending schedules after reconnect'
     );
-    return { sent: totalSent, queued: totalQueued, schedules: scheduleIds.length };
+    return { sent: totalSent, queued: totalQueued, schedules: scheduleIds.length, uncertainReconcile };
   } catch (error) {
     logger.error({ error }, 'Failed to send pending schedules after reconnect');
     return { sent: 0, queued: 0, schedules: 0, error: getErrorMessage(error) };
@@ -3872,6 +4171,9 @@ module.exports = {
   __testUtils: {
     buildDispatchIdentityKey,
     computeStaleProcessingThresholdMs,
-    partitionStaleProcessingRows
+    partitionStaleProcessingRows,
+    computeUncertainRetryDelayMs,
+    inferChatMessageMediaKind,
+    doesChatMessageMatchExpectedAttempt
   }
 };

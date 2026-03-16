@@ -379,7 +379,7 @@ const queueRoutes = () => {
       let retryQuery = supabase
         .from('message_logs')
         .update({ status: 'pending', error_message: null, retry_count: 0, processing_started_at: null })
-        .eq('status', 'failed')
+        .in('status', ['failed', 'uncertain'])
         .select();
 
       if (!includeManual) {
@@ -747,7 +747,7 @@ const queueRoutes = () => {
           error_message: 'Paused by user'
         })
         .eq('id', req.params.id)
-        .in('status', ['awaiting_approval', 'pending', 'failed'])
+        .in('status', ['awaiting_approval', 'pending', 'failed', 'uncertain'])
         .select('id,status,error_message')
         .single();
 
@@ -776,7 +776,7 @@ const queueRoutes = () => {
       }
 
       const currentStatus = String((current as { status?: string }).status || '').toLowerCase();
-      if (!['failed', 'skipped'].includes(currentStatus)) {
+      if (!['failed', 'skipped', 'uncertain'].includes(currentStatus)) {
         return res.status(400).json({ error: 'Queue item cannot be resumed from its current status' });
       }
 
@@ -790,7 +790,7 @@ const queueRoutes = () => {
           error_message: null
         })
         .eq('id', req.params.id)
-        .in('status', ['failed', 'skipped'])
+        .in('status', ['failed', 'skipped', 'uncertain'])
         .select('id,status,error_message')
         .single();
 

@@ -75,9 +75,8 @@ const downloadImageBuffer = async (url: string, refererUrl?: string | null) => {
     maxBodyLength: MAX_IMAGE_BYTES,
     headers: {
       'User-Agent': DEFAULT_USER_AGENT,
-      // Prefer formats WhatsApp accepts; if the origin still serves AVIF/other formats, we will
-      // attempt to transcode them to JPEG via sharp (see below).
-      Accept: 'image/webp,image/apng,image/*,*/*;q=0.8',
+      // Prefer source JPEG/PNG files so CDNs do not transparently re-encode them to WebP.
+      Accept: 'image/jpeg,image/png,image/apng,image/*;q=0.9,*/*;q=0.8',
       ...(refererOrigin ? { Referer: refererOrigin } : {})
     }
   });

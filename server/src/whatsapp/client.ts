@@ -193,6 +193,17 @@ const readTextValue = (value: unknown) => {
     .trim();
 };
 
+const readPositiveInteger = (value: unknown) => {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.trunc(parsed);
+  }
+  return null;
+};
+
 const extractGroupInviteCode = (value: unknown) => {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -1377,8 +1388,11 @@ class WhatsAppClient {
 
       const now = Date.now();
       const versionTtlMs = 6 * 60 * 60 * 1000;
+      const resolveLatestWaVersion =
+        String(process.env.WHATSAPP_RESOLVE_LATEST_VERSION || '').trim().toLowerCase() === 'true';
       const shouldRefreshVersion =
-        !this.waVersion || !this.waVersionFetchedAtMs || now - this.waVersionFetchedAtMs > versionTtlMs;
+        resolveLatestWaVersion &&
+        (!this.waVersion || !this.waVersionFetchedAtMs || now - this.waVersionFetchedAtMs > versionTtlMs);
 
       if (shouldRefreshVersion) {
         const isValidVersion = (candidate: unknown) =>
@@ -1433,7 +1447,13 @@ class WhatsAppClient {
         keepAliveIntervalMs: 30000,
         retryRequestDelayMs: 500,
         logger: this.createBaileysLogger(),
-        cachedGroupMetadata: async (jid: string) => this.groupMetadataCache.get(jid)
+        cachedGroupMetadata: async (jid: string) => this.groupMetadataCache.get(jid),
+        getMessage: async (key: { id?: string | null }) => {
+          const messageId = String(key?.id || '').trim();
+          if (!messageId) return undefined;
+          const cached = this.recentSentMessages.get(messageId);
+          return cached?.message || undefined;
+        }
       };
 
       if (this.waVersion) {
@@ -1848,6 +1868,15 @@ class WhatsAppClient {
 
     try {
       const meta = await withTimeout(socket.groupMetadata(jid), timeoutMs, 'Timed out fetching group metadata');
+      if (meta?.id) {
+        this.groupMetadataCache.set(String(meta.id), meta);
+        if (this.groupMetadataCache.size > 500) {
+          const oldest = this.groupMetadataCache.keys().next().value;
+          if (oldest) {
+            this.groupMetadataCache.delete(oldest);
+          }
+        }
+      }
       const participants = Array.isArray(meta?.participants) ? meta.participants : [];
       const meJid = this.meJid || socket?.user?.id || null;
       const meComparable = normalizePersonJidForCompare(meJid);
@@ -1869,6 +1898,64 @@ class WhatsAppClient {
       logger.warn({ jid, error: getErrorMessage(error) }, 'Failed to load group metadata');
       return null;
     }
+  }
+
+  private resolveDirectChatEphemeralExpiration(jid: string): number | null {
+    const socket = this.socket as any;
+    if (!socket) return null;
+
+    const normalizedTarget = normalizePersonJidForCompare(jid);
+    if (!normalizedTarget) return null;
+
+    try {
+      const chatsRaw = socket.store?.chats?.all?.() || socket.store?.chats || [];
+      const chats = Array.isArray(chatsRaw) ? chatsRaw : Object.values(chatsRaw || {});
+      for (const chat of chats as Array<Record<string, unknown>>) {
+        const chatJid = String(chat?.id || chat?.jid || '').trim();
+        if (!chatJid || !isSamePersonJid(chatJid, normalizedTarget)) continue;
+        return readPositiveInteger(chat?.ephemeralExpiration);
+      }
+    } catch {
+      return null;
+    }
+
+    return null;
+  }
+
+  private async resolveSendOptions(jid: string, options: Record<string, unknown>) {
+    const normalizedJid = String(jid || '').trim();
+    if (!normalizedJid) return options;
+    if (Object.prototype.hasOwnProperty.call(options, 'ephemeralExpiration')) {
+      return options;
+    }
+    if (normalizedJid === 'status@broadcast') {
+      return options;
+    }
+    if (normalizeNewsletterJid(normalizedJid, { allowNumeric: false })) {
+      return options;
+    }
+
+    let ephemeralExpiration: number | null = null;
+
+    if (normalizedJid.endsWith('@g.us')) {
+      const cached = this.groupMetadataCache.get(normalizedJid) as Record<string, unknown> | undefined;
+      ephemeralExpiration = readPositiveInteger(cached?.ephemeralDuration);
+      if (!ephemeralExpiration) {
+        const info = await this.getGroupInfo(normalizedJid);
+        ephemeralExpiration = readPositiveInteger(info?.ephemeralDuration);
+      }
+    } else {
+      ephemeralExpiration = this.resolveDirectChatEphemeralExpiration(normalizedJid);
+    }
+
+    if (!ephemeralExpiration) {
+      return options;
+    }
+
+    return {
+      ...options,
+      ephemeralExpiration
+    };
   }
 
   async waitForMessageStatus(
@@ -2447,7 +2534,8 @@ class WhatsAppClient {
     if (!this.socket) throw new Error('WhatsApp not connected');
     if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
     try {
-      const msg = await this.socket.sendMessage(jid, content, options);
+      const effectiveOptions = await this.resolveSendOptions(jid, options);
+      const msg = await this.socket.sendMessage(jid, content, effectiveOptions);
 
       try {
         const id = msg?.key?.id;

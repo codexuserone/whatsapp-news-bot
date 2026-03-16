@@ -144,4 +144,67 @@ describe('WhatsAppClient', () => {
             .toThrow('No status recipients resolved');
         expect(sendMessage).not.toHaveBeenCalled();
     });
+
+    it('should include ephemeralExpiration for disappearing groups', async () => {
+        const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'group-msg-1' } }));
+        const groupMetadata: any = jest.fn(async () => ({
+            id: '120363000000000010@g.us',
+            subject: 'Test Group',
+            size: 2,
+            ephemeralDuration: 86400,
+            participants: []
+        }));
+
+        client.socket = { sendMessage, groupMetadata };
+
+        await client.sendMessage('120363000000000010@g.us', { text: 'hello group' });
+
+        expect(sendMessage).toHaveBeenCalledWith(
+            '120363000000000010@g.us',
+            { text: 'hello group' },
+            expect.objectContaining({ ephemeralExpiration: 86400 })
+        );
+    });
+
+    it('should include ephemeralExpiration for disappearing private chats from store state', async () => {
+        const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'pm-msg-1' } }));
+
+        client.socket = {
+            sendMessage,
+            store: {
+                chats: [
+                    { id: '972501234567:18@s.whatsapp.net', ephemeralExpiration: 604800 }
+                ]
+            }
+        };
+
+        await client.sendMessage('972501234567@s.whatsapp.net', { text: 'hello pm' });
+
+        expect(sendMessage).toHaveBeenCalledWith(
+            '972501234567@s.whatsapp.net',
+            { text: 'hello pm' },
+            expect.objectContaining({ ephemeralExpiration: 604800 })
+        );
+    });
+
+    it('should not add ephemeralExpiration when the chat does not prove disappearing mode', async () => {
+        const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'plain-msg-1' } }));
+
+        client.socket = {
+            sendMessage,
+            store: {
+                chats: [
+                    { id: '972501234567@s.whatsapp.net', ephemeralExpiration: 0 }
+                ]
+            }
+        };
+
+        await client.sendMessage('972501234567@s.whatsapp.net', { text: 'plain chat' });
+
+        expect(sendMessage).toHaveBeenCalledWith(
+            '972501234567@s.whatsapp.net',
+            { text: 'plain chat' },
+            {}
+        );
+    });
 });

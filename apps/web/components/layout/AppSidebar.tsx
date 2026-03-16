@@ -1,5 +1,6 @@
 'use client';
 
+import * as React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { navSections } from '@/lib/navigation';
@@ -25,7 +26,14 @@ const isRouteActive = (pathname: string, to: string) => {
 
 const AppSidebar = () => {
   const pathname = usePathname() || '/';
+  const [mounted, setMounted] = React.useState(false);
   const { isMobile, setOpen } = useSidebar();
+
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const resolvedPathname = mounted ? pathname : '/';
   const closeIfMobile = () => {
     if (isMobile) {
       setOpen(false);
@@ -69,7 +77,7 @@ const AppSidebar = () => {
                   if (item.children?.length) {
                     return (
                       <SidebarMenuItem key={item.label}>
-                        <SidebarMenuButton asChild isActive={isRouteActive(pathname, item.to)} className="w-full">
+                        <SidebarMenuButton asChild isActive={isRouteActive(resolvedPathname, item.to)} className="w-full">
                           <Link href={item.to} onClick={closeIfMobile}>
                             {Icon && <Icon className="h-4 w-4" />}
                             <span>{item.label}</span>
@@ -80,7 +88,7 @@ const AppSidebar = () => {
                             <li key={child.to}>
                               <SidebarMenuButton
                                 asChild
-                                isActive={pathname === child.to}
+                                isActive={resolvedPathname === child.to}
                                 size="sm"
                                 className="w-full text-muted-foreground hover:text-foreground"
                               >
@@ -96,7 +104,7 @@ const AppSidebar = () => {
                   }
                   return (
                     <SidebarMenuItem key={item.label}>
-                      <SidebarMenuButton asChild isActive={isRouteActive(pathname, item.to)} className="w-full">
+                      <SidebarMenuButton asChild isActive={isRouteActive(resolvedPathname, item.to)} className="w-full">
                         <Link href={item.to} onClick={closeIfMobile}>
                           {Icon && <Icon className="h-4 w-4" />}
                           <span>{item.label}</span>

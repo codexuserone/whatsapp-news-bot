@@ -1,5 +1,6 @@
 'use client';
 
+import * as React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ChevronRight } from 'lucide-react';
@@ -10,7 +11,14 @@ const titleCase = (value: string) => value.replace(/-/g, ' ').replace(/\b\w/g, (
 
 const Breadcrumbs = () => {
   const pathname = usePathname() || '';
-  const segments = pathname.split('/').filter(Boolean);
+  const [mounted, setMounted] = React.useState(false);
+
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const resolvedPathname = mounted ? pathname : '';
+  const segments = resolvedPathname.split('/').filter(Boolean);
   const crumbs = [{ label: navLookup['/'] || 'Overview', to: '/' }];
 
   segments.forEach((segment, index) => {

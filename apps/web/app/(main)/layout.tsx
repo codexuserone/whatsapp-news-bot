@@ -1,5 +1,6 @@
 'use client';
 
+import * as React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import AppSidebar from '@/components/layout/AppSidebar';
@@ -39,7 +40,14 @@ const isPathActive = (pathname: string, to: string) => {
 
 const MainLayout = ({ children }: MainLayoutProps) => {
   const pathname = usePathname() || '/';
-  const mobileTitle = getMobileTitle(pathname);
+  const [mounted, setMounted] = React.useState(false);
+
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const resolvedPathname = mounted ? pathname : '/';
+  const mobileTitle = getMobileTitle(resolvedPathname);
 
   return (
     <SidebarProvider className="max-w-full overflow-x-clip">
@@ -61,7 +69,7 @@ const MainLayout = ({ children }: MainLayoutProps) => {
         <main className="relative min-w-0 max-w-full flex-1 overflow-y-auto overflow-x-hidden px-4 pb-24 pt-6 md:px-8 md:pb-8">
           <div className="mx-auto min-w-0 w-full max-w-6xl">
             <GlobalStatusBanner />
-            <div key={pathname} className="animate-in fade-in-0 slide-in-from-bottom-2 duration-300">
+            <div key={resolvedPathname} className="animate-in fade-in-0 slide-in-from-bottom-2 duration-300">
               {children}
             </div>
           </div>
@@ -70,7 +78,7 @@ const MainLayout = ({ children }: MainLayoutProps) => {
           <div className="mx-auto grid max-w-3xl grid-cols-5">
             {mobileNavItems.map((item) => {
               const Icon = item.icon;
-              const active = isPathActive(pathname, item.to);
+              const active = isPathActive(resolvedPathname, item.to);
               return (
                 <Link
                   key={item.to}

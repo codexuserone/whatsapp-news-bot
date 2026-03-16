@@ -167,6 +167,160 @@ const upsertPendingDispatchRows = async (
   return inserted;
 };
 
+type ProcessingRecoveryRow = {
+  id?: string | null;
+  schedule_id?: string | null;
+  target_id?: string | null;
+  feed_item_id?: string | null;
+};
+
+const buildDispatchIdentityKey = (
+  scheduleId?: string | null,
+  targetId?: string | null,
+  feedItemId?: string | null
+) => {
+  const normalizedScheduleId = String(scheduleId || '').trim();
+  const normalizedTargetId = String(targetId || '').trim();
+  const normalizedFeedItemId = String(feedItemId || '').trim();
+  if (!normalizedScheduleId || !normalizedTargetId || !normalizedFeedItemId) {
+    return null;
+  }
+  return `${normalizedScheduleId}:${normalizedTargetId}:${normalizedFeedItemId}`;
+};
+
+const computeStaleProcessingThresholdMs = (sendTimeoutMs: number) =>
+  Math.max(Math.round(Math.max(sendTimeoutMs, 10000) * 2.5), 120000);
+
+const partitionStaleProcessingRows = (
+  rows: ProcessingRecoveryRow[],
+  successfulDispatchKeys: Set<string>
+) => {
+  const toPending: string[] = [];
+  const toFailed: string[] = [];
+
+  for (const row of rows || []) {
+    const id = String(row?.id || '').trim();
+    if (!id) continue;
+    const key = buildDispatchIdentityKey(row?.schedule_id, row?.target_id, row?.feed_item_id);
+    if (key && successfulDispatchKeys.has(key)) {
+      toFailed.push(id);
+      continue;
+    }
+    toPending.push(id);
+  }
+
+  return { toPending, toFailed };
+};
+
+const recoverStaleProcessingLogs = async (
+  supabase: SupabaseClient,
+  settings: Record<string, unknown>,
+  options?: { scheduleId?: string | null; context?: string }
+) => {
+  const scheduleId = String(options?.scheduleId || '').trim();
+  const sendTimeoutMs = Math.max(Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS), 10000);
+  const staleThresholdMs = computeStaleProcessingThresholdMs(sendTimeoutMs);
+  const staleBeforeIso = new Date(Date.now() - staleThresholdMs).toISOString();
+
+  let query = supabase
+    .from('message_logs')
+    .select('id,schedule_id,target_id,feed_item_id')
+    .eq('status', 'processing')
+    .not('processing_started_at', 'is', null)
+    .lt('processing_started_at', staleBeforeIso);
+
+  if (scheduleId) {
+    query = query.eq('schedule_id', scheduleId);
+  }
+
+  const { data: staleRows, error: staleRowsError } = await query;
+  if (staleRowsError) {
+    logger.warn(
+      { scheduleId: scheduleId || null, error: staleRowsError, staleBeforeIso },
+      options?.context || 'Failed to inspect stale processing queue rows'
+    );
+    return { recoveredPending: 0, recoveredFailed: 0 };
+  }
+
+  const staleProcessingRows = (staleRows || []) as ProcessingRecoveryRow[];
+  if (!staleProcessingRows.length) {
+    return { recoveredPending: 0, recoveredFailed: 0 };
+  }
+
+  const scheduleIds = Array.from(
+    new Set(staleProcessingRows.map((row) => String(row.schedule_id || '').trim()).filter(Boolean))
+  );
+  const feedItemIds = Array.from(
+    new Set(staleProcessingRows.map((row) => String(row.feed_item_id || '').trim()).filter(Boolean))
+  );
+
+  const successfulDispatchKeys = new Set<string>();
+  if (scheduleIds.length && feedItemIds.length) {
+    let successfulQuery = supabase
+      .from('message_logs')
+      .select('schedule_id,target_id,feed_item_id')
+      .eq('status', 'sent')
+      .in('schedule_id', scheduleIds)
+      .in('feed_item_id', feedItemIds);
+
+    if (scheduleId) {
+      successfulQuery = successfulQuery.eq('schedule_id', scheduleId);
+    }
+
+    const { data: successfulRows, error: successfulRowsError } = await successfulQuery;
+    if (successfulRowsError) {
+      logger.warn(
+        { scheduleId: scheduleId || null, error: successfulRowsError, staleBeforeIso },
+        'Failed to inspect successful dispatch rows while recovering stale processing entries'
+      );
+    } else {
+      for (const row of (successfulRows || []) as ProcessingRecoveryRow[]) {
+        const key = buildDispatchIdentityKey(row.schedule_id, row.target_id, row.feed_item_id);
+        if (key) {
+          successfulDispatchKeys.add(key);
+        }
+      }
+    }
+  }
+
+  const { toPending, toFailed } = partitionStaleProcessingRows(staleProcessingRows, successfulDispatchKeys);
+
+  if (toPending.length) {
+    await supabase
+      .from('message_logs')
+      .update({
+        status: 'pending',
+        processing_started_at: null,
+        error_message: 'Recovered stale in-progress send after reconnect/redeploy; retrying.'
+      })
+      .in('id', toPending);
+  }
+
+  if (toFailed.length) {
+    await supabase
+      .from('message_logs')
+      .update({
+        status: 'failed',
+        processing_started_at: null,
+        error_message: 'Recovered stale in-progress send after reconnect/redeploy. Delivery status is uncertain because another send record already exists.'
+      })
+      .in('id', toFailed);
+  }
+
+  logger.info(
+    {
+      scheduleId: scheduleId || null,
+      staleBeforeIso,
+      staleThresholdMs,
+      recoveredPending: toPending.length,
+      recoveredFailed: toFailed.length
+    },
+    options?.context || 'Recovered stale processing queue rows'
+  );
+
+  return { recoveredPending: toPending.length, recoveredFailed: toFailed.length };
+};
+
 let globalLastTargetId: string | null = null;
 let globalLastSentAtMs = 0;
 const globalLastSentByTargetId = new Map<string, number>();
@@ -2478,6 +2632,11 @@ const sendQueuedForSchedule = async (
       return { sent: 0, queued: queuedCount, skipped: true, reason };
     }
 
+    await recoverStaleProcessingLogs(supabase, settings, {
+      scheduleId,
+      context: 'Recovered stale processing rows before schedule dispatch'
+    });
+
     const maxPendingAgeHours = Math.max(Number(settings.max_pending_age_hours || 48), 1);
     const staleCutoffMs = Date.now() - maxPendingAgeHours * 60 * 60 * 1000;
 
@@ -2630,21 +2789,6 @@ const sendQueuedForSchedule = async (
       }
 
       for (const log of sortedLogs || []) {
-        const { data: claimedRows, error: claimError } = await supabase
-          .from('message_logs')
-          .update({ status: 'processing', processing_started_at: new Date().toISOString() })
-          .eq('id', log.id)
-          .eq('status', 'pending')
-          .select('id');
-
-        if (claimError) {
-          logger.warn({ scheduleId, logId: log.id, error: claimError }, 'Failed to claim message log');
-          continue;
-        }
-
-        if (!claimedRows || claimedRows.length === 0) {
-          continue;
-        }
         // Get feed item
         const { data: feedItem, error: feedItemError } = await supabase
           .from('feed_items')
@@ -2668,8 +2812,30 @@ const sendQueuedForSchedule = async (
           continue;
         }
 
+        let didClaim = false;
         try {
-          const sendResult = await withGlobalSendLock(async () => {
+          const sendResult = await withTargetSendLock(target as Target, async () => {
+            const { data: claimedRows, error: claimError } = await supabase
+              .from('message_logs')
+              .update({
+                status: 'processing',
+                processing_started_at: new Date().toISOString(),
+                error_message: null
+              })
+              .eq('id', log.id)
+              .eq('status', 'pending')
+              .select('id');
+
+            if (claimError) {
+              logger.warn({ scheduleId, logId: log.id, error: claimError }, 'Failed to claim message log');
+              return null;
+            }
+
+            if (!claimedRows || claimedRows.length === 0) {
+              return null;
+            }
+
+            didClaim = true;
             await waitForDelays(target as Target, settings);
             const result = await sendMessageWithTemplate(whatsappClient, target, template, feedItem, {
               supabase,
@@ -2685,6 +2851,9 @@ const sendQueuedForSchedule = async (
             }
             return result;
           });
+          if (!didClaim || !sendResult) {
+            continue;
+          }
           const response = sendResult?.response;
 
           const messageId = response?.key?.id;
@@ -2737,6 +2906,10 @@ const sendQueuedForSchedule = async (
 
           sentCount += 1;
         } catch (error) {
+          if (!didClaim) {
+            logger.warn({ scheduleId, logId: log.id, error }, 'Failed before claiming queue row for send');
+            continue;
+          }
           logger.error({ error, scheduleId, feedItemId: feedItem.id, targetId: target.id }, 'Failed to send message');
 
           const rawErrorMessage = getErrorMessage(error);
@@ -3536,6 +3709,11 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
   }
 
   try {
+    const settings = await settingsService.getSettings();
+    await recoverStaleProcessingLogs(supabase, settings, {
+      context: 'Recovered stale processing rows before pending-send catch-up pass'
+    });
+
     const orphanCleanupCutoffIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const { data: orphanPendingRows, error: orphanPendingError } = await supabase
       .from('message_logs')
@@ -3690,5 +3868,10 @@ module.exports = {
   sendPendingForAllSchedules,
   queueLatestForSchedule,
   sendQueueLogNow,
-  reconcileUpdatedFeedItems
+  reconcileUpdatedFeedItems,
+  __testUtils: {
+    buildDispatchIdentityKey,
+    computeStaleProcessingThresholdMs,
+    partitionStaleProcessingRows
+  }
 };

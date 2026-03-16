@@ -83,7 +83,7 @@ const WhatsAppPage = () => {
   const [attachmentMimeType, setAttachmentMimeType] = React.useState('');
   const [attachmentName, setAttachmentName] = React.useState('');
   const [showAdvancedRecovery, setShowAdvancedRecovery] = React.useState(false);
-  const [qrTickMs, setQrTickMs] = React.useState(() => Date.now());
+  const [qrTickMs, setQrTickMs] = React.useState<number | null>(null);
 
   const { data: status, isLoading: statusLoading } = useQuery<WhatsAppStatus>({
     queryKey: ['whatsapp-status'],
@@ -97,6 +97,10 @@ const WhatsAppPage = () => {
     refetchInterval: 3000,
     enabled: status?.status !== 'connected' && status?.status !== 'paused'
   });
+
+  React.useEffect(() => {
+    setQrTickMs(Date.now());
+  }, []);
 
   React.useEffect(() => {
     if (!qr?.qr) return undefined;
@@ -244,7 +248,10 @@ const WhatsAppPage = () => {
   const isPaused = status?.status === 'paused';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
   const qrExpiresAtMs = qr?.expiresAt ? Date.parse(qr.expiresAt) : Number.NaN;
-  const qrRemainingMs = Number.isFinite(qrExpiresAtMs) ? Math.max(qrExpiresAtMs - qrTickMs, 0) : qr?.remainingMs ?? null;
+  const qrRemainingMs =
+    Number.isFinite(qrExpiresAtMs) && qrTickMs !== null
+      ? Math.max(qrExpiresAtMs - qrTickMs, 0)
+      : qr?.remainingMs ?? null;
   const qrRemainingMsValue = qrRemainingMs ?? 0;
   const isQrExpired = Boolean(qr?.qr) && ((Number.isFinite(qrExpiresAtMs) && qrRemainingMsValue <= 0) || (!Number.isFinite(qrExpiresAtMs) && Number(qr?.remainingMs || 0) <= 0));
   const activeQr = isQrExpired ? null : qr?.qr || null;

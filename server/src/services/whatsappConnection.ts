@@ -42,16 +42,18 @@ const ensureWhatsAppConnected = async (
       return false;
     }
 
-    const takeoverLease = whatsappClient.takeoverLease;
     const shouldAttemptTakeover =
       options?.triggerTakeover &&
-      typeof takeoverLease === 'function' &&
+      typeof whatsappClient.takeoverLease === 'function' &&
       (status === 'conflict' || status === 'disconnected' || status === 'error' || status === 'unknown') &&
       (attempt === 1 || attempt % 3 === 0);
 
     if (shouldAttemptTakeover) {
       try {
-        const takeover = await takeoverLease(takeoverTtlMs);
+        const takeover = await whatsappClient.takeoverLease?.(takeoverTtlMs);
+        if (!takeover) {
+          throw new Error('WhatsApp lease takeover returned no result');
+        }
         if (takeover.ok) {
           logger.info(
             { ownerId: takeover.ownerId, expiresAt: takeover.expiresAt, attempt, status, context: logContext },

@@ -48,4 +48,30 @@ describe('whatsappConnection recovery helpers', () => {
 
     expect(ready).toBe(true);
   });
+
+  it('should preserve client binding when calling takeoverLease', async () => {
+    const client = {
+      ownerId: 'lease-owner',
+      reconnect: jest.fn(async () => {}),
+      getStatus: jest
+        .fn()
+        .mockReturnValueOnce({ status: 'conflict' })
+        .mockReturnValue({ status: 'connected' }),
+      async takeoverLease(ttlMs?: number) {
+        expect(this.ownerId).toBe('lease-owner');
+        expect(ttlMs).toBe(90_000);
+        return { ok: true, supported: true, ownerId: this.ownerId, expiresAt: 'future' };
+      }
+    };
+
+    const ready = await ensureWhatsAppConnected(client, {
+      attempts: 1,
+      delayMs: 10,
+      triggerReconnect: true,
+      triggerTakeover: true,
+      logContext: 'test'
+    });
+
+    expect(ready).toBe(false);
+  });
 });

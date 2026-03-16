@@ -584,7 +584,18 @@ const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null)
     return null;
   };
 
-  let detectedMimeType = detectMimeTypeFromBuffer(buffer);
+  let preparedMimeType: string | null = null;
+  try {
+    const prepared = await prepareNewsletterImage(buffer, { maxBytes: MAX_IMAGE_BYTES });
+    if (Buffer.isBuffer(prepared?.buffer) && prepared.buffer.length) {
+      buffer = prepared.buffer;
+    }
+    preparedMimeType = String(prepared?.mimetype || '').trim().toLowerCase() || null;
+  } catch {
+    // Fall through to the raw detection checks below.
+  }
+
+  let detectedMimeType = preparedMimeType || detectMimeTypeFromBuffer(buffer);
 
   // Some sites return formats like AVIF/SVG/GIF even when we prefer jpeg/png/webp.
   // If sharp is available, transcode to JPEG so WhatsApp uploads work reliably.

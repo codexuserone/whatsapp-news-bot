@@ -13,6 +13,47 @@ const { refreshStatusRecipients } = require('../services/statusAudienceService')
 const { runTargetAutoSyncPass } = require('../services/targetSyncService');
 const { persistReceiptUpdates } = require('../services/receiptService');
 
+const resolveBrowserTuple = (Browsers: Record<string, unknown> | null | undefined, deviceLabel: string) => {
+  const requestedPlatform = String(
+    process.env.WHATSAPP_BROWSER_PLATFORM ||
+    process.env.WHATSAPP_BROWSER ||
+    process.env.WHATSAPP_DEVICE_PLATFORM ||
+    'windows'
+  )
+    .trim()
+    .toLowerCase();
+
+  const builders: Record<string, unknown> = {
+    windows: Browsers?.windows,
+    ubuntu: Browsers?.ubuntu,
+    macos: Browsers?.macOS,
+    'mac os': Browsers?.macOS,
+    appropriate: Browsers?.appropriate,
+    baileys: Browsers?.baileys
+  };
+
+  const requestedBuilder = builders[requestedPlatform];
+  const fallbackBuilder =
+    Browsers?.windows ||
+    Browsers?.appropriate ||
+    Browsers?.ubuntu ||
+    Browsers?.macOS ||
+    Browsers?.baileys;
+
+  const browser =
+    typeof requestedBuilder === 'function'
+      ? (requestedBuilder as (name: string) => string[])(deviceLabel)
+      : typeof fallbackBuilder === 'function'
+        ? (fallbackBuilder as (name: string) => string[])(deviceLabel)
+        : null;
+
+  if (Array.isArray(browser) && browser.length === 3) {
+    return browser;
+  }
+
+  return ['Windows', deviceLabel, '10.0.22631'];
+};
+
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict' | 'paused';
 
 type MessageStatusSnapshot = {
@@ -1375,7 +1416,7 @@ class WhatsAppClient {
       const deviceLabel = String(process.env.WHATSAPP_DEVICE_NAME || process.env.WHATSAPP_DEVICE_LABEL || 'Anash Bot')
         .trim()
         .slice(0, 64) || 'Anash Bot';
-      const browser = Browsers?.ubuntu?.(deviceLabel) || ['Ubuntu', deviceLabel, '22.04.4'];
+      const browser = resolveBrowserTuple(Browsers as Record<string, unknown> | null | undefined, deviceLabel);
 
       const syncFullHistory =
         String(process.env.WHATSAPP_SYNC_FULL_HISTORY || '').trim().toLowerCase() === 'true';

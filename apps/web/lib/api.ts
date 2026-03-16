@@ -32,11 +32,31 @@ const handleResponse = async <T>(response: Response): Promise<T> => {
   return response.json();
 };
 
+const mergeHeaders = (base?: HeadersInit, extra?: HeadersInit): HeadersInit | undefined => {
+  if (!base && !extra) return undefined;
+  const headers = new Headers(base || undefined);
+  if (extra) {
+    const next = new Headers(extra);
+    next.forEach((value, key) => headers.set(key, value));
+  }
+  return headers;
+};
+
 const fetchWithTimeout = (url: string, options: RequestInit = {}, timeoutMs = 30000) => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const headers = mergeHeaders(options.headers, { 'Cache-Control': 'no-cache' });
+  const requestInit: RequestInit = {
+    cache: 'no-store',
+    ...options,
+    signal: controller.signal
+  };
 
-  return fetch(url, { ...options, signal: controller.signal })
+  if (headers) {
+    requestInit.headers = headers;
+  }
+
+  return fetch(url, requestInit)
     .finally(() => clearTimeout(timeoutId))
     .catch((error) => {
       if (error.name === 'AbortError') {

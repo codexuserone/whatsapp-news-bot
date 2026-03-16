@@ -20,6 +20,15 @@ const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const DEFAULT_USER_AGENT = buildDefaultUserAgent();
 const SUPPORTED_WHATSAPP_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
+const setNoStoreHeaders = (res: Response) => {
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    Pragma: 'no-cache',
+    Expires: '0',
+    'Surrogate-Control': 'no-store'
+  });
+};
+
 const detectImageMimeTypeFromBuffer = (value: Buffer): string | null => {
   if (value.length >= 3 && value[0] === 0xff && value[1] === 0xd8 && value[2] === 0xff) {
     return 'image/jpeg';
@@ -691,11 +700,13 @@ const whatsappRoutes = () => {
   const router = express.Router();
 
   router.get('/status', asyncHandler(async (req: Request, res: Response) => {
+    setNoStoreHeaders(res);
     const whatsapp = req.app.locals.whatsapp;
     res.json(whatsapp?.getStatus() || { status: 'disconnected' });
   }));
 
   router.get('/qr', asyncHandler(async (req: Request, res: Response) => {
+    setNoStoreHeaders(res);
     const whatsapp = req.app.locals.whatsapp;
     res.json({ qr: whatsapp?.getQrCode() || null });
   }));

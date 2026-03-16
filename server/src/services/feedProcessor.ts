@@ -31,7 +31,9 @@ type FeedItemInput = {
   author?: string;
   imageUrl?: string;
   mediaUrl?: string;
-  mediaKind?: 'image' | 'video';
+  mediaKind?: 'image' | 'video' | 'audio' | 'document';
+  mediaMime?: string;
+  mediaFilename?: string;
   publishedAt?: string | Date;
   categories?: string[];
   raw?: Record<string, unknown>;
@@ -194,11 +196,15 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
       const normalizedMedia = normalizeFeedMedia({
         mediaUrl: item.mediaUrl,
         mediaKind: item.mediaKind,
+        mediaMime: item.mediaMime,
+        mediaFilename: item.mediaFilename,
         imageUrl: item.imageUrl,
         rawData: rawInput
       });
       if (normalizedMedia.mediaUrl) rawData.media_url = normalizedMedia.mediaUrl;
       if (normalizedMedia.mediaKind) rawData.media_kind = normalizedMedia.mediaKind;
+      if (normalizedMedia.mediaMime) rawData.media_mime = normalizedMedia.mediaMime;
+      if (normalizedMedia.mediaFilename) rawData.media_filename = normalizedMedia.mediaFilename;
       if (normalizedMedia.imageUrl) rawData.image_url = normalizedMedia.imageUrl;
 
       for (const [key, value] of Object.entries(rawInput)) {
@@ -214,6 +220,10 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
         link: item.url || null,
         description: descriptionForStorage || null,
         image_url: normalizedMedia.imageUrl || null,
+        media_url: normalizedMedia.mediaUrl || null,
+        media_kind: normalizedMedia.mediaKind || null,
+        media_mime: normalizedMedia.mediaMime || null,
+        media_filename: normalizedMedia.mediaFilename || null,
         image_source: normalizedMedia.mediaUrl ? 'feed' : null,
         pub_date: normalizedPubDate,
         normalized_url: normalizedUrlValue || null,
@@ -277,6 +287,10 @@ const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult>
           normalizeComparableText(existingRecord.content) !== normalizeComparableText(incomingPayload.content) ||
           normalizeComparableText(existingRecord.author) !== normalizeComparableText(incomingPayload.author) ||
           normalizeComparableText(existingRecord.image_url) !== normalizeComparableText(incomingPayload.image_url) ||
+          normalizeComparableText(existingRecord.media_url) !== normalizeComparableText(incomingPayload.media_url) ||
+          normalizeComparableText(existingRecord.media_kind) !== normalizeComparableText(incomingPayload.media_kind) ||
+          normalizeComparableText(existingRecord.media_mime) !== normalizeComparableText(incomingPayload.media_mime) ||
+          normalizeComparableText(existingRecord.media_filename) !== normalizeComparableText(incomingPayload.media_filename) ||
           normalizeComparableText(existingRawData.media_url) !== normalizeComparableText(rawData.media_url) ||
           normalizeComparableText(existingRawData.media_kind) !== normalizeComparableText(rawData.media_kind) ||
           normalizeIso(existingRecord.pub_date as string | Date | null | undefined) !== normalizeIso(normalizedPubDate) ||

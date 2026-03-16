@@ -97,16 +97,17 @@ const cleanup = async (): Promise<void> => {
   
   try {
     const settings = await settingsService.getSettings();
-    const retentionDays = Number(settings.log_retention_days ?? settings.retentionDays ?? 14);
-    const retentionDate = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
-    const retentionIso = retentionDate.toISOString();
+    const messageLogRetentionDays = 8;
+    const chatRetentionDays = 3;
+    const messageLogRetentionIso = new Date(Date.now() - messageLogRetentionDays * 24 * 60 * 60 * 1000).toISOString();
+    const chatRetentionIso = new Date(Date.now() - chatRetentionDays * 24 * 60 * 60 * 1000).toISOString();
     await resetStuckProcessingLogs();
 
     // Delete message logs first so we never orphan active logs from their feed items.
-    await supabase.from('message_logs').delete().lt('created_at', retentionIso);
+    await supabase.from('message_logs').delete().lt('created_at', messageLogRetentionIso);
 
     // Chat history is only used for dedupe heuristics; safe to prune independently.
-    await supabase.from('chat_messages').delete().lt('created_at', retentionIso);
+    await supabase.from('chat_messages').delete().lt('created_at', chatRetentionIso);
 
     // Feed items are required to render queued messages. Only delete items that are:
     // - old (based on sent_at)
@@ -125,7 +126,7 @@ const cleanup = async (): Promise<void> => {
         .from('feed_items')
         .select('id')
         .eq('sent', true)
-        .lt('sent_at', retentionIso)
+        .lt('sent_at', messageLogRetentionIso)
         .limit(5000);
 
       if (candidatesError) {
@@ -177,6 +178,47 @@ const cleanup = async (): Promise<void> => {
 
     await deleteOldFeedItemsSafely();
 
+    const { data: feedIds } = await supabase.from('feed_items').select('feed_id').not('feed_id', 'is', null).limit(5000);
+    const uniqueFeedIds = Array.from(
+      new Set((feedIds || []).map((row: { feed_id?: string | null }) => String(row.feed_id || '').trim()).filter(Boolean))
+    );
+
+    for (const feedId of uniqueFeedIds) {
+      const { data: recentFeedItems } = await supabase
+        .from('feed_items')
+        .select('id')
+        .eq('feed_id', feedId)
+        .order('pub_date', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(500);
+
+      const keepIds = new Set((recentFeedItems || []).map((row: { id?: string | null }) => String(row.id || '').trim()).filter(Boolean));
+      if (!keepIds.size) continue;
+
+      const { data: allFeedItems } = await supabase
+        .from('feed_items')
+        .select('id')
+        .eq('feed_id', feedId)
+        .order('created_at', { ascending: false })
+        .limit(5000);
+
+      const candidates = (allFeedItems || [])
+        .map((row: { id?: string | null }) => String(row.id || '').trim())
+        .filter((id: string) => Boolean(id) && !keepIds.has(id));
+
+      if (!candidates.length) continue;
+
+      const { data: refs } = await supabase
+        .from('message_logs')
+        .select('feed_item_id')
+        .in('feed_item_id', candidates);
+      const referenced = new Set((refs || []).map((row: { feed_item_id?: string | null }) => String(row.feed_item_id || '').trim()).filter(Boolean));
+      const deletable = candidates.filter((id: string) => !referenced.has(id));
+      if (!deletable.length) continue;
+      await supabase.from('feed_items').delete().in('id', deletable);
+    }
+
     logger.info('Retention cleanup complete');
   } catch (error) {
     logger.error({ error: getErrorMessage(error) }, 'Retention cleanup failed');
@@ -184,6 +226,7 @@ const cleanup = async (): Promise<void> => {
 };
 
 const scheduleRetentionCleanup = (): void => {
+  cron.schedule('0 * * * *', cleanup, { timezone: 'UTC' });
   cron.schedule('0 3 * * *', cleanup, { timezone: 'UTC' });
 };
 

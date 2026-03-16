@@ -3,6 +3,8 @@ const META_PREFIX = '__WNB_MANUAL_META__=';
 type ManualMeta = {
   disableLinkPreview?: boolean;
   includeCaption?: boolean;
+  documentFilename?: string;
+  documentMime?: string;
 };
 
 const toBoolean = (value: unknown) => value === true;
@@ -16,24 +18,32 @@ const normalizeMeta = (input: unknown): ManualMeta => {
       : {}),
     ...(Object.prototype.hasOwnProperty.call(obj, 'includeCaption')
       ? { includeCaption: obj.includeCaption !== false }
+      : {}),
+    ...(typeof obj.documentFilename === 'string' && obj.documentFilename.trim()
+      ? { documentFilename: obj.documentFilename.trim() }
+      : {}),
+    ...(typeof obj.documentMime === 'string' && obj.documentMime.trim()
+      ? { documentMime: obj.documentMime.trim() }
       : {})
   };
 };
 
 const encodeManualMessageContent = (
   message: unknown,
-  meta?: { disableLinkPreview?: boolean; includeCaption?: boolean }
+  meta?: { disableLinkPreview?: boolean; includeCaption?: boolean; documentFilename?: string | null; documentMime?: string | null }
 ): string | null => {
   const text = typeof message === 'string' ? message : '';
   const hasText = Boolean(text.trim());
-  if (!hasText) return null;
+  const documentFilename = typeof meta?.documentFilename === 'string' ? meta.documentFilename.trim() : '';
+  const documentMime = typeof meta?.documentMime === 'string' ? meta.documentMime.trim() : '';
 
   const disableLinkPreview = meta?.disableLinkPreview === true;
   const includeCaption = meta?.includeCaption !== false;
-  const needsMetaLine = disableLinkPreview || includeCaption === false;
+  const needsMetaLine = disableLinkPreview || includeCaption === false || Boolean(documentFilename) || Boolean(documentMime);
+  if (!hasText && !needsMetaLine) return null;
   if (!needsMetaLine) return text;
 
-  const payload = JSON.stringify({ disableLinkPreview, includeCaption });
+  const payload = JSON.stringify({ disableLinkPreview, includeCaption, documentFilename, documentMime });
   return `${META_PREFIX}${payload}\n${text}`;
 };
 
@@ -70,4 +80,3 @@ module.exports = {
 };
 
 export {};
-

@@ -10,6 +10,7 @@ const { getErrorMessage } = require('../utils/errorUtils');
 const { getSupabaseClient } = require('../db/supabase');
 const { normalizeMessageText } = require('../utils/messageText');
 const { ensureWhatsAppConnected } = require('../services/whatsappConnection');
+const { ensureFreshStatusRecipients, getStatusRecipientSnapshot, refreshStatusRecipients } = require('../services/statusAudienceService');
 const { isNewsletterJid, prepareNewsletterImage, prepareNewsletterVideo } = require('../utils/whatsappMedia');
 const { buildDefaultUserAgent } = require('../utils/httpClientIdentity');
 const { normalizeChannelJid, isValidChannelJid } = require('../utils/targetJid');
@@ -208,6 +209,98 @@ const parseVideoDataUrl = (value: string) => {
   // Force mimetype to mp4 for consistency with WhatsApp expectations.
   const finalMime = mimetype === 'video/mp4' ? mimetype : 'video/mp4';
   return { buffer, mimetype: finalMime };
+};
+
+const parseAudioDataUrl = (value: string) => {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,([a-zA-Z0-9+/=\s]+)$/);
+  if (!match || !match[1] || !match[2]) {
+    throw badRequest('audioDataUrl must be a valid base64 audio data URL');
+  }
+
+  const mimetype = String(match[1]).toLowerCase();
+  const base64 = String(match[2]).replace(/\s+/g, '');
+  const buffer = Buffer.from(base64, 'base64');
+  const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
+  if (!buffer.length) {
+    throw badRequest('audioDataUrl is empty');
+  }
+  if (buffer.length > MAX_AUDIO_BYTES) {
+    throw badRequest(`Audio too large (${buffer.length} bytes)`);
+  }
+  return { buffer, mimetype };
+};
+
+const parseDocumentDataUrl = (value: string, fallbackFilename?: string | null) => {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^data:([a-zA-Z0-9.+/-]+);base64,([a-zA-Z0-9+/=\s]+)$/);
+  if (!match || !match[1] || !match[2]) {
+    throw badRequest('documentDataUrl must be a valid base64 document data URL');
+  }
+
+  const mimetype = String(match[1]).toLowerCase();
+  const base64 = String(match[2]).replace(/\s+/g, '');
+  const buffer = Buffer.from(base64, 'base64');
+  const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
+  if (!buffer.length) {
+    throw badRequest('documentDataUrl is empty');
+  }
+  if (buffer.length > MAX_DOCUMENT_BYTES) {
+    throw badRequest(`Document too large (${buffer.length} bytes)`);
+  }
+  return {
+    buffer,
+    mimetype,
+    fileName: String(fallbackFilename || 'attachment').trim() || 'attachment'
+  };
+};
+
+const downloadAudioBuffer = async (url: string, refererUrl?: string | null) => {
+  const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
+  const refererOrigin = toOriginOrUndefined(refererUrl);
+  const response = await safeAxiosRequest(url, {
+    timeout: Math.max(DEFAULT_SEND_TIMEOUT_MS, 30000),
+    responseType: 'arraybuffer',
+    maxContentLength: MAX_AUDIO_BYTES,
+    maxBodyLength: MAX_AUDIO_BYTES,
+    headers: {
+      'User-Agent': DEFAULT_USER_AGENT,
+      Accept: 'audio/*;q=0.9,*/*;q=0.8',
+      ...(refererOrigin ? { Referer: refererOrigin } : {})
+    }
+  });
+  const buffer = Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data);
+  if (!buffer.length) throw badRequest('Audio download returned empty body');
+  if (buffer.length > MAX_AUDIO_BYTES) throw badRequest(`Audio too large (${buffer.length} bytes)`);
+  const contentTypeHeader = String(response.headers?.['content-type'] || 'audio/mpeg');
+  const mimetype = (contentTypeHeader.split(';')[0] || 'audio/mpeg').trim().toLowerCase() || 'audio/mpeg';
+  if (!mimetype.startsWith('audio/')) throw badRequest('audioUrl did not return audio data');
+  return { buffer, mimetype };
+};
+
+const downloadDocumentBuffer = async (url: string, refererUrl?: string | null) => {
+  const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
+  const refererOrigin = toOriginOrUndefined(refererUrl);
+  const response = await safeAxiosRequest(url, {
+    timeout: Math.max(DEFAULT_SEND_TIMEOUT_MS, 30000),
+    responseType: 'arraybuffer',
+    maxContentLength: MAX_DOCUMENT_BYTES,
+    maxBodyLength: MAX_DOCUMENT_BYTES,
+    headers: {
+      'User-Agent': DEFAULT_USER_AGENT,
+      Accept: 'application/*,text/plain,text/csv;q=0.9,*/*;q=0.8',
+      ...(refererOrigin ? { Referer: refererOrigin } : {})
+    }
+  });
+  const buffer = Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data);
+  if (!buffer.length) throw badRequest('Document download returned empty body');
+  if (buffer.length > MAX_DOCUMENT_BYTES) throw badRequest(`Document too large (${buffer.length} bytes)`);
+  const contentTypeHeader = String(response.headers?.['content-type'] || 'application/octet-stream');
+  const mimetype = (contentTypeHeader.split(';')[0] || 'application/octet-stream').trim().toLowerCase() || 'application/octet-stream';
+  const filenameHeader = String(response.headers?.['content-disposition'] || '');
+  const filenameMatch = filenameHeader.match(/filename\*?=(?:UTF-8''|")?([^\";]+)/i);
+  const fileName = filenameMatch?.[1] ? decodeURIComponent(filenameMatch[1]).replace(/"/g, '').trim() : 'attachment';
+  return { buffer, mimetype, fileName };
 };
 
 const normalizeDisplayText = (value: unknown) => String(value || '').replace(/\s+/g, ' ').trim();
@@ -929,8 +1022,14 @@ const whatsappRoutes = () => {
       linkUrl?: string | null;
       imageUrl?: string | null;
       videoUrl?: string | null;
+      audioUrl?: string | null;
+      documentUrl?: string | null;
       imageDataUrl?: string | null;
       videoDataUrl?: string | null;
+      audioDataUrl?: string | null;
+      documentDataUrl?: string | null;
+      documentFilename?: string | null;
+      documentMime?: string | null;
       statusJidList?: string[] | null;
       includeCaption?: boolean;
       disableLinkPreview?: boolean;
@@ -960,8 +1059,14 @@ const whatsappRoutes = () => {
     const normalizedLink = String(payload.linkUrl || '').trim();
     const imageUrl = payload.imageUrl ? String(payload.imageUrl).trim() : null;
     const videoUrl = payload.videoUrl ? String(payload.videoUrl).trim() : null;
+    const audioUrl = payload.audioUrl ? String(payload.audioUrl).trim() : null;
+    const documentUrl = payload.documentUrl ? String(payload.documentUrl).trim() : null;
     const imageDataUrl = payload.imageDataUrl ? String(payload.imageDataUrl).trim() : null;
     const videoDataUrl = payload.videoDataUrl ? String(payload.videoDataUrl).trim() : null;
+    const audioDataUrl = payload.audioDataUrl ? String(payload.audioDataUrl).trim() : null;
+    const documentDataUrl = payload.documentDataUrl ? String(payload.documentDataUrl).trim() : null;
+    const documentFilename = payload.documentFilename ? String(payload.documentFilename).trim() : null;
+    const documentMime = payload.documentMime ? String(payload.documentMime).trim() : null;
     const explicitStatusJidList = Array.isArray(payload.statusJidList)
       ? payload.statusJidList.map((value) => String(value || '').trim()).filter(Boolean)
       : [];
@@ -969,12 +1074,21 @@ const whatsappRoutes = () => {
     const confirm = payload.confirm;
 	    const includeCaption = payload.includeCaption !== false;
 	    const captionText = [normalizedMessage, normalizedLink].filter(Boolean).join('\n').trim();
-	    if (!captionText && !imageUrl && !videoUrl && !imageDataUrl && !videoDataUrl) {
-	      throw badRequest('message, linkUrl, imageUrl, videoUrl, imageDataUrl, or videoDataUrl is required');
+	    if (!captionText && !imageUrl && !videoUrl && !audioUrl && !documentUrl && !imageDataUrl && !videoDataUrl && !audioDataUrl && !documentDataUrl) {
+	      throw badRequest('message, linkUrl, imageUrl, videoUrl, audioUrl, documentUrl, imageDataUrl, videoDataUrl, audioDataUrl, or documentDataUrl is required');
 	    }
 
-	    const requestedMediaType = videoDataUrl || videoUrl ? 'video' : imageDataUrl || imageUrl ? 'image' : null;
-	    const requestedMediaUrl = videoUrl || imageUrl || null;
+	    const requestedMediaType =
+        videoDataUrl || videoUrl
+          ? 'video'
+          : audioDataUrl || audioUrl
+            ? 'audio'
+            : documentDataUrl || documentUrl
+              ? 'document'
+              : imageDataUrl || imageUrl
+                ? 'image'
+                : null;
+	    const requestedMediaUrl = videoUrl || audioUrl || documentUrl || imageUrl || null;
 	    let mediaWarning: string | null = null;
 	    const connected = await ensureConnectedForSend(whatsapp, 'send-test route');
 	    if (!connected) {
@@ -1003,6 +1117,62 @@ const whatsappRoutes = () => {
           : { video: buffer, mimetype };
       } catch (error) {
         const message = getErrorMessage(error, 'Failed to download videoUrl');
+        if (!captionText) {
+          throw badRequest(message);
+        }
+        mediaWarning = message;
+        content = disableLinkPreview ? { text: captionText, linkPreview: null } : { text: captionText };
+      }
+    } else if (audioDataUrl) {
+      const { buffer, mimetype } = parseAudioDataUrl(audioDataUrl);
+      content = { audio: buffer, mimetype, ptt: false };
+    } else if (audioUrl) {
+      if (!isHttpUrl(audioUrl)) {
+        throw badRequest('audioUrl must be an http(s) URL');
+      }
+      try {
+        await assertSafeOutboundUrl(audioUrl);
+      } catch (error) {
+        throw badRequest(getErrorMessage(error, 'audioUrl is not allowed'));
+      }
+      try {
+        const { buffer, mimetype } = await downloadAudioBuffer(audioUrl, normalizedLink || null);
+        content = { audio: buffer, mimetype, ptt: false };
+      } catch (error) {
+        const message = getErrorMessage(error, 'Failed to download audioUrl');
+        if (!captionText) {
+          throw badRequest(message);
+        }
+        mediaWarning = message;
+        content = disableLinkPreview ? { text: captionText, linkPreview: null } : { text: captionText };
+      }
+    } else if (documentDataUrl) {
+      const { buffer, mimetype, fileName } = parseDocumentDataUrl(documentDataUrl, documentFilename);
+      content = {
+        document: buffer,
+        mimetype: documentMime || mimetype,
+        fileName: documentFilename || fileName || 'attachment',
+        ...(includeCaption && captionText ? { caption: captionText } : {})
+      };
+    } else if (documentUrl) {
+      if (!isHttpUrl(documentUrl)) {
+        throw badRequest('documentUrl must be an http(s) URL');
+      }
+      try {
+        await assertSafeOutboundUrl(documentUrl);
+      } catch (error) {
+        throw badRequest(getErrorMessage(error, 'documentUrl is not allowed'));
+      }
+      try {
+        const { buffer, mimetype, fileName } = await downloadDocumentBuffer(documentUrl, normalizedLink || null);
+        content = {
+          document: buffer,
+          mimetype: documentMime || mimetype,
+          fileName: documentFilename || fileName || 'attachment',
+          ...(includeCaption && captionText ? { caption: captionText } : {})
+        };
+      } catch (error) {
+        const message = getErrorMessage(error, 'Failed to download documentUrl');
         if (!captionText) {
           throw badRequest(message);
         }
@@ -1056,6 +1226,9 @@ const whatsappRoutes = () => {
 
     for (const normalizedJid of normalizedJids) {
       try {
+        if (isStatusBroadcast(normalizedJid) && (requestedMediaType === 'audio' || requestedMediaType === 'document')) {
+          throw badRequest('Status only supports text, image, and video');
+        }
         let effectiveContent: Record<string, unknown> = content;
 
         // Baileys uses a special raw-media path for newsletters; in practice it is far pickier
@@ -1125,7 +1298,9 @@ const whatsappRoutes = () => {
         const sendPromise = isStatusBroadcast(normalizedJid)
           ? whatsapp.sendStatusBroadcast(
             effectiveContent,
-            explicitStatusJidList.length ? { statusJidList: explicitStatusJidList } : undefined
+            explicitStatusJidList.length
+              ? { statusJidList: explicitStatusJidList }
+              : { statusJidList: (await ensureFreshStatusRecipients(whatsapp, { maxAgeMinutes: 10, sampleSize: 25 })).recipients }
           )
           : whatsapp.sendMessage(normalizedJid, effectiveContent);
         const result = await withTimeout(
@@ -1227,13 +1402,15 @@ const whatsappRoutes = () => {
       return res.json({
         participantCount: 0,
         sample: [],
+        refreshedAt: null,
         sources: {
           contactsCache: 0,
           storeContacts: 0,
           storeChats: 0,
           groupMetadata: 0,
           env: 0,
-          me: 0
+          me: 0,
+          recentSuccessfulDirectRecipients: 0
         },
         warnings: [WHATSAPP_STATUS_DISABLED_REASON]
       });
@@ -1241,25 +1418,12 @@ const whatsappRoutes = () => {
     const whatsapp = req.app.locals.whatsapp as {
       getStatusAudience?: (options?: { sampleSize?: number }) => Promise<unknown> | unknown;
     } | null;
-    if (!whatsapp || typeof whatsapp.getStatusAudience !== 'function') {
-      return res.json({
-        participantCount: 0,
-        sample: [],
-        sources: {
-          contactsCache: 0,
-          storeContacts: 0,
-          storeChats: 0,
-          groupMetadata: 0,
-          env: 0,
-          me: 0
-        },
-        warnings: ['WhatsApp client not available']
-      });
-    }
-
     const rawSample = Number(req.query.sample || 25);
     const sampleSize = Number.isFinite(rawSample) ? Math.min(Math.max(Math.floor(rawSample), 1), 200) : 25;
-    const audience = await Promise.resolve(whatsapp.getStatusAudience({ sampleSize }));
+    const forceRefresh = String(req.query.refresh || '').toLowerCase() === 'true';
+    const audience = forceRefresh
+      ? await refreshStatusRecipients(whatsapp, { sampleSize })
+      : await getStatusRecipientSnapshot({ sampleSize });
     return res.json(audience);
   }));
 
@@ -1367,8 +1531,11 @@ const whatsappRoutes = () => {
     const explicitStatusJids = Array.isArray(statusJidList)
       ? statusJidList.map((value) => String(value || '').trim()).filter(Boolean)
       : [];
+    const statusSnapshot = explicitStatusJids.length
+      ? { recipients: explicitStatusJids }
+      : await ensureFreshStatusRecipients(whatsapp, { maxAgeMinutes: 10, sampleSize: 25 });
     const sendOptions: Record<string, unknown> = {};
-    if (explicitStatusJids.length) sendOptions.statusJidList = explicitStatusJids;
+    if (statusSnapshot.recipients.length) sendOptions.statusJidList = statusSnapshot.recipients;
     if (normalizedBackgroundColor) {
       sendOptions.backgroundColor = normalizedBackgroundColor.startsWith('#')
         ? normalizedBackgroundColor

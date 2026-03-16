@@ -258,7 +258,9 @@ type FeedItemResult = {
   author?: string | undefined;
   imageUrl?: string | undefined;
   mediaUrl?: string | undefined;
-  mediaKind?: 'image' | 'video' | undefined;
+  mediaKind?: 'image' | 'video' | 'audio' | 'document' | undefined;
+  mediaMime?: string | undefined;
+  mediaFilename?: string | undefined;
   publishedAt?: string | Date | undefined;
   categories?: string[] | undefined;
   raw?: Record<string, unknown>;
@@ -381,7 +383,8 @@ const enrichWordPressRssPublishedAt = async (feedUrl: string, items: FeedItemRes
         params: {
           include: batch.join(','),
           per_page: batch.length,
-          _fields: 'id,date_gmt,date'
+          _embed: 'wp:featuredmedia',
+          _fields: 'id,date_gmt,date,_embedded.wp:featuredmedia'
         },
         headers: {
           'User-Agent': DEFAULT_USER_AGENT,
@@ -396,15 +399,42 @@ const enrichWordPressRssPublishedAt = async (feedUrl: string, items: FeedItemRes
         const publishedValue = toTextValue(post.date_gmt) || toTextValue(post.date);
         const published = parsePublishedAt(publishedValue);
         if (!published.value) continue;
+        const featuredMediaUrl = pickFirstUrl(
+          toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].source_url')),
+          toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].media_details.sizes.full.source_url')),
+          toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].guid.rendered'))
+        );
+        const featuredMediaMime = toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].mime_type'));
+        const featuredMediaFilename =
+          toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].slug')) ||
+          toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].title.rendered'));
 
         const matchingItems = postsById.get(postId) || [];
         for (const item of matchingItems) {
           item.publishedAt = published.value;
+          if (featuredMediaUrl) {
+            const normalizedMedia = normalizeFeedMedia({
+              mediaUrl: featuredMediaUrl,
+              mediaMime: featuredMediaMime,
+              mediaFilename: featuredMediaFilename,
+              imageUrl: featuredMediaUrl
+            });
+            item.imageUrl = normalizedMedia.imageUrl || item.imageUrl;
+            item.mediaUrl = normalizedMedia.mediaUrl || item.mediaUrl;
+            item.mediaKind = normalizedMedia.mediaKind || item.mediaKind;
+            item.mediaMime = normalizedMedia.mediaMime || item.mediaMime;
+            item.mediaFilename = normalizedMedia.mediaFilename || item.mediaFilename;
+          }
           const itemRaw = item.raw && typeof item.raw === 'object' ? item.raw : {};
           itemRaw.published_precision = 'datetime';
           itemRaw.published_source = 'wp_rest';
           if (toTextValue(post.date_gmt)) itemRaw.wp_date_gmt = toTextValue(post.date_gmt);
           if (toTextValue(post.date)) itemRaw.wp_date = toTextValue(post.date);
+          if (item.mediaUrl) itemRaw.media_url = item.mediaUrl;
+          if (item.mediaKind) itemRaw.media_kind = item.mediaKind;
+          if (item.mediaMime) itemRaw.media_mime = item.mediaMime;
+          if (item.mediaFilename) itemRaw.media_filename = item.mediaFilename;
+          if (featuredMediaUrl) itemRaw.wp_featured_image = featuredMediaUrl;
           item.raw = itemRaw;
         }
       }
@@ -439,7 +469,13 @@ const toTextLike = (value: unknown): string | undefined => {
 
 const extractJsonRawFields = (
   item: Record<string, unknown>,
-  media?: { mediaUrl?: string; mediaKind?: 'image' | 'video' | null; imageUrl?: string }
+  media?: {
+    mediaUrl?: string;
+    mediaKind?: 'image' | 'video' | 'audio' | 'document' | null;
+    mediaMime?: string;
+    mediaFilename?: string;
+    imageUrl?: string;
+  }
 ) => {
   const raw: Record<string, unknown> = {};
   const set = (key: string, value: unknown) => {
@@ -464,6 +500,12 @@ const extractJsonRawFields = (
   }
   if (media?.mediaKind) {
     raw.media_kind = media.mediaKind;
+  }
+  if (media?.mediaMime) {
+    raw.media_mime = media.mediaMime;
+  }
+  if (media?.mediaFilename) {
+    raw.media_filename = media.mediaFilename;
   }
 
   const tags = getPath(item, 'tags');
@@ -555,12 +597,28 @@ const mapJsonFeedItem = (feed: FeedConfig, item: Record<string, unknown>): FeedI
   const mediaCandidate = pickFirstUrl(
     toTextLike(getPath(item, 'video_url')),
     toTextLike(getPath(item, 'videoUrl')),
+    toTextLike(getPath(item, 'audio_url')),
+    toTextLike(getPath(item, 'audioUrl')),
+    toTextLike(getPath(item, 'document_url')),
+    toTextLike(getPath(item, 'documentUrl')),
     toTextLike(getPath(item, 'media_url')),
     toTextLike(getPath(item, 'mediaUrl')),
     toTextLike(getPath(item, 'enclosure.url'))
   );
+  const mediaMimeCandidate =
+    toTextLike(getPath(item, 'mime_type')) ||
+    toTextLike(getPath(item, 'mimeType')) ||
+    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].mime_type')) ||
+    toTextLike(getPath(item, 'enclosure.type'));
+  const mediaFilenameCandidate =
+    toTextLike(getPath(item, 'file_name')) ||
+    toTextLike(getPath(item, 'filename')) ||
+    toTextLike(getPath(item, 'slug')) ||
+    toTextLike(getPath(item, 'title.rendered'));
   const normalizedMedia = normalizeFeedMedia({
     mediaUrl: mediaCandidate,
+    mediaMime: mediaMimeCandidate,
+    mediaFilename: mediaFilenameCandidate,
     imageUrl: imageCandidate
   });
 
@@ -573,6 +631,8 @@ const mapJsonFeedItem = (feed: FeedConfig, item: Record<string, unknown>): FeedI
   const rawData = extractJsonRawFields(item, {
     mediaUrl: normalizedMedia.mediaUrl || undefined,
     mediaKind: normalizedMedia.mediaKind,
+    mediaMime: normalizedMedia.mediaMime || undefined,
+    mediaFilename: normalizedMedia.mediaFilename || undefined,
     imageUrl: normalizedMedia.imageUrl || undefined
   });
   if (published.original) rawData.published_input = published.original;
@@ -588,6 +648,8 @@ const mapJsonFeedItem = (feed: FeedConfig, item: Record<string, unknown>): FeedI
     imageUrl: normalizedMedia.imageUrl || undefined,
     mediaUrl: normalizedMedia.mediaUrl || undefined,
     mediaKind: normalizedMedia.mediaKind || undefined,
+    mediaMime: normalizedMedia.mediaMime || undefined,
+    mediaFilename: normalizedMedia.mediaFilename || undefined,
     publishedAt: published.value || publishedCandidate,
     categories: Array.isArray(getPath(item, 'tags'))
       ? (getPath(item, 'tags') as unknown[]).map((value) => String(value))
@@ -626,14 +688,20 @@ const fetchRssItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
           const explicitImageCandidate = undefined;
           const normalizedMedia = normalizeFeedMedia({
             mediaUrl: toStringValue(rssItem.enclosure?.url || rssItem['media:content']?.$?.url || rssItem['media:content']?.url),
+            mediaMime: toStringValue((rssItem.enclosure as { type?: string } | undefined)?.type),
+            mediaFilename: toStringValue(rssItem.title),
             imageUrl: explicitImageCandidate
           });
           if (normalizedMedia.mediaUrl) raw.media_url = normalizedMedia.mediaUrl;
           if (normalizedMedia.mediaKind) raw.media_kind = normalizedMedia.mediaKind;
+          if (normalizedMedia.mediaMime) raw.media_mime = normalizedMedia.mediaMime;
+          if (normalizedMedia.mediaFilename) raw.media_filename = normalizedMedia.mediaFilename;
           return {
             imageUrl: normalizedMedia.imageUrl || undefined,
             mediaUrl: normalizedMedia.mediaUrl || undefined,
-            mediaKind: normalizedMedia.mediaKind || undefined
+            mediaKind: normalizedMedia.mediaKind || undefined,
+            mediaMime: normalizedMedia.mediaMime || undefined,
+            mediaFilename: normalizedMedia.mediaFilename || undefined
           };
         })(),
         publishedAt: published.value || toStringValue(rssItem.pubDate || rssItem.isoDate),
@@ -714,10 +782,14 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
     );
     const normalizedMedia = normalizeFeedMedia({
       mediaUrl: mediaCandidate,
+      mediaMime: toStringValue((rssItem.enclosure as { type?: string } | undefined)?.type),
+      mediaFilename: toStringValue(rssItem.title),
       imageUrl: explicitImageCandidate
     });
     if (normalizedMedia.mediaUrl) raw.media_url = normalizedMedia.mediaUrl;
     if (normalizedMedia.mediaKind) raw.media_kind = normalizedMedia.mediaKind;
+    if (normalizedMedia.mediaMime) raw.media_mime = normalizedMedia.mediaMime;
+    if (normalizedMedia.mediaFilename) raw.media_filename = normalizedMedia.mediaFilename;
     return {
       guid: guidValue,
       title: toStringValue(rssItem.title),
@@ -728,6 +800,8 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
       imageUrl: normalizedMedia.imageUrl || undefined,
       mediaUrl: normalizedMedia.mediaUrl || undefined,
       mediaKind: normalizedMedia.mediaKind || undefined,
+      mediaMime: normalizedMedia.mediaMime || undefined,
+      mediaFilename: normalizedMedia.mediaFilename || undefined,
       publishedAt: published.value || toStringValue(rssItem.pubDate || rssItem.isoDate),
       categories: Array.isArray(rssItem.categories) ? rssItem.categories.map((value) => String(value)) : [],
       raw
@@ -764,6 +838,7 @@ const fetchJsonItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
   const response = await safeAxiosRequest(feed.url, {
     timeout: 15000,
     headers,
+    params: /\/wp-json\/wp\/v2\//i.test(feed.url) ? { _embed: 'wp:featuredmedia' } : undefined,
     validateStatus: (status: number) => (status >= 200 && status < 300) || status === 304
   });
 
@@ -921,13 +996,16 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
       const cleanedUrl = cleaning?.stripUtm && item.url ? removeUtm(item.url) : item.url;
       const cleanedImageUrl =
         cleaning?.stripUtm && item.imageUrl ? removeUtm(item.imageUrl) : item.imageUrl;
+      const cleanedMediaUrl =
+        cleaning?.stripUtm && item.mediaUrl ? removeUtm(item.mediaUrl) : item.mediaUrl;
       return {
         ...item,
         title: cleanedTitle || 'Untitled',
         description: cleanedDescription,
         content: cleanedContent,
         url: cleanedUrl,
-        imageUrl: cleanedImageUrl
+        imageUrl: cleanedImageUrl,
+        mediaUrl: cleanedMediaUrl
       };
     });
   const discoveredFromUrl = meta?.discoveredFromUrl || discoveredFromHtmlUrl;

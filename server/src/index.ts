@@ -12,6 +12,7 @@ const registerRoutes = require('./routes');
 const settingsService = require('./services/settingsService');
 const { initSchedulers, clearAll } = require('./services/schedulerService');
 const { startTargetAutoSync, stopTargetAutoSync } = require('./services/targetSyncService');
+const { scheduleStatusAudienceRefresh, stopStatusAudienceRefresh } = require('./services/statusAudienceService');
 const {
   scheduleRetentionCleanup,
   scheduleProcessingWatchdog,
@@ -41,6 +42,7 @@ const gracefulShutdown = async (
     // Clear all intervals and timeouts
     clearAll();
     stopTargetAutoSync();
+    stopStatusAudienceRefresh();
     stopKeepAlive();
     
     // Disconnect WhatsApp
@@ -429,6 +431,7 @@ const start = async () => {
   } else {
     scheduleRetentionCleanup();
     scheduleProcessingWatchdog();
+    scheduleStatusAudienceRefresh(whatsappClient);
     // If WhatsApp leasing is supported, only the lease-holder should run polling/schedulers.
     // This avoids duplicate feed polling + queue churn during rolling deploys.
     const status = whatsappClient?.getStatus?.();

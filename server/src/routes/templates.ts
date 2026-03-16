@@ -27,52 +27,66 @@ function extractVariables(content: string) {
 
 const normalizeTemplatePayload = (payload: Record<string, unknown>) => {
   const next = { ...payload } as Record<string, unknown> & {
-    send_mode?: 'image' | 'image_only' | 'link_preview' | 'text_only';
+    send_mode?:
+      | 'auto_media'
+      | 'media_only'
+      | 'text_preview'
+      | 'text_only'
+      | 'image'
+      | 'image_only'
+      | 'link_preview';
     send_images?: boolean;
   };
 
   const explicitMode = next.send_mode;
 
-  if (explicitMode === 'image_only') {
-    next.send_mode = 'image_only';
-    // image_only still attaches an image; it just suppresses the caption/text fallback.
+  if (explicitMode === 'auto_media' || explicitMode === 'image') {
+    next.send_mode = 'auto_media';
     next.send_images = true;
     return next;
   }
 
-  if (explicitMode === 'image') {
-    next.send_mode = 'image';
+  if (explicitMode === 'media_only' || explicitMode === 'image_only') {
+    next.send_mode = 'media_only';
     next.send_images = true;
     return next;
   }
 
-  if (explicitMode === 'link_preview' || explicitMode === 'text_only') {
-    next.send_mode = explicitMode;
+  if (explicitMode === 'text_preview' || explicitMode === 'link_preview') {
+    next.send_mode = 'text_preview';
     next.send_images = false;
     return next;
   }
 
-  const legacyMode = next.send_images === false ? 'link_preview' : 'image';
+  if (explicitMode === 'text_only') {
+    next.send_mode = 'text_only';
+    next.send_images = false;
+    return next;
+  }
+
+  const legacyMode = next.send_images === false ? 'text_preview' : 'auto_media';
   next.send_mode = legacyMode;
-  next.send_images = legacyMode === 'image';
+  next.send_images = legacyMode === 'auto_media';
   return next;
 };
 
 const normalizeTemplateResponse = <T extends Record<string, unknown>>(template: T): T => {
   const next = { ...template } as T & {
-    send_mode?: 'image' | 'link_preview' | 'text_only' | 'image_only' | null;
+    send_mode?: 'auto_media' | 'text_preview' | 'text_only' | 'media_only' | 'image' | 'image_only' | 'link_preview' | null;
     send_images?: boolean | null;
   };
 
-  // Backward compatibility: legacy rows may have send_images=false with send_mode defaulting to "image".
-  // In that case, treat it as link_preview (no media).
   if (next.send_mode === 'image' && next.send_images === false) {
-    next.send_mode = 'link_preview';
+    next.send_mode = 'text_preview';
   }
 
-  if (next.send_mode === 'image' || next.send_mode === 'image_only') {
+  if (next.send_mode === 'image') next.send_mode = 'auto_media';
+  if (next.send_mode === 'image_only') next.send_mode = 'media_only';
+  if (next.send_mode === 'link_preview') next.send_mode = 'text_preview';
+
+  if (next.send_mode === 'auto_media' || next.send_mode === 'media_only') {
     next.send_images = true;
-  } else if (next.send_mode === 'link_preview' || next.send_mode === 'text_only') {
+  } else if (next.send_mode === 'text_preview' || next.send_mode === 'text_only') {
     next.send_images = false;
   }
 
@@ -180,8 +194,10 @@ const templateRoutes = () => {
         { name: 'author', description: 'Article author' },
         { name: 'pub_date', description: 'Publication date' },
         { name: 'image_url', description: 'Article image URL when present' },
-        { name: 'media_url', description: 'Article image or video URL when present' },
-        { name: 'media_kind', description: 'Article media type (image or video)' },
+        { name: 'media_url', description: 'Article media URL when present' },
+        { name: 'media_kind', description: 'Article media type (image, video, audio, or document)' },
+        { name: 'media_mime', description: 'Detected media MIME type when known' },
+        { name: 'media_filename', description: 'Detected media filename when known' },
         { name: 'categories', description: 'Article categories' },
         { name: 'normalized_url', description: 'Normalized URL (for dedupe)' },
         { name: 'content_hash', description: 'Content hash (for dedupe)' },

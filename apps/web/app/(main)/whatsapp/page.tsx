@@ -23,8 +23,14 @@ type SendTestPayload = {
   message?: string;
   linkUrl?: string;
   imageUrl?: string;
+  audioUrl?: string;
+  documentUrl?: string;
   imageDataUrl?: string;
   videoDataUrl?: string;
+  audioDataUrl?: string;
+  documentDataUrl?: string;
+  documentFilename?: string;
+  documentMime?: string;
   includeCaption?: boolean;
   disableLinkPreview?: boolean;
 };
@@ -262,17 +268,27 @@ const WhatsAppPage = () => {
 
     const isImage = file.type.startsWith('image/');
     const isVideo = file.type.startsWith('video/');
-    if (!isImage && !isVideo) {
-      alert('Please choose an image or video file.');
+    const isAudio = file.type.startsWith('audio/');
+    const isDocument = !isImage && !isVideo && !isAudio;
+    if (!isImage && !isVideo && !isAudio && !isDocument) {
+      alert('Please choose an image, video, audio, or document file.');
       event.target.value = '';
       return;
     }
 
     const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
     const MAX_VIDEO_BYTES = 24 * 1024 * 1024;
-    const maxBytes = isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
+    const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
+    const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
+    const maxBytes = isVideo
+      ? MAX_VIDEO_BYTES
+      : isAudio
+        ? MAX_AUDIO_BYTES
+        : isDocument
+          ? MAX_DOCUMENT_BYTES
+          : MAX_IMAGE_BYTES;
     if (file.size > maxBytes) {
-      const maxLabel = isVideo ? '24MB' : '8MB';
+      const maxLabel = isVideo ? '24MB' : isAudio ? '20MB' : isDocument ? '25MB' : '8MB';
       alert(`File too large. Max allowed is ${maxLabel}.`);
       event.target.value = '';
       return;
@@ -331,6 +347,14 @@ const WhatsAppPage = () => {
     if (attachmentDataUrl && needsAttachment) {
       if (attachmentMimeType.startsWith('video/')) {
         payload.videoDataUrl = attachmentDataUrl;
+      } else if (attachmentMimeType.startsWith('audio/')) {
+        payload.audioDataUrl = attachmentDataUrl;
+      } else if (attachmentMimeType && !attachmentMimeType.startsWith('image/')) {
+        payload.documentDataUrl = attachmentDataUrl;
+        payload.documentFilename = attachmentName || 'attachment';
+        if (attachmentMimeType) {
+          payload.documentMime = attachmentMimeType;
+        }
       } else {
         payload.imageDataUrl = attachmentDataUrl;
       }
@@ -631,7 +655,12 @@ const WhatsAppPage = () => {
             {needsAttachment ? (
               <div className="space-y-2">
                 <Label htmlFor="attachmentUpload">Attachment</Label>
-                <Input id="attachmentUpload" type="file" accept="image/*,video/*" onChange={onPickAttachmentFile} />
+                <Input
+                  id="attachmentUpload"
+                  type="file"
+                  accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.txt,.rtf,.zip"
+                  onChange={onPickAttachmentFile}
+                />
                 {attachmentName ? <p className="text-xs text-muted-foreground">Selected: {attachmentName}</p> : null}
               </div>
             ) : null}

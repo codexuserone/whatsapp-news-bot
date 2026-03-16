@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@jest/globals';
 
-const { inferMediaKindFromUrl, normalizeFeedMedia } = require('../src/utils/feedMedia');
+const { inferMediaKindFromUrl, inferMediaKindFromMimeType, normalizeFeedMedia } = require('../src/utils/feedMedia');
 
 describe('inferMediaKindFromUrl', () => {
     it('detects image URLs by extension', () => {
@@ -17,6 +17,21 @@ describe('inferMediaKindFromUrl', () => {
         expect(inferMediaKindFromUrl('https://example.com/post')).toBeNull();
         expect(inferMediaKindFromUrl('')).toBeNull();
     });
+
+    it('detects audio and document URLs by extension', () => {
+        expect(inferMediaKindFromUrl('https://example.com/audio.mp3')).toBe('audio');
+        expect(inferMediaKindFromUrl('https://example.com/file.pdf?download=1')).toBe('document');
+    });
+});
+
+describe('inferMediaKindFromMimeType', () => {
+    it('detects supported media kinds by mime type', () => {
+        expect(inferMediaKindFromMimeType('audio/mpeg')).toBe('audio');
+        expect(inferMediaKindFromMimeType('application/pdf')).toBe('document');
+        expect(inferMediaKindFromMimeType('video/mp4')).toBe('video');
+        expect(inferMediaKindFromMimeType('image/jpeg')).toBe('image');
+        expect(inferMediaKindFromMimeType('')).toBeNull();
+    });
 });
 
 describe('normalizeFeedMedia', () => {
@@ -30,6 +45,8 @@ describe('normalizeFeedMedia', () => {
         ).toEqual({
             mediaUrl: 'https://example.com/video.mp4',
             mediaKind: 'video',
+            mediaMime: '',
+            mediaFilename: '',
             imageUrl: ''
         });
     });
@@ -45,6 +62,8 @@ describe('normalizeFeedMedia', () => {
         ).toEqual({
             mediaUrl: 'https://example.com/image.jpg',
             mediaKind: 'image',
+            mediaMime: '',
+            mediaFilename: '',
             imageUrl: 'https://example.com/image.jpg'
         });
     });
@@ -57,7 +76,25 @@ describe('normalizeFeedMedia', () => {
         ).toEqual({
             mediaUrl: 'https://example.com/featured.png',
             mediaKind: 'image',
+            mediaMime: 'image/*',
+            mediaFilename: '',
             imageUrl: 'https://example.com/featured.png'
+        });
+    });
+
+    it('uses mime type and filename hints for non-image media', () => {
+        expect(
+            normalizeFeedMedia({
+                mediaUrl: 'https://example.com/download',
+                mediaMime: 'audio/mpeg',
+                mediaFilename: 'episode.mp3'
+            })
+        ).toEqual({
+            mediaUrl: 'https://example.com/download',
+            mediaKind: 'audio',
+            mediaMime: 'audio/mpeg',
+            mediaFilename: 'episode.mp3',
+            imageUrl: ''
         });
     });
 });

@@ -15,7 +15,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
-import { CalendarClock, Play, Pencil, Trash2, Loader2, Plus, X } from 'lucide-react';
+import { CalendarClock, Play, Pencil, Trash2, Loader2, Plus, X, Copy } from 'lucide-react';
 
 const pad2 = (value: number) => String(value).padStart(2, '0');
 
@@ -317,6 +317,16 @@ const SchedulesPage = () => {
       }
     },
     onError: (error: unknown) => alert(`Failed to delete schedule: ${getErrorMessage(error)}`)
+  });
+
+  const cloneSchedule = useMutation({
+    mutationFn: (id: string) => api.post<Schedule>(`/api/schedules/${id}/clone`),
+    onSuccess: (clonedSchedule: Schedule) => {
+      queryClient.invalidateQueries({ queryKey: ['schedules'] });
+      setActive(clonedSchedule);
+      setAutomationNotice({ type: 'success', message: 'Automation cloned. Review and save any changes you want.' });
+    },
+    onError: (error: unknown) => alert(`Failed to clone automation: ${getErrorMessage(error)}`)
   });
 
   const setScheduleState = useMutation({
@@ -964,6 +974,9 @@ const SchedulesPage = () => {
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" variant="outline" onClick={() => setActive(schedule)}>
                       <Pencil className="mr-1 h-3 w-3" /> Edit
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => cloneSchedule.mutate(schedule.id)} disabled={cloneSchedule.isPending}>
+                      <Copy className="mr-1 h-3 w-3" /> Clone
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => dispatchSchedule.mutate(schedule.id)} disabled={dispatchSchedule.isPending}>
                       <Play className="mr-1 h-3 w-3" /> Send once

@@ -9,9 +9,11 @@ const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const { normalizeMessageText } = require('../utils/messageText');
 const { stripManualMeta } = require('../utils/manualMeta');
 const { normalizeTargetJidForSend } = require('../utils/targetJid');
+const { normalizeFeedMedia } = require('../utils/feedMedia');
 
 const WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES = 15;
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
+const HISTORY_QUEUE_STATUSES = new Set(['sent', 'failed', 'skipped', 'uncertain', 'superseded']);
 
 const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
 
@@ -47,6 +49,68 @@ const readBasicAuthUser = (req: Request) => {
   } catch {
     return null;
   }
+};
+
+type QueueCursorPayload = {
+  primary: string;
+  createdAt: string;
+  id: string;
+};
+
+type QueueOrder = {
+  primaryColumn: 'created_at' | 'sent_at';
+  ascending: boolean;
+};
+
+const parsePositiveLimit = (value: unknown, fallback: number, max: number) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(Math.floor(parsed), 1), max);
+};
+
+const resolveQueueOrder = (statusFilter?: string): QueueOrder => {
+  if (statusFilter === 'awaiting_approval' || statusFilter === 'pending' || statusFilter === 'processing') {
+    return { primaryColumn: 'created_at', ascending: true };
+  }
+  if (statusFilter && HISTORY_QUEUE_STATUSES.has(statusFilter)) {
+    return { primaryColumn: 'sent_at', ascending: false };
+  }
+  return { primaryColumn: 'created_at', ascending: false };
+};
+
+const encodeQueueCursor = (cursor: QueueCursorPayload) =>
+  Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+
+const decodeQueueCursor = (value: unknown): QueueCursorPayload | null => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as Partial<QueueCursorPayload>;
+    const primary = String(parsed.primary || '').trim();
+    const createdAt = String(parsed.createdAt || '').trim();
+    const id = String(parsed.id || '').trim();
+    if (!primary || !createdAt || !id) return null;
+    return { primary, createdAt, id };
+  } catch {
+    return null;
+  }
+};
+
+const buildQueueCursorFilter = (order: QueueOrder, cursor: QueueCursorPayload) => {
+  const primaryOperator = order.ascending ? 'gt' : 'lt';
+  const idOperator = order.ascending ? 'gt' : 'lt';
+  if (order.primaryColumn === 'created_at') {
+    return [
+      `created_at.${primaryOperator}.${cursor.primary}`,
+      `and(created_at.eq.${cursor.primary},id.${idOperator}.${cursor.id})`
+    ].join(',');
+  }
+
+  return [
+    `sent_at.${primaryOperator}.${cursor.primary}`,
+    `and(sent_at.eq.${cursor.primary},created_at.${primaryOperator}.${cursor.createdAt})`,
+    `and(sent_at.eq.${cursor.primary},created_at.eq.${cursor.createdAt},id.${idOperator}.${cursor.id})`
+  ].join(',');
 };
 
 const queueRoutes = () => {
@@ -88,6 +152,13 @@ const queueRoutes = () => {
       const statusFilter = statusFilterRaw ? String(statusFilterRaw).toLowerCase() : undefined;
       const shouldFilterByStatus = Boolean(statusFilter && statusFilter !== 'all');
       const includeManual = String(req.query.include_manual || '').toLowerCase() === 'true';
+      const useCursorPagination =
+        String(req.query.mode || '').toLowerCase() === 'cursor' ||
+        Object.prototype.hasOwnProperty.call(req.query, 'limit') ||
+        Object.prototype.hasOwnProperty.call(req.query, 'cursor');
+      const limit = parsePositiveLimit(req.query.limit, 100, 250);
+      const cursor = decodeQueueCursor(req.query.cursor);
+      const order = resolveQueueOrder(statusFilter);
 
       let query = supabase
         .from('message_logs')
@@ -128,6 +199,10 @@ const queueRoutes = () => {
             title,
             link,
             image_url,
+            media_url,
+            media_kind,
+            media_mime,
+            media_filename,
             pub_date,
             raw_data
           )
@@ -144,18 +219,20 @@ const queueRoutes = () => {
         query = query.not('schedule_id', 'is', null);
       }
 
-      if (statusFilter === 'awaiting_approval' || statusFilter === 'pending' || statusFilter === 'processing') {
-        query = query.order('created_at', { ascending: true }).order('id', { ascending: true });
-      } else if (statusFilter === 'sent' || statusFilter === 'failed' || statusFilter === 'skipped') {
-        query = query
-          .order('sent_at', { ascending: false, nullsFirst: false })
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: false });
-      } else {
-        query = query.order('created_at', { ascending: false }).order('id', { ascending: false });
+      if (cursor) {
+        const cursorFilter = buildQueueCursorFilter(order, cursor);
+        if (cursorFilter) {
+          query = query.or(cursorFilter);
+        }
       }
 
-      query = query.limit(100);
+      if (order.primaryColumn === 'sent_at') {
+        query = query.order('sent_at', { ascending: order.ascending, nullsFirst: false });
+      }
+      query = query
+        .order('created_at', { ascending: order.ascending })
+        .order('id', { ascending: order.ascending })
+        .limit(useCursorPagination ? limit + 1 : limit);
 
       const { data: rows, error } = await query;
 
@@ -166,6 +243,10 @@ const queueRoutes = () => {
           title?: string;
           link?: string;
           image_url?: string;
+          media_url?: string | null;
+          media_kind?: string | null;
+          media_mime?: string | null;
+          media_filename?: string | null;
           pub_date?: string;
           raw_data?: Record<string, unknown> | null;
         } | undefined;
@@ -173,6 +254,14 @@ const queueRoutes = () => {
           feedItems?.raw_data && typeof feedItems.raw_data === 'object'
             ? (feedItems.raw_data as Record<string, unknown>)
             : null;
+        const normalizedMedia = normalizeFeedMedia({
+          mediaUrl: feedItems?.media_url,
+          mediaKind: feedItems?.media_kind,
+          mediaMime: feedItems?.media_mime,
+          mediaFilename: feedItems?.media_filename,
+          imageUrl: feedItems?.image_url,
+          rawData
+        });
         const schedule = row.schedule as {
           id?: string;
           name?: string;
@@ -200,14 +289,15 @@ const queueRoutes = () => {
           target_type: target?.type || null,
           title,
           url: feedItems?.link || null,
-          image_url: feedItems?.image_url || null,
+          image_url: normalizedMedia.imageUrl || null,
+          media_kind: normalizedMedia.mediaKind || null,
           pub_date: feedItems?.pub_date || null,
           pub_precision: rawData ? String(rawData.published_precision || '') || null : null,
           rendered_content: isManual ? displayMessageContent : row.message_content,
           status: row.status,
           error_message: row.error_message,
-          media_url: row.media_url || null,
-          media_type: row.media_type || null,
+          media_url: row.media_url || normalizedMedia.mediaUrl || null,
+          media_type: row.media_type || normalizedMedia.mediaKind || null,
           media_sent: Boolean(row.media_sent),
           media_error: row.media_error || null,
           approved_at: row.approved_at || null,
@@ -223,7 +313,27 @@ const queueRoutes = () => {
         };
       });
 
-      res.json(items);
+      if (!useCursorPagination) {
+        return res.json(items);
+      }
+
+      const hasMore = items.length > limit;
+      const visibleItems = hasMore ? items.slice(0, limit) : items;
+      const lastVisible = hasMore ? (rows || [])[limit - 1] as Record<string, unknown> | undefined : (rows || [])[items.length - 1] as Record<string, unknown> | undefined;
+      const nextCursor =
+        hasMore && lastVisible
+          ? encodeQueueCursor({
+              primary: String(lastVisible[order.primaryColumn] || lastVisible.created_at || '').trim(),
+              createdAt: String(lastVisible.created_at || '').trim(),
+              id: String(lastVisible.id || '').trim()
+            })
+          : null;
+
+      return res.json({
+        items: visibleItems,
+        next_cursor: nextCursor,
+        limit
+      });
     } catch (error) {
       console.error('Error fetching queue:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
@@ -324,19 +434,23 @@ const queueRoutes = () => {
         return query;
       };
 
-      const [awaitingRes, pendingRes, processingRes, sentRes, failedRes, skippedRes] = await Promise.all([
+      const [awaitingRes, pendingRes, processingRes, sentRes, failedRes, skippedRes, uncertainRes, supersededRes] = await Promise.all([
         countByStatus('awaiting_approval'),
         countByStatus('pending'),
         countByStatus('processing'),
         countByStatus('sent', true),
         countByStatus('failed', true),
-        countByStatus('skipped', true)
+        countByStatus('skipped', true),
+        countByStatus('uncertain', true),
+        countByStatus('superseded', true)
       ]);
 
-      const [sentAllTimeRes, failedAllTimeRes, skippedAllTimeRes] = await Promise.all([
+      const [sentAllTimeRes, failedAllTimeRes, skippedAllTimeRes, uncertainAllTimeRes, supersededAllTimeRes] = await Promise.all([
         countByStatus('sent'),
         countByStatus('failed'),
-        countByStatus('skipped')
+        countByStatus('skipped'),
+        countByStatus('uncertain'),
+        countByStatus('superseded')
       ]);
 
       const awaitingCount = awaitingRes.count ?? 0;
@@ -345,12 +459,16 @@ const queueRoutes = () => {
       const sRecentCount = sentRes.count ?? 0;
       const fRecentCount = failedRes.count ?? 0;
       const skRecentCount = skippedRes.count ?? 0;
+      const uRecentCount = uncertainRes.count ?? 0;
+      const suRecentCount = supersededRes.count ?? 0;
       const sAllCount = sentAllTimeRes.count ?? 0;
       const fAllCount = failedAllTimeRes.count ?? 0;
       const skAllCount = skippedAllTimeRes.count ?? 0;
+      const uAllCount = uncertainAllTimeRes.count ?? 0;
+      const suAllCount = supersededAllTimeRes.count ?? 0;
       const queuedNow = awaitingCount + pCount + prCount;
-      const historyWindowTotal = sRecentCount + fRecentCount + skRecentCount;
-      const allTimeTotal = sAllCount + fAllCount + skAllCount;
+      const historyWindowTotal = sRecentCount + fRecentCount + skRecentCount + uRecentCount + suRecentCount;
+      const allTimeTotal = sAllCount + fAllCount + skAllCount + uAllCount + suAllCount;
 
       res.json({
         awaiting_approval: awaitingCount,
@@ -359,6 +477,8 @@ const queueRoutes = () => {
         sent: sRecentCount,
         failed: fRecentCount,
         skipped: skRecentCount,
+        uncertain: uRecentCount,
+        superseded: suRecentCount,
         total: queuedNow + historyWindowTotal,
         queued_now: queuedNow,
         history_window_total: historyWindowTotal,
@@ -366,6 +486,8 @@ const queueRoutes = () => {
         sent_all_time: sAllCount,
         failed_all_time: fAllCount,
         skipped_all_time: skAllCount,
+        uncertain_all_time: uAllCount,
+        superseded_all_time: suAllCount,
         window_hours: windowHours,
         window_start: windowStartIso
       });

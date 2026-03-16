@@ -6,9 +6,9 @@ const normalizeBooleanEnv = (value: unknown, fallback: boolean) => {
   return fallback;
 };
 
-const WHATSAPP_STATUS_ENABLED = normalizeBooleanEnv(process.env.WHATSAPP_STATUS_ENABLED, false);
+const WHATSAPP_STATUS_ENABLED = normalizeBooleanEnv(process.env.WHATSAPP_STATUS_ENABLED, true);
 const WHATSAPP_STATUS_DISABLED_REASON =
-  'WhatsApp Status is disabled during the current stabilization pass.';
+  'WhatsApp Status is disabled for this deployment.';
 
 module.exports = {
   WHATSAPP_STATUS_ENABLED,

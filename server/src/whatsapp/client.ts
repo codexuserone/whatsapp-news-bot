@@ -9,6 +9,7 @@ const { getErrorMessage } = require('../utils/errorUtils');
 const useSupabaseAuthState = require('./authStore');
 const { saveIncomingMessages } = require('../services/messageService');
 const { initSchedulers } = require('../services/schedulerService');
+const { refreshStatusRecipients } = require('../services/statusAudienceService');
 const { runTargetAutoSyncPass } = require('../services/targetSyncService');
 const { persistReceiptUpdates } = require('../services/receiptService');
 
@@ -1480,6 +1481,9 @@ class WhatsAppClient {
           } catch (error) {
             logger.error({ error }, 'Failed to initialize schedulers after reconnect');
           }
+          void refreshStatusRecipients(this, { sampleSize: 25 }).catch((error: unknown) => {
+            logger.warn({ error: getErrorMessage(error) }, 'Failed to refresh persisted status recipients after connect');
+          });
           void runTargetAutoSyncPass(this, { silent: true });
           this.startPresenceOfflineHeartbeat();
         }
@@ -2513,6 +2517,35 @@ class WhatsAppClient {
       });
     } catch (err) {
       logger.error({ err, jid: normalizedJid, messageId: normalizedMessageId }, 'Failed to edit message');
+      const message = err instanceof Error ? err.message : String(err);
+      if (this.isAuthStateCorrupted(message)) {
+        void this.handleCorruptedAuthState(err);
+      }
+      throw err;
+    }
+  }
+
+  async deleteMessage(jid: string, messageId: string) {
+    if (!this.socket) throw new Error('WhatsApp not connected');
+    if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
+    const normalizedJid = String(jid || '').trim();
+    const normalizedMessageId = String(messageId || '').trim();
+    if (!normalizedJid || !normalizedMessageId) {
+      throw new Error('jid and messageId are required to delete a message');
+    }
+
+    const cached = this.recentSentMessages.get(normalizedMessageId);
+    const cachedKey = cached?.key || null;
+    const key: proto.IMessageKey = {
+      remoteJid: String(cachedKey?.remoteJid || normalizedJid),
+      id: String(cachedKey?.id || normalizedMessageId),
+      fromMe: true
+    };
+
+    try {
+      return await this.socket.sendMessage(normalizedJid, { delete: key });
+    } catch (err) {
+      logger.error({ err, jid: normalizedJid, messageId: normalizedMessageId }, 'Failed to delete message');
       const message = err instanceof Error ? err.message : String(err);
       if (this.isAuthStateCorrupted(message)) {
         void this.handleCorruptedAuthState(err);

@@ -24,7 +24,7 @@ const schema = z.object({
   content: z.string().min(1),
   description: z.string().optional(),
   active: z.boolean().default(true),
-  send_mode: z.enum(['image', 'image_only', 'link_preview', 'text_only']).default('image')
+  send_mode: z.enum(['auto_media', 'media_only', 'text_preview', 'text_only']).default('auto_media')
 });
 
 type TemplateFormValues = z.infer<typeof schema>;
@@ -85,7 +85,18 @@ const getFeedItemMedia = (item?: FeedItem | null) => {
   const mediaUrl = String(item?.media_url || item?.image_url || '').trim();
   const rawKind = String(item?.media_kind || '').trim().toLowerCase();
   const looksLikeVideo = /\.(mp4|webm|mov|m4v)(?:[?#]|$)/i.test(mediaUrl);
-  const mediaKind = rawKind === 'video' || looksLikeVideo ? 'video' : mediaUrl ? 'image' : '';
+  const looksLikeAudio = /\.(mp3|wav|ogg|m4a|flac|aac|opus)(?:[?#]|$)/i.test(mediaUrl);
+  const looksLikeDocument = /\.(pdf|doc|docx|ppt|pptx|xls|xlsx|csv|txt|rtf|zip)(?:[?#]|$)/i.test(mediaUrl);
+  const mediaKind =
+    rawKind === 'video' || looksLikeVideo
+      ? 'video'
+      : rawKind === 'audio' || looksLikeAudio
+        ? 'audio'
+        : rawKind === 'document' || looksLikeDocument
+          ? 'document'
+          : mediaUrl
+            ? 'image'
+            : '';
   return {
     mediaUrl,
     mediaKind
@@ -94,13 +105,13 @@ const getFeedItemMedia = (item?: FeedItem | null) => {
 
 const getTemplateModeLabel = (mode?: Template['send_mode'] | null) => {
   switch (mode) {
-    case 'image_only':
+    case 'media_only':
       return 'Media only';
-    case 'link_preview':
+    case 'text_preview':
       return 'Text + preview';
     case 'text_only':
       return 'Text only';
-    case 'image':
+    case 'auto_media':
     default:
       return 'Auto media';
   }
@@ -108,15 +119,15 @@ const getTemplateModeLabel = (mode?: Template['send_mode'] | null) => {
 
 const getTemplateModeDescription = (mode?: Template['send_mode'] | null) => {
   switch (mode) {
-    case 'image_only':
-      return 'Send only the image or video from the story. If the story has no media, sending is blocked.';
-    case 'link_preview':
+    case 'media_only':
+      return 'Send only the story media. If the story has no supported media, sending is blocked.';
+    case 'text_preview':
       return 'Send your text and let WhatsApp build a preview from the link in the message.';
     case 'text_only':
       return 'Send plain text only, with no link preview and no media.';
-    case 'image':
+    case 'auto_media':
     default:
-      return 'Use the story image or video when it exists. If not, fall back to text with a preview link.';
+      return 'Use the story media when it exists. If not, fall back to text with a preview link.';
   }
 };
 
@@ -181,12 +192,12 @@ const TemplatesPage = () => {
 
   const selectedPreviewTarget = previewTargetByKey.get(previewTargetKey) || null;
 
-  const resolveSendMode = (template?: Template | null): 'image' | 'image_only' | 'link_preview' | 'text_only' => {
-    if (template?.send_mode === 'image_only') return 'image_only';
-    if (template?.send_mode === 'image' && template?.send_images === false) return 'link_preview';
-    if (template?.send_mode === 'link_preview') return 'link_preview';
+  const resolveSendMode = (template?: Template | null): 'auto_media' | 'media_only' | 'text_preview' | 'text_only' => {
+    if (template?.send_mode === 'media_only') return 'media_only';
+    if (template?.send_mode === 'auto_media' && template?.send_images === false) return 'text_preview';
+    if (template?.send_mode === 'text_preview') return 'text_preview';
     if (template?.send_mode === 'text_only') return 'text_only';
-    return 'image';
+    return 'auto_media';
   };
 
   const sampleItem = React.useMemo(() => {
@@ -300,7 +311,7 @@ const TemplatesPage = () => {
 
   const form = useForm<TemplateFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', content: '', description: '', active: true, send_mode: 'image' }
+    defaultValues: { name: '', content: '', description: '', active: true, send_mode: 'auto_media' }
   });
 
   const watchedContent = useWatch({ control: form.control, name: 'content' });
@@ -309,7 +320,7 @@ const TemplatesPage = () => {
   const renderedPreviewText = previewWithData
     ? (() => {
       const base = applyTemplate(watchedContent || '', sampleData);
-      if (watchedSendMode !== 'link_preview') return base;
+      if (watchedSendMode !== 'text_preview') return base;
       const link = String(sampleData.link || sampleData.url || '').trim();
       if (!link || /https?:\/\//i.test(base)) return base;
       return `${base}\n${link}`.trim();
@@ -358,18 +369,20 @@ const TemplatesPage = () => {
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
       if (active?.id === id) {
         setActive(null);
-        form.reset({ name: '', content: '', description: '', active: true, send_mode: 'image' });
+        form.reset({ name: '', content: '', description: '', active: true, send_mode: 'auto_media' });
       }
     },
     onError: (error: unknown) => alert(`Failed to delete template: ${getErrorMessage(error)}`)
   });
 
   const sendPreview = useMutation({
-      mutationFn: (payload: {
+    mutationFn: (payload: {
       jid: string;
       message: string;
       imageUrl?: string;
       videoUrl?: string;
+      audioUrl?: string;
+      documentUrl?: string;
       includeCaption?: boolean;
       disableLinkPreview?: boolean;
     }) => api.post<{ messageId?: string }>('/api/whatsapp/send-test', payload),
@@ -408,21 +421,27 @@ const TemplatesPage = () => {
     const mediaUrl = String(sampleData.media_url || sampleData.mediaUrl || sampleData.image_url || sampleData.imageUrl || '').trim();
     const mediaKind = String(sampleData.media_kind || sampleData.mediaKind || '').trim().toLowerCase();
 
-    if (watchedSendMode === 'image_only') {
+    if (watchedSendMode === 'media_only') {
       if (!mediaUrl) {
-        setPreviewSendNotice('Media only needs a sample item with an image or video.');
+        setPreviewSendNotice('Media only needs a sample item with media.');
         return;
       }
       sendPreview.mutate({
         jid,
         message: message || ' ',
-        ...(mediaKind === 'video' ? { videoUrl: mediaUrl } : { imageUrl: mediaUrl }),
+        ...(mediaKind === 'video'
+          ? { videoUrl: mediaUrl }
+          : mediaKind === 'audio'
+            ? { audioUrl: mediaUrl }
+            : mediaKind === 'document'
+              ? { documentUrl: mediaUrl }
+              : { imageUrl: mediaUrl }),
         includeCaption: false
       });
       return;
     }
 
-    if (watchedSendMode === 'image') {
+    if (watchedSendMode === 'auto_media') {
       if (!mediaUrl) {
         setPreviewSendNotice('No sample media found. Preview send will use text with a preview link.');
         sendPreview.mutate({
@@ -435,13 +454,19 @@ const TemplatesPage = () => {
       sendPreview.mutate({
         jid,
         message,
-        ...(mediaKind === 'video' ? { videoUrl: mediaUrl } : { imageUrl: mediaUrl }),
+        ...(mediaKind === 'video'
+          ? { videoUrl: mediaUrl }
+          : mediaKind === 'audio'
+            ? { audioUrl: mediaUrl }
+            : mediaKind === 'document'
+              ? { documentUrl: mediaUrl }
+              : { imageUrl: mediaUrl }),
         includeCaption: true
       });
       return;
     }
 
-    if (watchedSendMode === 'link_preview') {
+    if (watchedSendMode === 'text_preview') {
       sendPreview.mutate({
         jid,
         message,
@@ -622,9 +647,9 @@ const TemplatesPage = () => {
                   <Label>Message format</Label>
                   <div className="grid gap-2 sm:grid-cols-2">
                     {([
-                      { value: 'image', label: 'Auto media' },
-                      { value: 'image_only', label: 'Media only' },
-                      { value: 'link_preview', label: 'Text + preview' },
+                      { value: 'auto_media', label: 'Auto media' },
+                      { value: 'media_only', label: 'Media only' },
+                      { value: 'text_preview', label: 'Text + preview' },
                       { value: 'text_only', label: 'Text only' }
                     ] as const).map((option) => (
                       <Button
@@ -659,7 +684,7 @@ const TemplatesPage = () => {
                       variant="outline"
                       onClick={() => {
                         setActive(null);
-                        form.reset({ name: '', content: '', description: '', active: true, send_mode: 'image' });
+                        form.reset({ name: '', content: '', description: '', active: true, send_mode: 'auto_media' });
                       }}
                     >
                       Cancel
@@ -709,7 +734,7 @@ const TemplatesPage = () => {
 
               <div className="rounded-md border p-3 text-xs text-muted-foreground">
                 Format: <span className="font-medium text-foreground">{getTemplateModeLabel(watchedSendMode)}</span>
-                {watchedSendMode === 'image_only' ? ' (requires sample media)' : ''}
+                {watchedSendMode === 'media_only' ? ' (requires sample media)' : ''}
               </div>
 
               <div className="flex items-center gap-2">
@@ -763,7 +788,7 @@ const TemplatesPage = () => {
               <div className="rounded-lg bg-emerald-50/70 p-4 dark:bg-emerald-950/40">
                 <div className="max-w-[85%] rounded-lg bg-white/80 px-3 py-2 shadow-sm ring-1 ring-emerald-200/60 dark:bg-emerald-900/50 dark:ring-emerald-800/60">
                   {previewWithData &&
-                  (watchedSendMode === 'image' || watchedSendMode === 'image_only') &&
+                  (watchedSendMode === 'auto_media' || watchedSendMode === 'media_only') &&
                   String(sampleData.media_kind || sampleData.mediaKind || '').trim().toLowerCase() === 'video' &&
                   isSafeVideoSrc(sampleData.media_url || sampleData.mediaUrl) ? (
                     <div className="mb-2 overflow-hidden rounded-md border border-black/5 bg-black">
@@ -774,7 +799,7 @@ const TemplatesPage = () => {
                       />
                     </div>
                   ) : previewWithData &&
-                  (watchedSendMode === 'image' || watchedSendMode === 'image_only') &&
+                  (watchedSendMode === 'auto_media' || watchedSendMode === 'media_only') &&
                   isSafeImageSrc(sampleData.media_url || sampleData.mediaUrl || sampleData.image_url) ? (
                     <div className="mb-2 overflow-hidden rounded-md border border-black/5 bg-white">
                       <Image

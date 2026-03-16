@@ -7,6 +7,30 @@ type BaileysMessage = {
   messageTimestamp?: number | string;
 };
 
+const buildNormalizedEnvelope = (message: BaileysMessage) => {
+  const content = message.message || {};
+  const firstType = Object.keys(content)[0] || null;
+  const mediaNode = (content.imageMessage || content.videoMessage || content.audioMessage || content.documentMessage || null) as
+    | Record<string, unknown>
+    | null;
+  return {
+    key: {
+      remoteJid: message.key?.remoteJid || null,
+      id: message.key?.id || null,
+      fromMe: Boolean(message.key?.fromMe)
+    },
+    timestamp: message.messageTimestamp || null,
+    messageType: firstType,
+    media: mediaNode
+      ? {
+          mimetype: mediaNode.mimetype || null,
+          fileLength: mediaNode.fileLength || null,
+          fileName: mediaNode.fileName || null
+        }
+      : null
+  };
+};
+
 const saveIncomingMessages = async (messages: BaileysMessage[] = []) => {
   const entries: Array<Record<string, unknown>> = [];
   for (const message of messages) {
@@ -28,7 +52,7 @@ const saveIncomingMessages = async (messages: BaileysMessage[] = []) => {
       content: text,
       message_type: 'text',
       timestamp,
-      raw_message: message
+      raw_message: buildNormalizedEnvelope(message)
     };
 
     entries.push({

@@ -153,7 +153,10 @@ const schemas = {
     description: z.string().max(1000).optional().nullable().transform(normalizeOptional),
     active: z.boolean().default(true),
     send_images: z.boolean().default(true),
-    send_mode: z.enum(['image', 'image_only', 'link_preview', 'text_only']).optional().default('image')
+    send_mode: z
+      .enum(['auto_media', 'media_only', 'text_preview', 'text_only', 'image', 'image_only', 'link_preview'])
+      .optional()
+      .default('auto_media')
   }),
 
   testMessage: z
@@ -164,9 +167,15 @@ const schemas = {
       linkUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       videoUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      audioUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      documentUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       imageDataUrl: z.string().max(12_000_000).optional().nullable().transform(normalizeOptional),
       // Base64 video payloads are large; keep this bounded even if JSON_BODY_LIMIT_LARGE is higher.
       videoDataUrl: z.string().max(35_000_000).optional().nullable().transform(normalizeOptional),
+      audioDataUrl: z.string().max(25_000_000).optional().nullable().transform(normalizeOptional),
+      documentDataUrl: z.string().max(35_000_000).optional().nullable().transform(normalizeOptional),
+      documentFilename: z.string().max(255).optional().nullable().transform(normalizeOptional),
+      documentMime: z.string().max(255).optional().nullable().transform(normalizeOptional),
       statusJidList: z.array(z.string().regex(STATUS_AUDIENCE_JID_PATTERN)).max(2000).optional(),
       includeCaption: z.boolean().optional().default(true),
       disableLinkPreview: z.boolean().optional().default(false),
@@ -187,11 +196,28 @@ const schemas = {
         linkUrl?: string | null;
         imageUrl?: string | null;
         videoUrl?: string | null;
+        audioUrl?: string | null;
+        documentUrl?: string | null;
         imageDataUrl?: string | null;
         videoDataUrl?: string | null;
-      }) => Boolean(value.message || value.linkUrl || value.imageUrl || value.videoUrl || value.imageDataUrl || value.videoDataUrl),
+        audioDataUrl?: string | null;
+        documentDataUrl?: string | null;
+      }) =>
+        Boolean(
+          value.message ||
+          value.linkUrl ||
+          value.imageUrl ||
+          value.videoUrl ||
+          value.audioUrl ||
+          value.documentUrl ||
+          value.imageDataUrl ||
+          value.videoDataUrl ||
+          value.audioDataUrl ||
+          value.documentDataUrl
+        ),
       {
-        message: 'message, linkUrl, imageUrl, videoUrl, imageDataUrl, or videoDataUrl is required'
+        message:
+          'message, linkUrl, imageUrl, videoUrl, audioUrl, documentUrl, imageDataUrl, videoDataUrl, audioDataUrl, or documentDataUrl is required'
       }
     ),
 
@@ -247,8 +273,12 @@ const schemas = {
       message: z.string().max(4096).optional().nullable().transform(normalizeOptional),
       imageUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       videoUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      audioUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      documentUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       disableLinkPreview: z.boolean().optional().default(false),
-      includeCaption: z.boolean().optional().default(true)
+      includeCaption: z.boolean().optional().default(true),
+      documentFilename: z.string().max(255).optional().nullable().transform(normalizeOptional),
+      documentMime: z.string().max(255).optional().nullable().transform(normalizeOptional)
     })
     .refine(
       (value: { target_id?: string | null; target_ids?: string[] }) =>
@@ -258,16 +288,26 @@ const schemas = {
       }
     )
     .refine(
-      (value: { message?: string | null; imageUrl?: string | null; videoUrl?: string | null }) =>
-        Boolean(value.message || value.imageUrl || value.videoUrl),
+      (value: {
+        message?: string | null;
+        imageUrl?: string | null;
+        videoUrl?: string | null;
+        audioUrl?: string | null;
+        documentUrl?: string | null;
+      }) => Boolean(value.message || value.imageUrl || value.videoUrl || value.audioUrl || value.documentUrl),
       {
-        message: 'message, imageUrl, or videoUrl is required'
+        message: 'message, imageUrl, videoUrl, audioUrl, or documentUrl is required'
       }
     )
     .refine(
-      (value: { imageUrl?: string | null; videoUrl?: string | null }) => !(value.imageUrl && value.videoUrl),
+      (value: {
+        imageUrl?: string | null;
+        videoUrl?: string | null;
+        audioUrl?: string | null;
+        documentUrl?: string | null;
+      }) => [value.imageUrl, value.videoUrl, value.audioUrl, value.documentUrl].filter(Boolean).length <= 1,
       {
-        message: 'Provide either imageUrl or videoUrl, not both'
+        message: 'Provide at most one media source'
       }
     ),
 

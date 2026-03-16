@@ -13,8 +13,12 @@ type ManualPostBody = {
   message?: string | null;
   imageUrl?: string | null;
   videoUrl?: string | null;
+  audioUrl?: string | null;
+  documentUrl?: string | null;
   disableLinkPreview?: boolean;
   includeCaption?: boolean;
+  documentFilename?: string | null;
+  documentMime?: string | null;
 };
 
 const manualRoutes = () => {
@@ -38,6 +42,14 @@ const manualRoutes = () => {
   const buildMediaFields = (body: ManualPostBody) => {
     const imageUrl = String(body.imageUrl || '').trim();
     const videoUrl = String(body.videoUrl || '').trim();
+    const audioUrl = String(body.audioUrl || '').trim();
+    const documentUrl = String(body.documentUrl || '').trim();
+    if (documentUrl) {
+      return { media_url: documentUrl, media_type: 'document' as const };
+    }
+    if (audioUrl) {
+      return { media_url: audioUrl, media_type: 'audio' as const };
+    }
     if (videoUrl) {
       return { media_url: videoUrl, media_type: 'video' as const };
     }
@@ -57,7 +69,12 @@ const manualRoutes = () => {
     const media = buildMediaFields(body);
     const disableLinkPreview = body.disableLinkPreview === true;
     const includeCaption = body.includeCaption !== false;
-    const message = encodeManualMessageContent(messageRaw, { disableLinkPreview, includeCaption });
+    const message = encodeManualMessageContent(messageRaw, {
+      disableLinkPreview,
+      includeCaption,
+      documentFilename: body.documentFilename || null,
+      documentMime: body.documentMime || null
+    });
 
     const rows = targetIds.map((targetId) => ({
       schedule_id: null,

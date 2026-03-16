@@ -21,6 +21,7 @@ const { buildDefaultUserAgent } = require('../utils/httpClientIdentity');
 const { normalizeTargetJidForSend } = require('../utils/targetJid');
 const { normalizeFeedMedia } = require('../utils/feedMedia');
 const { WHATSAPP_STATUS_ENABLED, WHATSAPP_STATUS_DISABLED_REASON } = require('../config/features');
+const { ensureFreshStatusRecipients } = require('./statusAudienceService');
 
 type Target = {
   id?: string;
@@ -37,7 +38,15 @@ type Template = {
   id?: string;
   content: string;
   send_images?: boolean | null;
-  send_mode?: 'image' | 'image_only' | 'link_preview' | 'text_only' | null;
+  send_mode?:
+    | 'auto_media'
+    | 'media_only'
+    | 'text_preview'
+    | 'text_only'
+    | 'image'
+    | 'image_only'
+    | 'link_preview'
+    | null;
 };
 
 type FeedItem = {
@@ -48,6 +57,10 @@ type FeedItem = {
   content?: string;
   author?: string;
   image_url?: string;
+  media_url?: string | null;
+  media_kind?: 'image' | 'video' | 'audio' | 'document' | null;
+  media_mime?: string | null;
+  media_filename?: string | null;
   image_source?: string | null;
   image_scraped_at?: string | Date | null;
   image_scrape_error?: string | null;
@@ -61,6 +74,7 @@ type WhatsAppClient = {
   sendMessage: (jid: string, content: Record<string, unknown>, options?: Record<string, unknown>) => Promise<any>;
   sendStatusBroadcast: (content: Record<string, unknown>, options?: Record<string, unknown>) => Promise<any>;
   editMessage?: (jid: string, messageId: string, text: string) => Promise<any>;
+  deleteMessage?: (jid: string, messageId: string) => Promise<any>;
   reconnect?: () => Promise<void> | void;
   takeoverLease?: (
     ttlMs?: number
@@ -86,8 +100,15 @@ const MANUAL_POST_PAUSE_ERROR = 'Paused for this post';
 const FEED_PAUSED_ERROR = 'Feed paused';
 const NON_REVIVABLE_SKIP_ERRORS = new Set([MANUAL_POST_PAUSE_ERROR, FEED_PAUSED_ERROR]);
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
+const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.wma'];
+const DOCUMENT_EXTENSIONS = ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv', '.txt', '.rtf', '.zip'];
 
 const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
+
+const getStatusSendTimeoutMs = (kind: 'text' | 'media', fallbackMs: number) => {
+  const baseline = Math.max(Number(fallbackMs || DEFAULT_SEND_TIMEOUT_MS), 10000);
+  return kind === 'media' ? Math.max(baseline, 90000) : Math.max(baseline, 60000);
+};
 
 const isDuplicateDispatchConflict = (error: unknown) => {
   const code = String((error as { code?: unknown })?.code || '').trim();
@@ -200,11 +221,23 @@ class SendMutex {
 }
 
 const sendMutex = new SendMutex();
+const statusSendMutex = new SendMutex();
 
 
 // Replaces withGlobalSendLock
 const withGlobalSendLock = async <T>(fn: () => Promise<T>): Promise<T> => {
   return sendMutex.run(fn, 120000); // 2 minute max wait to acquire lock
+};
+
+const withStatusSendLock = async <T>(fn: () => Promise<T>): Promise<T> => {
+  return statusSendMutex.run(fn, 180000);
+};
+
+const withTargetSendLock = async <T>(target: Target, fn: () => Promise<T>): Promise<T> => {
+  if (target?.type === 'status') {
+    return withStatusSendLock(fn);
+  }
+  return withGlobalSendLock(fn);
 };
 
 const waitForDelays = async (
@@ -306,6 +339,18 @@ const isVideoUrl = (url: string): boolean => {
   const hasExt = (ext: string) => new RegExp(`${ext.replace('.', '\\.')}([?#]|$)`).test(lower);
   const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v'];
   return videoExtensions.some(hasExt);
+};
+
+const isAudioUrl = (url: string): boolean => {
+  const lower = String(url || '').toLowerCase();
+  const hasExt = (ext: string) => new RegExp(`${ext.replace('.', '\\.')}([?#]|$)`).test(lower);
+  return AUDIO_EXTENSIONS.some(hasExt);
+};
+
+const isDocumentUrl = (url: string): boolean => {
+  const lower = String(url || '').toLowerCase();
+  const hasExt = (ext: string) => new RegExp(`${ext.replace('.', '\\.')}([?#]|$)`).test(lower);
+  return DOCUMENT_EXTENSIONS.some(hasExt);
 };
 
 const DEFAULT_USER_AGENT = buildDefaultUserAgent();
@@ -613,6 +658,60 @@ const downloadVideoBuffer = async (videoUrl: string, refererUrl?: string | null)
   return { buffer, mimetype: 'video/mp4' };
 };
 
+const downloadAudioBuffer = async (audioUrl: string, refererUrl?: string | null) => {
+  const MAX_AUDIO_BYTES = Math.max(
+    1,
+    Math.floor(Number(process.env.MAX_AUDIO_BYTES || process.env.WHATSAPP_MAX_AUDIO_BYTES || 20 * 1024 * 1024))
+  );
+  const refererOrigin = toOriginOrUndefined(refererUrl);
+  const response = await safeAxiosRequest(audioUrl, {
+    timeout: Math.max(DEFAULT_SEND_TIMEOUT_MS, 30000),
+    responseType: 'arraybuffer',
+    maxContentLength: MAX_AUDIO_BYTES,
+    maxBodyLength: MAX_AUDIO_BYTES,
+    headers: {
+      'User-Agent': DEFAULT_USER_AGENT,
+      Accept: 'audio/*;q=0.9,*/*;q=0.8',
+      ...(refererOrigin ? { Referer: refererOrigin } : {})
+    }
+  });
+  const buffer = Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data);
+  if (!buffer.length) throw new Error('Audio download returned empty body');
+  if (buffer.length > MAX_AUDIO_BYTES) throw new Error(`Audio too large (${buffer.length} bytes)`);
+  const contentTypeHeader = String(response.headers?.['content-type'] || 'audio/mpeg');
+  const mimetype = (contentTypeHeader.split(';')[0] || 'audio/mpeg').trim().toLowerCase() || 'audio/mpeg';
+  if (!mimetype.startsWith('audio/')) throw new Error('Unsupported audio payload');
+  return { buffer, mimetype };
+};
+
+const downloadDocumentBuffer = async (documentUrl: string, refererUrl?: string | null) => {
+  const MAX_DOCUMENT_BYTES = Math.max(
+    1,
+    Math.floor(Number(process.env.MAX_DOCUMENT_BYTES || process.env.WHATSAPP_MAX_DOCUMENT_BYTES || 25 * 1024 * 1024))
+  );
+  const refererOrigin = toOriginOrUndefined(refererUrl);
+  const response = await safeAxiosRequest(documentUrl, {
+    timeout: Math.max(DEFAULT_SEND_TIMEOUT_MS, 30000),
+    responseType: 'arraybuffer',
+    maxContentLength: MAX_DOCUMENT_BYTES,
+    maxBodyLength: MAX_DOCUMENT_BYTES,
+    headers: {
+      'User-Agent': DEFAULT_USER_AGENT,
+      Accept: 'application/*,text/plain,text/csv;q=0.9,*/*;q=0.8',
+      ...(refererOrigin ? { Referer: refererOrigin } : {})
+    }
+  });
+  const buffer = Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data);
+  if (!buffer.length) throw new Error('Document download returned empty body');
+  if (buffer.length > MAX_DOCUMENT_BYTES) throw new Error(`Document too large (${buffer.length} bytes)`);
+  const contentTypeHeader = String(response.headers?.['content-type'] || 'application/octet-stream');
+  const mimetype = (contentTypeHeader.split(';')[0] || 'application/octet-stream').trim().toLowerCase() || 'application/octet-stream';
+  const filenameHeader = String(response.headers?.['content-disposition'] || '');
+  const filenameMatch = filenameHeader.match(/filename\*?=(?:UTF-8''|")?([^\";]+)/i);
+  const filename = filenameMatch?.[1] ? decodeURIComponent(filenameMatch[1]).replace(/"/g, '').trim() : '';
+  return { buffer, mimetype, filename };
+};
+
 const maybeUpdateFeedItemImage = async (
   supabase: SupabaseClient | undefined,
   feedItemId: string | undefined,
@@ -632,53 +731,70 @@ const resolveMediaUrlForFeedItem = async (
   allowMedia: boolean
 ): Promise<{
   url: string | null;
-  kind: 'image' | 'video' | null;
+  kind: 'image' | 'video' | 'audio' | 'document' | null;
+  mime: string | null;
+  filename: string | null;
   source: string | null;
   scraped: boolean;
   error: string | null;
 }> => {
   if (!allowMedia) {
-    return { url: null, kind: null, source: null, scraped: false, error: null };
+    return { url: null, kind: null, mime: null, filename: null, source: null, scraped: false, error: null };
   }
 
   let existingUrlIssue: string | null = null;
   const normalizedMedia = normalizeFeedMedia({
-    mediaUrl:
-      feedItem?.raw_data && typeof feedItem.raw_data === 'object'
-        ? (feedItem.raw_data as Record<string, unknown>).media_url
-        : null,
-    mediaKind:
-      feedItem?.raw_data && typeof feedItem.raw_data === 'object'
-        ? (feedItem.raw_data as Record<string, unknown>).media_kind
-        : null,
+    mediaUrl: feedItem.media_url || (feedItem?.raw_data && typeof feedItem.raw_data === 'object'
+      ? (feedItem.raw_data as Record<string, unknown>).media_url
+      : null),
+    mediaKind: feedItem.media_kind || (feedItem?.raw_data && typeof feedItem.raw_data === 'object'
+      ? (feedItem.raw_data as Record<string, unknown>).media_kind
+      : null),
+    mediaMime: feedItem.media_mime || (feedItem?.raw_data && typeof feedItem.raw_data === 'object'
+      ? (feedItem.raw_data as Record<string, unknown>).media_mime
+      : null),
+    mediaFilename: feedItem.media_filename || (feedItem?.raw_data && typeof feedItem.raw_data === 'object'
+      ? (feedItem.raw_data as Record<string, unknown>).media_filename
+      : null),
     imageUrl: typeof feedItem.image_url === 'string' ? feedItem.image_url : null,
     rawData: feedItem.raw_data || null
   });
   const existing = normalizedMedia.mediaUrl || null;
   if (existing && isHttpUrl(existing)) {
-    const normalizedKind = normalizedMedia.mediaKind || (isVideoUrl(existing) ? 'video' : isImageUrl(existing) ? 'image' : null);
-    if (normalizedKind === 'image') {
+    const normalizedKind =
+      normalizedMedia.mediaKind ||
+      (isVideoUrl(existing)
+        ? 'video'
+        : isAudioUrl(existing)
+          ? 'audio'
+          : isDocumentUrl(existing)
+            ? 'document'
+            : isImageUrl(existing)
+              ? 'image'
+              : null);
+    if (normalizedKind === 'image' || normalizedKind === 'video' || normalizedKind === 'audio' || normalizedKind === 'document') {
       try {
         await assertSafeOutboundUrl(existing);
-        return { url: existing, kind: 'image', source: feedItem.image_source || 'feed', scraped: false, error: null };
-      } catch (error) {
-        existingUrlIssue = getErrorMessage(error);
-      }
-    } else if (normalizedKind === 'video') {
-      try {
-        await assertSafeOutboundUrl(existing);
-        return { url: existing, kind: 'video', source: feedItem.image_source || 'feed', scraped: false, error: null };
+        return {
+          url: existing,
+          kind: normalizedKind,
+          mime: normalizedMedia.mediaMime || null,
+          filename: normalizedMedia.mediaFilename || null,
+          source: feedItem.image_source || 'feed',
+          scraped: false,
+          error: null
+        };
       } catch (error) {
         existingUrlIssue = getErrorMessage(error);
       }
     } else {
-      existingUrlIssue = 'Feed media URL is not a supported image/video';
+      existingUrlIssue = 'Feed media URL is not a supported WhatsApp media type';
     }
   }
 
   const link = typeof feedItem.link === 'string' ? feedItem.link : null;
   if (!link || !isHttpUrl(link)) {
-    return { url: null, kind: null, source: null, scraped: false, error: existingUrlIssue };
+    return { url: null, kind: null, mime: null, filename: null, source: null, scraped: false, error: existingUrlIssue };
   }
 
   const scrapedAt = feedItem.image_scraped_at ? new Date(feedItem.image_scraped_at).getTime() : 0;
@@ -687,6 +803,8 @@ const resolveMediaUrlForFeedItem = async (
     return {
       url: null,
       kind: null,
+      mime: null,
+      filename: null,
       source: null,
       scraped: false,
       error: feedItem.image_scrape_error || existingUrlIssue || null
@@ -707,7 +825,7 @@ const resolveMediaUrlForFeedItem = async (
           image_scraped_at: nowIso,
           image_scrape_error: message
         });
-        return { url: null, kind: null, source: null, scraped: true, error: message };
+        return { url: null, kind: null, mime: null, filename: null, source: null, scraped: true, error: message };
       }
 
       feedItem.image_url = scraped;
@@ -720,7 +838,7 @@ const resolveMediaUrlForFeedItem = async (
         image_scraped_at: nowIso,
         image_scrape_error: null
       });
-      return { url: scraped, kind: 'image', source: 'page', scraped: true, error: null };
+      return { url: scraped, kind: 'image', mime: 'image/*', filename: null, source: 'page', scraped: true, error: null };
     }
 
     feedItem.image_scraped_at = nowIso;
@@ -729,7 +847,7 @@ const resolveMediaUrlForFeedItem = async (
       image_scraped_at: nowIso,
       image_scrape_error: 'No image found on page'
     });
-    return { url: null, kind: null, source: null, scraped: true, error: 'No image found on page' };
+    return { url: null, kind: null, mime: null, filename: null, source: null, scraped: true, error: 'No image found on page' };
   } catch (error) {
     const message = getErrorMessage(error);
     const nowIso = new Date().toISOString();
@@ -739,7 +857,7 @@ const resolveMediaUrlForFeedItem = async (
       image_scraped_at: nowIso,
       image_scrape_error: message
     });
-    return { url: null, kind: null, source: null, scraped: true, error: message };
+    return { url: null, kind: null, mime: null, filename: null, source: null, scraped: true, error: message };
   }
 };
 
@@ -762,22 +880,30 @@ const buildMessageData = (feedItem: FeedItem) => ({
   author: feedItem.author,
   image_url: feedItem.image_url,
   imageUrl: feedItem.image_url,
-  media_url:
-    typeof feedItem.raw_data === 'object' && feedItem.raw_data
-      ? (feedItem.raw_data as Record<string, unknown>).media_url
-      : '',
-  mediaUrl:
-    typeof feedItem.raw_data === 'object' && feedItem.raw_data
-      ? (feedItem.raw_data as Record<string, unknown>).media_url
-      : '',
-  media_kind:
-    typeof feedItem.raw_data === 'object' && feedItem.raw_data
-      ? (feedItem.raw_data as Record<string, unknown>).media_kind
-      : '',
-  mediaKind:
-    typeof feedItem.raw_data === 'object' && feedItem.raw_data
-      ? (feedItem.raw_data as Record<string, unknown>).media_kind
-      : '',
+  media_url: feedItem.media_url || (typeof feedItem.raw_data === 'object' && feedItem.raw_data
+    ? (feedItem.raw_data as Record<string, unknown>).media_url
+    : ''),
+  mediaUrl: feedItem.media_url || (typeof feedItem.raw_data === 'object' && feedItem.raw_data
+    ? (feedItem.raw_data as Record<string, unknown>).media_url
+    : ''),
+  media_kind: feedItem.media_kind || (typeof feedItem.raw_data === 'object' && feedItem.raw_data
+    ? (feedItem.raw_data as Record<string, unknown>).media_kind
+    : ''),
+  mediaKind: feedItem.media_kind || (typeof feedItem.raw_data === 'object' && feedItem.raw_data
+    ? (feedItem.raw_data as Record<string, unknown>).media_kind
+    : ''),
+  media_mime: feedItem.media_mime || (typeof feedItem.raw_data === 'object' && feedItem.raw_data
+    ? (feedItem.raw_data as Record<string, unknown>).media_mime
+    : ''),
+  mediaMime: feedItem.media_mime || (typeof feedItem.raw_data === 'object' && feedItem.raw_data
+    ? (feedItem.raw_data as Record<string, unknown>).media_mime
+    : ''),
+  media_filename: feedItem.media_filename || (typeof feedItem.raw_data === 'object' && feedItem.raw_data
+    ? (feedItem.raw_data as Record<string, unknown>).media_filename
+    : ''),
+  mediaFilename: feedItem.media_filename || (typeof feedItem.raw_data === 'object' && feedItem.raw_data
+    ? (feedItem.raw_data as Record<string, unknown>).media_filename
+    : ''),
   normalized_url: (feedItem as unknown as { normalized_url?: string }).normalized_url,
   normalizedUrl: (feedItem as unknown as { normalized_url?: string }).normalized_url,
   content_hash: (feedItem as unknown as { content_hash?: string }).content_hash,
@@ -814,21 +940,24 @@ const ensurePreviewLink = (value: string, link?: string | null) => {
   return `${text}\n${normalizedLink}`;
 };
 
-type TemplateSendMode = 'image' | 'image_only' | 'link_preview' | 'text_only';
+type TemplateSendMode = 'auto_media' | 'media_only' | 'text_preview' | 'text_only';
 
 const getTemplateSendMode = (template: Template): TemplateSendMode => {
-  if (template?.send_mode === 'image' && template?.send_images === false) {
-    return 'link_preview';
+  if ((template?.send_mode === 'image' || template?.send_mode === 'auto_media') && template?.send_images === false) {
+    return 'text_preview';
   }
   if (
-    template?.send_mode === 'image' ||
-    template?.send_mode === 'image_only' ||
-    template?.send_mode === 'link_preview' ||
+    template?.send_mode === 'auto_media' ||
+    template?.send_mode === 'media_only' ||
+    template?.send_mode === 'text_preview' ||
     template?.send_mode === 'text_only'
   ) {
     return template.send_mode as TemplateSendMode;
   }
-  return template?.send_images === false ? 'link_preview' : 'image';
+  if (template?.send_mode === 'image') return 'auto_media';
+  if (template?.send_mode === 'image_only') return 'media_only';
+  if (template?.send_mode === 'link_preview') return 'text_preview';
+  return template?.send_images === false ? 'text_preview' : 'auto_media';
 };
 
 const renderTemplateMessage = (
@@ -851,13 +980,13 @@ const renderTemplateMessage = (
   }
 
   const sendMode = getTemplateSendMode(template);
-  const includeImageCaption = sendMode !== 'image_only';
-  const allowTextFallback = sendMode !== 'image_only';
+  const includeImageCaption = sendMode !== 'media_only';
+  const allowTextFallback = sendMode !== 'media_only';
   const textWithPreview = ensurePreviewLink(renderedText, feedItem.link);
   const outboundText =
     sendMode === 'text_only'
       ? renderedText
-      : sendMode === 'link_preview'
+      : sendMode === 'text_preview'
         ? textWithPreview
         : includeImageCaption
           ? renderedText
@@ -911,15 +1040,24 @@ const sendMessageWithTemplate = async (
   const allowTextFallback = rendered.allowTextFallback;
   const renderedText = rendered.renderedText;
   const textWithPreview = rendered.textWithPreview;
+  const buildStatusOptions = async () => {
+    if (target.type !== 'status') return undefined;
+    const snapshot = await ensureFreshStatusRecipients(whatsappClient, { maxAgeMinutes: 10, sampleSize: 25 });
+    if (!snapshot.recipients.length) {
+      throw new Error('No fresh status recipients are available for this status send.');
+    }
+    return { statusJidList: snapshot.recipients };
+  };
 
   const sendText = async (text: string, modeOptions?: { disableLinkPreview?: boolean }) => {
     const content: Record<string, unknown> = modeOptions?.disableLinkPreview
       ? { text, linkPreview: null }
       : { text };
     if (target.type === 'status') {
+      const statusOptions = await buildStatusOptions();
       return withTimeout(
-        whatsappClient.sendStatusBroadcast(content),
-        sendTimeoutMs,
+        whatsappClient.sendStatusBroadcast(content, statusOptions),
+        getStatusSendTimeoutMs('text', sendTimeoutMs),
         'Timed out sending status message'
       );
     }
@@ -939,7 +1077,7 @@ const sendMessageWithTemplate = async (
     };
   }
 
-  if (sendMode === 'link_preview') {
+  if (sendMode === 'text_preview') {
     const response = await sendText(textWithPreview);
     return {
       response,
@@ -949,8 +1087,8 @@ const sendMessageWithTemplate = async (
   }
 
   const resolved = await resolveMediaUrlForFeedItem(options?.supabase, feedItem, allowImages);
-  if (sendMode === 'image_only' && !resolved.url) {
-    throw new Error('Image-only mode requires an available media (image/video) for this feed item');
+  if (sendMode === 'media_only' && !resolved.url) {
+    throw new Error('Media-only mode requires an available media file for this feed item');
   }
 
   if (allowImages && resolved.url) {
@@ -1006,11 +1144,12 @@ const sendMessageWithTemplate = async (
           Object.assign(content, newsletterExtras);
         }
 
+        const statusOptions = target.type === 'status' ? await buildStatusOptions() : undefined;
         const response =
           target.type === 'status'
             ? await withTimeout(
-              whatsappClient.sendStatusBroadcast(content),
-              sendTimeoutMs,
+              whatsappClient.sendStatusBroadcast(content, statusOptions),
+              getStatusSendTimeoutMs('media', sendTimeoutMs),
               'Timed out sending video status message'
             )
             : await withTimeout(
@@ -1035,6 +1174,93 @@ const sendMessageWithTemplate = async (
           response,
           text: textWithPreview,
           media: { type: 'video', url: safeUrl, sent: false, error: bufferErrorMessage }
+        };
+      }
+    }
+
+    if (resolved.kind === 'audio') {
+      if (target.type === 'status') {
+        if (!allowTextFallback) {
+          throw new Error('Status only supports text, image, and video');
+        }
+        const response = await sendText(textWithPreview);
+        return {
+          response,
+          text: textWithPreview,
+          media: { type: 'audio', url: safeUrl, sent: false, error: 'Status only supports text, image, and video' }
+        };
+      }
+      try {
+        const { buffer, mimetype } = await downloadAudioBuffer(safeUrl, feedItem.link);
+        const content: Record<string, unknown> = { audio: buffer, mimetype, ptt: false };
+        const response = await withTimeout(
+          whatsappClient.sendMessage(jid, content),
+          sendTimeoutMs,
+          'Timed out sending audio message'
+        );
+        return {
+          response,
+          text: '',
+          media: { type: 'audio', url: safeUrl, sent: true, error: null }
+        };
+      } catch (error) {
+        const bufferErrorMessage = getErrorMessage(error);
+        if (!allowTextFallback) {
+          throw new Error(bufferErrorMessage);
+        }
+        logger.warn({ error, jid, audioUrl: safeUrl }, 'Audio send failed; using text fallback');
+        const response = await sendText(textWithPreview);
+        return {
+          response,
+          text: textWithPreview,
+          media: { type: 'audio', url: safeUrl, sent: false, error: bufferErrorMessage }
+        };
+      }
+    }
+
+    if (resolved.kind === 'document') {
+      if (target.type === 'status') {
+        if (!allowTextFallback) {
+          throw new Error('Status only supports text, image, and video');
+        }
+        const response = await sendText(textWithPreview);
+        return {
+          response,
+          text: textWithPreview,
+          media: { type: 'document', url: safeUrl, sent: false, error: 'Status only supports text, image, and video' }
+        };
+      }
+      try {
+        const { buffer, mimetype, filename } = await downloadDocumentBuffer(safeUrl, feedItem.link);
+        const content: Record<string, unknown> = {
+          document: buffer,
+          mimetype: resolved.mime || mimetype || 'application/octet-stream',
+          fileName: resolved.filename || filename || 'attachment'
+        };
+        if (includeImageCaption && renderedText) {
+          content.caption = renderedText;
+        }
+        const response = await withTimeout(
+          whatsappClient.sendMessage(jid, content),
+          sendTimeoutMs,
+          'Timed out sending document message'
+        );
+        return {
+          response,
+          text: includeImageCaption ? renderedText : '',
+          media: { type: 'document', url: safeUrl, sent: true, error: null }
+        };
+      } catch (error) {
+        const bufferErrorMessage = getErrorMessage(error);
+        if (!allowTextFallback) {
+          throw new Error(bufferErrorMessage);
+        }
+        logger.warn({ error, jid, documentUrl: safeUrl }, 'Document send failed; using text fallback');
+        const response = await sendText(textWithPreview);
+        return {
+          response,
+          text: textWithPreview,
+          media: { type: 'document', url: safeUrl, sent: false, error: bufferErrorMessage }
         };
       }
     }
@@ -1072,11 +1298,12 @@ const sendMessageWithTemplate = async (
         Object.assign(content, newsletterExtras);
       }
 
+      const statusOptions = target.type === 'status' ? await buildStatusOptions() : undefined;
       const response =
         target.type === 'status'
           ? await withTimeout(
-            whatsappClient.sendStatusBroadcast(content),
-            sendTimeoutMs,
+            whatsappClient.sendStatusBroadcast(content, statusOptions),
+            getStatusSendTimeoutMs('media', sendTimeoutMs),
             'Timed out sending image status message'
           )
           : await withTimeout(
@@ -1119,8 +1346,8 @@ const sendMessageWithTemplate = async (
     }
   }
 
-  if (sendMode === 'image_only') {
-    throw new Error('Image-only mode could not find a media (image/video) to send');
+  if (sendMode === 'media_only') {
+    throw new Error('Media-only mode could not find a usable media file to send');
   }
 
   const response = await sendText(textWithPreview);
@@ -1527,6 +1754,21 @@ const computeNextBatchRunAt = (times: string[], timezone?: string | null) => {
   return nextValue;
 };
 
+const compareFeedDispatchOrder = (
+  left: { pub_date?: string | null; created_at?: string | null; id?: string | null },
+  right: { pub_date?: string | null; created_at?: string | null; id?: string | null }
+) => {
+  const leftPub = left?.pub_date ? Date.parse(String(left.pub_date)) : Number.NaN;
+  const rightPub = right?.pub_date ? Date.parse(String(right.pub_date)) : Number.NaN;
+  const leftCreated = left?.created_at ? Date.parse(String(left.created_at)) : Number.NaN;
+  const rightCreated = right?.created_at ? Date.parse(String(right.created_at)) : Number.NaN;
+  const leftPrimary = Number.isFinite(leftPub) ? leftPub : Number.isFinite(leftCreated) ? leftCreated : 0;
+  const rightPrimary = Number.isFinite(rightPub) ? rightPub : Number.isFinite(rightCreated) ? rightCreated : 0;
+  if (leftPrimary !== rightPrimary) return leftPrimary - rightPrimary;
+  if (leftCreated !== rightCreated) return leftCreated - rightCreated;
+  return String(left?.id || '').localeCompare(String(right?.id || ''));
+};
+
 const queueSinceLastRunForSchedule = async (
   supabase: SupabaseClient,
   schedule: Schedule,
@@ -1602,7 +1844,7 @@ const queueSinceLastRunForSchedule = async (
   while (true) {
     let query = supabase
       .from('feed_items')
-      .select('id, created_at')
+      .select('id, created_at, pub_date')
       .eq('feed_id', schedule.feed_id)
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
@@ -1620,7 +1862,7 @@ const queueSinceLastRunForSchedule = async (
       break;
     }
 
-    const items = (page || []) as Array<{ id?: string; created_at?: string }>;
+    const items = ((page || []) as Array<{ id?: string; created_at?: string; pub_date?: string }>).sort(compareFeedDispatchOrder);
     if (!items.length) {
       break;
     }
@@ -1678,10 +1920,12 @@ const queueRecentMissingForSchedule = async (
 
   const { data: recentItems, error: itemsError } = await supabase
     .from('feed_items')
-    .select('id')
+    .select('id,created_at,pub_date')
     .eq('feed_id', schedule.feed_id)
     .gte('created_at', sinceIso)
+    .order('pub_date', { ascending: true, nullsFirst: false })
     .order('created_at', { ascending: true })
+    .order('id', { ascending: true })
     .limit(400);
 
   if (itemsError || !recentItems?.length) {
@@ -1780,9 +2024,11 @@ const queueLatestForSchedule = async (
 
   const { data: latestFeedItem } = await supabase
     .from('feed_items')
-    .select('id, title, created_at')
+    .select('id, title, created_at, pub_date')
     .eq('feed_id', schedule.feed_id)
+    .order('pub_date', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
     .limit(1)
     .single();
 
@@ -2818,9 +3064,13 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
     const sendTextManual = async (text: string) => {
       const content: Record<string, unknown> = disableLinkPreview ? { text, linkPreview: null } : { text };
       if (targetRow.type === 'status') {
+        const statusSnapshot = await ensureFreshStatusRecipients(activeWhatsappClient, { maxAgeMinutes: 10, sampleSize: 25 });
+        if (!statusSnapshot.recipients.length) {
+          throw new Error('No fresh status recipients are available for this status send.');
+        }
         return withTimeout(
-          activeWhatsappClient.sendStatusBroadcast(content),
-          Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+          activeWhatsappClient.sendStatusBroadcast(content, { statusJidList: statusSnapshot.recipients }),
+          getStatusSendTimeoutMs('text', Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS)),
           'Timed out sending status message'
         );
       }
@@ -2895,7 +3145,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           return { ok: false, error: 'Template not found' };
         }
 
-        const sendResult = await withGlobalSendLock(async () => {
+        const sendResult = await withTargetSendLock(targetRow, async () => {
           await waitForDelays(targetRow, settings);
           const result = await sendMessageWithTemplate(
             activeWhatsappClient,
@@ -2921,7 +3171,8 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
         const messageId = sendResult?.response?.key?.id;
         await ensureSendConfirmed(
           messageId || null,
-          (sendResult?.media?.type === 'image' || sendResult?.media?.type === 'video') && Boolean(sendResult?.media?.sent)
+          ['image', 'video', 'audio', 'document'].includes(String(sendResult?.media?.type || '')) &&
+            Boolean(sendResult?.media?.sent)
         );
 
         await supabase
@@ -2959,7 +3210,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
         throw new Error('Manual message must include message text or a media URL');
       }
 
-      const sendResult = await withGlobalSendLock(async () => {
+      const sendResult = await withTargetSendLock(targetRow, async () => {
         await waitForDelays(targetRow, settings);
 
         if (!manualHasMedia) {
@@ -2986,14 +3237,22 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             ? 'video'
             : manualMediaType === 'image'
               ? 'image'
-              : isVideoUrl(safeUrl)
-                ? 'video'
-                : isImageUrl(safeUrl)
-                  ? 'image'
-                  : null;
+              : manualMediaType === 'audio'
+                ? 'audio'
+                : manualMediaType === 'document'
+                  ? 'document'
+                : isVideoUrl(safeUrl)
+                  ? 'video'
+                  : isAudioUrl(safeUrl)
+                    ? 'audio'
+                    : isDocumentUrl(safeUrl)
+                      ? 'document'
+                  : isImageUrl(safeUrl)
+                    ? 'image'
+                    : null;
 
         if (!inferredKind) {
-          throw new Error('Unsupported media URL (expected an image or MP4 video)');
+          throw new Error('Unsupported media URL (expected image, video, audio, or document)');
         }
 
         if (inferredKind === 'video') {
@@ -3026,12 +3285,16 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             if (newsletterExtras && Object.keys(newsletterExtras).length) {
               Object.assign(content, newsletterExtras);
             }
+            const statusSnapshot =
+              targetRow.type === 'status'
+                ? await ensureFreshStatusRecipients(activeWhatsappClient, { maxAgeMinutes: 10, sampleSize: 25 })
+                : null;
 
             const response =
               targetRow.type === 'status'
                 ? await withTimeout(
-                  activeWhatsappClient.sendStatusBroadcast(content),
-                  Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+                  activeWhatsappClient.sendStatusBroadcast(content, { statusJidList: statusSnapshot?.recipients || [] }),
+                  getStatusSendTimeoutMs('media', Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS)),
                   'Timed out sending video status message'
                 )
                 : await withTimeout(
@@ -3057,6 +3320,79 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             logger.warn({ error, jid, videoUrl: safeUrl }, 'Manual video send failed; using text fallback');
             const response = await sendTextManual(manualText);
             return { response, media: { type: 'video', url: safeUrl, sent: false, error: message } };
+          }
+        }
+
+        if (inferredKind === 'audio') {
+          if (targetRow.type === 'status') {
+            throw new Error('Status only supports text, image, and video');
+          }
+          try {
+            const { buffer, mimetype } = await downloadAudioBuffer(safeUrl, null);
+            const content: Record<string, unknown> = { audio: buffer, mimetype, ptt: false };
+            const response = await withTimeout(
+              activeWhatsappClient.sendMessage(jid, content),
+              Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+              'Timed out sending audio message'
+            );
+
+            const nowMs = Date.now();
+            globalLastSentAtMs = nowMs;
+            globalLastTargetId = String(targetRow.id);
+            globalLastSentByTargetId.set(String(targetRow.id), nowMs);
+            if (globalLastSentByTargetId.size > 1000) {
+              globalLastSentByTargetId.clear();
+            }
+
+            return { response, media: { type: 'audio', url: safeUrl, sent: true, error: null } };
+          } catch (error) {
+            const message = getErrorMessage(error);
+            if (!manualText) {
+              throw error;
+            }
+            logger.warn({ error, jid, audioUrl: safeUrl }, 'Manual audio send failed; using text fallback');
+            const response = await sendTextManual(manualText);
+            return { response, media: { type: 'audio', url: safeUrl, sent: false, error: message } };
+          }
+        }
+
+        if (inferredKind === 'document') {
+          if (targetRow.type === 'status') {
+            throw new Error('Status only supports text, image, and video');
+          }
+          try {
+            const { buffer, mimetype, filename } = await downloadDocumentBuffer(safeUrl, null);
+            const content: Record<string, unknown> = {
+              document: buffer,
+              mimetype: parsedManual.meta.documentMime || mimetype || 'application/octet-stream',
+              fileName: parsedManual.meta.documentFilename || filename || 'attachment'
+            };
+            if (includeCaption && manualText) {
+              content.caption = manualText;
+            }
+            const response = await withTimeout(
+              activeWhatsappClient.sendMessage(jid, content),
+              Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+              'Timed out sending document message'
+            );
+
+            const nowMs = Date.now();
+            globalLastSentAtMs = nowMs;
+            globalLastTargetId = String(targetRow.id);
+            globalLastSentByTargetId.set(String(targetRow.id), nowMs);
+            if (globalLastSentByTargetId.size > 1000) {
+              globalLastSentByTargetId.clear();
+            }
+
+            return { response, media: { type: 'document', url: safeUrl, sent: true, error: null } };
+          } catch (error) {
+            const message = getErrorMessage(error);
+            if (!manualText) {
+              throw error;
+            }
+            logger.warn({ error, jid, documentUrl: safeUrl }, 'Manual document send failed; using text fallback');
+            const response = await sendTextManual(manualText);
+            return { response, media: { type: 'document', url: safeUrl, sent: false, error: message } };
           }
         }
 
@@ -3088,12 +3424,16 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           if (newsletterExtras && Object.keys(newsletterExtras).length) {
             Object.assign(content, newsletterExtras);
           }
+          const statusSnapshot =
+            targetRow.type === 'status'
+              ? await ensureFreshStatusRecipients(activeWhatsappClient, { maxAgeMinutes: 10, sampleSize: 25 })
+              : null;
 
           const response =
             targetRow.type === 'status'
               ? await withTimeout(
-                activeWhatsappClient.sendStatusBroadcast(content),
-                Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+                activeWhatsappClient.sendStatusBroadcast(content, { statusJidList: statusSnapshot?.recipients || [] }),
+                getStatusSendTimeoutMs('media', Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS)),
                 'Timed out sending image status message'
               )
               : await withTimeout(
@@ -3149,12 +3489,14 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       const errorMessage = authError
         ? `${AUTH_ERROR_HINT} (${rawErrorMessage || 'unknown auth error'})`
         : rawErrorMessage;
+      const timedOut = /timed out/i.test(String(rawErrorMessage || ''));
+      const terminalStatus = targetRow.type === 'status' && timedOut ? 'uncertain' : 'failed';
 
       const keepMedia = !isAutomationBacked && Boolean(String(log.media_url || '').trim());
       await supabase
         .from('message_logs')
         .update({
-          status: 'failed',
+          status: terminalStatus,
           processing_started_at: null,
           error_message: errorMessage,
           media_url: keepMedia ? log.media_url || null : null,

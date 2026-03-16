@@ -32,7 +32,7 @@ export type Template = {
   content: string;
   active: boolean;
   send_images?: boolean | null;
-  send_mode?: 'image' | 'image_only' | 'link_preview' | 'text_only' | null;
+  send_mode?: 'auto_media' | 'media_only' | 'text_preview' | 'text_only' | null;
 };
 
 export type Target = {
@@ -100,7 +100,9 @@ export type FeedItem = {
   raw_data?: Record<string, unknown> | null;
   image_url?: string | null;
   media_url?: string | null;
-  media_kind?: 'image' | 'video' | null | string;
+  media_kind?: 'image' | 'video' | 'audio' | 'document' | null | string;
+  media_mime?: string | null;
+  media_filename?: string | null;
   categories?: string[] | string | null;
   sent?: boolean | null;
   delivery?: {
@@ -139,7 +141,7 @@ export type QueueItem = {
   pub_date?: string | null;
   pub_precision?: 'date' | 'datetime' | null | string;
   image_url?: string | null;
-  media_kind?: 'image' | 'video' | null | string;
+  media_kind?: 'image' | 'video' | 'audio' | 'document' | null | string;
   rendered_content?: string | null;
   media_url?: string | null;
   media_type?: string | null;
@@ -164,6 +166,8 @@ export type QueueStats = {
   sent: number;
   failed: number;
   skipped: number;
+  uncertain?: number;
+  superseded?: number;
   total: number;
   queued_now?: number;
   history_window_total?: number;
@@ -171,6 +175,8 @@ export type QueueStats = {
   sent_all_time?: number;
   failed_all_time?: number;
   skipped_all_time?: number;
+  uncertain_all_time?: number;
+  superseded_all_time?: number;
   window_hours?: number;
   window_start?: string;
 };
@@ -244,6 +250,7 @@ export type WhatsAppGroup = {
 export type WhatsAppStatusAudience = {
   participantCount: number;
   sample: string[];
+  refreshedAt?: string | null;
   sources: {
     contactsCache: number;
     storeContacts: number;
@@ -251,6 +258,7 @@ export type WhatsAppStatusAudience = {
     groupMetadata: number;
     env: number;
     me: number;
+    recentSuccessfulDirectRecipients?: number;
   };
   warnings?: string[];
 };

@@ -255,6 +255,57 @@ const scheduleRoutes = () => {
     }
   });
 
+  router.post('/:id/clone', async (req: Request, res: Response) => {
+    try {
+      const supabase = getDb();
+      const { data: currentSchedule, error } = await supabase
+        .from('schedules')
+        .select('*')
+        .eq('id', req.params.id)
+        .single();
+
+      if (error || !currentSchedule) {
+        return res.status(404).json({ error: 'Schedule not found' });
+      }
+
+      const baseName = String(currentSchedule.name || 'Automation').trim() || 'Automation';
+      const clonedPayload = normalizeSchedulePayload(
+        {
+          ...currentSchedule,
+          name: `${baseName} Copy`,
+          state: 'paused',
+          active: false,
+          next_run_at: null,
+          last_run_at: null,
+          last_queued_at: null,
+          last_dispatched_at: null
+        },
+        { forInsert: true }
+      );
+
+      delete clonedPayload.created_at;
+      delete clonedPayload.updated_at;
+      delete clonedPayload.id;
+
+      const { data: clonedSchedule, error: cloneError } = await supabase
+        .from('schedules')
+        .insert(clonedPayload)
+        .select()
+        .single();
+
+      if (cloneError) throw cloneError;
+
+      refreshSchedulers(req.app.locals.whatsapp);
+      res.json({
+        ...clonedSchedule,
+        state: resolveScheduleState(clonedSchedule),
+        active: isScheduleRunning(clonedSchedule)
+      });
+    } catch (cloneError) {
+      res.status(getErrorStatus(cloneError)).json({ error: getErrorMessage(cloneError) });
+    }
+  });
+
   router.post('/:id/state', async (req: Request, res: Response) => {
     try {
       const supabase = getDb();

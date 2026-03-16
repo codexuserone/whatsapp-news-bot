@@ -30,7 +30,7 @@
     "@radix-ui/react-tooltip": "^1.2.8",
     "@supabase/supabase-js": "^2.45.0",
     "@tanstack/react-query": "^5.90.20",
-    "@whiskeysockets/baileys": "^6.7.9",
+    "@whiskeysockets/baileys": "6.17.16",
     "axios": "^1.13.5",
     "cheerio": "^1.0.0-rc.12",
     "class-variance-authority": "^0.7.1",

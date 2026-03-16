@@ -1438,10 +1438,12 @@ class WhatsAppClient {
         process.env.WHATSAPP_BROWSER_NAME ||
         process.env.WHATSAPP_BROWSER_LABEL ||
         process.env.WHATSAPP_BROWSER_BRAND ||
-        'Chrome'
+        process.env.WHATSAPP_DEVICE_NAME ||
+        process.env.WHATSAPP_DEVICE_LABEL ||
+        'Anash Bot'
       )
         .trim()
-        .slice(0, 64) || 'Chrome';
+        .slice(0, 64) || 'Anash Bot';
       const browser = resolveBrowserTuple(Browsers as Record<string, unknown> | null | undefined, browserName);
 
       const syncFullHistory =

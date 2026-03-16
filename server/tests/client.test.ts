@@ -41,21 +41,23 @@ describe('WhatsAppClient', () => {
         expect(client.instanceId).toBeDefined();
     });
 
-    it('should default browser tuples to a real browser name', () => {
+    it('should default browser tuples to the configured device label', () => {
         const originalPlatform = process.env.WHATSAPP_BROWSER_PLATFORM;
         const originalBrowserName = process.env.WHATSAPP_BROWSER_NAME;
+        const originalDeviceName = process.env.WHATSAPP_DEVICE_NAME;
 
         process.env.WHATSAPP_BROWSER_PLATFORM = 'ubuntu';
         delete process.env.WHATSAPP_BROWSER_NAME;
+        process.env.WHATSAPP_DEVICE_NAME = 'Anash Bot';
 
         const tuple = WhatsAppClient.resolveBrowserTuple(
             {
                 ubuntu: (name: string) => ['Ubuntu', name, '22.04.4']
             },
-            'Chrome'
+            String(process.env.WHATSAPP_DEVICE_NAME)
         );
 
-        expect(tuple).toEqual(['Ubuntu', 'Chrome', '22.04.4']);
+        expect(tuple).toEqual(['Ubuntu', 'Anash Bot', '22.04.4']);
 
         if (originalPlatform === undefined) {
             delete process.env.WHATSAPP_BROWSER_PLATFORM;
@@ -66,6 +68,11 @@ describe('WhatsAppClient', () => {
             delete process.env.WHATSAPP_BROWSER_NAME;
         } else {
             process.env.WHATSAPP_BROWSER_NAME = originalBrowserName;
+        }
+        if (originalDeviceName === undefined) {
+            delete process.env.WHATSAPP_DEVICE_NAME;
+        } else {
+            process.env.WHATSAPP_DEVICE_NAME = originalDeviceName;
         }
     });
 

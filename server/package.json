@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
-    "@whiskeysockets/baileys": "^6.7.9",
+    "@whiskeysockets/baileys": "6.17.16",
     "axios": "^1.13.5",
     "cheerio": "^1.0.0-rc.12",
     "cors": "^2.8.5",
@@ -30,7 +30,7 @@
     "pino": "^9.2.0",
     "qrcode": "^1.5.4",
     "rss-parser": "^3.13.0",
-    "sharp": "^0.34.5",
+    "sharp": "0.32.6",
     "swagger-ui-express": "^5.0.0",
     "zod": "^3.23.8"
   },

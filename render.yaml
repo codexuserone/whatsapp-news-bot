@@ -10,6 +10,8 @@ services:
         value: production
       - key: PORT
         value: 10000
+      - key: NODE_VERSION
+        value: "22"
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
@@ -54,8 +56,14 @@ services:
         value: "false"
       - key: WHATSAPP_SESSION_ID
         value: primary
+      - key: WHATSAPP_LEASE_AUTO_TAKEOVER
+        value: "false"
       - key: WHATSAPP_DEVICE_NAME
         value: Anash Bot
+      - key: WHATSAPP_BROWSER_PLATFORM
+        value: ubuntu
+      - key: WHATSAPP_RESOLVE_LATEST_VERSION
+        value: "true"
       - key: WHATSAPP_SYNC_FULL_HISTORY
         value: "false"
       - key: WHATSAPP_PRESENCE_OFFLINE_INTERVAL_MS
@@ -69,4 +77,4 @@ services:
       - key: WHATSAPP_MAX_VIDEO_BYTES
         value: "33554432"
     healthCheckPath: /health
-    autoDeploy: true
+    autoDeployTrigger: commit

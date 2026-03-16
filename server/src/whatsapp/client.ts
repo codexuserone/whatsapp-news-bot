@@ -18,7 +18,7 @@ const resolveBrowserTuple = (Browsers: Record<string, unknown> | null | undefine
     process.env.WHATSAPP_BROWSER_PLATFORM ||
     process.env.WHATSAPP_BROWSER ||
     process.env.WHATSAPP_DEVICE_PLATFORM ||
-    'windows'
+    'ubuntu'
   )
     .trim()
     .toLowerCase();
@@ -34,9 +34,9 @@ const resolveBrowserTuple = (Browsers: Record<string, unknown> | null | undefine
 
   const requestedBuilder = builders[requestedPlatform];
   const fallbackBuilder =
+    Browsers?.ubuntu ||
     Browsers?.windows ||
     Browsers?.appropriate ||
-    Browsers?.ubuntu ||
     Browsers?.macOS ||
     Browsers?.baileys;
 
@@ -51,7 +51,7 @@ const resolveBrowserTuple = (Browsers: Record<string, unknown> | null | undefine
     return browser;
   }
 
-  return ['Windows', deviceLabel, '10.0.22631'];
+  return ['Ubuntu', deviceLabel, '22.04.4'];
 };
 
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict' | 'paused';

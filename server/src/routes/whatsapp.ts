@@ -1421,10 +1421,30 @@ const whatsappRoutes = () => {
     const rawSample = Number(req.query.sample || 25);
     const sampleSize = Number.isFinite(rawSample) ? Math.min(Math.max(Math.floor(rawSample), 1), 200) : 25;
     const forceRefresh = String(req.query.refresh || '').toLowerCase() === 'true';
+    const includeRecipients = String(req.query.include_recipients || '').toLowerCase() === 'true';
     const audience = forceRefresh
       ? await refreshStatusRecipients(whatsapp, { sampleSize })
       : await getStatusRecipientSnapshot({ sampleSize });
-    return res.json(audience);
+    if (includeRecipients) {
+      return res.json(audience);
+    }
+    const { recipients: _recipients, ...snapshot } = audience as {
+      recipients?: string[];
+      participantCount: number;
+      sample: string[];
+      refreshedAt: string | null;
+      sources: {
+        contactsCache: number;
+        storeContacts: number;
+        storeChats: number;
+        groupMetadata: number;
+        env: number;
+        me: number;
+        recentSuccessfulDirectRecipients: number;
+      };
+      warnings: string[];
+    };
+    return res.json(snapshot);
   }));
 
   // Send to status broadcast

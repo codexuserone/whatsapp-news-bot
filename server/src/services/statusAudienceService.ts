@@ -236,7 +236,7 @@ const refreshStatusRecipients = async (
       .from('status_recipients')
       .delete()
       .eq('session_id', SESSION_ID)
-      .not('recipient_jid', 'in', `(${participants.map((jid) => `"${jid.replace(/"/g, '""')}"`).join(',')})`);
+      .lt('refreshed_at', refreshedAt);
     if (deleteError) {
       logger.warn({ error: deleteError }, 'Failed to prune stale status recipients');
     }

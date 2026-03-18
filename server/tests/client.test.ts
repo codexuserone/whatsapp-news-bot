@@ -231,7 +231,7 @@ describe('WhatsAppClient', () => {
         expect(sendMessage).toHaveBeenCalledWith(
             '120363000000000010@g.us',
             { text: 'hello group' },
-            {}
+            { useUserDevicesCache: false }
         );
     });
 

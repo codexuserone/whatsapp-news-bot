@@ -2053,7 +2053,13 @@ class WhatsAppClient {
     }
 
     if (isGroup) {
-      return options;
+      if (Object.prototype.hasOwnProperty.call(options, 'useUserDevicesCache')) {
+        return options;
+      }
+      return {
+        ...options,
+        useUserDevicesCache: false
+      };
     }
 
     if (!ephemeralExpiration) {

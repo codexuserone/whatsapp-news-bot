@@ -249,12 +249,8 @@ const SettingsPage = () => {
             Loading current settings...
           </CardContent>
         </Card>
-      ) : null}
-
-      <form
-        onSubmit={form.handleSubmit(submitSettings, submitInvalidSettings)}
-        className={`space-y-6 ${isSettingsLoading ? 'pointer-events-none opacity-60' : ''}`}
-      >
+      ) : (
+      <form onSubmit={form.handleSubmit(submitSettings, submitInvalidSettings)} className="space-y-6">
         {saveNotice ? (
           <div
             className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-sm ${
@@ -532,11 +528,12 @@ const SettingsPage = () => {
           </CardContent>
         </Card>
 
-        <Button type="submit" disabled={saveSettings.isPending || isSettingsLoading}>
+        <Button type="submit" disabled={saveSettings.isPending}>
           {saveSettings.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {saveSettings.isPending ? 'Saving Settings...' : 'Save Settings'}
         </Button>
       </form>
+      )}
 
       <Card id="shabbos">
         <CardHeader>

@@ -2052,6 +2052,10 @@ class WhatsAppClient {
       );
     }
 
+    if (isGroup) {
+      return options;
+    }
+
     if (!ephemeralExpiration) {
       return options;
     }

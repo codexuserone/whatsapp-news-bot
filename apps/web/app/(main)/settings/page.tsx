@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useForm, Controller, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -15,7 +15,7 @@ import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Settings, Clock, MapPin, Loader2, Copy } from 'lucide-react';
+import { Settings, Clock, MapPin, Loader2, Copy, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 const WHATSAPP_EDIT_MAX_MINUTES = 15;
 const CORRECTION_SCAN_MAX_MINUTES = 15;
@@ -50,9 +50,15 @@ const schema = z.object({
 
 type SettingsFormValues = z.infer<typeof schema>;
 type BackendSettings = SettingsFormValues & {
+  retentionDays?: number;
   whatsapp_paused?: boolean;
   whatsapp_paused_at?: string | null;
 };
+
+type SaveNotice =
+  | { kind: 'success'; message: string }
+  | { kind: 'error'; message: string }
+  | { kind: 'validation'; message: string };
 
 const PRESET_LOCATIONS = [
   { name: 'New York', latitude: 40.7128, longitude: -74.006, tzid: 'America/New_York' },
@@ -78,9 +84,36 @@ const COMMON_TIMEZONES = [
   'Asia/Dubai'
 ];
 
+const toSettingsFormValues = (settings?: Partial<BackendSettings> | null): SettingsFormValues => ({
+  app_name: String(settings?.app_name || 'WhatsApp News Bot'),
+  app_paused: settings?.app_paused === true,
+  default_timezone: String(settings?.default_timezone || 'UTC'),
+  log_retention_days: Number(settings?.log_retention_days ?? settings?.retentionDays ?? 30),
+  message_delay_ms: Number(settings?.message_delay_ms ?? 2000),
+  max_retries: Number(settings?.max_retries ?? 3),
+  defaultInterTargetDelaySec: Number(settings?.defaultInterTargetDelaySec ?? 8),
+  defaultIntraTargetDelaySec: Number(settings?.defaultIntraTargetDelaySec ?? 3),
+  post_send_edit_window_minutes: Number(settings?.post_send_edit_window_minutes ?? 15),
+  post_send_correction_window_minutes: Number(settings?.post_send_correction_window_minutes ?? 15),
+  processingTimeoutMinutes: Number(settings?.processingTimeoutMinutes ?? 30),
+  dedupeThreshold:
+    settings?.dedupeThreshold == null
+      ? undefined
+      : Number(settings.dedupeThreshold),
+  authRetentionDays: Number(settings?.authRetentionDays ?? 60),
+  initial_fetch_limit: Number(settings?.initial_fetch_limit ?? 1),
+  max_pending_age_hours: Number(settings?.max_pending_age_hours ?? 48),
+  send_timeout_ms: Number(settings?.send_timeout_ms ?? 45000),
+  reconcile_queue_lookback_hours: Number(settings?.reconcile_queue_lookback_hours ?? 12)
+});
+
 const SettingsPage = () => {
   const queryClient = useQueryClient();
-  const { data: settings } = useQuery<BackendSettings>({ queryKey: ['settings'], queryFn: () => api.get('/api/settings') });
+  const [saveNotice, setSaveNotice] = useState<SaveNotice | null>(null);
+  const { data: settings, isLoading: isSettingsLoading } = useQuery<BackendSettings>({
+    queryKey: ['settings'],
+    queryFn: () => api.get('/api/settings')
+  });
   const { data: shabbosStatus } = useQuery<ShabbosStatus>({
     queryKey: ['shabbos-status'],
     queryFn: () => api.get('/api/shabbos/status'),
@@ -93,34 +126,17 @@ const SettingsPage = () => {
 
   const [manualLocation, setManualLocation] = useState<string | null>(null);
   const selectedLocation = manualLocation ?? shabbosSettings?.city ?? '';
+  const defaultFormValues = useMemo(() => toSettingsFormValues(settings), [settings]);
 
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: {
-      app_name: 'WhatsApp News Bot',
-      app_paused: false,
-      default_timezone: 'UTC',
-      log_retention_days: 30,
-      message_delay_ms: 2000,
-      max_retries: 3,
-      defaultInterTargetDelaySec: 8,
-      defaultIntraTargetDelaySec: 3,
-      post_send_edit_window_minutes: 15,
-      post_send_correction_window_minutes: 15,
-      processingTimeoutMinutes: 30,
-      dedupeThreshold: 0.88,
-      authRetentionDays: 60,
-      initial_fetch_limit: 1,
-      max_pending_age_hours: 48,
-      send_timeout_ms: 45000,
-      reconcile_queue_lookback_hours: 12
-    }
+    defaultValues: defaultFormValues
   });
   const appPaused = useWatch({ control: form.control, name: 'app_paused' });
 
   useEffect(() => {
     if (settings) {
-      form.reset(settings);
+      form.reset(toSettingsFormValues(settings));
     }
   }, [settings, form]);
 
@@ -135,16 +151,29 @@ const SettingsPage = () => {
     }
   }, []);
 
-  const saveSettings = useMutation({
-    mutationFn: (payload: SettingsFormValues) => api.put('/api/settings', payload),
+  const saveSettings = useMutation<BackendSettings, Error, SettingsFormValues>({
+    mutationFn: (payload: SettingsFormValues) => api.put<BackendSettings>('/api/settings', payload),
     onSuccess: async (data) => {
+      const nextValues = toSettingsFormValues(data);
       queryClient.setQueryData(['settings'], data);
       await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['settings'] }),
         queryClient.invalidateQueries({ queryKey: ['schedules'] }),
         queryClient.invalidateQueries({ queryKey: ['queue'] }),
         queryClient.invalidateQueries({ queryKey: ['queue-stats'] }),
         queryClient.invalidateQueries({ queryKey: ['feed-items'] })
       ]);
+      form.reset(nextValues);
+      setSaveNotice({
+        kind: 'success',
+        message: `Settings saved at ${new Date().toLocaleTimeString()}.`
+      });
+    },
+    onError: (error: Error) => {
+      setSaveNotice({
+        kind: 'error',
+        message: error.message || 'Settings could not be saved.'
+      });
     }
   });
 
@@ -173,6 +202,7 @@ const SettingsPage = () => {
   };
 
   const submitSettings = (values: SettingsFormValues) => {
+    setSaveNotice(null);
     const editWindow = Math.max(
       1,
       Math.min(
@@ -195,6 +225,16 @@ const SettingsPage = () => {
     });
   };
 
+  const submitInvalidSettings = () => {
+    const messages = Object.values(form.formState.errors)
+      .map((issue) => issue?.message)
+      .filter((message): message is string => Boolean(message));
+    setSaveNotice({
+      kind: 'validation',
+      message: messages[0] || 'Fix the highlighted settings and try again.'
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -202,7 +242,38 @@ const SettingsPage = () => {
         <p className="text-muted-foreground">Configure global defaults and safety controls.</p>
       </div>
 
-      <form onSubmit={form.handleSubmit(submitSettings)} className="space-y-6">
+      {isSettingsLoading ? (
+        <Card>
+          <CardContent className="flex items-center gap-3 py-8 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading current settings...
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <form
+        onSubmit={form.handleSubmit(submitSettings, submitInvalidSettings)}
+        className={`space-y-6 ${isSettingsLoading ? 'pointer-events-none opacity-60' : ''}`}
+      >
+        {saveNotice ? (
+          <div
+            className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-sm ${
+              saveNotice.kind === 'success'
+                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+                : saveNotice.kind === 'validation'
+                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
+                  : 'border-destructive/40 bg-destructive/10 text-destructive'
+            }`}
+          >
+            {saveNotice.kind === 'success' ? (
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+            ) : (
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            )}
+            <p>{saveNotice.message}</p>
+          </div>
+        ) : null}
+
         <Card id="general">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -461,9 +532,9 @@ const SettingsPage = () => {
           </CardContent>
         </Card>
 
-        <Button type="submit" disabled={saveSettings.isPending}>
+        <Button type="submit" disabled={saveSettings.isPending || isSettingsLoading}>
           {saveSettings.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          Save Settings
+          {saveSettings.isPending ? 'Saving Settings...' : 'Save Settings'}
         </Button>
       </form>
 

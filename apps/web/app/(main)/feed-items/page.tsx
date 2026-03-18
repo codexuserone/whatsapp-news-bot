@@ -26,7 +26,7 @@ const buildComposeHref = (item: FeedItem) => {
   return query ? `/compose?${query}` : '/compose';
 };
 
-const formatTargetSummary = (count: number, noun: 'accepted' | 'queued' | 'failed' | 'paused') =>
+const formatTargetSummary = (count: number, noun: 'recorded' | 'queued' | 'failed' | 'paused') =>
   `${count} target${count === 1 ? '' : 's'} ${noun}`;
 
 const FeedItemsPage = () => {
@@ -97,13 +97,13 @@ const FeedItemsPage = () => {
 
     if (queued > 0 && sent > 0 && failed > 0) {
       return {
-        label: `${formatTargetSummary(sent, 'accepted')}, ${formatTargetSummary(queued, 'queued')}, ${formatTargetSummary(failed, 'failed')}`,
+        label: `${formatTargetSummary(sent, 'recorded')}, ${formatTargetSummary(queued, 'queued')}, ${formatTargetSummary(failed, 'failed')}`,
         variant: 'warning' as const
       };
     }
     if (queued > 0 && sent > 0) {
       return {
-        label: `${formatTargetSummary(sent, 'accepted')}, ${formatTargetSummary(queued, 'queued')}`,
+        label: `${formatTargetSummary(sent, 'recorded')}, ${formatTargetSummary(queued, 'queued')}`,
         variant: 'warning' as const
       };
     }
@@ -118,7 +118,7 @@ const FeedItemsPage = () => {
     }
     if (sent > 0 && failed > 0) {
       return {
-        label: `${formatTargetSummary(sent, 'accepted')}, ${formatTargetSummary(failed, 'failed')}`,
+        label: `${formatTargetSummary(sent, 'recorded')}, ${formatTargetSummary(failed, 'failed')}`,
         variant: 'warning' as const
       };
     }
@@ -126,7 +126,7 @@ const FeedItemsPage = () => {
       return { label: formatTargetSummary(failed, 'failed'), variant: 'destructive' as const };
     }
     if (sent > 0) {
-      return { label: formatTargetSummary(sent, 'accepted'), variant: 'success' as const };
+      return { label: formatTargetSummary(sent, 'recorded'), variant: 'success' as const };
     }
     // Item exists in feed history but no queue rows were created yet.
     if (total === 0) {

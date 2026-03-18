@@ -176,9 +176,9 @@ const ComposeInner = () => {
       const sent = Number(result?.sent || 0);
       const failed = Number(result?.failed || 0);
       if (failed > 0 || result?.ok === false) {
-        setNotice({ type: 'error', message: `Sent ${sent}, failed ${failed}. Check Queue/History for details.` });
+        setNotice({ type: 'error', message: `Recorded locally ${sent}, failed ${failed}. Check Queue/History for details.` });
       } else {
-        setNotice({ type: 'success', message: `Sent ${sent} message(s).` });
+        setNotice({ type: 'success', message: `Recorded locally ${sent} message(s).` });
       }
       queryClient.invalidateQueries({ queryKey: ['queue'] });
       queryClient.invalidateQueries({ queryKey: ['queue-stats'] });

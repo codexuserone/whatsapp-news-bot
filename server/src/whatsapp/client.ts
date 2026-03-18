@@ -620,6 +620,34 @@ class WhatsAppClient {
     }
   }
 
+  rememberMessageStatus(messageId: string, snapshot: MessageStatusSnapshot): void {
+    const id = String(messageId || '').trim();
+    if (!id) return;
+
+    const existing = this.recentMessageStatuses.get(id);
+    const existingStatus = typeof existing?.status === 'number' ? existing.status : -1;
+    const nextStatus = typeof snapshot.status === 'number' ? snapshot.status : -1;
+
+    if (!existing || nextStatus >= existingStatus) {
+      this.recentMessageStatuses.set(id, snapshot);
+    }
+
+    if (snapshot.statusLabel === 'delivered' || snapshot.statusLabel === 'read' || snapshot.statusLabel === 'played') {
+      this.pendingReceiptUpdates.set(id, snapshot);
+      if (this.pendingReceiptUpdates.size > 2000) {
+        this.pendingReceiptUpdates.clear();
+      }
+      this.scheduleReceiptFlush();
+    }
+
+    if (this.recentMessageStatuses.size > 1000) {
+      const oldest = this.recentMessageStatuses.keys().next().value;
+      if (oldest) {
+        this.recentMessageStatuses.delete(oldest);
+      }
+    }
+  }
+
   async init(): Promise<void> {
     try {
       this.authStore = await useSupabaseAuthState(this.sessionId);
@@ -1289,6 +1317,7 @@ class WhatsAppClient {
     ev.removeAllListeners('creds.update');
     ev.removeAllListeners('messages.upsert');
     ev.removeAllListeners('messages.update');
+    ev.removeAllListeners('message-receipt.update');
     ev.removeAllListeners('chats.set');
     ev.removeAllListeners('chats.upsert');
     ev.removeAllListeners('chats.update');
@@ -1777,25 +1806,40 @@ class WhatsAppClient {
               updatedAtMs: Date.now()
             };
 
-            this.recentMessageStatuses.set(String(id), snapshot);
-
-            if (statusLabel === 'delivered' || statusLabel === 'read' || statusLabel === 'played') {
-              this.pendingReceiptUpdates.set(String(id), snapshot);
-              if (this.pendingReceiptUpdates.size > 2000) {
-                // Guard against unbounded growth if receipts flood while DB is unavailable.
-                this.pendingReceiptUpdates.clear();
-              }
-              this.scheduleReceiptFlush();
-            }
-            if (this.recentMessageStatuses.size > 1000) {
-              const oldest = this.recentMessageStatuses.keys().next().value;
-              if (oldest) {
-                this.recentMessageStatuses.delete(oldest);
-              }
-            }
+            this.rememberMessageStatus(String(id), snapshot);
           }
         } catch (e) {
           logger.warn({ e }, 'Failed to process messages.update');
+        }
+      });
+
+      socket.ev.on('message-receipt.update', (updates) => {
+        try {
+          const list = Array.isArray(updates) ? updates : [];
+          for (const entry of list as any[]) {
+            const id = entry?.key?.id;
+            if (!id) continue;
+
+            const receipt = entry?.receipt || {};
+            const status =
+              receipt?.readTimestamp != null
+                ? 4
+                : receipt?.receiptTimestamp != null
+                  ? 3
+                  : null;
+            if (status == null) continue;
+
+            const snapshot: MessageStatusSnapshot = {
+              status,
+              statusLabel: mapMessageStatusLabel(status),
+              remoteJid: entry?.key?.remoteJid ? String(entry.key.remoteJid) : null,
+              updatedAtMs: Date.now()
+            };
+
+            this.rememberMessageStatus(String(id), snapshot);
+          }
+        } catch (e) {
+          logger.warn({ e }, 'Failed to process message-receipt.update');
         }
       });
 
@@ -2086,22 +2130,26 @@ class WhatsAppClient {
     }
 
     return new Promise((resolve) => {
-      let handler: ((updates: any[]) => void) | null = null;
+      let updateHandler: ((updates: any[]) => void) | null = null;
+      let receiptHandler: ((updates: any[]) => void) | null = null;
       let settled = false;
 
       const finish = (value: MessageStatusSnapshot | null) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
-        if (handler) {
-          socket.ev.off('messages.update', handler);
+        if (updateHandler) {
+          socket.ev.off('messages.update', updateHandler);
+        }
+        if (receiptHandler) {
+          socket.ev.off('message-receipt.update', receiptHandler);
         }
         resolve(value);
       };
 
       const timeout = setTimeout(() => finish(null), timeoutMs);
 
-      handler = (updates: any[]) => {
+      updateHandler = (updates: any[]) => {
         const list = Array.isArray(updates) ? updates : [];
         for (const entry of list) {
           const id = entry?.key?.id;
@@ -2117,13 +2165,41 @@ class WhatsAppClient {
             remoteJid: entry?.key?.remoteJid ? String(entry.key.remoteJid) : null,
             updatedAtMs: Date.now()
           };
-          this.recentMessageStatuses.set(messageId, snapshot);
+          this.rememberMessageStatus(messageId, snapshot);
           finish(snapshot);
           return;
         }
       };
 
-      socket.ev.on('messages.update', handler);
+      receiptHandler = (updates: any[]) => {
+        const list = Array.isArray(updates) ? updates : [];
+        for (const entry of list) {
+          const id = entry?.key?.id;
+          if (!id || String(id) !== messageId) continue;
+
+          const receipt = entry?.receipt || {};
+          const status =
+            receipt?.readTimestamp != null
+              ? 4
+              : receipt?.receiptTimestamp != null
+                ? 3
+                : null;
+          if (status == null || status < minStatus) continue;
+
+          const snapshot: MessageStatusSnapshot = {
+            status,
+            statusLabel: mapMessageStatusLabel(status),
+            remoteJid: entry?.key?.remoteJid ? String(entry.key.remoteJid) : null,
+            updatedAtMs: Date.now()
+          };
+          this.rememberMessageStatus(messageId, snapshot);
+          finish(snapshot);
+          return;
+        }
+      };
+
+      socket.ev.on('messages.update', updateHandler);
+      socket.ev.on('message-receipt.update', receiptHandler);
 
       // Avoid race: status may be cached between the first check and listener attach.
       const cachedAfter = this.recentMessageStatuses.get(messageId);
@@ -2151,12 +2227,26 @@ class WhatsAppClient {
       // ignore
     }
 
+    if (sawLocalUpsert) {
+      const cachedAfterUpsert = this.recentMessageStatuses.get(messageId);
+      if (cachedAfterUpsert && typeof cachedAfterUpsert.status === 'number' && cachedAfterUpsert.status >= minStatus) {
+        return {
+          ok: true,
+          via: 'ack',
+          status: cachedAfterUpsert.status,
+          statusLabel: cachedAfterUpsert.statusLabel
+        };
+      }
+
+      return { ok: true, via: 'upsert', status: 1, statusLabel: 'pending' };
+    }
+
     const acked = await this.waitForMessageStatus(messageId, minStatus, ackTimeoutMs);
     if (acked) {
       return { ok: true, via: 'ack', status: acked.status, statusLabel: acked.statusLabel };
     }
 
-    return { ok: false, via: sawLocalUpsert ? 'upsert' : 'none' };
+    return { ok: false, via: 'none' };
   }
 
   getQrCode(): string | null {

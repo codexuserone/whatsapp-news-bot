@@ -178,7 +178,7 @@ const OverviewPage = () => {
             </div>
             <div className="border-t pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Last {queueStats?.window_hours ?? 24} hours</div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Accepted by WhatsApp</span>
+              <span className="text-muted-foreground">Recorded locally</span>
               <span className="font-medium">{queueStats?.sent ?? 0}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
@@ -207,7 +207,7 @@ const OverviewPage = () => {
               ) : null}
               <div className="text-[11px] text-muted-foreground">
                 {deliveryAnalytics
-                  ? `${deliveryAnalytics.sent} accepted, ${deliveryAnalytics.failed} failed, ${deliveryAnalytics.skipped} skipped`
+                  ? `${deliveryAnalytics.sent} recorded locally, ${deliveryAnalytics.failed} failed, ${deliveryAnalytics.skipped} skipped`
                   : 'Loading delivery analytics...'}
               </div>
             </div>
@@ -252,7 +252,7 @@ const OverviewPage = () => {
                               : 'warning'
                         }
                       >
-                        {log.status === 'sent' ? 'Accepted' : log.status}
+                        {log.status === 'sent' ? 'Recorded locally' : log.status}
                       </Badge>
                     </TableCell>
                     <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>

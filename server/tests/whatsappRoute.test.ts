@@ -45,6 +45,21 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
+  it('marks test sends sent when local upsert was observed', () => {
+    const result = __testUtils.resolveTestSendLogResolution({
+      messageId: 'abc123',
+      confirmRequested: true,
+      confirmation: { ok: true, via: 'upsert', status: 1, statusLabel: 'pending' },
+      confirmedAt: '2026-03-18T22:00:00.000Z'
+    });
+
+    expect(result).toEqual({
+      status: 'sent',
+      errorMessage: null,
+      sentAt: '2026-03-18T22:00:00.000Z'
+    });
+  });
+
   it('marks test sends uncertain when confirmation was skipped', () => {
     const result = __testUtils.resolveTestSendLogResolution({
       messageId: 'abc123',

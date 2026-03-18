@@ -724,7 +724,7 @@ const WhatsAppPage = () => {
               </Button>
               {sendTestMessage.isSuccess ? (
                 <span className="text-sm text-success">
-                  Accepted {sendTestMessage.data?.sent ?? 1}
+                  Recorded locally {sendTestMessage.data?.sent ?? 1}
                   {(sendTestMessage.data?.confirmed ?? 0) > 0
                     ? `, confirmed ${sendTestMessage.data?.confirmed}`
                     : ''}

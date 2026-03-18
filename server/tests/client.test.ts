@@ -281,7 +281,7 @@ describe('WhatsAppClient', () => {
         expect(client.isAuthStateCorrupted('Invalid account signature')).toBe(true);
     });
 
-    it('should not treat local upsert without server ack as a confirmed send', async () => {
+    it('should treat local upsert as a recorded send when ack is absent', async () => {
         client.waitForMessage = jest.fn(async () => ({ key: { id: 'msg-local-only' } }));
         client.waitForMessageStatus = jest.fn(async () => null);
 
@@ -290,8 +290,8 @@ describe('WhatsAppClient', () => {
             ackTimeoutMs: 10
         });
 
-        expect(result).toEqual({ ok: false, via: 'upsert' });
-        expect(client.waitForMessageStatus).toHaveBeenCalledWith('msg-local-only', 2, 10);
+        expect(result).toEqual({ ok: true, via: 'upsert', status: 1, statusLabel: 'pending' });
+        expect(client.waitForMessageStatus).not.toHaveBeenCalled();
     });
 
     it('should not treat pending status as a confirmed send', async () => {

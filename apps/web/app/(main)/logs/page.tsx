@@ -116,7 +116,7 @@ const LogsPage = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
-                <SelectItem value="sent">Accepted / delivered</SelectItem>
+                <SelectItem value="sent">Recorded / delivered</SelectItem>
                 <SelectItem value="failed">Failed</SelectItem>
               </SelectContent>
             </Select>
@@ -146,7 +146,7 @@ const LogsPage = () => {
                           variant={STATUS_COLORS[log.status] || 'secondary'}
                           title={log.error_message || undefined}
                         >
-                          {log.status === 'sent' ? 'Accepted by WhatsApp' :
+                          {log.status === 'sent' ? 'Recorded locally' :
                            log.status === 'failed' ? 'Failed' :
                            log.status === 'pending' ? 'Sending' :
                            log.status === 'uncertain' ? 'Send uncertain' :

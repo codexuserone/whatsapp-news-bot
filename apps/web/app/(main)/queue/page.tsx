@@ -394,7 +394,7 @@ const QueueInner = () => {
       case 'processing':
         return <Badge variant="warning">Attempting send</Badge>;
       case 'sent':
-        return <Badge variant="success">Accepted by WhatsApp</Badge>;
+        return <Badge variant="success">Recorded locally</Badge>;
       case 'delivered':
         return <Badge variant="success">Delivered</Badge>;
       case 'read':
@@ -436,7 +436,7 @@ const QueueInner = () => {
       return <Badge variant="success">Delivered</Badge>;
     }
     if (lower === 'pending' || lower === 'server') {
-      return <Badge variant="warning">Accepted, awaiting receipt</Badge>;
+      return <Badge variant="warning">Receipt pending</Badge>;
     }
     return null;
   };
@@ -464,15 +464,15 @@ const QueueInner = () => {
 
     if (isSuccessfulSendStatus(item.status)) {
       if (mediaType === 'image' && mediaSent) {
-        return { label: 'Accepted as image', tone: 'success' as const };
+        return { label: 'Recorded as image', tone: 'success' as const };
       }
       if (mediaType === 'video' && mediaSent) {
-        return { label: 'Accepted as video', tone: 'success' as const };
+        return { label: 'Recorded as video', tone: 'success' as const };
       }
       if (mediaType && !mediaSent) {
-        return { label: 'Accepted as text (media fallback)', tone: 'warning' as const };
+        return { label: 'Recorded as text (media fallback)', tone: 'warning' as const };
       }
-      return { label: 'Accepted as text/link', tone: 'secondary' as const };
+      return { label: 'Recorded as text/link', tone: 'secondary' as const };
     }
 
     if (item.image_url) {
@@ -563,7 +563,7 @@ const QueueInner = () => {
               <SelectItem value="awaiting_approval">Awaiting approval ({queueStats?.awaiting_approval ?? 0})</SelectItem>
               <SelectItem value="pending">Queued ({queueStats?.pending ?? 0})</SelectItem>
               <SelectItem value="processing">Attempting send ({queueStats?.processing ?? 0})</SelectItem>
-              <SelectItem value="sent">Accepted by WhatsApp ({queueStats?.sent ?? 0})</SelectItem>
+              <SelectItem value="sent">Recorded locally ({queueStats?.sent ?? 0})</SelectItem>
               <SelectItem value="failed">Failed ({queueStats?.failed ?? 0})</SelectItem>
               <SelectItem value="uncertain">Checking possible send ({queueStats?.uncertain ?? 0})</SelectItem>
               <SelectItem value="skipped">Skipped ({queueStats?.skipped ?? 0})</SelectItem>

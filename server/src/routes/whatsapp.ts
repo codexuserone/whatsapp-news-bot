@@ -20,6 +20,19 @@ const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const DEFAULT_USER_AGENT = buildDefaultUserAgent();
 const SUPPORTED_WHATSAPP_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
+type TestSendConfirmation = {
+  ok: boolean;
+  via: string;
+  status?: number | null;
+  statusLabel?: string | null;
+};
+
+type TestSendLogResolution = {
+  status: 'sent' | 'uncertain';
+  errorMessage: string | null;
+  sentAt: string | null;
+};
+
 const setNoStoreHeaders = (res: Response) => {
   res.set({
     'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -27,6 +40,54 @@ const setNoStoreHeaders = (res: Response) => {
     Expires: '0',
     'Surrogate-Control': 'no-store'
   });
+};
+
+const buildUncertainSendMessage = (value: unknown) => {
+  const message = String(value || '').trim();
+  if (!message) {
+    return 'Send result is uncertain. Verifying delivery before retrying.';
+  }
+  return `Send result is uncertain. Verifying delivery before retrying. ${message}`.trim();
+};
+
+const resolveTestSendLogResolution = (options: {
+  messageId?: string | null;
+  confirmation?: TestSendConfirmation | null;
+  confirmedAt?: string;
+}) => {
+  const messageId = String(options.messageId || '').trim();
+  const confirmation = options.confirmation || null;
+  const confirmedAt = String(options.confirmedAt || new Date().toISOString());
+
+  if (!messageId) {
+    return {
+      status: 'uncertain',
+      errorMessage: buildUncertainSendMessage('Missing WhatsApp message id'),
+      sentAt: null
+    } satisfies TestSendLogResolution;
+  }
+
+  if (confirmation?.ok) {
+    return {
+      status: 'sent',
+      errorMessage: null,
+      sentAt: confirmedAt
+    } satisfies TestSendLogResolution;
+  }
+
+  const statusLabel = String(confirmation?.statusLabel || '').trim();
+  const via = String(confirmation?.via || '').trim();
+  const detail = statusLabel
+    ? `No confirmation yet (${statusLabel})`
+    : via
+      ? `No confirmation yet (${via})`
+      : 'No confirmation yet';
+
+  return {
+    status: 'uncertain',
+    errorMessage: buildUncertainSendMessage(detail),
+    sentAt: null
+  } satisfies TestSendLogResolution;
 };
 
 const detectImageMimeTypeFromBuffer = (value: Buffer): string | null => {
@@ -1364,22 +1425,29 @@ const whatsappRoutes = () => {
           if (jid && id) targetIdByJid.set(jid, id);
         }
 
-        const sentAt = new Date().toISOString();
-        const rowsToInsert = successful.map((entry) => ({
+        const confirmedAt = new Date().toISOString();
+        const rowsToInsert = successful.map((entry) => {
+          const resolution = resolveTestSendLogResolution({
+            messageId: entry.messageId || null,
+            confirmation: entry.confirmation || null,
+            confirmedAt
+          });
+          return {
           schedule_id: null,
           feed_item_id: null,
           target_id: targetIdByJid.get(entry.jid) || null,
           template_id: null,
           message_content: captionText || null,
-          status: 'sent',
-          error_message: null,
+          status: resolution.status,
+          error_message: resolution.errorMessage,
           whatsapp_message_id: entry.messageId || null,
-          sent_at: sentAt,
+          sent_at: resolution.sentAt,
           media_url: requestedMediaUrl && !requestedMediaUrl.startsWith('data:') ? requestedMediaUrl : null,
           media_type: requestedMediaType,
           media_sent: Boolean(requestedMediaType && !mediaWarning),
           media_error: mediaWarning
-        }));
+        };
+        });
 
         if (rowsToInsert.length) {
           await supabase.from('message_logs').insert(rowsToInsert);
@@ -1626,3 +1694,7 @@ const whatsappRoutes = () => {
 };
 
 module.exports = whatsappRoutes;
+module.exports.__testUtils = {
+  buildUncertainSendMessage,
+  resolveTestSendLogResolution
+};

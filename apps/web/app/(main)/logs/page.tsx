@@ -18,7 +18,8 @@ const STATUS_COLORS: Record<string, 'success' | 'destructive' | 'warning' | 'sec
   read: 'success',
   played: 'success',
   skipped: 'warning',
-  failed: 'destructive'
+  failed: 'destructive',
+  uncertain: 'warning'
 };
 
 const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | null) => {
@@ -115,7 +116,7 @@ const LogsPage = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
-                <SelectItem value="sent">Sent</SelectItem>
+                <SelectItem value="sent">Accepted / delivered</SelectItem>
                 <SelectItem value="failed">Failed</SelectItem>
               </SelectContent>
             </Select>
@@ -145,9 +146,10 @@ const LogsPage = () => {
                           variant={STATUS_COLORS[log.status] || 'secondary'}
                           title={log.error_message || undefined}
                         >
-                          {log.status === 'sent' ? 'Sent' :
+                          {log.status === 'sent' ? 'Accepted by WhatsApp' :
                            log.status === 'failed' ? 'Failed' :
                            log.status === 'pending' ? 'Sending' :
+                           log.status === 'uncertain' ? 'Send uncertain' :
                            log.status === 'delivered' ? 'Delivered' :
                            log.status === 'read' ? 'Read' :
                            log.status === 'played' ? 'Played' :

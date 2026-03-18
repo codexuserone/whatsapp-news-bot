@@ -164,9 +164,10 @@ const OverviewPage = () => {
         <Card>
           <CardHeader>
             <CardTitle>Queue Summary</CardTitle>
-            <CardDescription>Queued now + delivery results in the last 24 hours</CardDescription>
+            <CardDescription>Live queue counts plus recorded WhatsApp outcomes in the last 24 hours</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Live now</div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Pending</span>
               <span className="font-medium">{queueStats?.pending ?? 0}</span>
@@ -175,18 +176,19 @@ const OverviewPage = () => {
               <span className="text-muted-foreground">Processing</span>
               <span className="font-medium">{queueStats?.processing ?? 0}</span>
             </div>
+            <div className="border-t pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Last {queueStats?.window_hours ?? 24} hours</div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Sent ({queueStats?.window_hours ?? 24}h)</span>
+              <span className="text-muted-foreground">Accepted by WhatsApp</span>
               <span className="font-medium">{queueStats?.sent ?? 0}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Failed ({queueStats?.window_hours ?? 24}h)</span>
+              <span className="text-muted-foreground">Failed</span>
               <span className="font-medium">{queueStats?.failed ?? 0}</span>
             </div>
 
             <div className="pt-2 border-t space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Delivered rate</span>
+                <span className="text-muted-foreground">Receipt rate</span>
                 <span className="font-medium">{Math.round((deliveryAnalytics?.delivered_rate ?? 0) * 100)}%</span>
               </div>
               <div className="flex items-center justify-between text-sm">
@@ -201,7 +203,7 @@ const OverviewPage = () => {
               ) : null}
               <div className="text-[11px] text-muted-foreground">
                 {deliveryAnalytics
-                  ? `${deliveryAnalytics.sent} sent, ${deliveryAnalytics.failed} failed, ${deliveryAnalytics.skipped} skipped`
+                  ? `${deliveryAnalytics.sent} accepted, ${deliveryAnalytics.failed} failed, ${deliveryAnalytics.skipped} skipped`
                   : 'Loading delivery analytics...'}
               </div>
             </div>
@@ -246,7 +248,7 @@ const OverviewPage = () => {
                               : 'warning'
                         }
                       >
-                        {log.status}
+                        {log.status === 'sent' ? 'Accepted' : log.status}
                       </Badge>
                     </TableCell>
                     <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>

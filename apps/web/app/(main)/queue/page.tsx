@@ -393,7 +393,7 @@ const QueueInner = () => {
       case 'processing':
         return <Badge variant="warning">Sending now</Badge>;
       case 'sent':
-        return <Badge variant="success">Sent</Badge>;
+        return <Badge variant="success">Accepted by WhatsApp</Badge>;
       case 'delivered':
         return <Badge variant="success">Delivered</Badge>;
       case 'read':
@@ -401,7 +401,9 @@ const QueueInner = () => {
       case 'played':
         return <Badge variant="success">Played</Badge>;
       case 'failed':
-        return <Badge variant="destructive">Failed - will retry</Badge>;
+        return <Badge variant="destructive">Failed</Badge>;
+      case 'uncertain':
+        return <Badge variant="warning">Send uncertain</Badge>;
       case 'skipped':
         return <Badge variant="warning">Skipped</Badge>;
       default:
@@ -556,15 +558,16 @@ const QueueInner = () => {
           <SelectTrigger className="w-full max-w-full sm:w-44">
             <SelectValue placeholder="Select status" />
           </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="awaiting_approval">Awaiting approval ({queueStats?.awaiting_approval ?? 0})</SelectItem>
-            <SelectItem value="pending">Queued ({queueStats?.pending ?? 0})</SelectItem>
-            <SelectItem value="processing">Sending ({queueStats?.processing ?? 0})</SelectItem>
-            <SelectItem value="sent">Sent ({queueStats?.sent ?? 0})</SelectItem>
-            <SelectItem value="failed">Failed ({queueStats?.failed ?? 0})</SelectItem>
-            <SelectItem value="skipped">Skipped ({queueStats?.skipped ?? 0})</SelectItem>
-            <SelectItem value="all">All ({queueStats?.total ?? 0})</SelectItem>
-          </SelectContent>
+            <SelectContent>
+              <SelectItem value="awaiting_approval">Awaiting approval ({queueStats?.awaiting_approval ?? 0})</SelectItem>
+              <SelectItem value="pending">Queued ({queueStats?.pending ?? 0})</SelectItem>
+              <SelectItem value="processing">Sending ({queueStats?.processing ?? 0})</SelectItem>
+              <SelectItem value="sent">Accepted by WhatsApp ({queueStats?.sent ?? 0})</SelectItem>
+              <SelectItem value="failed">Failed ({queueStats?.failed ?? 0})</SelectItem>
+              <SelectItem value="uncertain">Send uncertain ({queueStats?.uncertain ?? 0})</SelectItem>
+              <SelectItem value="skipped">Skipped ({queueStats?.skipped ?? 0})</SelectItem>
+              <SelectItem value="all">All ({queueStats?.total ?? 0})</SelectItem>
+            </SelectContent>
         </Select>
         <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
           <Switch id="include-manual" checked={includeManual} onCheckedChange={setIncludeManual} />

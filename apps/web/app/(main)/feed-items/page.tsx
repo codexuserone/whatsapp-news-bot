@@ -26,6 +26,9 @@ const buildComposeHref = (item: FeedItem) => {
   return query ? `/compose?${query}` : '/compose';
 };
 
+const formatTargetSummary = (count: number, noun: 'accepted' | 'queued' | 'failed' | 'paused') =>
+  `${count} target${count === 1 ? '' : 's'} ${noun}`;
+
 const FeedItemsPage = () => {
   const queryClient = useQueryClient();
   const [scope, setScope] = React.useState<'automation' | 'all'>('automation');
@@ -83,32 +86,47 @@ const FeedItemsPage = () => {
     const total = delivery.total || 0;
 
     if (manualPaused > 0 && queued > 0) {
-      return { label: `Paused (${manualPaused}), queued (${queued})`, variant: 'warning' as const };
+      return {
+        label: `${formatTargetSummary(manualPaused, 'paused')}, ${formatTargetSummary(queued, 'queued')}`,
+        variant: 'warning' as const
+      };
     }
     if (manualPaused > 0) {
-      return { label: `Paused (${manualPaused})`, variant: 'secondary' as const };
+      return { label: formatTargetSummary(manualPaused, 'paused'), variant: 'secondary' as const };
     }
 
     if (queued > 0 && sent > 0 && failed > 0) {
-      return { label: `Mixed (${sent} sent, ${queued} queued, ${failed} failed)`, variant: 'warning' as const };
+      return {
+        label: `${formatTargetSummary(sent, 'accepted')}, ${formatTargetSummary(queued, 'queued')}, ${formatTargetSummary(failed, 'failed')}`,
+        variant: 'warning' as const
+      };
     }
     if (queued > 0 && sent > 0) {
-      return { label: `Partially sent (${sent} sent, ${queued} queued)`, variant: 'warning' as const };
+      return {
+        label: `${formatTargetSummary(sent, 'accepted')}, ${formatTargetSummary(queued, 'queued')}`,
+        variant: 'warning' as const
+      };
     }
     if (queued > 0 && failed > 0) {
-      return { label: `Retrying (${queued} queued, ${failed} failed)`, variant: 'warning' as const };
+      return {
+        label: `${formatTargetSummary(queued, 'queued')}, ${formatTargetSummary(failed, 'failed')}`,
+        variant: 'warning' as const
+      };
     }
     if (queued > 0) {
-      return { label: `Queued (${queued})`, variant: 'warning' as const };
+      return { label: formatTargetSummary(queued, 'queued'), variant: 'warning' as const };
     }
     if (sent > 0 && failed > 0) {
-      return { label: `Partial (${sent} sent, ${failed} failed)`, variant: 'warning' as const };
+      return {
+        label: `${formatTargetSummary(sent, 'accepted')}, ${formatTargetSummary(failed, 'failed')}`,
+        variant: 'warning' as const
+      };
     }
     if (failed > 0) {
-      return { label: `Failed (${failed})`, variant: 'destructive' as const };
+      return { label: formatTargetSummary(failed, 'failed'), variant: 'destructive' as const };
     }
     if (sent > 0) {
-      return { label: `Sent (${sent})`, variant: 'success' as const };
+      return { label: formatTargetSummary(sent, 'accepted'), variant: 'success' as const };
     }
     // Item exists in feed history but no queue rows were created yet.
     if (total === 0) {

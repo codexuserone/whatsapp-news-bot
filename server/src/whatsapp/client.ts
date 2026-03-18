@@ -2133,23 +2133,24 @@ class WhatsAppClient {
   ): Promise<{ ok: boolean; via: 'upsert' | 'ack' | 'none'; status?: number | null; statusLabel?: string | null }> {
     const upsertTimeoutMs = Number(options?.upsertTimeoutMs ?? 5000);
     const ackTimeoutMs = Number(options?.ackTimeoutMs ?? 15000);
+    const minStatus = 2;
+    let sawLocalUpsert = false;
 
     try {
       const observed = await this.waitForMessage(messageId, upsertTimeoutMs);
       if (observed) {
-        return { ok: true, via: 'upsert' };
+        sawLocalUpsert = true;
       }
     } catch {
       // ignore
     }
 
-    const minStatus = 0;
     const acked = await this.waitForMessageStatus(messageId, minStatus, ackTimeoutMs);
     if (acked) {
       return { ok: true, via: 'ack', status: acked.status, statusLabel: acked.statusLabel };
     }
 
-    return { ok: false, via: 'none' };
+    return { ok: false, via: sawLocalUpsert ? 'upsert' : 'none' };
   }
 
   getQrCode(): string | null {

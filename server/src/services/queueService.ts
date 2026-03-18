@@ -3133,6 +3133,9 @@ const sendQueuedForSchedule = async (
           const response = sendResult?.response;
 
           const messageId = response?.key?.id;
+          if (!messageId) {
+            throw new Error('Message send not confirmed (missing message id)');
+          }
           if (messageId) {
             if (whatsappClient.confirmSend) {
               const isMedia =

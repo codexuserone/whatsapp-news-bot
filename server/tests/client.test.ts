@@ -281,6 +281,60 @@ describe('WhatsAppClient', () => {
         expect(client.isAuthStateCorrupted('Invalid account signature')).toBe(true);
     });
 
+    it('should not treat local upsert without server ack as a confirmed send', async () => {
+        client.waitForMessage = jest.fn(async () => ({ key: { id: 'msg-local-only' } }));
+        client.waitForMessageStatus = jest.fn(async () => null);
+
+        const result = await client.confirmSend('msg-local-only', {
+            upsertTimeoutMs: 10,
+            ackTimeoutMs: 10
+        });
+
+        expect(result).toEqual({ ok: false, via: 'upsert' });
+        expect(client.waitForMessageStatus).toHaveBeenCalledWith('msg-local-only', 2, 10);
+    });
+
+    it('should not treat pending status as a confirmed send', async () => {
+        client.waitForMessage = jest.fn(async () => null);
+        client.waitForMessageStatus = jest.fn(async () => null);
+        client.recentMessageStatuses.set('msg-pending', {
+            status: 1,
+            statusLabel: 'pending',
+            remoteJid: '120363401649232180@newsletter',
+            updatedAtMs: Date.now()
+        });
+
+        const result = await client.confirmSend('msg-pending', {
+            upsertTimeoutMs: 10,
+            ackTimeoutMs: 10
+        });
+
+        expect(result).toEqual({ ok: false, via: 'none' });
+        expect(client.waitForMessageStatus).toHaveBeenCalledWith('msg-pending', 2, 10);
+    });
+
+    it('should require server ack or better before confirming a send', async () => {
+        client.waitForMessage = jest.fn(async () => null);
+        client.waitForMessageStatus = jest.fn(async () => ({
+            status: 2,
+            statusLabel: 'server',
+            remoteJid: '120363401649232180@newsletter',
+            updatedAtMs: Date.now()
+        }));
+
+        const result = await client.confirmSend('msg-server-ack', {
+            upsertTimeoutMs: 10,
+            ackTimeoutMs: 10
+        });
+
+        expect(result).toEqual({
+            ok: true,
+            via: 'ack',
+            status: 2,
+            statusLabel: 'server'
+        });
+    });
+
     it('should clear auth state when invalid account signature is detected', async () => {
         const clearState = jest.fn(async () => {});
         const updateStatus = jest.fn(async () => {});

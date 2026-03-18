@@ -314,7 +314,7 @@ const SettingsPage = () => {
                   const value = String(field.value || 'UTC');
                   const options = Array.from(new Set([value, ...COMMON_TIMEZONES]));
                   return (
-                    <Select value={value} onValueChange={field.onChange}>
+                    <Select key={`default-timezone-${value}`} value={value} onValueChange={field.onChange}>
                       <SelectTrigger id="default_timezone">
                         <SelectValue placeholder="Select timezone" />
                       </SelectTrigger>

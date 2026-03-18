@@ -3,6 +3,7 @@ const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
 const { resetStuckProcessingLogs } = require('../services/retentionService');
 const { sendQueueLogNow } = require('../services/queueService');
+const { isScheduleRunning } = require('../services/scheduleState');
 const settingsService = require('../services/settingsService');
 const { serviceUnavailable } = require('../core/errors');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
@@ -14,6 +15,8 @@ const { normalizeFeedMedia } = require('../utils/feedMedia');
 const WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES = 15;
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
 const HISTORY_QUEUE_STATUSES = new Set(['sent', 'failed', 'skipped', 'uncertain', 'superseded']);
+const DEFAULT_QUEUE_HISTORY_WINDOW_HOURS = 24;
+const MAX_QUEUE_HISTORY_WINDOW_HOURS = 168;
 
 const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
 
@@ -66,6 +69,76 @@ const parsePositiveLimit = (value: unknown, fallback: number, max: number) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(Math.max(Math.floor(parsed), 1), max);
+};
+
+const parseWindowHours = (value: unknown) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_QUEUE_HISTORY_WINDOW_HOURS;
+  return Math.min(Math.max(Math.round(parsed), 1), MAX_QUEUE_HISTORY_WINDOW_HOURS);
+};
+
+type RetryableQueueRow = {
+  id?: string | null;
+  schedule_id?: string | null;
+  updated_at?: string | null;
+  created_at?: string | null;
+  schedule?: {
+    state?: string | null;
+    active?: boolean | null;
+  } | null;
+};
+
+const isRetryableQueueRow = (row: RetryableQueueRow, windowStartIso: string) => {
+  const id = String(row?.id || '').trim();
+  if (!id) return false;
+
+  const comparisonIso = String(row?.updated_at || row?.created_at || '').trim();
+  if (!comparisonIso || comparisonIso < windowStartIso) {
+    return false;
+  }
+
+  const scheduleId = String(row?.schedule_id || '').trim();
+  if (!scheduleId) {
+    return true;
+  }
+
+  return isScheduleRunning(row?.schedule || null);
+};
+
+const loadRetryableQueueLogIds = async (
+  supabase: ReturnType<typeof getSupabaseClient>,
+  options: { includeManual: boolean; windowHours: number }
+) => {
+  const windowStartIso = new Date(Date.now() - options.windowHours * 60 * 60 * 1000).toISOString();
+
+  let query = supabase
+    .from('message_logs')
+    .select(`
+      id,
+      schedule_id,
+      updated_at,
+      created_at,
+      schedule:schedules (
+        state,
+        active
+      )
+    `)
+    .in('status', ['failed', 'uncertain'])
+    .gte('updated_at', windowStartIso);
+
+  if (!options.includeManual) {
+    query = query.not('schedule_id', 'is', null);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const ids = (data || [])
+    .filter((row: RetryableQueueRow) => isRetryableQueueRow(row, windowStartIso))
+    .map((row: RetryableQueueRow) => String(row.id || '').trim())
+    .filter(Boolean);
+
+  return [...new Set(ids)];
 };
 
 const resolveQueueOrder = (statusFilter?: string): QueueOrder => {
@@ -375,21 +448,22 @@ const queueRoutes = () => {
     try {
       const supabase = getDb();
       const includeManual = String(req.query.include_manual || '').toLowerCase() === 'true';
+      const windowHours = parseWindowHours(req.query.window_hours);
+      const retryableIds = await loadRetryableQueueLogIds(supabase, { includeManual, windowHours });
 
-      let retryQuery = supabase
-        .from('message_logs')
-        .update({ status: 'pending', error_message: null, retry_count: 0, processing_started_at: null })
-        .in('status', ['failed', 'uncertain'])
-        .select();
-
-      if (!includeManual) {
-        retryQuery = retryQuery.not('schedule_id', 'is', null);
+      if (!retryableIds.length) {
+        return res.json({ success: true, count: 0, window_hours: windowHours });
       }
 
-      const { data, error } = await retryQuery;
+      const { data, error } = await supabase
+        .from('message_logs')
+        .update({ status: 'pending', error_message: null, retry_count: 0, processing_started_at: null })
+        .in('id', retryableIds)
+        .in('status', ['failed', 'uncertain'])
+        .select('id');
 
       if (error) throw error;
-      res.json({ success: true, count: data?.length || 0 });
+      res.json({ success: true, count: data?.length || 0, window_hours: windowHours });
     } catch (error) {
       console.error('Error retrying failed items:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
@@ -412,10 +486,7 @@ const queueRoutes = () => {
     try {
       const supabase = getDb();
       const includeManual = String(req.query.include_manual || '').toLowerCase() === 'true';
-      const rawWindowHours = Number(req.query.window_hours);
-      const windowHours = Number.isFinite(rawWindowHours) && rawWindowHours > 0
-        ? Math.min(Math.round(rawWindowHours), 168)
-        : 24;
+      const windowHours = parseWindowHours(req.query.window_hours);
       const windowStartIso = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
 
       const countByStatus = (status: string, recentOnly = false) => {
@@ -838,3 +909,7 @@ const queueRoutes = () => {
 };
 
 module.exports = queueRoutes;
+module.exports.__testUtils = {
+  parseWindowHours,
+  isRetryableQueueRow
+};

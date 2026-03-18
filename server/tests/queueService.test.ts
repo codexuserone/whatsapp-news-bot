@@ -149,4 +149,15 @@ describe('queueService __testUtils', () => {
       )
     ).toBe(false);
   });
+
+  it('advances feed pagination using scan order while dispatching by publish order', () => {
+    const plan = testUtils.planFeedDispatchPage([
+      { id: 'b', created_at: '2026-03-10T10:00:00.000Z', pub_date: '2026-03-10T12:00:00.000Z' },
+      { id: 'c', created_at: '2026-03-10T11:00:00.000Z', pub_date: '2026-03-10T09:00:00.000Z' }
+    ]);
+
+    expect(plan.dispatchItems.map((item: { id: string }) => item.id)).toEqual(['c', 'b']);
+    expect(plan.cursorAt).toBe('2026-03-10T11:00:00.000Z');
+    expect(plan.cursorId).toBe('c');
+  });
 });

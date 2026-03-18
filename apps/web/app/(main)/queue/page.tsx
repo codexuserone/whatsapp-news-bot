@@ -5,7 +5,7 @@ import Image from 'next/image';
 import { useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { QueueItem, ShabbosStatus, WhatsAppOutbox, WhatsAppOutboxStatus } from '@/lib/types';
+import type { QueueItem, QueueStats, ShabbosStatus, WhatsAppOutbox, WhatsAppOutboxStatus } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -27,16 +27,6 @@ import {
   Send,
   LayoutGrid
 } from 'lucide-react';
-
-type QueueStats = {
-  awaiting_approval?: number;
-  pending: number;
-  processing: number;
-  sent: number;
-  failed: number;
-  skipped: number;
-  total: number;
-};
 
 const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | null) => {
   if (statusLabel) return statusLabel;
@@ -136,6 +126,8 @@ const QueueInner = () => {
     refetchInterval: 10000
   });
 
+  const retryableIssueCount = Number(queueStats?.failed || 0) + Number(queueStats?.uncertain || 0);
+
   const { data: queueItems = [], isLoading } = useQuery<QueueItem[]>({
     queryKey: ['queue', statusFilter, includeManual],
     queryFn: () =>
@@ -191,9 +183,9 @@ const QueueInner = () => {
   });
 
   const retryFailed = useMutation({
-    mutationFn: () => api.post(`/api/queue/retry-failed?include_manual=${includeManual}`),
+    mutationFn: () => api.post(`/api/queue/retry-failed?include_manual=${includeManual}&window_hours=24`),
     onSuccess: () => {
-      setActionNotice({ type: 'success', message: 'Failed items were moved back to queue.' });
+      setActionNotice({ type: 'success', message: 'Recent issues were moved back to queue.' });
       refreshQueueViews();
     },
     onError: (error: unknown) => {
@@ -506,9 +498,14 @@ const QueueInner = () => {
             <RefreshCw className={`mr-2 h-4 w-4 ${resetProcessing.isPending ? 'animate-spin' : ''}`} />
             Fix stuck sends
           </Button>
-          <Button variant="outline" onClick={() => retryFailed.mutate()} disabled={retryFailed.isPending}>
+          <Button
+            variant="outline"
+            onClick={() => retryFailed.mutate()}
+            disabled={retryFailed.isPending || !retryableIssueCount}
+            title={retryableIssueCount ? 'Retry recent failed or uncertain sends from the last 24 hours' : 'No recent failed sends to retry'}
+          >
             <RefreshCw className={`mr-2 h-4 w-4 ${retryFailed.isPending ? 'animate-spin' : ''}`} />
-            Retry Failed
+            Retry Recent Issues
           </Button>
           <Button variant="destructive" onClick={() => clearPending.mutate()} disabled={clearPending.isPending}>
             <Trash2 className="mr-2 h-4 w-4" />

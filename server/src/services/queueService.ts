@@ -2190,6 +2190,19 @@ const compareFeedDispatchOrder = (
   return String(left?.id || '').localeCompare(String(right?.id || ''));
 };
 
+const planFeedDispatchPage = <T extends { pub_date?: string | null; created_at?: string | null; id?: string | null }>(
+  page: T[]
+) => {
+  const scanItems = Array.isArray(page) ? [...page] : [];
+  const dispatchItems = [...scanItems].sort(compareFeedDispatchOrder);
+  const lastScanned = scanItems.length ? scanItems[scanItems.length - 1] : null;
+  return {
+    dispatchItems,
+    cursorAt: lastScanned?.created_at ? String(lastScanned.created_at) : null,
+    cursorId: lastScanned?.id ? String(lastScanned.id) : null
+  };
+};
+
 const queueSinceLastRunForSchedule = async (
   supabase: SupabaseClient,
   schedule: Schedule,
@@ -2274,7 +2287,7 @@ const queueSinceLastRunForSchedule = async (
     if (cursorId) {
       query = query.or(`created_at.gt.${cursorAt},and(created_at.eq.${cursorAt},id.gt.${cursorId})`);
     } else {
-      query = query.gt('created_at', cursorAt);
+      query = query.gte('created_at', cursorAt);
     }
 
     const { data: page, error: itemsError } = await query;
@@ -2283,7 +2296,8 @@ const queueSinceLastRunForSchedule = async (
       break;
     }
 
-    const items = ((page || []) as Array<{ id?: string; created_at?: string; pub_date?: string }>).sort(compareFeedDispatchOrder);
+    const pagePlan = planFeedDispatchPage((page || []) as Array<{ id?: string; created_at?: string; pub_date?: string }>);
+    const items = pagePlan.dispatchItems;
     if (!items.length) {
       break;
     }
@@ -2314,13 +2328,8 @@ const queueSinceLastRunForSchedule = async (
       totalQueued += await flushBatch(batch);
     }
 
-    const last = items[items.length - 1];
-    if (last?.created_at) {
-      cursorAt = String(last.created_at);
-    }
-    if (last?.id) {
-      cursorId = String(last.id);
-    }
+    cursorAt = pagePlan.cursorAt || cursorAt;
+    cursorId = pagePlan.cursorId || cursorId;
   }
 
   return { queued: totalQueued, feedItemCount: totalFeedItems, cursorAt: cursorAt || null };
@@ -4173,6 +4182,8 @@ module.exports = {
     computeStaleProcessingThresholdMs,
     partitionStaleProcessingRows,
     computeUncertainRetryDelayMs,
+    compareFeedDispatchOrder,
+    planFeedDispatchPage,
     inferChatMessageMediaKind,
     doesChatMessageMatchExpectedAttempt
   }

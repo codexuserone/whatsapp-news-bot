@@ -385,9 +385,10 @@ const TemplatesPage = () => {
       documentUrl?: string;
       includeCaption?: boolean;
       disableLinkPreview?: boolean;
+      confirm?: boolean;
     }) => api.post<{ messageId?: string }>('/api/whatsapp/send-test', payload),
     onSuccess: (result: { messageId?: string }) => {
-      setPreviewSendNotice(result?.messageId ? `Sent (${result.messageId})` : 'Sent');
+      setPreviewSendNotice(result?.messageId ? `Accepted (${result.messageId})` : 'Accepted');
     },
     onError: (error: unknown) => {
       setPreviewSendNotice(`Failed: ${getErrorMessage(error)}`);
@@ -436,7 +437,8 @@ const TemplatesPage = () => {
             : mediaKind === 'document'
               ? { documentUrl: mediaUrl }
               : { imageUrl: mediaUrl }),
-        includeCaption: false
+        includeCaption: false,
+        confirm: true
       });
       return;
     }
@@ -447,7 +449,8 @@ const TemplatesPage = () => {
         sendPreview.mutate({
           jid,
           message,
-          disableLinkPreview: false
+          disableLinkPreview: false,
+          confirm: true
         });
         return;
       }
@@ -461,7 +464,8 @@ const TemplatesPage = () => {
             : mediaKind === 'document'
               ? { documentUrl: mediaUrl }
               : { imageUrl: mediaUrl }),
-        includeCaption: true
+        includeCaption: true,
+        confirm: true
       });
       return;
     }
@@ -470,7 +474,8 @@ const TemplatesPage = () => {
       sendPreview.mutate({
         jid,
         message,
-        disableLinkPreview: false
+        disableLinkPreview: false,
+        confirm: true
       });
       return;
     }
@@ -478,7 +483,8 @@ const TemplatesPage = () => {
     sendPreview.mutate({
       jid,
       message,
-      disableLinkPreview: true
+      disableLinkPreview: true,
+      confirm: true
     });
   };
 

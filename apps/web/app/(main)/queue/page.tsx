@@ -341,9 +341,10 @@ const QueueInner = () => {
     return true;
   };
 
-  const canPause = (item: QueueItem) => item.status === 'awaiting_approval' || item.status === 'pending' || item.status === 'failed';
+  const canPause = (item: QueueItem) =>
+    item.status === 'awaiting_approval' || item.status === 'pending' || item.status === 'failed' || item.status === 'uncertain';
 
-  const canResume = (item: QueueItem) => isPaused(item) || item.status === 'failed';
+  const canResume = (item: QueueItem) => isPaused(item) || item.status === 'failed' || item.status === 'uncertain';
 
   const canPausePost = (item: QueueItem) => Boolean(item.feed_item_id) && !isPostPaused(item);
 
@@ -391,7 +392,7 @@ const QueueInner = () => {
       case 'pending':
         return <Badge variant="secondary">Waiting to send</Badge>;
       case 'processing':
-        return <Badge variant="warning">Sending now</Badge>;
+        return <Badge variant="warning">Attempting send</Badge>;
       case 'sent':
         return <Badge variant="success">Accepted by WhatsApp</Badge>;
       case 'delivered':
@@ -403,7 +404,7 @@ const QueueInner = () => {
       case 'failed':
         return <Badge variant="destructive">Failed</Badge>;
       case 'uncertain':
-        return <Badge variant="warning">Send uncertain</Badge>;
+        return <Badge variant="warning">Checking possible send</Badge>;
       case 'skipped':
         return <Badge variant="warning">Skipped</Badge>;
       default:
@@ -435,7 +436,7 @@ const QueueInner = () => {
       return <Badge variant="success">Delivered</Badge>;
     }
     if (lower === 'pending' || lower === 'server') {
-      return <Badge variant="warning">Sending...</Badge>;
+      return <Badge variant="warning">Accepted, awaiting receipt</Badge>;
     }
     return null;
   };
@@ -463,15 +464,15 @@ const QueueInner = () => {
 
     if (isSuccessfulSendStatus(item.status)) {
       if (mediaType === 'image' && mediaSent) {
-        return { label: 'Sent as image', tone: 'success' as const };
+        return { label: 'Accepted as image', tone: 'success' as const };
       }
       if (mediaType === 'video' && mediaSent) {
-        return { label: 'Sent as video', tone: 'success' as const };
+        return { label: 'Accepted as video', tone: 'success' as const };
       }
       if (mediaType && !mediaSent) {
-        return { label: 'Sent as text (media fallback)', tone: 'warning' as const };
+        return { label: 'Accepted as text (media fallback)', tone: 'warning' as const };
       }
-      return { label: 'Sent as text/link', tone: 'secondary' as const };
+      return { label: 'Accepted as text/link', tone: 'secondary' as const };
     }
 
     if (item.image_url) {
@@ -561,10 +562,10 @@ const QueueInner = () => {
             <SelectContent>
               <SelectItem value="awaiting_approval">Awaiting approval ({queueStats?.awaiting_approval ?? 0})</SelectItem>
               <SelectItem value="pending">Queued ({queueStats?.pending ?? 0})</SelectItem>
-              <SelectItem value="processing">Sending ({queueStats?.processing ?? 0})</SelectItem>
+              <SelectItem value="processing">Attempting send ({queueStats?.processing ?? 0})</SelectItem>
               <SelectItem value="sent">Accepted by WhatsApp ({queueStats?.sent ?? 0})</SelectItem>
               <SelectItem value="failed">Failed ({queueStats?.failed ?? 0})</SelectItem>
-              <SelectItem value="uncertain">Send uncertain ({queueStats?.uncertain ?? 0})</SelectItem>
+              <SelectItem value="uncertain">Checking possible send ({queueStats?.uncertain ?? 0})</SelectItem>
               <SelectItem value="skipped">Skipped ({queueStats?.skipped ?? 0})</SelectItem>
               <SelectItem value="all">All ({queueStats?.total ?? 0})</SelectItem>
             </SelectContent>

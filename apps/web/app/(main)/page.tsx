@@ -185,6 +185,10 @@ const OverviewPage = () => {
               <span className="text-muted-foreground">Failed</span>
               <span className="font-medium">{queueStats?.failed ?? 0}</span>
             </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Uncertain</span>
+              <span className="font-medium">{queueStats?.uncertain ?? 0}</span>
+            </div>
 
             <div className="pt-2 border-t space-y-2">
               <div className="flex items-center justify-between text-sm">

@@ -33,6 +33,7 @@ type SendTestPayload = {
   documentMime?: string;
   includeCaption?: boolean;
   disableLinkPreview?: boolean;
+  confirm?: boolean;
 };
 
 type SendTestResponse = {
@@ -371,7 +372,8 @@ const WhatsAppPage = () => {
     const payload: SendTestPayload = {
       jids: selectedTargets,
       includeCaption: attachMedia ? includeTextWithMedia : true,
-      disableLinkPreview: attachMedia ? false : disableLinkPreview
+      disableLinkPreview: attachMedia ? false : disableLinkPreview,
+      confirm: true
     };
 
     const normalizedMessage = testMessage.trim();
@@ -714,7 +716,7 @@ const WhatsAppPage = () => {
               </Button>
               {sendTestMessage.isSuccess ? (
                 <span className="text-sm text-success">
-                  Sent {sendTestMessage.data?.sent ?? 1}
+                  Accepted {sendTestMessage.data?.sent ?? 1}
                   {(sendTestMessage.data?.failed ?? 0) > 0 ? `, failed ${sendTestMessage.data?.failed}` : ''}.
                 </span>
               ) : null}

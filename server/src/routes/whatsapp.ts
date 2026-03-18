@@ -28,7 +28,7 @@ type TestSendConfirmation = {
 };
 
 type TestSendLogResolution = {
-  status: 'sent' | 'uncertain';
+  status: 'sent' | 'delivered' | 'read' | 'played' | 'uncertain';
   errorMessage: string | null;
   sentAt: string | null;
 };
@@ -52,10 +52,12 @@ const buildUncertainSendMessage = (value: unknown) => {
 
 const resolveTestSendLogResolution = (options: {
   messageId?: string | null;
+  confirmRequested?: boolean;
   confirmation?: TestSendConfirmation | null;
   confirmedAt?: string;
 }) => {
   const messageId = String(options.messageId || '').trim();
+  const confirmRequested = options.confirmRequested !== false;
   const confirmation = options.confirmation || null;
   const confirmedAt = String(options.confirmedAt || new Date().toISOString());
 
@@ -68,10 +70,22 @@ const resolveTestSendLogResolution = (options: {
   }
 
   if (confirmation?.ok) {
+    const statusLabel = String(confirmation.statusLabel || '').trim().toLowerCase();
     return {
-      status: 'sent',
+      status:
+        statusLabel === 'delivered' || statusLabel === 'read' || statusLabel === 'played'
+          ? (statusLabel as 'delivered' | 'read' | 'played')
+          : 'sent',
       errorMessage: null,
       sentAt: confirmedAt
+    } satisfies TestSendLogResolution;
+  }
+
+  if (!confirmRequested) {
+    return {
+      status: 'uncertain',
+      errorMessage: buildUncertainSendMessage('Confirmation check was skipped'),
+      sentAt: null
     } satisfies TestSendLogResolution;
   }
 
@@ -1139,7 +1153,7 @@ const whatsappRoutes = () => {
       ? payload.statusJidList.map((value) => String(value || '').trim()).filter(Boolean)
       : [];
     const disableLinkPreview = payload.disableLinkPreview === true;
-    const confirm = payload.confirm;
+    const confirmationRequired = payload.confirm !== false;
 	    const includeCaption = payload.includeCaption !== false;
 	    const captionText = [normalizedMessage, normalizedLink].filter(Boolean).join('\n').trim();
 	    if (!captionText && !imageUrl && !videoUrl && !audioUrl && !documentUrl && !imageDataUrl && !videoDataUrl && !audioDataUrl && !documentDataUrl) {
@@ -1385,11 +1399,22 @@ const whatsappRoutes = () => {
 
         const messageId = result?.key?.id || null;
         let confirmation: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null = null;
-        if (confirm && messageId && whatsapp?.confirmSend) {
+        if (confirmationRequired && !messageId) {
+          throw new Error('Test message was not assigned a WhatsApp message id');
+        }
+        if (confirmationRequired && messageId && whatsapp?.confirmSend) {
           const timeouts = (imageUrl || videoUrl || imageDataUrl || videoDataUrl)
             ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
             : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 };
           confirmation = await whatsapp.confirmSend(messageId, timeouts);
+        }
+        if (confirmationRequired && (!confirmation || !confirmation.ok)) {
+          const statusLabel = String(confirmation?.statusLabel || '').trim();
+          throw new Error(
+            statusLabel
+              ? `Test message was not confirmed by WhatsApp (${statusLabel})`
+              : 'Test message was not confirmed by WhatsApp'
+          );
         }
 
         results.push({
@@ -1429,7 +1454,8 @@ const whatsappRoutes = () => {
         const rowsToInsert = successful.map((entry) => {
           const resolution = resolveTestSendLogResolution({
             messageId: entry.messageId || null,
-            confirmation: entry.confirmation || null,
+            confirmRequested: confirmationRequired,
+            confirmation: confirmationRequired ? entry.confirmation || null : null,
             confirmedAt
           });
           return {
@@ -1440,13 +1466,20 @@ const whatsappRoutes = () => {
           message_content: captionText || null,
           status: resolution.status,
           error_message: resolution.errorMessage,
-          whatsapp_message_id: entry.messageId || null,
-          sent_at: resolution.sentAt,
-          media_url: requestedMediaUrl && !requestedMediaUrl.startsWith('data:') ? requestedMediaUrl : null,
-          media_type: requestedMediaType,
-          media_sent: Boolean(requestedMediaType && !mediaWarning),
-          media_error: mediaWarning
-        };
+            whatsapp_message_id: entry.messageId || null,
+            sent_at: resolution.sentAt,
+            media_url: requestedMediaUrl && !requestedMediaUrl.startsWith('data:') ? requestedMediaUrl : null,
+            media_type: requestedMediaType,
+          media_sent: Boolean(
+            requestedMediaType &&
+            !mediaWarning &&
+            (resolution.status === 'sent' ||
+              resolution.status === 'delivered' ||
+              resolution.status === 'read' ||
+              resolution.status === 'played')
+          ),
+            media_error: mediaWarning
+          };
         });
 
         if (rowsToInsert.length) {

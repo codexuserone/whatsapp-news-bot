@@ -40,8 +40,16 @@ type SendTestResponse = {
   ok: boolean;
   messageId?: string | null;
   sent?: number;
+  confirmed?: number;
+  uncertain?: number;
   failed?: number;
-  results?: Array<{ jid: string; ok: boolean; messageId?: string | null; error?: string }>;
+  results?: Array<{
+    jid: string;
+    ok: boolean;
+    messageId?: string | null;
+    confirmed?: boolean;
+    error?: string;
+  }>;
   confirmation?: {
     ok: boolean;
     via?: string;
@@ -717,6 +725,12 @@ const WhatsAppPage = () => {
               {sendTestMessage.isSuccess ? (
                 <span className="text-sm text-success">
                   Accepted {sendTestMessage.data?.sent ?? 1}
+                  {(sendTestMessage.data?.confirmed ?? 0) > 0
+                    ? `, confirmed ${sendTestMessage.data?.confirmed}`
+                    : ''}
+                  {(sendTestMessage.data?.uncertain ?? 0) > 0
+                    ? `, awaiting confirmation ${sendTestMessage.data?.uncertain}`
+                    : ''}
                   {(sendTestMessage.data?.failed ?? 0) > 0 ? `, failed ${sendTestMessage.data?.failed}` : ''}.
                 </span>
               ) : null}

@@ -17,6 +17,8 @@ const { normalizeChannelJid, isValidChannelJid } = require('../utils/targetJid')
 const { WHATSAPP_STATUS_ENABLED, WHATSAPP_STATUS_DISABLED_REASON } = require('../config/features');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
+const GROUP_SEND_TIMEOUT_MS = 60000;
+const GROUP_MEDIA_SEND_TIMEOUT_MS = 90000;
 const DEFAULT_USER_AGENT = buildDefaultUserAgent();
 const SUPPORTED_WHATSAPP_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -138,6 +140,13 @@ const isHttpUrl = (value: string) => {
   } catch {
     return false;
   }
+};
+
+const isGroupJid = (value: string) => String(value || '').trim().endsWith('@g.us');
+
+const resolveSendTestTimeoutMs = (jid: string, mediaType: string | null) => {
+  if (!isGroupJid(jid)) return DEFAULT_SEND_TIMEOUT_MS;
+  return mediaType ? GROUP_MEDIA_SEND_TIMEOUT_MS : GROUP_SEND_TIMEOUT_MS;
 };
 
 const toOriginOrUndefined = (value?: string | null) => {
@@ -1307,6 +1316,7 @@ const whatsappRoutes = () => {
 	      jid: string;
 	      ok: boolean;
 	      messageId?: string | null;
+          confirmed?: boolean;
 	      confirmation?: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null;
 	      warning?: string;
 	      error?: string;
@@ -1393,7 +1403,7 @@ const whatsappRoutes = () => {
           : whatsapp.sendMessage(normalizedJid, effectiveContent);
         const result = await withTimeout(
           sendPromise,
-          DEFAULT_SEND_TIMEOUT_MS,
+          resolveSendTestTimeoutMs(normalizedJid, requestedMediaType),
           'Timed out sending test message'
         );
 
@@ -1408,20 +1418,12 @@ const whatsappRoutes = () => {
             : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 };
           confirmation = await whatsapp.confirmSend(messageId, timeouts);
         }
-        if (confirmationRequired && (!confirmation || !confirmation.ok)) {
-          const statusLabel = String(confirmation?.statusLabel || '').trim();
-          throw new Error(
-            statusLabel
-              ? `Test message was not confirmed by WhatsApp (${statusLabel})`
-              : 'Test message was not confirmed by WhatsApp'
-          );
-        }
-
         results.push({
           jid: normalizedJid,
           ok: true,
           messageId,
           confirmation,
+          confirmed: Boolean(confirmation?.ok),
           ...(mediaWarning ? { warning: mediaWarning } : {})
         });
       } catch (error) {
@@ -1490,11 +1492,16 @@ const whatsappRoutes = () => {
       // Best effort only: test-message logging should not fail the send endpoint.
     }
 
+    const confirmedCount = successful.filter((entry) => entry.confirmed === true).length;
+    const uncertainCount = successful.length - confirmedCount;
+
     if (normalizedJids.length === 1) {
       const first = successful[0];
       return res.json({
         ok: results.every((entry) => entry.ok),
         sent: successful.length,
+        confirmed: confirmedCount,
+        uncertain: uncertainCount,
         failed: results.length - successful.length,
         messageId: first?.messageId || null,
         confirmation: first?.confirmation || null,
@@ -1505,6 +1512,8 @@ const whatsappRoutes = () => {
     res.json({
       ok: results.every((entry) => entry.ok),
       sent: successful.length,
+      confirmed: confirmedCount,
+      uncertain: uncertainCount,
       failed: results.length - successful.length,
       results
     });
@@ -1729,5 +1738,7 @@ const whatsappRoutes = () => {
 module.exports = whatsappRoutes;
 module.exports.__testUtils = {
   buildUncertainSendMessage,
+  isGroupJid,
+  resolveSendTestTimeoutMs,
   resolveTestSendLogResolution
 };

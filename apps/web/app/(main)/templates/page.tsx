@@ -386,9 +386,25 @@ const TemplatesPage = () => {
       includeCaption?: boolean;
       disableLinkPreview?: boolean;
       confirm?: boolean;
-    }) => api.post<{ messageId?: string }>('/api/whatsapp/send-test', payload),
-    onSuccess: (result: { messageId?: string }) => {
-      setPreviewSendNotice(result?.messageId ? `Accepted (${result.messageId})` : 'Accepted');
+    }) => api.post<{ messageId?: string; confirmed?: number; uncertain?: number }>('/api/whatsapp/send-test', payload),
+    onSuccess: (result: { messageId?: string; confirmed?: number; uncertain?: number }) => {
+      const messageId = String(result?.messageId || '').trim();
+      const confirmed = Number(result?.confirmed || 0);
+      const uncertain = Number(result?.uncertain || 0);
+      const suffix = messageId ? ` (${messageId})` : '';
+      if (confirmed > 0 && uncertain > 0) {
+        setPreviewSendNotice(`Accepted${suffix}. Confirmed ${confirmed}, awaiting confirmation ${uncertain}.`);
+        return;
+      }
+      if (confirmed > 0) {
+        setPreviewSendNotice(`Accepted${suffix}. Confirmed ${confirmed}.`);
+        return;
+      }
+      if (uncertain > 0) {
+        setPreviewSendNotice(`Accepted${suffix}. Awaiting confirmation ${uncertain}.`);
+        return;
+      }
+      setPreviewSendNotice(messageId ? `Accepted (${messageId})` : 'Accepted');
     },
     onError: (error: unknown) => {
       setPreviewSendNotice(`Failed: ${getErrorMessage(error)}`);

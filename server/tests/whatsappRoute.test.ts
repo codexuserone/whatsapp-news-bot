@@ -3,6 +3,18 @@ import { describe, it, expect } from '@jest/globals';
 const { __testUtils } = require('../src/routes/whatsapp');
 
 describe('whatsapp route test-send logging', () => {
+  it('uses longer timeouts for group sends', () => {
+    expect(__testUtils.isGroupJid('120363425146275942@g.us')).toBe(true);
+    expect(__testUtils.resolveSendTestTimeoutMs('120363425146275942@g.us', null)).toBe(60000);
+    expect(__testUtils.resolveSendTestTimeoutMs('120363425146275942@g.us', 'image')).toBe(90000);
+  });
+
+  it('keeps direct and channel sends on the default timeout', () => {
+    expect(__testUtils.isGroupJid('16465527019@s.whatsapp.net')).toBe(false);
+    expect(__testUtils.resolveSendTestTimeoutMs('16465527019@s.whatsapp.net', null)).toBe(15000);
+    expect(__testUtils.resolveSendTestTimeoutMs('120363406955649221@newsletter', 'video')).toBe(15000);
+  });
+
   it('marks test sends uncertain when no message id is present', () => {
     const result = __testUtils.resolveTestSendLogResolution({
       messageId: null,

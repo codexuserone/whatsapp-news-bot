@@ -25,6 +25,9 @@ type DeliveryAnalytics = {
   played_rate: number;
 };
 
+const formatCountLabel = (count: number, singular: string, plural: string = `${singular}s`) =>
+  `${count} ${count === 1 ? singular : plural}`;
+
 const OverviewPage = () => {
   const queryClient = useQueryClient();
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
@@ -73,6 +76,14 @@ const OverviewPage = () => {
   ];
 
   const feedErrors = feeds.filter((feed) => feed.last_error).length;
+  const liveQueuedNow = Number(queueStats?.queued_now ?? ((queueStats?.awaiting_approval ?? 0) + (queueStats?.pending ?? 0) + (queueStats?.processing ?? 0)));
+  const recentRecordedCount = Number(deliveryAnalytics?.sent ?? 0);
+  const recentFailedCount = Number(queueStats?.failed ?? 0);
+  const recentUncertainCount = Number(queueStats?.uncertain ?? 0);
+  const recentSkippedCount = Number(queueStats?.skipped ?? 0);
+  const recentReceiptCount = Number(deliveryAnalytics?.delivered ?? 0);
+  const recentReadCount = Number(deliveryAnalytics?.read ?? 0);
+  const recentPlayedCount = Number(deliveryAnalytics?.played ?? 0);
 
   return (
     <div className="space-y-6">
@@ -164,50 +175,58 @@ const OverviewPage = () => {
         <Card>
           <CardHeader>
             <CardTitle>Queue Summary</CardTitle>
-            <CardDescription>Live queue counts plus recorded WhatsApp outcomes in the last 24 hours</CardDescription>
+            <CardDescription>Live queue right now, plus recent app-recorded send results.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Live now</div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Pending</span>
+              <span className="text-muted-foreground">Total waiting now</span>
+              <span className="font-medium">{liveQueuedNow}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Awaiting approval</span>
+              <span className="font-medium">{queueStats?.awaiting_approval ?? 0}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Queued</span>
               <span className="font-medium">{queueStats?.pending ?? 0}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Processing</span>
+              <span className="text-muted-foreground">Trying now</span>
               <span className="font-medium">{queueStats?.processing ?? 0}</span>
             </div>
             <div className="border-t pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Last {queueStats?.window_hours ?? 24} hours</div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Recorded locally</span>
-              <span className="font-medium">{queueStats?.sent ?? 0}</span>
+              <span className="text-muted-foreground">Recorded by app</span>
+              <span className="font-medium">{recentRecordedCount}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Failed</span>
-              <span className="font-medium">{queueStats?.failed ?? 0}</span>
+              <span className="text-muted-foreground">Need review</span>
+              <span className="font-medium">{recentFailedCount + recentUncertainCount}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Uncertain</span>
-              <span className="font-medium">{queueStats?.uncertain ?? 0}</span>
+              <span className="text-muted-foreground">Skipped</span>
+              <span className="font-medium">{recentSkippedCount}</span>
             </div>
 
             <div className="pt-2 border-t space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Receipt rate</span>
-                <span className="font-medium">{Math.round((deliveryAnalytics?.delivered_rate ?? 0) * 100)}%</span>
+                <span className="text-muted-foreground">Receipt confirmations</span>
+                <span className="font-medium">{recentReceiptCount}</span>
               </div>
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Read rate</span>
-                <span className="font-medium">{Math.round((deliveryAnalytics?.read_rate ?? 0) * 100)}%</span>
+                <span className="text-muted-foreground">Read confirmations</span>
+                <span className="font-medium">{recentReadCount}</span>
               </div>
-              {Number(deliveryAnalytics?.played ?? 0) > 0 ? (
+              {recentPlayedCount > 0 ? (
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Played</span>
-                  <span className="font-medium">{deliveryAnalytics?.played ?? 0}</span>
+                  <span className="text-muted-foreground">Played confirmations</span>
+                  <span className="font-medium">{recentPlayedCount}</span>
                 </div>
               ) : null}
               <div className="text-[11px] text-muted-foreground">
                 {deliveryAnalytics
-                  ? `${deliveryAnalytics.sent} recorded locally, ${deliveryAnalytics.failed} failed, ${deliveryAnalytics.skipped} skipped`
+                  ? `${formatCountLabel(recentRecordedCount, 'target')} recorded by the app. Receipt confirmations are tracked separately and may arrive later or not at all.`
                   : 'Loading delivery analytics...'}
               </div>
             </div>

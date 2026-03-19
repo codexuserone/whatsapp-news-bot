@@ -8,6 +8,103 @@ const { normalizeFeedMedia } = require('../utils/feedMedia');
 
 const MANUAL_POST_PAUSE_REASON = 'Paused for this post';
 
+type DeliveryLogRow = {
+  id?: string | null;
+  feed_item_id?: string | null;
+  schedule_id?: string | null;
+  target_id?: string | null;
+  status?: string | null;
+  error_message?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  sent_at?: string | null;
+};
+
+type DeliverySummary = {
+  pending: number;
+  processing: number;
+  sent: number;
+  failed: number;
+  skipped: number;
+  manual_paused: number;
+};
+
+const createEmptyDeliverySummary = (): DeliverySummary => ({
+  pending: 0,
+  processing: 0,
+  sent: 0,
+  failed: 0,
+  skipped: 0,
+  manual_paused: 0
+});
+
+const getDeliveryRowTimestamp = (row: DeliveryLogRow) => {
+  const candidates = [row.updated_at, row.sent_at, row.created_at];
+  for (const candidate of candidates) {
+    const value = String(candidate || '').trim();
+    if (value) return value;
+  }
+  return '';
+};
+
+const isNewerDeliveryRow = (candidate: DeliveryLogRow, current: DeliveryLogRow) => {
+  const candidateTimestamp = getDeliveryRowTimestamp(candidate);
+  const currentTimestamp = getDeliveryRowTimestamp(current);
+  if (candidateTimestamp !== currentTimestamp) return candidateTimestamp > currentTimestamp;
+
+  const candidateCreatedAt = String(candidate.created_at || '').trim();
+  const currentCreatedAt = String(current.created_at || '').trim();
+  if (candidateCreatedAt !== currentCreatedAt) return candidateCreatedAt > currentCreatedAt;
+
+  return String(candidate.id || '').trim() > String(current.id || '').trim();
+};
+
+const selectRelevantDeliveryRows = (rows: DeliveryLogRow[], activeScheduleIds: Set<string>) => {
+  const latestByTarget = new Map<string, DeliveryLogRow>();
+
+  for (const row of rows || []) {
+    const feedItemId = String(row.feed_item_id || '').trim();
+    const scheduleId = String(row.schedule_id || '').trim();
+    if (!feedItemId || !scheduleId || !activeScheduleIds.has(scheduleId)) continue;
+
+    const targetId = String(row.target_id || '').trim();
+    const key = `${feedItemId}::${scheduleId}::${targetId}`;
+    const current = latestByTarget.get(key);
+    if (!current || isNewerDeliveryRow(row, current)) {
+      latestByTarget.set(key, row);
+    }
+  }
+
+  return Array.from(latestByTarget.values());
+};
+
+const summarizeDeliveryRows = (rows: DeliveryLogRow[]) => {
+  const deliveryByItem = new Map<string, DeliverySummary>();
+
+  for (const row of rows || []) {
+    const feedItemId = String(row.feed_item_id || '').trim();
+    const status = String(row.status || '').trim().toLowerCase();
+    if (!feedItemId || !status) continue;
+
+    const current = deliveryByItem.get(feedItemId) || createEmptyDeliverySummary();
+
+    if (status === 'pending' || status === 'awaiting_approval') current.pending += 1;
+    else if (status === 'processing') current.processing += 1;
+    else if (status === 'sent' || status === 'delivered' || status === 'read' || status === 'played') current.sent += 1;
+    else if (status === 'failed') current.failed += 1;
+    else if (status === 'skipped') {
+      current.skipped += 1;
+      if (String(row.error_message || '') === MANUAL_POST_PAUSE_REASON) {
+        current.manual_paused += 1;
+      }
+    }
+
+    deliveryByItem.set(feedItemId, current);
+  }
+
+  return deliveryByItem;
+};
+
 const feedItemRoutes = () => {
   const router = express.Router();
   
@@ -28,17 +125,22 @@ const feedItemRoutes = () => {
 
       const { data: schedules, error: schedulesError } = await supabase
         .from('schedules')
-        .select('feed_id,active,state,template_id,target_ids,last_queued_at,last_run_at,created_at');
+        .select('id,feed_id,active,state,template_id,target_ids,last_queued_at,last_run_at,created_at');
 
       if (schedulesError) throw schedulesError;
 
+      const runningScheduleIds = new Set<string>();
       const runningAutomationCountByFeedId = new Map<string, number>();
       const dispatchableAutomationCountByFeedId = new Map<string, number>();
       const queueCursorByFeedId = new Map<string, number>();
-      for (const schedule of (schedules || []) as Array<{ feed_id?: string | null; active?: boolean | null; state?: string | null }>) {
+      for (const schedule of (schedules || []) as Array<{ id?: string | null; feed_id?: string | null; active?: boolean | null; state?: string | null }>) {
         const feedId = String(schedule.feed_id || '').trim();
         if (!feedId) continue;
         if (!isScheduleRunning(schedule)) continue;
+        const scheduleId = String(schedule.id || '').trim();
+        if (scheduleId) {
+          runningScheduleIds.add(scheduleId);
+        }
         runningAutomationCountByFeedId.set(feedId, (runningAutomationCountByFeedId.get(feedId) || 0) + 1);
         const cursorCandidates = [
           Date.parse(String((schedule as { last_queued_at?: string | null }).last_queued_at || '')),
@@ -102,42 +204,19 @@ const feedItemRoutes = () => {
         { pending: number; processing: number; sent: number; failed: number; skipped: number; manual_paused: number }
       >();
 
-      if (ids.length) {
+      if (ids.length && runningScheduleIds.size) {
         const { data: logs, error: logsError } = await supabase
           .from('message_logs')
-          .select('feed_item_id,status,error_message')
+          .select('id,feed_item_id,schedule_id,target_id,status,error_message,created_at,updated_at,sent_at')
           .in('feed_item_id', ids);
 
         if (logsError) {
           console.warn('Error fetching message log summaries:', logsError);
         }
-
-        for (const row of (logs || []) as Array<{ feed_item_id?: string; status?: string; error_message?: string | null }>) {
-          const feedItemId = row.feed_item_id;
-          const status = row.status;
-          if (!feedItemId || !status) continue;
-
-          const current = deliveryByItem.get(feedItemId) || {
-            pending: 0,
-            processing: 0,
-            sent: 0,
-            failed: 0,
-            skipped: 0,
-            manual_paused: 0
-          };
-
-          if (status === 'pending' || status === 'awaiting_approval') current.pending += 1;
-          else if (status === 'processing') current.processing += 1;
-          else if (status === 'sent' || status === 'delivered' || status === 'read' || status === 'played') current.sent += 1;
-          else if (status === 'failed') current.failed += 1;
-          else if (status === 'skipped') {
-            current.skipped += 1;
-            if (String(row.error_message || '') === MANUAL_POST_PAUSE_REASON) {
-              current.manual_paused += 1;
-            }
-          }
-
-          deliveryByItem.set(feedItemId, current);
+        const relevantLogs = selectRelevantDeliveryRows((logs || []) as DeliveryLogRow[], runningScheduleIds);
+        const relevantDelivery = summarizeDeliveryRows(relevantLogs);
+        for (const [feedItemId, summary] of relevantDelivery.entries()) {
+          deliveryByItem.set(feedItemId, summary);
         }
       }
 
@@ -412,3 +491,7 @@ const feedItemRoutes = () => {
 };
 
 module.exports = feedItemRoutes;
+module.exports.__testUtils = {
+  selectRelevantDeliveryRows,
+  summarizeDeliveryRows
+};

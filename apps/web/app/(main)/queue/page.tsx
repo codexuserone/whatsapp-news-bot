@@ -50,6 +50,8 @@ const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | nu
 
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
 const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
+const LIVE_QUEUE_STATUSES = new Set(['awaiting_approval', 'pending', 'processing']);
+const HISTORY_STATUSES = new Set(['sent', 'failed', 'uncertain', 'skipped', 'superseded']);
 
 const WHATSAPP_SENT_EDIT_MAX_MINUTES = 15;
 
@@ -127,6 +129,23 @@ const QueueInner = () => {
   });
 
   const retryableIssueCount = Number(queueStats?.failed || 0) + Number(queueStats?.uncertain || 0);
+  const showingLiveQueueOnly = LIVE_QUEUE_STATUSES.has(statusFilter);
+  const showingHistoryOnly = HISTORY_STATUSES.has(statusFilter);
+  const queueCardTitle = showingLiveQueueOnly
+    ? 'Live queue'
+    : showingHistoryOnly
+      ? 'Recent delivery results'
+      : 'Live queue and recent results';
+  const queueCardDescription = showingLiveQueueOnly
+    ? 'Only destinations that are still waiting, paused for approval, or being attempted right now.'
+    : showingHistoryOnly
+      ? 'Recent delivery history, not items that are still waiting to send.'
+      : 'This combined view mixes live queue rows with recent delivery history.';
+  const filterHelpText = showingLiveQueueOnly
+    ? 'Showing only live queue rows.'
+    : showingHistoryOnly
+      ? 'Showing only recent result history.'
+      : 'Showing live queue rows and recent history together. Use a status filter for a narrower view.';
 
   const { data: queueItems = [], isLoading } = useQuery<QueueItem[]>({
     queryKey: ['queue', statusFilter, includeManual],
@@ -482,6 +501,8 @@ const QueueInner = () => {
     return { label: 'Text/link send', tone: 'secondary' as const };
   };
 
+  const isHistoryItem = (item: QueueItem) => HISTORY_STATUSES.has(String(item.status || '').toLowerCase());
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -563,11 +584,11 @@ const QueueInner = () => {
               <SelectItem value="awaiting_approval">Awaiting approval ({queueStats?.awaiting_approval ?? 0})</SelectItem>
               <SelectItem value="pending">Queued ({queueStats?.pending ?? 0})</SelectItem>
               <SelectItem value="processing">Attempting send ({queueStats?.processing ?? 0})</SelectItem>
-              <SelectItem value="sent">Recorded locally ({queueStats?.sent ?? 0})</SelectItem>
-              <SelectItem value="failed">Failed ({queueStats?.failed ?? 0})</SelectItem>
+              <SelectItem value="sent">Recorded by app ({queueStats?.sent ?? 0})</SelectItem>
+              <SelectItem value="failed">Needs review ({queueStats?.failed ?? 0})</SelectItem>
               <SelectItem value="uncertain">Checking possible send ({queueStats?.uncertain ?? 0})</SelectItem>
               <SelectItem value="skipped">Skipped ({queueStats?.skipped ?? 0})</SelectItem>
-              <SelectItem value="all">All ({queueStats?.total ?? 0})</SelectItem>
+              <SelectItem value="all">All visible rows ({queueStats?.total ?? 0})</SelectItem>
             </SelectContent>
         </Select>
         <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
@@ -580,6 +601,8 @@ const QueueInner = () => {
           {queueItems.length} item{queueItems.length !== 1 ? 's' : ''}
         </span>
       </div>
+
+      <p className="text-sm text-muted-foreground">{filterHelpText}</p>
 
       {actionNotice ? (
         <div
@@ -596,8 +619,9 @@ const QueueInner = () => {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             {viewMode === 'list' ? <ListOrdered className="h-5 w-5" /> : <LayoutGrid className="h-5 w-5" />}
-            {viewMode === 'list' ? 'Queued messages (List)' : 'Queued messages (Grid)'}
+            {viewMode === 'list' ? `${queueCardTitle} (List)` : `${queueCardTitle} (Grid)`}
           </CardTitle>
+          <p className="text-sm text-muted-foreground">{queueCardDescription}</p>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -606,7 +630,7 @@ const QueueInner = () => {
             </div>
           ) : queueItems.length === 0 ? (
             <div className="py-8 text-center text-muted-foreground">
-              No messages in queue with status &quot;{statusFilter === 'all' ? 'any' : statusFilter}&quot;
+              No rows found for &quot;{statusFilter === 'all' ? 'all statuses' : statusFilter}&quot;.
             </div>
           ) : viewMode === 'list' ? (
             <div className="space-y-3">
@@ -644,6 +668,7 @@ const QueueInner = () => {
                       <div className="min-w-0 flex-1">
                         <div className="mb-1 flex flex-wrap items-center gap-2">
                           {getStatusBadge(item)}
+                          <Badge variant="outline">{isHistoryItem(item) ? 'History' : 'Live queue'}</Badge>
                           {item.delivery_mode === 'batch' || item.delivery_mode === 'batched' ? (
                             <Badge variant="outline">Scheduled time</Badge>
                           ) : null}

@@ -26,8 +26,7 @@ const buildComposeHref = (item: FeedItem) => {
   return query ? `/compose?${query}` : '/compose';
 };
 
-const formatTargetSummary = (count: number, noun: 'recorded' | 'queued' | 'failed' | 'paused') =>
-  `${count} target${count === 1 ? '' : 's'} ${noun}`;
+const formatTargetSummary = (count: number, label: string) => `${count} target${count === 1 ? '' : 's'} ${label}`;
 
 const FeedItemsPage = () => {
   const queryClient = useQueryClient();
@@ -67,7 +66,7 @@ const FeedItemsPage = () => {
       return { label: 'Will queue on next poll', variant: 'secondary' as const };
     }
     if (item.delivery_status === 'not_queued_old') {
-      return { label: 'Older than queue start', variant: 'secondary' as const };
+      return { label: 'Older than the current automation window', variant: 'secondary' as const };
     }
 
     const delivery = item.delivery || {
@@ -87,7 +86,7 @@ const FeedItemsPage = () => {
 
     if (manualPaused > 0 && queued > 0) {
       return {
-        label: `${formatTargetSummary(manualPaused, 'paused')}, ${formatTargetSummary(queued, 'queued')}`,
+        label: `${formatTargetSummary(manualPaused, 'paused')}, ${formatTargetSummary(queued, 'still queued')}`,
         variant: 'warning' as const
       };
     }
@@ -97,40 +96,40 @@ const FeedItemsPage = () => {
 
     if (queued > 0 && sent > 0 && failed > 0) {
       return {
-        label: `${formatTargetSummary(sent, 'recorded')}, ${formatTargetSummary(queued, 'queued')}, ${formatTargetSummary(failed, 'failed')}`,
+        label: `${formatTargetSummary(sent, 'recorded by app')}, ${formatTargetSummary(queued, 'still queued')}, ${formatTargetSummary(failed, 'need review')}`,
         variant: 'warning' as const
       };
     }
     if (queued > 0 && sent > 0) {
       return {
-        label: `${formatTargetSummary(sent, 'recorded')}, ${formatTargetSummary(queued, 'queued')}`,
+        label: `${formatTargetSummary(sent, 'recorded by app')}, ${formatTargetSummary(queued, 'still queued')}`,
         variant: 'warning' as const
       };
     }
     if (queued > 0 && failed > 0) {
       return {
-        label: `${formatTargetSummary(queued, 'queued')}, ${formatTargetSummary(failed, 'failed')}`,
+        label: `${formatTargetSummary(queued, 'still queued')}, ${formatTargetSummary(failed, 'need review')}`,
         variant: 'warning' as const
       };
     }
     if (queued > 0) {
-      return { label: formatTargetSummary(queued, 'queued'), variant: 'warning' as const };
+      return { label: formatTargetSummary(queued, 'still queued'), variant: 'warning' as const };
     }
     if (sent > 0 && failed > 0) {
       return {
-        label: `${formatTargetSummary(sent, 'recorded')}, ${formatTargetSummary(failed, 'failed')}`,
+        label: `${formatTargetSummary(sent, 'recorded by app')}, ${formatTargetSummary(failed, 'need review')}`,
         variant: 'warning' as const
       };
     }
     if (failed > 0) {
-      return { label: formatTargetSummary(failed, 'failed'), variant: 'destructive' as const };
+      return { label: formatTargetSummary(failed, 'need review'), variant: 'destructive' as const };
     }
     if (sent > 0) {
-      return { label: formatTargetSummary(sent, 'recorded'), variant: 'success' as const };
+      return { label: formatTargetSummary(sent, 'recorded by app'), variant: 'success' as const };
     }
     // Item exists in feed history but no queue rows were created yet.
     if (total === 0) {
-      return { label: 'Waiting for next send window', variant: 'secondary' as const };
+      return { label: 'Waiting for the next send window', variant: 'secondary' as const };
     }
     return { label: 'Waiting', variant: 'secondary' as const };
   };
@@ -159,6 +158,9 @@ const FeedItemsPage = () => {
         <h1 className="text-3xl font-bold tracking-tight">Feed Items</h1>
         <p className="text-muted-foreground">
           Stories from your feeds. Queue is where editable outgoing messages live before they are sent.
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Story status here is based on the latest live automation rows for each destination. Older history is ignored.
         </p>
       </div>
 

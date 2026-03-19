@@ -1,4 +1,4 @@
-import type { AnyMessageContent, WASocket, proto } from '@whiskeysockets/baileys';
+import type { AnyMessageContent, MiscMessageGenerationOptions, WASocket, proto } from '@whiskeysockets/baileys';
 import { randomUUID } from 'crypto';
 
 const { loadBaileys } = require('./baileys');
@@ -2056,7 +2056,7 @@ class WhatsAppClient {
     return null;
   }
 
-  private async resolveSendOptions(jid: string, options: Record<string, unknown>) {
+  private async resolveSendOptions(jid: string, options: MiscMessageGenerationOptions) {
     const normalizedJid = String(jid || '').trim();
     if (!normalizedJid) return options;
     if (Object.prototype.hasOwnProperty.call(options, 'ephemeralExpiration')) {
@@ -2097,12 +2097,18 @@ class WhatsAppClient {
     }
 
     if (isGroup) {
-      if (Object.prototype.hasOwnProperty.call(options, 'useUserDevicesCache')) {
-        return options;
+      const resolvedOptions = Object.prototype.hasOwnProperty.call(options, 'useUserDevicesCache')
+        ? { ...options }
+        : {
+            ...options,
+            useUserDevicesCache: false
+          };
+      if (!ephemeralExpiration) {
+        return resolvedOptions;
       }
       return {
-        ...options,
-        useUserDevicesCache: false
+        ...resolvedOptions,
+        ephemeralExpiration
       };
     }
 
@@ -2769,7 +2775,7 @@ class WhatsAppClient {
     return { allowed: true, reason: null };
   }
 
-  async sendMessage(jid: string, content: AnyMessageContent, options: Record<string, unknown> = {}) {
+  async sendMessage(jid: string, content: AnyMessageContent, options: MiscMessageGenerationOptions = {}) {
     if (!this.socket) throw new Error('WhatsApp not connected');
     if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
     const normalizedJid = String(jid || '').trim();

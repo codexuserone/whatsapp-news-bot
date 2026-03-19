@@ -214,7 +214,7 @@ describe('WhatsAppClient', () => {
         expect(sendMessage).not.toHaveBeenCalled();
     });
 
-    it('should not inject ephemeralExpiration into group sends', async () => {
+    it('should include ephemeralExpiration for disappearing groups', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'group-msg-1' } }));
         const groupMetadata: any = jest.fn(async () => ({
             id: '120363000000000010@g.us',
@@ -231,6 +231,27 @@ describe('WhatsAppClient', () => {
         expect(sendMessage).toHaveBeenCalledWith(
             '120363000000000010@g.us',
             { text: 'hello group' },
+            { useUserDevicesCache: false, ephemeralExpiration: 86400 }
+        );
+    });
+
+    it('should not add ephemeralExpiration for groups without disappearing mode', async () => {
+        const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'group-msg-2' } }));
+        const groupMetadata: any = jest.fn(async () => ({
+            id: '120363000000000011@g.us',
+            subject: 'Plain Group',
+            size: 2,
+            ephemeralDuration: 0,
+            participants: []
+        }));
+
+        client.socket = { sendMessage, groupMetadata };
+
+        await client.sendMessage('120363000000000011@g.us', { text: 'plain group' });
+
+        expect(sendMessage).toHaveBeenCalledWith(
+            '120363000000000011@g.us',
+            { text: 'plain group' },
             { useUserDevicesCache: false }
         );
     });

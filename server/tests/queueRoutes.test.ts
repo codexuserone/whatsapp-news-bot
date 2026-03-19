@@ -62,4 +62,18 @@ describe('queue route retry safeguards', () => {
       )
     ).toBe(true);
   });
+
+  it('limits history filters to the recent window and keeps live statuses separate', () => {
+    expect(testUtils.shouldLimitQueueStatusToRecentHistory('sent')).toBe(true);
+    expect(testUtils.shouldLimitQueueStatusToRecentHistory('failed')).toBe(true);
+    expect(testUtils.shouldLimitQueueStatusToRecentHistory('uncertain')).toBe(true);
+    expect(testUtils.shouldLimitQueueStatusToRecentHistory('pending')).toBe(false);
+    expect(testUtils.shouldLimitQueueStatusToRecentHistory(undefined)).toBe(false);
+  });
+
+  it('builds a combined filter that keeps live queue rows plus recent history', () => {
+    expect(testUtils.buildCombinedQueueFilter('2026-03-18T00:00:00.000Z')).toBe(
+      'status.eq.awaiting_approval,status.eq.pending,status.eq.processing,created_at.gte.2026-03-18T00:00:00.000Z'
+    );
+  });
 });

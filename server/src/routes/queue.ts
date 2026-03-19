@@ -14,6 +14,7 @@ const { normalizeFeedMedia } = require('../utils/feedMedia');
 
 const WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES = 15;
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
+const LIVE_QUEUE_STATUS_VALUES = ['awaiting_approval', 'pending', 'processing'];
 const HISTORY_QUEUE_STATUSES = new Set(['sent', 'failed', 'skipped', 'uncertain', 'superseded']);
 const DEFAULT_QUEUE_HISTORY_WINDOW_HOURS = 24;
 const MAX_QUEUE_HISTORY_WINDOW_HOURS = 168;
@@ -76,6 +77,14 @@ const parseWindowHours = (value: unknown) => {
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_QUEUE_HISTORY_WINDOW_HOURS;
   return Math.min(Math.max(Math.round(parsed), 1), MAX_QUEUE_HISTORY_WINDOW_HOURS);
 };
+
+const shouldLimitQueueStatusToRecentHistory = (statusFilter?: string) => {
+  if (!statusFilter) return false;
+  return statusFilter === 'sent' || HISTORY_QUEUE_STATUSES.has(statusFilter);
+};
+
+const buildCombinedQueueFilter = (windowStartIso: string) =>
+  [...LIVE_QUEUE_STATUS_VALUES.map((status) => `status.eq.${status}`), `created_at.gte.${windowStartIso}`].join(',');
 
 type RetryableQueueRow = {
   id?: string | null;
@@ -225,6 +234,8 @@ const queueRoutes = () => {
       const statusFilter = statusFilterRaw ? String(statusFilterRaw).toLowerCase() : undefined;
       const shouldFilterByStatus = Boolean(statusFilter && statusFilter !== 'all');
       const includeManual = String(req.query.include_manual || '').toLowerCase() === 'true';
+      const windowHours = parseWindowHours(req.query.window_hours);
+      const windowStartIso = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
       const useCursorPagination =
         String(req.query.mode || '').toLowerCase() === 'cursor' ||
         Object.prototype.hasOwnProperty.call(req.query, 'limit') ||
@@ -287,6 +298,11 @@ const queueRoutes = () => {
         } else {
           query = query.eq('status', statusFilter);
         }
+        if (shouldLimitQueueStatusToRecentHistory(statusFilter)) {
+          query = query.gte('created_at', windowStartIso);
+        }
+      } else {
+        query = query.or(buildCombinedQueueFilter(windowStartIso));
       }
       if (!includeManual) {
         query = query.not('schedule_id', 'is', null);
@@ -911,5 +927,7 @@ const queueRoutes = () => {
 module.exports = queueRoutes;
 module.exports.__testUtils = {
   parseWindowHours,
-  isRetryableQueueRow
+  isRetryableQueueRow,
+  shouldLimitQueueStatusToRecentHistory,
+  buildCombinedQueueFilter
 };

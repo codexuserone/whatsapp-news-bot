@@ -51,7 +51,7 @@ const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | nu
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
 const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
 const LIVE_QUEUE_STATUSES = new Set(['awaiting_approval', 'pending', 'processing']);
-const HISTORY_STATUSES = new Set(['sent', 'failed', 'uncertain', 'skipped', 'superseded']);
+const HISTORY_STATUSES = new Set(['sent', 'delivered', 'read', 'played', 'failed', 'uncertain', 'skipped', 'superseded']);
 
 const WHATSAPP_SENT_EDIT_MAX_MINUTES = 15;
 

@@ -73,7 +73,7 @@ type WhatsAppClient = {
   getStatus: () => { status: string };
   sendMessage: (jid: string, content: Record<string, unknown>, options?: Record<string, unknown>) => Promise<any>;
   sendStatusBroadcast: (content: Record<string, unknown>, options?: Record<string, unknown>) => Promise<any>;
-  editMessage?: (jid: string, messageId: string, text: string) => Promise<any>;
+  editMessage?: (jid: string, messageId: string, content: string | Record<string, unknown>) => Promise<any>;
   deleteMessage?: (jid: string, messageId: string) => Promise<any>;
   reconnect?: () => Promise<void> | void;
   takeoverLease?: (
@@ -107,6 +107,7 @@ const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']
 const QUEUED_CORRECTION_STATUSES = new Set(['awaiting_approval', 'pending', 'failed', 'uncertain', 'skipped']);
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.wma'];
 const DOCUMENT_EXTENSIONS = ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv', '.txt', '.rtf', '.zip'];
+const EDITABLE_MEDIA_TYPES = new Set(['image', 'video', 'document']);
 
 const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
 
@@ -132,6 +133,37 @@ const normalizeComparableMediaType = (value: unknown) =>
   String(value || '')
     .trim()
     .toLowerCase() || null;
+
+const canEditCaptionInPlace = (options: {
+  currentMediaType?: unknown;
+  desiredMediaType?: unknown;
+  currentMediaUrl?: unknown;
+  desiredMediaUrl?: unknown;
+}) => {
+  const currentMediaType = normalizeComparableMediaType(options.currentMediaType);
+  const desiredMediaType = normalizeComparableMediaType(options.desiredMediaType);
+  const currentMediaUrl = normalizeComparableText(options.currentMediaUrl);
+  const desiredMediaUrl = normalizeComparableText(options.desiredMediaUrl);
+  if (!currentMediaType || !desiredMediaType) return false;
+  if (!EDITABLE_MEDIA_TYPES.has(currentMediaType) || !EDITABLE_MEDIA_TYPES.has(desiredMediaType)) return false;
+  if (!currentMediaUrl || !desiredMediaUrl) return false;
+  return currentMediaType === desiredMediaType && currentMediaUrl === desiredMediaUrl;
+};
+
+const hasEditableQueuePayload = (row: {
+  media_type?: unknown;
+  media_url?: unknown;
+}) => {
+  const mediaType = normalizeComparableMediaType(row.media_type);
+  const mediaUrl = normalizeComparableText(row.media_url);
+  if (!mediaType && !mediaUrl) return true;
+  return canEditCaptionInPlace({
+    currentMediaType: mediaType,
+    desiredMediaType: mediaType,
+    currentMediaUrl: mediaUrl,
+    desiredMediaUrl: mediaUrl
+  });
+};
 
 const hasCorrectionChanges = (
   current: { text?: unknown; mediaUrl?: unknown; mediaType?: unknown },
@@ -160,7 +192,9 @@ const chooseCorrectionStrategy = (options: {
   supportsEdit: boolean;
   supportsDelete: boolean;
   currentMediaType?: string | null;
+  currentMediaUrl?: string | null;
   desiredMediaType?: string | null;
+  desiredMediaUrl?: string | null;
 }) => {
   const targetType = String(options.targetType || '').trim().toLowerCase();
   const sentAgeMs = options.sentAgeMs;
@@ -174,11 +208,16 @@ const chooseCorrectionStrategy = (options: {
   const currentMediaType = normalizeComparableMediaType(options.currentMediaType);
   const desiredMediaType = normalizeComparableMediaType(options.desiredMediaType);
   const isTextOnly = !currentMediaType && !desiredMediaType;
+  const isSameEditableMedia = canEditCaptionInPlace({
+    currentMediaType,
+    desiredMediaType,
+    currentMediaUrl: options.currentMediaUrl,
+    desiredMediaUrl: options.desiredMediaUrl
+  });
 
   if (
     options.supportsEdit &&
-    targetType !== 'channel' &&
-    isTextOnly &&
+    (isTextOnly || isSameEditableMedia) &&
     sentAgeMs <= options.editWindowMs
   ) {
     return 'edit' as const;
@@ -1862,6 +1901,127 @@ const sendMessageWithTemplate = async (
   };
 };
 
+const buildEditableMessageContent = async (options: {
+  jid: string;
+  text?: string | null;
+  mediaUrl?: string | null;
+  mediaType?: string | null;
+  mediaMime?: string | null;
+  mediaFilename?: string | null;
+  refererUrl?: string | null;
+}): Promise<Record<string, unknown>> => {
+  const jid = String(options.jid || '').trim();
+  if (!jid) {
+    throw new Error('jid is required to edit a message');
+  }
+
+  const normalizedText = normalizeMessageText(String(options.text || '')).trim();
+  const normalizedMediaType = normalizeComparableMediaType(options.mediaType);
+  const normalizedMediaUrl = String(options.mediaUrl || '').trim();
+
+  if (!normalizedMediaType && !normalizedMediaUrl) {
+    if (!normalizedText) {
+      throw new Error('Updated message text is required');
+    }
+    return { text: normalizedText };
+  }
+
+  if (!canEditCaptionInPlace({
+    currentMediaType: normalizedMediaType,
+    desiredMediaType: normalizedMediaType,
+    currentMediaUrl: normalizedMediaUrl,
+    desiredMediaUrl: normalizedMediaUrl
+  })) {
+    throw new Error('Only image, video, and document messages can keep the same media during edits');
+  }
+
+  const safeUrl = (await assertSafeOutboundUrl(normalizedMediaUrl)).toString();
+
+  if (normalizedMediaType === 'image') {
+    const { buffer, mimetype } = await downloadImageBuffer(safeUrl, options.refererUrl);
+    let sendBuffer = buffer;
+    let sendMime = mimetype;
+    let newsletterExtras: Record<string, unknown> | null = null;
+    if (isNewsletterJid(jid)) {
+      try {
+        const prepared = await prepareNewsletterImage(buffer, { maxBytes: 8 * 1024 * 1024 });
+        sendBuffer = prepared.buffer;
+        sendMime = prepared.mimetype || sendMime;
+        newsletterExtras = {
+          ...(prepared.jpegThumbnail ? { jpegThumbnail: prepared.jpegThumbnail } : {}),
+          ...(typeof prepared.width === 'number' ? { width: prepared.width } : {}),
+          ...(typeof prepared.height === 'number' ? { height: prepared.height } : {})
+        };
+      } catch (error) {
+        logger.warn(
+          { error, jid, originalSize: buffer.length, maxBytes: 8 * 1024 * 1024 },
+          'Failed to normalize newsletter image edit payload; sending original buffer'
+        );
+      }
+    }
+
+    const content: Record<string, unknown> = { image: sendBuffer };
+    if (normalizedText) {
+      content.caption = normalizedText;
+    }
+    if (sendMime) {
+      content.mimetype = sendMime;
+    }
+    if (newsletterExtras && Object.keys(newsletterExtras).length) {
+      Object.assign(content, newsletterExtras);
+    }
+    return content;
+  }
+
+  if (normalizedMediaType === 'video') {
+    const { buffer, mimetype } = await downloadVideoBuffer(safeUrl, options.refererUrl);
+    let sendBuffer = buffer;
+    let sendMime = mimetype;
+    let newsletterExtras: Record<string, unknown> | null = null;
+    if (isNewsletterJid(jid)) {
+      try {
+        const prepared = await prepareNewsletterVideo(buffer, { maxBytes: 32 * 1024 * 1024 });
+        sendBuffer = prepared.buffer;
+        sendMime = prepared.mimetype || sendMime;
+        newsletterExtras = {
+          ...(prepared.jpegThumbnail ? { jpegThumbnail: prepared.jpegThumbnail } : {}),
+          ...(typeof prepared.seconds === 'number' ? { seconds: prepared.seconds } : {}),
+          ...(typeof prepared.width === 'number' ? { width: prepared.width } : {}),
+          ...(typeof prepared.height === 'number' ? { height: prepared.height } : {})
+        };
+      } catch (error) {
+        logger.warn(
+          { error, jid, originalSize: buffer.length, maxBytes: 32 * 1024 * 1024 },
+          'Failed to normalize newsletter video edit payload; sending original buffer'
+        );
+      }
+    }
+
+    const content: Record<string, unknown> = { video: sendBuffer };
+    if (normalizedText) {
+      content.caption = normalizedText;
+    }
+    if (sendMime) {
+      content.mimetype = sendMime;
+    }
+    if (newsletterExtras && Object.keys(newsletterExtras).length) {
+      Object.assign(content, newsletterExtras);
+    }
+    return content;
+  }
+
+  const { buffer, mimetype, filename } = await downloadDocumentBuffer(safeUrl, options.refererUrl);
+  const content: Record<string, unknown> = {
+    document: buffer,
+    mimetype: String(options.mediaMime || mimetype || 'application/octet-stream').trim() || 'application/octet-stream',
+    fileName: String(options.mediaFilename || filename || 'attachment').trim() || 'attachment'
+  };
+  if (normalizedText) {
+    content.caption = normalizedText;
+  }
+  return content;
+};
+
 type ReconcileUpdatedFeedItemsResult = {
   processed: number;
   refreshed: number;
@@ -2168,6 +2328,8 @@ const reconcileUpdatedFeedItems = async (
     const desiredText = String(rendered.outboundText || '').trim();
     const desiredMediaUrl = String(expectedMedia.url || '').trim() || null;
     const desiredMediaType = normalizeComparableMediaType(expectedMedia.kind);
+    const desiredMediaMime = String(expectedMedia.mime || '').trim() || null;
+    const desiredMediaFilename = String(expectedMedia.filename || '').trim() || null;
     if (!desiredText && !desiredMediaUrl) {
       result.skipped += 1;
       continue;
@@ -2216,19 +2378,26 @@ const reconcileUpdatedFeedItems = async (
       supportsEdit: Boolean(whatsappClient.editMessage),
       supportsDelete: Boolean(whatsappClient.deleteMessage),
       currentMediaType: String(log.media_type || '').trim() || null,
-      desiredMediaType
+      currentMediaUrl: String(log.media_url || '').trim() || null,
+      desiredMediaType,
+      desiredMediaUrl
     });
 
     if (correctionStrategy === 'edit') {
       try {
+        const editableContent = await buildEditableMessageContent({
+          jid,
+          text: desiredText,
+          mediaUrl: desiredMediaUrl,
+          mediaType: desiredMediaType,
+          mediaMime: desiredMediaMime,
+          mediaFilename: desiredMediaFilename,
+          refererUrl: String(feedItem.link || '').trim() || null
+        });
         await withGlobalSendLock(async () => {
           await waitForDelays(target as Target, settings);
           await withTimeout(
-            whatsappClient.editMessage!(
-              jid,
-              whatsappMessageId,
-              desiredText
-            ),
+            whatsappClient.editMessage!(jid, whatsappMessageId, editableContent),
             sendTimeoutMs,
             'Timed out editing message'
           );
@@ -2238,6 +2407,8 @@ const reconcileUpdatedFeedItems = async (
           .from('message_logs')
           .update({
             message_content: desiredText,
+            media_url: desiredMediaUrl,
+            media_type: desiredMediaType,
             error_message: null,
             corrected_at: new Date().toISOString(),
             correction_kind: 'edit',
@@ -4496,6 +4667,8 @@ module.exports = {
   queueLatestForSchedule,
   sendQueueLogNow,
   reconcileUpdatedFeedItems,
+  buildEditableMessageContent,
+  hasEditableQueuePayload,
   __testUtils: {
     buildDispatchIdentityKey,
     computeStaleProcessingThresholdMs,
@@ -4506,6 +4679,8 @@ module.exports = {
     inferChatMessageMediaKind,
     doesChatMessageMatchExpectedAttempt,
     hasCorrectionChanges,
+    canEditCaptionInPlace,
+    hasEditableQueuePayload,
     chooseCorrectionStrategy,
     isConnectionStateError,
     buildConnectionWaitErrorMessage

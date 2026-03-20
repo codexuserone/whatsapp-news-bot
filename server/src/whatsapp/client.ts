@@ -1,4 +1,4 @@
-import type { AnyMessageContent, MiscMessageGenerationOptions, WASocket, proto } from '@whiskeysockets/baileys';
+import type { AnyMessageContent, AnyRegularMessageContent, MiscMessageGenerationOptions, WASocket, proto } from '@whiskeysockets/baileys';
 import { randomUUID } from 'crypto';
 
 const { loadBaileys } = require('./baileys');
@@ -2890,15 +2890,32 @@ class WhatsAppClient {
     }
   }
 
-  async editMessage(jid: string, messageId: string, text: string) {
+  async editMessage(jid: string, messageId: string, contentOrText: string | AnyRegularMessageContent) {
     if (!this.socket) throw new Error('WhatsApp not connected');
     if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
-    const normalizedText = String(text || '').trim();
-    if (!normalizedText) throw new Error('Updated message text is required');
     const normalizedJid = String(jid || '').trim();
     const normalizedMessageId = String(messageId || '').trim();
     if (!normalizedJid || !normalizedMessageId) {
       throw new Error('jid and messageId are required to edit a message');
+    }
+
+    let content: AnyRegularMessageContent;
+    if (typeof contentOrText === 'string') {
+      const normalizedText = String(contentOrText || '').trim();
+      if (!normalizedText) throw new Error('Updated message text is required');
+      content = { text: normalizedText };
+    } else if (contentOrText && typeof contentOrText === 'object') {
+      const editableContent = { ...(contentOrText as Record<string, unknown>) } as AnyRegularMessageContent;
+      const hasText = Boolean(String((editableContent as { text?: unknown }).text || '').trim());
+      const hasMedia = ['image', 'video', 'document'].some((key) =>
+        Object.prototype.hasOwnProperty.call(editableContent as Record<string, unknown>, key)
+      );
+      if (!hasText && !hasMedia) {
+        throw new Error('Updated message content is required');
+      }
+      content = editableContent;
+    } else {
+      throw new Error('Updated message content is required');
     }
 
     const key: proto.IMessageKey = {
@@ -2908,10 +2925,10 @@ class WhatsAppClient {
     };
 
     try {
-      return await this.socket.sendMessage(normalizedJid, {
-        text: normalizedText,
+      return await this.socket.sendMessage(normalizedJid, ({
+        ...(content as Record<string, unknown>),
         edit: key
-      });
+      } as unknown) as AnyMessageContent);
     } catch (err) {
       logger.error({ err, jid: normalizedJid, messageId: normalizedMessageId }, 'Failed to edit message');
       const message = err instanceof Error ? err.message : String(err);

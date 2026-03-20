@@ -197,7 +197,7 @@ describe('queueService __testUtils', () => {
     ).toBe(true);
   });
 
-  it('prefers in-place edit only for text-only direct or group messages inside the edit window', () => {
+  it('prefers in-place edit for text rows and same-media caption updates inside the edit window', () => {
     expect(
       testUtils.chooseCorrectionStrategy({
         targetType: 'group',
@@ -208,7 +208,9 @@ describe('queueService __testUtils', () => {
         supportsEdit: true,
         supportsDelete: true,
         currentMediaType: null,
-        desiredMediaType: null
+        currentMediaUrl: null,
+        desiredMediaType: null,
+        desiredMediaUrl: null
       })
     ).toBe('edit');
 
@@ -222,12 +224,30 @@ describe('queueService __testUtils', () => {
         supportsEdit: true,
         supportsDelete: true,
         currentMediaType: 'image',
-        desiredMediaType: 'image'
+        currentMediaUrl: 'https://example.com/a.jpg',
+        desiredMediaType: 'image',
+        desiredMediaUrl: 'https://example.com/a.jpg'
+      })
+    ).toBe('edit');
+
+    expect(
+      testUtils.chooseCorrectionStrategy({
+        targetType: 'group',
+        sentAgeMs: 2 * 60 * 1000,
+        editWindowMs: 15 * 60 * 1000,
+        correctionWindowMs: 15 * 60 * 1000,
+        hasMessageId: true,
+        supportsEdit: true,
+        supportsDelete: true,
+        currentMediaType: 'image',
+        currentMediaUrl: 'https://example.com/a.jpg',
+        desiredMediaType: 'image',
+        desiredMediaUrl: 'https://example.com/b.jpg'
       })
     ).toBe('replace');
   });
 
-  it('uses replacement for channels and skips status corrections', () => {
+  it('allows channel edits when the same payload can be edited and skips status corrections', () => {
     expect(
       testUtils.chooseCorrectionStrategy({
         targetType: 'channel',
@@ -238,9 +258,11 @@ describe('queueService __testUtils', () => {
         supportsEdit: true,
         supportsDelete: true,
         currentMediaType: null,
-        desiredMediaType: null
+        currentMediaUrl: null,
+        desiredMediaType: null,
+        desiredMediaUrl: null
       })
-    ).toBe('replace');
+    ).toBe('edit');
 
     expect(
       testUtils.chooseCorrectionStrategy({
@@ -252,7 +274,9 @@ describe('queueService __testUtils', () => {
         supportsEdit: true,
         supportsDelete: true,
         currentMediaType: null,
-        desiredMediaType: null
+        currentMediaUrl: null,
+        desiredMediaType: null,
+        desiredMediaUrl: null
       })
     ).toBe('skip');
   });

@@ -77,17 +77,20 @@ describe('queue route retry safeguards', () => {
     );
   });
 
-  it('allows in-place edits only for text-only rows', () => {
-    expect(testUtils.hasEditableTextOnlyPayload({
+  it('allows in-place edits for text rows and same-media caption rows', () => {
+    expect(testUtils.hasEditableQueuePayload({
       media_type: null,
-      media_url: null,
-      media_sent: false
+      media_url: null
     })).toBe(true);
 
-    expect(testUtils.hasEditableTextOnlyPayload({
+    expect(testUtils.hasEditableQueuePayload({
       media_type: 'image',
-      media_url: 'https://example.com/image.jpg',
-      media_sent: true
+      media_url: 'https://example.com/image.jpg'
+    })).toBe(true);
+
+    expect(testUtils.hasEditableQueuePayload({
+      media_type: 'audio',
+      media_url: 'https://example.com/audio.mp3'
     })).toBe(false);
   });
 });

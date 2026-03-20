@@ -201,6 +201,31 @@ describe('WhatsAppClient', () => {
         );
     });
 
+    it('should edit media messages with structured content payloads', async () => {
+        const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'edit-msg-1' } }));
+        client.socket = { sendMessage };
+
+        await client.editMessage('120363000000000010@g.us', 'msg-123', {
+            image: Buffer.from('fake-image'),
+            caption: 'updated caption',
+            mimetype: 'image/jpeg'
+        });
+
+        expect(sendMessage).toHaveBeenCalledWith(
+            '120363000000000010@g.us',
+            expect.objectContaining({
+                image: expect.any(Buffer),
+                caption: 'updated caption',
+                mimetype: 'image/jpeg',
+                edit: expect.objectContaining({
+                    remoteJid: '120363000000000010@g.us',
+                    id: 'msg-123',
+                    fromMe: true
+                })
+            })
+        );
+    });
+
     it('should fail status send when audience is empty', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-2' } }));
         client.socket = { sendMessage };

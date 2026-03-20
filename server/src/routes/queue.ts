@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
 const { resetStuckProcessingLogs } = require('../services/retentionService');
-const { sendQueueLogNow } = require('../services/queueService');
+const { sendQueueLogNow, buildEditableMessageContent, hasEditableQueuePayload } = require('../services/queueService');
 const { isScheduleRunning } = require('../services/scheduleState');
 const settingsService = require('../services/settingsService');
 const { serviceUnavailable } = require('../core/errors');
@@ -85,17 +85,6 @@ const shouldLimitQueueStatusToRecentHistory = (statusFilter?: string) => {
 
 const buildCombinedQueueFilter = (windowStartIso: string) =>
   [...LIVE_QUEUE_STATUS_VALUES.map((status) => `status.eq.${status}`), `updated_at.gte.${windowStartIso}`].join(',');
-
-const hasEditableTextOnlyPayload = (row: {
-  media_type?: unknown;
-  media_url?: unknown;
-  media_sent?: unknown;
-}) => {
-  if (Boolean(row?.media_sent)) return false;
-  if (String(row?.media_type || '').trim()) return false;
-  if (String(row?.media_url || '').trim()) return false;
-  return true;
-};
 
 type RetryableQueueRow = {
   id?: string | null;
@@ -675,8 +664,8 @@ const queueRoutes = () => {
           return res.status(400).json({ error: 'Cannot edit sent message without WhatsApp message id' });
         }
 
-        if (!hasEditableTextOnlyPayload(current as { media_type?: unknown; media_url?: unknown; media_sent?: unknown })) {
-          return res.status(400).json({ error: 'In-place edit is only supported for text-only messages' });
+        if (!hasEditableQueuePayload(current as { media_type?: unknown; media_url?: unknown })) {
+          return res.status(400).json({ error: 'In-place edit requires text-only messages or the same attached image, video, or document' });
         }
 
         const targetId = String((current as { target_id?: string | null }).target_id || '').trim();
@@ -694,8 +683,8 @@ const queueRoutes = () => {
         }
 
         const targetType = String((targetRow as { type?: string | null }).type || '').toLowerCase();
-        if (targetType === 'status' || targetType === 'channel') {
-          return res.status(400).json({ error: 'In-place edit is only supported for direct/group messages' });
+        if (targetType === 'status') {
+          return res.status(400).json({ error: 'In-place edit is not supported for status messages' });
         }
 
         const jid = normalizeTargetJid(targetRow as { phone_number?: string | null; type?: string | null });
@@ -706,7 +695,7 @@ const queueRoutes = () => {
         const whatsapp = req.app.locals.whatsapp as
           | {
               getStatus?: () => { status?: string | null };
-              editMessage?: (jid: string, messageId: string, text: string) => Promise<unknown>;
+              editMessage?: (jid: string, messageId: string, content: string | Record<string, unknown>) => Promise<unknown>;
             }
           | undefined;
         const waStatus = String(whatsapp?.getStatus?.().status || '').toLowerCase();
@@ -715,7 +704,13 @@ const queueRoutes = () => {
         }
 
         try {
-          await whatsapp.editMessage(jid, whatsappMessageId, normalizedMessageContent);
+          const editableContent = await buildEditableMessageContent({
+            jid,
+            text: normalizedMessageContent,
+            mediaUrl: String((current as { media_url?: string | null }).media_url || '').trim() || null,
+            mediaType: String((current as { media_type?: string | null }).media_type || '').trim() || null
+          });
+          await whatsapp.editMessage(jid, whatsappMessageId, editableContent);
         } catch (waError) {
           return res.status(400).json({ error: getErrorMessage(waError) || 'Failed to edit WhatsApp message in-place' });
         }
@@ -955,5 +950,5 @@ module.exports.__testUtils = {
   isRetryableQueueRow,
   shouldLimitQueueStatusToRecentHistory,
   buildCombinedQueueFilter,
-  hasEditableTextOnlyPayload
+  hasEditableQueuePayload
 };

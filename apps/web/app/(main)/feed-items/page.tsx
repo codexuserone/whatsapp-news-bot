@@ -27,6 +27,7 @@ const buildComposeHref = (item: FeedItem) => {
 };
 
 const formatTargetSummary = (count: number, label: string) => `${count} target${count === 1 ? '' : 's'} ${label}`;
+const joinStatusSummary = (parts: string[]) => parts.filter(Boolean).join(', ');
 
 const FeedItemsPage = () => {
   const queryClient = useQueryClient();
@@ -82,56 +83,98 @@ const FeedItemsPage = () => {
     const sent = delivery.sent || 0;
     const failed = delivery.failed || 0;
     const manualPaused = delivery.manual_paused || 0;
+    const correctedBeforeSend = delivery.corrected_before_send || 0;
+    const correctedAfterSend = delivery.corrected_after_send || 0;
     const total = delivery.total || 0;
+    const correctionParts = [
+      correctedBeforeSend > 0 ? formatTargetSummary(correctedBeforeSend, 'updated before send') : '',
+      correctedAfterSend > 0 ? formatTargetSummary(correctedAfterSend, 'corrected after send') : ''
+    ].filter(Boolean);
 
     if (manualPaused > 0 && queued > 0) {
       return {
-        label: `${formatTargetSummary(manualPaused, 'paused')}, ${formatTargetSummary(queued, 'still queued')}`,
+        label: joinStatusSummary([
+          formatTargetSummary(manualPaused, 'paused'),
+          formatTargetSummary(queued, 'still queued'),
+          ...correctionParts
+        ]),
         variant: 'warning' as const
       };
     }
     if (manualPaused > 0) {
-      return { label: formatTargetSummary(manualPaused, 'paused'), variant: 'secondary' as const };
+      return {
+        label: joinStatusSummary([formatTargetSummary(manualPaused, 'paused'), ...correctionParts]),
+        variant: 'secondary' as const
+      };
     }
 
     if (queued > 0 && sent > 0 && failed > 0) {
       return {
-        label: `${formatTargetSummary(sent, 'recorded by app')}, ${formatTargetSummary(queued, 'still queued')}, ${formatTargetSummary(failed, 'need review')}`,
+        label: joinStatusSummary([
+          formatTargetSummary(sent, 'recorded by app'),
+          formatTargetSummary(queued, 'still queued'),
+          formatTargetSummary(failed, 'need review'),
+          ...correctionParts
+        ]),
         variant: 'warning' as const
       };
     }
     if (queued > 0 && sent > 0) {
       return {
-        label: `${formatTargetSummary(sent, 'recorded by app')}, ${formatTargetSummary(queued, 'still queued')}`,
+        label: joinStatusSummary([
+          formatTargetSummary(sent, 'recorded by app'),
+          formatTargetSummary(queued, 'still queued'),
+          ...correctionParts
+        ]),
         variant: 'warning' as const
       };
     }
     if (queued > 0 && failed > 0) {
       return {
-        label: `${formatTargetSummary(queued, 'still queued')}, ${formatTargetSummary(failed, 'need review')}`,
+        label: joinStatusSummary([
+          formatTargetSummary(queued, 'still queued'),
+          formatTargetSummary(failed, 'need review'),
+          ...correctionParts
+        ]),
         variant: 'warning' as const
       };
     }
     if (queued > 0) {
-      return { label: formatTargetSummary(queued, 'still queued'), variant: 'warning' as const };
+      return {
+        label: joinStatusSummary([formatTargetSummary(queued, 'still queued'), ...correctionParts]),
+        variant: 'warning' as const
+      };
     }
     if (sent > 0 && failed > 0) {
       return {
-        label: `${formatTargetSummary(sent, 'recorded by app')}, ${formatTargetSummary(failed, 'need review')}`,
+        label: joinStatusSummary([
+          formatTargetSummary(sent, 'recorded by app'),
+          formatTargetSummary(failed, 'need review'),
+          ...correctionParts
+        ]),
         variant: 'warning' as const
       };
     }
     if (failed > 0) {
-      return { label: formatTargetSummary(failed, 'need review'), variant: 'destructive' as const };
+      return {
+        label: joinStatusSummary([formatTargetSummary(failed, 'need review'), ...correctionParts]),
+        variant: 'destructive' as const
+      };
     }
     if (sent > 0) {
-      return { label: formatTargetSummary(sent, 'recorded by app'), variant: 'success' as const };
+      return {
+        label: joinStatusSummary([formatTargetSummary(sent, 'recorded by app'), ...correctionParts]),
+        variant: 'success' as const
+      };
     }
     // Item exists in feed history but no queue rows were created yet.
     if (total === 0) {
       return { label: 'Waiting for the next send window', variant: 'secondary' as const };
     }
-    return { label: 'Waiting', variant: 'secondary' as const };
+    return {
+      label: joinStatusSummary(['Waiting', ...correctionParts]),
+      variant: 'secondary' as const
+    };
   };
 
   const isStoryPaused = (item: FeedItem) => {

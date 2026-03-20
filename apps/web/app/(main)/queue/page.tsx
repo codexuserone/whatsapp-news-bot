@@ -460,6 +460,27 @@ const QueueInner = () => {
     return null;
   };
 
+  const getCorrectionBadge = (item: QueueItem) => {
+    const correctionKind = String(item.correction_kind || '').trim().toLowerCase();
+    const hasCorrection = Boolean(correctionKind || String(item.corrected_at || '').trim());
+    if (!hasCorrection) {
+      return null;
+    }
+
+    switch (correctionKind) {
+      case 'pending_refresh':
+        return <Badge variant="outline">Updated from feed</Badge>;
+      case 'edit':
+        return <Badge variant="outline">Edited after send</Badge>;
+      case 'replacement':
+        return <Badge variant="outline">Replaced after send</Badge>;
+      case 'manual_edit':
+        return <Badge variant="outline">Edited manually</Badge>;
+      default:
+        return <Badge variant="outline">Corrected</Badge>;
+    }
+  };
+
   const formatDate = (dateStr?: string | null) => {
     if (!dateStr) return '-';
     return new Date(dateStr).toLocaleString();
@@ -661,6 +682,7 @@ const QueueInner = () => {
                     Math.ceil(editRemainingMs / 1000) % 60
                   ).padStart(2, '0')}`
                   : null;
+                const correctionBadge = getCorrectionBadge(item);
 
                 return (
                   <div key={item.id} className="space-y-3 rounded-lg border p-4">
@@ -694,6 +716,7 @@ const QueueInner = () => {
                           >
                             {deliveryPath.label}
                           </Badge>
+                          {correctionBadge}
                         </div>
                         {item.url ? (
                           <a
@@ -840,6 +863,7 @@ const QueueInner = () => {
                       {item.batch_times && item.batch_times.length ? <span>Send windows: {item.batch_times.join(', ')}</span> : null}
                       {item.scheduled_for ? <span>Scheduled: {formatDate(item.scheduled_for)}</span> : null}
                       {item.sent_at ? <span>Sent: {formatDate(item.sent_at)}</span> : null}
+                      {item.corrected_at ? <span>Corrected: {formatDate(item.corrected_at)}</span> : null}
                       {editCountdown ? <span>Editable: {editCountdown} left</span> : null}
                       {item.delivered_at ? <span>Delivered: {formatDate(item.delivered_at)}</span> : null}
                       {item.read_at ? <span>Read: {formatDate(item.read_at)}</span> : null}
@@ -851,6 +875,7 @@ const QueueInner = () => {
                         </span>
                       ) : null}
                       {item.error_message ? <span className="text-destructive">Error: {item.error_message}</span> : null}
+                      {item.correction_error ? <span className="text-warning-foreground">Correction: {item.correction_error}</span> : null}
                       {isSuccessfulSendStatus(item.status) && item.media_type === 'image' && !item.media_sent && item.media_error ? (
                         <span className="text-warning-foreground">Sent as text fallback (image unavailable)</span>
                       ) : null}
@@ -865,6 +890,7 @@ const QueueInner = () => {
               {queueItems.map((item) => {
                 const editing = editingId === item.id;
                 const deliveryPath = getDeliveryPath(item);
+                const correctionBadge = getCorrectionBadge(item);
                 const mediaCandidate = item.media_url || item.image_url || null;
                 const sentWithImage =
                   isSuccessfulSendStatus(item.status) && item.media_type === 'image' && Boolean(item.media_sent);
@@ -908,11 +934,14 @@ const QueueInner = () => {
                         {item.rendered_content || deriveDefaultMessage(item) || 'No content'}
                       </p>
                       <p className="text-[11px] text-muted-foreground">{deliveryPath.label}</p>
+                      {correctionBadge ? <div className="flex flex-wrap gap-1">{correctionBadge}</div> : null}
                       {item.pub_date ? <p className="text-[11px] text-muted-foreground">Published: {formatPublishedDate(item.pub_date, item.pub_precision)}</p> : null}
                       {item.sent_at ? <p className="text-[11px] text-muted-foreground">Sent: {formatDate(item.sent_at)}</p> : null}
+                      {item.corrected_at ? <p className="text-[11px] text-muted-foreground">Corrected: {formatDate(item.corrected_at)}</p> : null}
                       {item.delivered_at ? <p className="text-[11px] text-muted-foreground">Delivered: {formatDate(item.delivered_at)}</p> : null}
                       {item.read_at ? <p className="text-[11px] text-muted-foreground">Read: {formatDate(item.read_at)}</p> : null}
                       {item.played_at ? <p className="text-[11px] text-muted-foreground">Played: {formatDate(item.played_at)}</p> : null}
+                      {item.correction_error ? <p className="text-[11px] text-warning-foreground">Correction: {item.correction_error}</p> : null}
                       {editing ? (
                         <div className="rounded-md border bg-muted/30 p-2 space-y-2">
                           <p className="text-[11px] text-muted-foreground">Edit message text before sending</p>

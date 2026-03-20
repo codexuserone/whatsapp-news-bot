@@ -112,6 +112,9 @@ export type FeedItem = {
     failed: number;
     skipped: number;
     manual_paused?: number;
+    corrected?: number;
+    corrected_before_send?: number;
+    corrected_after_send?: number;
     total: number;
   } | null;
   delivery_status?: string | null;
@@ -152,6 +155,9 @@ export type QueueItem = {
   delivered_at?: string | null;
   read_at?: string | null;
   played_at?: string | null;
+  corrected_at?: string | null;
+  correction_kind?: string | null;
+  correction_error?: string | null;
   approved_at?: string | null;
   approved_by?: string | null;
   processing_started_at?: string | null;
@@ -183,6 +189,7 @@ export type QueueStats = {
 
 export type ReconcileResult = {
   processed: number;
+  refreshed?: number;
   edited: number;
   replaced: number;
   skipped: number;

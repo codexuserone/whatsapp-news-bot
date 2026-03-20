@@ -362,13 +362,20 @@ const SchedulesPage = () => {
       const summarizeReconcile = (reconcile?: ReconcileResult | null) => {
         if (!reconcile) return '';
         const processed = Number(reconcile.processed || 0);
+        const refreshed = Number(reconcile.refreshed || 0);
         const edited = Number(reconcile.edited || 0);
         const replaced = Number(reconcile.replaced || 0);
         const failed = Number(reconcile.failed || 0);
         const reason = String(reconcile.reason || '').trim();
 
-        if (processed > 0 || edited > 0 || replaced > 0 || failed > 0) {
-          return `Corrections: ${edited} in-place edits, ${failed} failed${replaced > 0 ? `, ${replaced} replacement sends blocked` : ''}.`;
+        if (processed > 0 || refreshed > 0 || edited > 0 || replaced > 0 || failed > 0) {
+          const parts = [
+            refreshed > 0 ? `${refreshed} queued updates` : '',
+            edited > 0 ? `${edited} in-place edits` : '',
+            replaced > 0 ? `${replaced} replacements` : '',
+            failed > 0 ? `${failed} failed` : ''
+          ].filter(Boolean);
+          return parts.length ? `Corrections: ${parts.join(', ')}.` : '';
         }
         if (reason) {
           return `Corrections: ${reason}.`;

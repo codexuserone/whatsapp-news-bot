@@ -77,6 +77,8 @@ describe('feed item delivery summaries', () => {
         schedule_id: 'schedule-1',
         target_id: 'target-2',
         status: 'processing',
+        corrected_at: '2026-03-18T12:01:30.000Z',
+        correction_kind: 'pending_refresh',
         created_at: '2026-03-18T12:01:00.000Z'
       },
       {
@@ -85,6 +87,8 @@ describe('feed item delivery summaries', () => {
         schedule_id: 'schedule-1',
         target_id: 'target-3',
         status: 'delivered',
+        corrected_at: '2026-03-18T12:02:30.000Z',
+        correction_kind: 'edit',
         created_at: '2026-03-18T12:02:00.000Z'
       },
       {
@@ -103,7 +107,10 @@ describe('feed item delivery summaries', () => {
       sent: 1,
       failed: 1,
       skipped: 1,
-      manual_paused: 1
+      manual_paused: 1,
+      corrected: 2,
+      corrected_before_send: 1,
+      corrected_after_send: 1
     });
   });
 });

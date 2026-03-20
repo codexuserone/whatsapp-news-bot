@@ -15,6 +15,8 @@ type DeliveryLogRow = {
   target_id?: string | null;
   status?: string | null;
   error_message?: string | null;
+  corrected_at?: string | null;
+  correction_kind?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   sent_at?: string | null;
@@ -27,6 +29,9 @@ type DeliverySummary = {
   failed: number;
   skipped: number;
   manual_paused: number;
+  corrected: number;
+  corrected_before_send: number;
+  corrected_after_send: number;
 };
 
 const createEmptyDeliverySummary = (): DeliverySummary => ({
@@ -35,7 +40,10 @@ const createEmptyDeliverySummary = (): DeliverySummary => ({
   sent: 0,
   failed: 0,
   skipped: 0,
-  manual_paused: 0
+  manual_paused: 0,
+  corrected: 0,
+  corrected_before_send: 0,
+  corrected_after_send: 0
 });
 
 const getDeliveryRowTimestamp = (row: DeliveryLogRow) => {
@@ -87,6 +95,7 @@ const summarizeDeliveryRows = (rows: DeliveryLogRow[]) => {
     if (!feedItemId || !status) continue;
 
     const current = deliveryByItem.get(feedItemId) || createEmptyDeliverySummary();
+    const wasCorrected = Boolean(String(row.corrected_at || '').trim() || String(row.correction_kind || '').trim());
 
     if (status === 'pending' || status === 'awaiting_approval') current.pending += 1;
     else if (status === 'processing') current.processing += 1;
@@ -96,6 +105,14 @@ const summarizeDeliveryRows = (rows: DeliveryLogRow[]) => {
       current.skipped += 1;
       if (String(row.error_message || '') === MANUAL_POST_PAUSE_REASON) {
         current.manual_paused += 1;
+      }
+    }
+    if (wasCorrected) {
+      current.corrected += 1;
+      if (status === 'sent' || status === 'delivered' || status === 'read' || status === 'played') {
+        current.corrected_after_send += 1;
+      } else {
+        current.corrected_before_send += 1;
       }
     }
 
@@ -201,13 +218,13 @@ const feedItemRoutes = () => {
       const ids = (items || []).map((item: { id?: string }) => item.id).filter(Boolean) as string[];
       const deliveryByItem = new Map<
         string,
-        { pending: number; processing: number; sent: number; failed: number; skipped: number; manual_paused: number }
+        DeliverySummary
       >();
 
       if (ids.length && runningScheduleIds.size) {
         const { data: logs, error: logsError } = await supabase
           .from('message_logs')
-          .select('id,feed_item_id,schedule_id,target_id,status,error_message,created_at,updated_at,sent_at')
+          .select('id,feed_item_id,schedule_id,target_id,status,error_message,corrected_at,correction_kind,created_at,updated_at,sent_at')
           .in('feed_item_id', ids);
 
         if (logsError) {
@@ -228,7 +245,10 @@ const feedItemRoutes = () => {
           sent: 0,
           failed: 0,
           skipped: 0,
-          manual_paused: 0
+          manual_paused: 0,
+          corrected: 0,
+          corrected_before_send: 0,
+          corrected_after_send: 0
         };
         const queued = delivery.pending + delivery.processing;
         const total = delivery.pending + delivery.processing + delivery.sent + delivery.failed + delivery.skipped;

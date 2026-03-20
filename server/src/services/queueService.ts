@@ -104,6 +104,7 @@ const MANUAL_POST_PAUSE_ERROR = 'Paused for this post';
 const FEED_PAUSED_ERROR = 'Feed paused';
 const NON_REVIVABLE_SKIP_ERRORS = new Set([MANUAL_POST_PAUSE_ERROR, FEED_PAUSED_ERROR]);
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
+const QUEUED_CORRECTION_STATUSES = new Set(['awaiting_approval', 'pending', 'failed', 'uncertain', 'skipped']);
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.wma'];
 const DOCUMENT_EXTENSIONS = ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv', '.txt', '.rtf', '.zip'];
 
@@ -1863,6 +1864,7 @@ const sendMessageWithTemplate = async (
 
 type ReconcileUpdatedFeedItemsResult = {
   processed: number;
+  refreshed: number;
   edited: number;
   replaced: number;
   skipped: number;
@@ -1910,6 +1912,7 @@ const reconcileUpdatedFeedItems = async (
 ): Promise<ReconcileUpdatedFeedItemsResult> => {
   const result: ReconcileUpdatedFeedItemsResult = {
     processed: 0,
+    refreshed: 0,
     edited: 0,
     replaced: 0,
     skipped: 0,
@@ -1950,46 +1953,62 @@ const reconcileUpdatedFeedItems = async (
   const { editWindowMs, correctionWindowMs } = getPostSendWindows(settings);
   const correctionCutoffIso = new Date(Date.now() - correctionWindowMs).toISOString();
 
-  const { data: logRows, error: logsError } = await supabase
-    .from('message_logs')
-    .select('id,feed_item_id,target_id,template_id,sent_at,whatsapp_message_id,message_content,media_url,media_type')
-    .in('feed_item_id', feedItemIds)
-    .in('status', Array.from(SUCCESSFUL_SEND_STATUSES))
-    .gte('sent_at', correctionCutoffIso)
-    .not('target_id', 'is', null);
-
-  if (logsError) {
-    logger.warn({ error: logsError }, 'Failed loading sent logs for feed-item reconciliation');
-    return { ...result, reason: 'Failed loading sent logs' };
-  }
-
-  type SentLogRow = {
+  type CorrectionLogRow = {
     id: string;
     feed_item_id?: string | null;
     target_id?: string | null;
     template_id?: string | null;
+    status?: string | null;
     sent_at?: string | null;
     whatsapp_message_id?: string | null;
     message_content?: string | null;
     media_url?: string | null;
     media_type?: string | null;
+    corrected_at?: string | null;
+    correction_kind?: string | null;
+    correction_error?: string | null;
   };
 
-  const sentLogs = (logRows || []) as SentLogRow[];
-  if (!sentLogs.length) {
+  const [sentLogsRes, queuedLogsRes] = await Promise.all([
+    supabase
+      .from('message_logs')
+      .select('id,feed_item_id,target_id,template_id,status,sent_at,whatsapp_message_id,message_content,media_url,media_type,corrected_at,correction_kind,correction_error')
+      .in('feed_item_id', feedItemIds)
+      .in('status', Array.from(SUCCESSFUL_SEND_STATUSES))
+      .gte('sent_at', correctionCutoffIso)
+      .not('target_id', 'is', null),
+    supabase
+      .from('message_logs')
+      .select('id,feed_item_id,target_id,template_id,status,sent_at,whatsapp_message_id,message_content,media_url,media_type,corrected_at,correction_kind,correction_error')
+      .in('feed_item_id', feedItemIds)
+      .in('status', Array.from(QUEUED_CORRECTION_STATUSES))
+      .not('target_id', 'is', null)
+  ]);
+
+  if (sentLogsRes.error || queuedLogsRes.error) {
+    logger.warn(
+      { sentLogsError: sentLogsRes.error, queuedLogsError: queuedLogsRes.error },
+      'Failed loading message logs for feed-item reconciliation'
+    );
+    return { ...result, reason: 'Failed loading message logs' };
+  }
+
+  const sentLogs = (sentLogsRes.data || []) as CorrectionLogRow[];
+  const queuedLogs = (queuedLogsRes.data || []) as CorrectionLogRow[];
+  if (!sentLogs.length && !queuedLogs.length) {
     return result;
   }
 
   const targetIds = Array.from(
     new Set(
-      sentLogs
+      [...sentLogs, ...queuedLogs]
         .map((row) => String(row.target_id || '').trim())
         .filter(Boolean)
     )
   );
   const templateIds = Array.from(
     new Set(
-      sentLogs
+      [...sentLogs, ...queuedLogs]
         .map((row) => String(row.template_id || '').trim())
         .filter(Boolean)
     )
@@ -2024,6 +2043,98 @@ const reconcileUpdatedFeedItems = async (
     const id = String(row?.id || '').trim();
     if (!id) continue;
     templatesById.set(id, row);
+  }
+
+  const applyCorrectionSnapshot = async (
+    log: CorrectionLogRow,
+    desired: { text: string; mediaUrl: string | null; mediaType: string | null },
+    kind: string,
+    correctionError?: string | null
+  ) => {
+    await supabase
+      .from('message_logs')
+      .update({
+        message_content: desired.text || null,
+        media_url: desired.mediaUrl,
+        media_type: desired.mediaType,
+        corrected_at: new Date().toISOString(),
+        correction_kind: kind,
+        correction_error: correctionError || null
+      })
+      .eq('id', log.id);
+  };
+
+  for (const log of queuedLogs) {
+    const feedItemId = String(log.feed_item_id || '').trim();
+    const targetId = String(log.target_id || '').trim();
+    const templateId = String(log.template_id || '').trim();
+
+    const feedItem = byFeedItemId.get(feedItemId);
+    const target = targetsById.get(targetId);
+    const template = templatesById.get(templateId);
+
+    if (!feedItem || !target || !template || target.active === false) {
+      result.skipped += 1;
+      continue;
+    }
+
+    let rendered: ReturnType<typeof renderTemplateMessage>;
+    let expectedMedia: Awaited<ReturnType<typeof resolveMediaUrlForFeedItem>>;
+    try {
+      rendered = renderTemplateMessage(template, feedItem);
+      expectedMedia =
+        rendered.sendMode === 'auto_media' || rendered.sendMode === 'media_only'
+          ? await resolveMediaUrlForFeedItem(supabase, feedItem, true)
+          : { url: null, kind: null, mime: null, filename: null, source: null, scraped: false, error: null };
+    } catch (error) {
+      result.failed += 1;
+      logger.warn({ error, feedItemId, targetId, templateId }, 'Failed to render updated template for queued message');
+      continue;
+    }
+
+    const desiredText = String(rendered.outboundText || '').trim();
+    const desiredMediaUrl = String(expectedMedia.url || '').trim() || null;
+    const desiredMediaType = normalizeComparableMediaType(expectedMedia.kind);
+    if (!desiredText && !desiredMediaUrl) {
+      result.skipped += 1;
+      continue;
+    }
+
+    if (!hasCorrectionChanges(
+      {
+        text: normalizeMessageText(String(log.message_content || '')).trim(),
+        mediaUrl: log.media_url,
+        mediaType: log.media_type
+      },
+      {
+        text: normalizeMessageText(desiredText).trim(),
+        mediaUrl: desiredMediaUrl,
+        mediaType: desiredMediaType
+      }
+    )) {
+      result.skipped += 1;
+      continue;
+    }
+
+    result.processed += 1;
+    try {
+      await applyCorrectionSnapshot(
+        log,
+        {
+          text: desiredText,
+          mediaUrl: desiredMediaUrl,
+          mediaType: desiredMediaType
+        },
+        'pending_refresh'
+      );
+      result.refreshed += 1;
+    } catch (error) {
+      result.failed += 1;
+      logger.warn(
+        { error, logId: log.id, targetId, feedItemId, status: log.status },
+        'Failed to refresh queued message snapshot during feed reconciliation'
+      );
+    }
   }
 
   for (const log of sentLogs) {
@@ -2127,7 +2238,10 @@ const reconcileUpdatedFeedItems = async (
           .from('message_logs')
           .update({
             message_content: desiredText,
-            error_message: null
+            error_message: null,
+            corrected_at: new Date().toISOString(),
+            correction_kind: 'edit',
+            correction_error: null
           })
           .eq('id', log.id);
 
@@ -2177,7 +2291,10 @@ const reconcileUpdatedFeedItems = async (
             media_type: replacementResult?.media?.type || null,
             media_sent: Boolean(replacementResult?.media?.sent),
             media_error: replacementResult?.media?.error || null,
-            error_message: null
+            error_message: null,
+            corrected_at: new Date().toISOString(),
+            correction_kind: 'replacement',
+            correction_error: null
           })
           .eq('id', log.id);
 
@@ -2185,6 +2302,13 @@ const reconcileUpdatedFeedItems = async (
         continue;
       } catch (error) {
         result.failed += 1;
+        await supabase
+          .from('message_logs')
+          .update({
+            corrected_at: new Date().toISOString(),
+            correction_error: getErrorMessage(error)
+          })
+          .eq('id', log.id);
         logger.warn(
           { error, logId: log.id, targetId, feedItemId, targetType: target.type },
           'Failed to replace sent message during feed reconciliation'

@@ -396,6 +396,7 @@ const feedsRoutes = () => {
       let totalErrors = 0;
       let totalQueued = 0;
       let totalReconcileProcessed = 0;
+      let totalReconcileRefreshed = 0;
       let totalReconcileEdited = 0;
       let totalReconcileReplaced = 0;
       let totalReconcileSkipped = 0;
@@ -418,6 +419,7 @@ const feedsRoutes = () => {
         totalDuplicates += result.duplicateCount;
         totalErrors += result.errorCount;
         totalReconcileProcessed += Number(reconcile?.processed || 0);
+        totalReconcileRefreshed += Number(reconcile?.refreshed || 0);
         totalReconcileEdited += Number(reconcile?.edited || 0);
         totalReconcileReplaced += Number(reconcile?.replaced || 0);
         totalReconcileSkipped += Number(reconcile?.skipped || 0);
@@ -449,6 +451,7 @@ const feedsRoutes = () => {
           queuedCount: totalQueued,
           reconcile: {
             processed: totalReconcileProcessed,
+            refreshed: totalReconcileRefreshed,
             edited: totalReconcileEdited,
             replaced: totalReconcileReplaced,
             skipped: totalReconcileSkipped,

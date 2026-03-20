@@ -267,6 +267,9 @@ const queueRoutes = () => {
           delivered_at,
           read_at,
           played_at,
+          corrected_at,
+          correction_kind,
+          correction_error,
           created_at,
           schedule:schedules (
             id,
@@ -396,6 +399,9 @@ const queueRoutes = () => {
           delivered_at: row.delivered_at || null,
           read_at: row.read_at || null,
           played_at: row.played_at || null,
+          corrected_at: row.corrected_at || null,
+          correction_kind: row.correction_kind || null,
+          correction_error: row.correction_error || null,
           created_at: row.created_at,
           is_manual: isManual,
           scheduled_for: null
@@ -698,6 +704,10 @@ const queueRoutes = () => {
         } catch (waError) {
           return res.status(400).json({ error: getErrorMessage(waError) || 'Failed to edit WhatsApp message in-place' });
         }
+
+        patch.corrected_at = new Date().toISOString();
+        patch.correction_kind = 'manual_edit';
+        patch.correction_error = null;
       }
 
       const { data: updated, error: updateError } = await supabase

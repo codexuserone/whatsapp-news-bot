@@ -98,6 +98,17 @@ describe('feed item delivery summaries', () => {
         target_id: 'target-4',
         status: 'failed',
         created_at: '2026-03-18T12:03:00.000Z'
+      },
+      {
+        id: 'row-5',
+        feed_item_id: 'item-1',
+        schedule_id: 'schedule-1',
+        target_id: 'target-5',
+        status: 'failed',
+        corrected_at: '2026-03-18T12:04:30.000Z',
+        correction_kind: 'replacement',
+        correction_error: 'Timed out replacing message',
+        created_at: '2026-03-18T12:04:00.000Z'
       }
     ]);
 
@@ -105,12 +116,29 @@ describe('feed item delivery summaries', () => {
       pending: 0,
       processing: 1,
       sent: 1,
-      failed: 1,
+      failed: 2,
       skipped: 1,
       manual_paused: 1,
       corrected: 2,
       corrected_before_send: 1,
       corrected_after_send: 1
     });
+  });
+
+  it('restores paused story rows to awaiting approval only when the schedule still requires it', () => {
+    expect(testUtils.resolveManualPostResumeStatus({
+      approved_at: '2026-03-18T12:00:00.000Z',
+      schedule: { approval_required: true }
+    })).toBe('pending');
+
+    expect(testUtils.resolveManualPostResumeStatus({
+      approved_at: null,
+      schedule: { approval_required: true }
+    })).toBe('awaiting_approval');
+
+    expect(testUtils.resolveManualPostResumeStatus({
+      approved_at: null,
+      schedule: { approval_required: false }
+    })).toBe('pending');
   });
 });

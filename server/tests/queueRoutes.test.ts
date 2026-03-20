@@ -73,7 +73,21 @@ describe('queue route retry safeguards', () => {
 
   it('builds a combined filter that keeps live queue rows plus recent history', () => {
     expect(testUtils.buildCombinedQueueFilter('2026-03-18T00:00:00.000Z')).toBe(
-      'status.eq.awaiting_approval,status.eq.pending,status.eq.processing,created_at.gte.2026-03-18T00:00:00.000Z'
+      'status.eq.awaiting_approval,status.eq.pending,status.eq.processing,updated_at.gte.2026-03-18T00:00:00.000Z'
     );
+  });
+
+  it('allows in-place edits only for text-only rows', () => {
+    expect(testUtils.hasEditableTextOnlyPayload({
+      media_type: null,
+      media_url: null,
+      media_sent: false
+    })).toBe(true);
+
+    expect(testUtils.hasEditableTextOnlyPayload({
+      media_type: 'image',
+      media_url: 'https://example.com/image.jpg',
+      media_sent: true
+    })).toBe(false);
   });
 });

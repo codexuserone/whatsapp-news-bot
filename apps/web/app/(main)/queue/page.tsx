@@ -79,6 +79,7 @@ const deriveDefaultMessage = (item: QueueItem) => {
 const canEditSentInPlace = (item: QueueItem, editWindowMinutes: number, nowMs?: number) => {
   if (!isSuccessfulSendStatus(item.status)) return false;
   if (item.target_type === 'status' || item.target_type === 'channel') return false;
+  if (item.media_sent || String(item.media_type || '').trim() || String(item.media_url || '').trim()) return false;
   if (!String(item.whatsapp_message_id || '').trim()) return false;
   const sentAt = String(item.sent_at || '').trim();
   if (!sentAt) return false;
@@ -462,6 +463,10 @@ const QueueInner = () => {
 
   const getCorrectionBadge = (item: QueueItem) => {
     const correctionKind = String(item.correction_kind || '').trim().toLowerCase();
+    const correctionError = String(item.correction_error || '').trim();
+    if (correctionError) {
+      return <Badge variant="destructive">Correction failed</Badge>;
+    }
     const hasCorrection = Boolean(correctionKind || String(item.corrected_at || '').trim());
     if (!hasCorrection) {
       return null;

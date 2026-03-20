@@ -84,7 +84,18 @@ const shouldLimitQueueStatusToRecentHistory = (statusFilter?: string) => {
 };
 
 const buildCombinedQueueFilter = (windowStartIso: string) =>
-  [...LIVE_QUEUE_STATUS_VALUES.map((status) => `status.eq.${status}`), `created_at.gte.${windowStartIso}`].join(',');
+  [...LIVE_QUEUE_STATUS_VALUES.map((status) => `status.eq.${status}`), `updated_at.gte.${windowStartIso}`].join(',');
+
+const hasEditableTextOnlyPayload = (row: {
+  media_type?: unknown;
+  media_url?: unknown;
+  media_sent?: unknown;
+}) => {
+  if (Boolean(row?.media_sent)) return false;
+  if (String(row?.media_type || '').trim()) return false;
+  if (String(row?.media_url || '').trim()) return false;
+  return true;
+};
 
 type RetryableQueueRow = {
   id?: string | null;
@@ -302,7 +313,7 @@ const queueRoutes = () => {
           query = query.eq('status', statusFilter);
         }
         if (shouldLimitQueueStatusToRecentHistory(statusFilter)) {
-          query = query.gte('created_at', windowStartIso);
+          query = query.gte('updated_at', windowStartIso);
         }
       } else {
         query = query.or(buildCombinedQueueFilter(windowStartIso));
@@ -522,7 +533,7 @@ const queueRoutes = () => {
           query = query.not('schedule_id', 'is', null);
         }
         if (recentOnly) {
-          query = query.gte('created_at', windowStartIso);
+          query = query.gte('updated_at', windowStartIso);
         }
         return query;
       };
@@ -596,7 +607,7 @@ const queueRoutes = () => {
       const supabase = getDb();
       const { data: current, error: currentError } = await supabase
         .from('message_logs')
-        .select('id,status,target_id,whatsapp_message_id,sent_at,approved_at,schedule_id')
+        .select('id,status,target_id,whatsapp_message_id,sent_at,approved_at,schedule_id,media_type,media_url,media_sent')
         .eq('id', req.params.id)
         .single();
 
@@ -662,6 +673,10 @@ const queueRoutes = () => {
         const whatsappMessageId = String((current as { whatsapp_message_id?: string | null }).whatsapp_message_id || '').trim();
         if (!whatsappMessageId) {
           return res.status(400).json({ error: 'Cannot edit sent message without WhatsApp message id' });
+        }
+
+        if (!hasEditableTextOnlyPayload(current as { media_type?: unknown; media_url?: unknown; media_sent?: unknown })) {
+          return res.status(400).json({ error: 'In-place edit is only supported for text-only messages' });
         }
 
         const targetId = String((current as { target_id?: string | null }).target_id || '').trim();
@@ -939,5 +954,6 @@ module.exports.__testUtils = {
   parseWindowHours,
   isRetryableQueueRow,
   shouldLimitQueueStatusToRecentHistory,
-  buildCombinedQueueFilter
+  buildCombinedQueueFilter,
+  hasEditableTextOnlyPayload
 };

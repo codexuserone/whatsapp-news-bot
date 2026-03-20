@@ -2254,6 +2254,12 @@ const reconcileUpdatedFeedItems = async (
         );
         if (!whatsappClient.deleteMessage) {
           result.failed += 1;
+          await supabase
+            .from('message_logs')
+            .update({
+              correction_error: getErrorMessage(error)
+            })
+            .eq('id', log.id);
           continue;
         }
       }
@@ -2285,6 +2291,9 @@ const reconcileUpdatedFeedItems = async (
           .update({
             status: 'sent',
             sent_at: new Date().toISOString(),
+            delivered_at: null,
+            read_at: null,
+            played_at: null,
             message_content: replacementResult?.text || null,
             whatsapp_message_id: replacementResult?.response?.key?.id || null,
             media_url: replacementResult?.media?.url || null,
@@ -2305,7 +2314,6 @@ const reconcileUpdatedFeedItems = async (
         await supabase
           .from('message_logs')
           .update({
-            corrected_at: new Date().toISOString(),
             correction_error: getErrorMessage(error)
           })
           .eq('id', log.id);

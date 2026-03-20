@@ -7,6 +7,8 @@ const { isScheduleRunning } = require('../services/scheduleState');
 const { normalizeFeedMedia } = require('../utils/feedMedia');
 
 const MANUAL_POST_PAUSE_REASON = 'Paused for this post';
+const MANUAL_POST_PAUSABLE_STATUSES = ['awaiting_approval', 'pending', 'processing', 'failed', 'uncertain'];
+const SUCCESSFUL_CORRECTION_KINDS = new Set(['pending_refresh', 'edit', 'replacement', 'manual_edit']);
 
 type DeliveryLogRow = {
   id?: string | null;
@@ -17,6 +19,7 @@ type DeliveryLogRow = {
   error_message?: string | null;
   corrected_at?: string | null;
   correction_kind?: string | null;
+  correction_error?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   sent_at?: string | null;
@@ -95,7 +98,11 @@ const summarizeDeliveryRows = (rows: DeliveryLogRow[]) => {
     if (!feedItemId || !status) continue;
 
     const current = deliveryByItem.get(feedItemId) || createEmptyDeliverySummary();
-    const wasCorrected = Boolean(String(row.corrected_at || '').trim() || String(row.correction_kind || '').trim());
+    const correctionKind = String(row.correction_kind || '').trim().toLowerCase();
+    const hasCorrectionError = Boolean(String((row as { correction_error?: string | null }).correction_error || '').trim());
+    const wasCorrected =
+      !hasCorrectionError &&
+      (SUCCESSFUL_CORRECTION_KINDS.has(correctionKind) || Boolean(String(row.corrected_at || '').trim()));
 
     if (status === 'pending' || status === 'awaiting_approval') current.pending += 1;
     else if (status === 'processing') current.processing += 1;
@@ -120,6 +127,12 @@ const summarizeDeliveryRows = (rows: DeliveryLogRow[]) => {
   }
 
   return deliveryByItem;
+};
+
+const resolveManualPostResumeStatus = (row: { approved_at?: unknown; schedule?: { approval_required?: boolean | null } | null }) => {
+  const approvedAt = String(row?.approved_at || '').trim();
+  if (approvedAt) return 'pending';
+  return row?.schedule?.approval_required === true ? 'awaiting_approval' : 'pending';
 };
 
 const feedItemRoutes = () => {
@@ -390,7 +403,7 @@ const feedItemRoutes = () => {
           })
           .eq('feed_item_id', feedItemId)
           .in('schedule_id', scheduleIds)
-          .in('status', ['pending', 'processing', 'failed'])
+          .in('status', MANUAL_POST_PAUSABLE_STATUSES)
           .select('id');
 
         if (updateError) throw updateError;
@@ -447,25 +460,70 @@ const feedItemRoutes = () => {
       }
 
       const supabase = getDb();
-      const { data: resumedRows, error: resumeError } = await supabase
+      const { data: pausedRows, error: pausedRowsError } = await supabase
         .from('message_logs')
-        .update({
-          status: 'pending',
-          error_message: null,
-          retry_count: 0,
-          processing_started_at: null
-        })
+        .select(`
+          id,
+          approved_at,
+          schedule:schedules (
+            approval_required
+          )
+        `)
         .eq('feed_item_id', feedItemId)
         .eq('status', 'skipped')
-        .eq('error_message', MANUAL_POST_PAUSE_REASON)
-        .select('id');
+        .eq('error_message', MANUAL_POST_PAUSE_REASON);
 
-      if (resumeError) throw resumeError;
+      if (pausedRowsError) throw pausedRowsError;
+
+      const pendingIds: string[] = [];
+      const awaitingApprovalIds: string[] = [];
+
+      for (const row of pausedRows || []) {
+        const id = String((row as { id?: string | null }).id || '').trim();
+        if (!id) continue;
+        const nextStatus = resolveManualPostResumeStatus(row as {
+          approved_at?: unknown;
+          schedule?: { approval_required?: boolean | null } | null;
+        });
+        if (nextStatus === 'awaiting_approval') awaitingApprovalIds.push(id);
+        else pendingIds.push(id);
+      }
+
+      let resumedCount = 0;
+      if (pendingIds.length) {
+        const { data: resumedPendingRows, error: resumedPendingError } = await supabase
+          .from('message_logs')
+          .update({
+            status: 'pending',
+            error_message: null,
+            retry_count: 0,
+            processing_started_at: null
+          })
+          .in('id', pendingIds)
+          .select('id');
+        if (resumedPendingError) throw resumedPendingError;
+        resumedCount += resumedPendingRows?.length || 0;
+      }
+
+      if (awaitingApprovalIds.length) {
+        const { data: resumedApprovalRows, error: resumedApprovalError } = await supabase
+          .from('message_logs')
+          .update({
+            status: 'awaiting_approval',
+            error_message: null,
+            retry_count: 0,
+            processing_started_at: null
+          })
+          .in('id', awaitingApprovalIds)
+          .select('id');
+        if (resumedApprovalError) throw resumedApprovalError;
+        resumedCount += resumedApprovalRows?.length || 0;
+      }
 
       return res.json({
         ok: true,
         feed_item_id: feedItemId,
-        resumed: resumedRows?.length || 0
+        resumed: resumedCount
       });
     } catch (error) {
       console.error('Error resuming feed item:', error);
@@ -513,5 +571,7 @@ const feedItemRoutes = () => {
 module.exports = feedItemRoutes;
 module.exports.__testUtils = {
   selectRelevantDeliveryRows,
-  summarizeDeliveryRows
+  summarizeDeliveryRows,
+  resolveManualPostResumeStatus,
+  MANUAL_POST_PAUSABLE_STATUSES
 };

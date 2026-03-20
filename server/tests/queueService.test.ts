@@ -94,6 +94,19 @@ describe('queueService __testUtils', () => {
     expect(testUtils.computeUncertainRetryDelayMs(90000)).toBe(180000);
   });
 
+  it('treats connection-state errors as recoverable without consuming retries', () => {
+    expect(testUtils.isConnectionStateError('WhatsApp not connected')).toBe(true);
+    expect(testUtils.isConnectionStateError('WhatsApp requires QR scan')).toBe(true);
+    expect(testUtils.isConnectionStateError('Timed out sending message')).toBe(false);
+  });
+
+  it('builds a connection wait message for queued retries', () => {
+    expect(testUtils.buildConnectionWaitErrorMessage('WhatsApp not connected')).toBe(
+      'Waiting for WhatsApp connection: WhatsApp not connected'
+    );
+    expect(testUtils.buildConnectionWaitErrorMessage('')).toBe('Waiting for WhatsApp connection');
+  });
+
   it('requeues only stale rows that do not already have a sent sibling', () => {
     const rows = [
       { id: 'log-1', schedule_id: 'schedule-1', target_id: 'target-1', feed_item_id: 'feed-1' },
@@ -159,5 +172,88 @@ describe('queueService __testUtils', () => {
     expect(plan.dispatchItems.map((item: { id: string }) => item.id)).toEqual(['c', 'b']);
     expect(plan.cursorAt).toBe('2026-03-10T11:00:00.000Z');
     expect(plan.cursorId).toBe('c');
+  });
+
+  it('detects text or media changes for correction decisions', () => {
+    expect(
+      testUtils.hasCorrectionChanges(
+        { text: 'hello', mediaUrl: null, mediaType: null },
+        { text: 'hello there', mediaUrl: null, mediaType: null }
+      )
+    ).toBe(true);
+
+    expect(
+      testUtils.hasCorrectionChanges(
+        { text: 'hello', mediaUrl: 'https://example.com/a.jpg', mediaType: 'image' },
+        { text: 'hello', mediaUrl: 'https://example.com/a.jpg', mediaType: 'image' }
+      )
+    ).toBe(false);
+
+    expect(
+      testUtils.hasCorrectionChanges(
+        { text: 'hello', mediaUrl: 'https://example.com/a.jpg', mediaType: 'image' },
+        { text: 'hello', mediaUrl: 'https://example.com/b.jpg', mediaType: 'image' }
+      )
+    ).toBe(true);
+  });
+
+  it('prefers in-place edit only for text-only direct or group messages inside the edit window', () => {
+    expect(
+      testUtils.chooseCorrectionStrategy({
+        targetType: 'group',
+        sentAgeMs: 2 * 60 * 1000,
+        editWindowMs: 15 * 60 * 1000,
+        correctionWindowMs: 15 * 60 * 1000,
+        hasMessageId: true,
+        supportsEdit: true,
+        supportsDelete: true,
+        currentMediaType: null,
+        desiredMediaType: null
+      })
+    ).toBe('edit');
+
+    expect(
+      testUtils.chooseCorrectionStrategy({
+        targetType: 'group',
+        sentAgeMs: 2 * 60 * 1000,
+        editWindowMs: 15 * 60 * 1000,
+        correctionWindowMs: 15 * 60 * 1000,
+        hasMessageId: true,
+        supportsEdit: true,
+        supportsDelete: true,
+        currentMediaType: 'image',
+        desiredMediaType: 'image'
+      })
+    ).toBe('replace');
+  });
+
+  it('uses replacement for channels and skips status corrections', () => {
+    expect(
+      testUtils.chooseCorrectionStrategy({
+        targetType: 'channel',
+        sentAgeMs: 2 * 60 * 1000,
+        editWindowMs: 15 * 60 * 1000,
+        correctionWindowMs: 15 * 60 * 1000,
+        hasMessageId: true,
+        supportsEdit: true,
+        supportsDelete: true,
+        currentMediaType: null,
+        desiredMediaType: null
+      })
+    ).toBe('replace');
+
+    expect(
+      testUtils.chooseCorrectionStrategy({
+        targetType: 'status',
+        sentAgeMs: 2 * 60 * 1000,
+        editWindowMs: 15 * 60 * 1000,
+        correctionWindowMs: 15 * 60 * 1000,
+        hasMessageId: true,
+        supportsEdit: true,
+        supportsDelete: true,
+        currentMediaType: null,
+        desiredMediaType: null
+      })
+    ).toBe('skip');
   });
 });

@@ -143,4 +143,10 @@ describe('schedulerService dispatch entry points', () => {
             }
         );
     });
+
+    it('caps the correction window parser at the supported 15-minute limit', () => {
+        expect(schedulerService.__testUtils.parseCorrectionWindowMinutes(5)).toBe(5);
+        expect(schedulerService.__testUtils.parseCorrectionWindowMinutes(90)).toBe(15);
+        expect(schedulerService.__testUtils.parseCorrectionWindowMinutes(undefined)).toBe(15);
+    });
 });

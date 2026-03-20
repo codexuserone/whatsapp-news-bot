@@ -40,8 +40,12 @@ type RunScheduleOptions = {
 const feedIntervals = new Map<string, NodeJS.Timeout>();
 const scheduleJobs = new Map<string, ScheduledTask>();
 let pendingSendCatchupTimer: NodeJS.Timeout | null = null;
+let recentFeedCorrectionTimer: NodeJS.Timeout | null = null;
 const feedInFlight = new Map<string, boolean>();
 const scheduleInFlight = new Map<string, boolean>();
+const SUCCESSFUL_SEND_STATUSES = ['sent', 'delivered', 'read', 'played'];
+const DEFAULT_CORRECTION_WINDOW_MINUTES = 15;
+const MAX_CORRECTION_WINDOW_MINUTES = 15;
 
 const schedulersDisabled = () => process.env.DISABLE_SCHEDULERS === 'true';
 
@@ -102,6 +106,59 @@ const isAppPaused = async () => {
   }
 };
 
+const parseCorrectionWindowMinutes = (value: unknown) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_CORRECTION_WINDOW_MINUTES;
+  return Math.min(Math.max(Math.floor(parsed), 1), MAX_CORRECTION_WINDOW_MINUTES);
+};
+
+const listRecentlyCorrectableFeedIds = async (supabase: ReturnType<typeof getSupabaseClient>) => {
+  const settings = await settingsService.getSettings();
+  const correctionWindowMinutes = parseCorrectionWindowMinutes(settings?.post_send_correction_window_minutes);
+  const cutoffIso = new Date(Date.now() - correctionWindowMinutes * 60 * 1000).toISOString();
+
+  const { data: logRows, error: logsError } = await supabase
+    .from('message_logs')
+    .select('feed_item_id')
+    .in('status', SUCCESSFUL_SEND_STATUSES)
+    .gte('sent_at', cutoffIso)
+    .not('feed_item_id', 'is', null)
+    .limit(500);
+
+  if (logsError) {
+    throw logsError;
+  }
+
+  const feedItemIds = Array.from(
+    new Set(
+      (logRows || [])
+        .map((row: { feed_item_id?: string | null }) => String(row?.feed_item_id || '').trim())
+        .filter(Boolean)
+    )
+  );
+
+  if (!feedItemIds.length) {
+    return [];
+  }
+
+  const { data: feedItems, error: feedItemsError } = await supabase
+    .from('feed_items')
+    .select('id,feed_id')
+    .in('id', feedItemIds);
+
+  if (feedItemsError) {
+    throw feedItemsError;
+  }
+
+  return Array.from(
+    new Set(
+      (feedItems || [])
+        .map((row: { feed_id?: string | null }) => String(row?.feed_id || '').trim())
+        .filter(Boolean)
+    )
+  );
+};
+
 const clearAll = () => {
   feedIntervals.forEach((interval) => clearTimeout(interval));
   feedIntervals.clear();
@@ -110,6 +167,10 @@ const clearAll = () => {
   if (pendingSendCatchupTimer) {
     clearInterval(pendingSendCatchupTimer);
     pendingSendCatchupTimer = null;
+  }
+  if (recentFeedCorrectionTimer) {
+    clearInterval(recentFeedCorrectionTimer);
+    recentFeedCorrectionTimer = null;
   }
   feedInFlight.clear();
   scheduleInFlight.clear();
@@ -444,6 +505,64 @@ const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
   }
 };
 
+const startRecentFeedCorrectionWatcher = (whatsappClient?: WhatsAppClient) => {
+  if (recentFeedCorrectionTimer) {
+    clearInterval(recentFeedCorrectionTimer);
+    recentFeedCorrectionTimer = null;
+  }
+
+  const intervalMs = Math.max(Number(process.env.FEED_CORRECTION_POLL_MS || 60000), 30000);
+  const runCorrectionPass = async () => {
+    try {
+      if (await isAppPaused()) return;
+      if (!canRunSchedulers(whatsappClient)) return;
+      const supabase = getSupabaseClient();
+      if (!supabase) return;
+
+      const feedIds = await listRecentlyCorrectableFeedIds(supabase);
+      if (!feedIds.length) return;
+
+      const { data: feeds, error } = await supabase
+        .from('feeds')
+        .select('*')
+        .in('id', feedIds)
+        .eq('active', true);
+
+      if (error) throw error;
+
+      for (const feed of feeds || []) {
+        if (!feed?.id) continue;
+        if (feedInFlight.get(feed.id)) {
+          continue;
+        }
+
+        feedInFlight.set(feed.id, true);
+        try {
+          const result = await fetchAndProcessFeed(feed);
+          if (Array.isArray(result.updatedItems) && result.updatedItems.length) {
+            const reconcile = await reconcileUpdatedFeedItems(result.updatedItems, whatsappClient);
+            logger.info(
+              { feedId: feed.id, reconcile },
+              'Applied correction-window reconciliation during recent-send watch pass'
+            );
+          }
+        } catch (error) {
+          logger.error({ error, feedId: feed.id }, 'Failed recent-send correction watcher pass');
+        } finally {
+          feedInFlight.set(feed.id, false);
+        }
+      }
+    } catch (error) {
+      logger.error({ error }, 'Failed recent-feed correction watcher');
+    }
+  };
+
+  void runCorrectionPass();
+  recentFeedCorrectionTimer = setInterval(() => {
+    void runCorrectionPass();
+  }, intervalMs);
+};
+
 const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
   if (await isAppPaused()) {
     logger.info('Skipping schedule sender setup - app is paused');
@@ -629,6 +748,7 @@ const initSchedulers = async (whatsappClient?: WhatsAppClient) => {
   }
 
   await scheduleFeedPolling(whatsappClient);
+  startRecentFeedCorrectionWatcher(whatsappClient);
   await scheduleSenders(whatsappClient);
   startPendingSendCatchup(whatsappClient);
 };
@@ -638,5 +758,8 @@ module.exports = {
   clearAll,
   triggerImmediateSchedules,
   queueBatchSchedulesForFeed,
-  waitForFeedIdle
+  waitForFeedIdle,
+  __testUtils: {
+    parseCorrectionWindowMinutes
+  }
 };

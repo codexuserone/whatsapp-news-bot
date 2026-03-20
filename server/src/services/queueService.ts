@@ -127,6 +127,69 @@ const normalizeComparableText = (value: unknown) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+const normalizeComparableMediaType = (value: unknown) =>
+  String(value || '')
+    .trim()
+    .toLowerCase() || null;
+
+const hasCorrectionChanges = (
+  current: { text?: unknown; mediaUrl?: unknown; mediaType?: unknown },
+  desired: { text?: unknown; mediaUrl?: unknown; mediaType?: unknown }
+) => {
+  const currentText = normalizeComparableText(current.text);
+  const desiredText = normalizeComparableText(desired.text);
+  const currentMediaUrl = normalizeComparableText(current.mediaUrl);
+  const desiredMediaUrl = normalizeComparableText(desired.mediaUrl);
+  const currentMediaType = normalizeComparableMediaType(current.mediaType);
+  const desiredMediaType = normalizeComparableMediaType(desired.mediaType);
+
+  return (
+    currentText !== desiredText ||
+    currentMediaUrl !== desiredMediaUrl ||
+    currentMediaType !== desiredMediaType
+  );
+};
+
+const chooseCorrectionStrategy = (options: {
+  targetType: string | null | undefined;
+  sentAgeMs: number | null;
+  editWindowMs: number;
+  correctionWindowMs: number;
+  hasMessageId: boolean;
+  supportsEdit: boolean;
+  supportsDelete: boolean;
+  currentMediaType?: string | null;
+  desiredMediaType?: string | null;
+}) => {
+  const targetType = String(options.targetType || '').trim().toLowerCase();
+  const sentAgeMs = options.sentAgeMs;
+  if (sentAgeMs == null || sentAgeMs > options.correctionWindowMs || !options.hasMessageId) {
+    return 'skip' as const;
+  }
+  if (targetType === 'status') {
+    return 'skip' as const;
+  }
+
+  const currentMediaType = normalizeComparableMediaType(options.currentMediaType);
+  const desiredMediaType = normalizeComparableMediaType(options.desiredMediaType);
+  const isTextOnly = !currentMediaType && !desiredMediaType;
+
+  if (
+    options.supportsEdit &&
+    targetType !== 'channel' &&
+    isTextOnly &&
+    sentAgeMs <= options.editWindowMs
+  ) {
+    return 'edit' as const;
+  }
+
+  if (options.supportsDelete) {
+    return 'replace' as const;
+  }
+
+  return 'skip' as const;
+};
+
 type ChatMessageRow = {
   id?: string;
   whatsapp_id?: string | null;
@@ -708,6 +771,25 @@ const isAuthStateError = (message: string) => {
     'bad key material',
     'no session record'
   ].some((needle) => normalized.includes(needle));
+};
+
+const isConnectionStateError = (message: string) => {
+  const normalized = String(message || '').toLowerCase();
+  if (!normalized) return false;
+  return [
+    'whatsapp not connected',
+    'whatsapp requires qr scan',
+    'whatsapp is paused',
+    'timed out waiting for whatsapp connection',
+    'connection closed',
+    'connection failure',
+    'socket closed'
+  ].some((needle) => normalized.includes(needle));
+};
+
+const buildConnectionWaitErrorMessage = (message: string) => {
+  const normalized = String(message || '').trim();
+  return normalized ? `Waiting for WhatsApp connection: ${normalized}` : 'Waiting for WhatsApp connection';
 };
 
 const applyTemplate = (templateBody: string, data: Record<string, unknown>): string => {
@@ -1870,7 +1952,7 @@ const reconcileUpdatedFeedItems = async (
 
   const { data: logRows, error: logsError } = await supabase
     .from('message_logs')
-    .select('id,feed_item_id,target_id,template_id,sent_at,whatsapp_message_id,message_content')
+    .select('id,feed_item_id,target_id,template_id,sent_at,whatsapp_message_id,message_content,media_url,media_type')
     .in('feed_item_id', feedItemIds)
     .in('status', Array.from(SUCCESSFUL_SEND_STATUSES))
     .gte('sent_at', correctionCutoffIso)
@@ -1889,6 +1971,8 @@ const reconcileUpdatedFeedItems = async (
     sent_at?: string | null;
     whatsapp_message_id?: string | null;
     message_content?: string | null;
+    media_url?: string | null;
+    media_type?: string | null;
   };
 
   const sentLogs = (logRows || []) as SentLogRow[];
@@ -1957,8 +2041,13 @@ const reconcileUpdatedFeedItems = async (
     }
 
     let rendered: ReturnType<typeof renderTemplateMessage>;
+    let expectedMedia: Awaited<ReturnType<typeof resolveMediaUrlForFeedItem>>;
     try {
       rendered = renderTemplateMessage(template, feedItem);
+      expectedMedia =
+        rendered.sendMode === 'auto_media' || rendered.sendMode === 'media_only'
+          ? await resolveMediaUrlForFeedItem(supabase, feedItem, true)
+          : { url: null, kind: null, mime: null, filename: null, source: null, scraped: false, error: null };
     } catch (error) {
       result.failed += 1;
       logger.warn({ error, feedItemId, targetId, templateId }, 'Failed to render updated template for sent message');
@@ -1966,14 +2055,25 @@ const reconcileUpdatedFeedItems = async (
     }
 
     const desiredText = String(rendered.outboundText || '').trim();
-    if (!desiredText) {
+    const desiredMediaUrl = String(expectedMedia.url || '').trim() || null;
+    const desiredMediaType = normalizeComparableMediaType(expectedMedia.kind);
+    if (!desiredText && !desiredMediaUrl) {
       result.skipped += 1;
       continue;
     }
 
-    const currentComparable = normalizeMessageText(String(log.message_content || '')).trim();
-    const desiredComparable = normalizeMessageText(desiredText).trim();
-    if (currentComparable && currentComparable === desiredComparable) {
+    if (!hasCorrectionChanges(
+      {
+        text: normalizeMessageText(String(log.message_content || '')).trim(),
+        mediaUrl: log.media_url,
+        mediaType: log.media_type
+      },
+      {
+        text: normalizeMessageText(desiredText).trim(),
+        mediaUrl: desiredMediaUrl,
+        mediaType: desiredMediaType
+      }
+    )) {
       result.skipped += 1;
       continue;
     }
@@ -1995,22 +2095,27 @@ const reconcileUpdatedFeedItems = async (
       logger.warn({ error, logId: log.id, targetId }, 'Failed to normalize target JID for feed-item reconciliation');
       continue;
     }
-    const hasEditCandidate = Boolean(
-      whatsappClient.editMessage &&
-      target.type !== 'status' &&
-      target.type !== 'channel' &&
-      sentAgeMs <= editWindowMs &&
-      String(log.whatsapp_message_id || '').trim()
-    );
+    const whatsappMessageId = String(log.whatsapp_message_id || '').trim();
+    const correctionStrategy = chooseCorrectionStrategy({
+      targetType: target.type,
+      sentAgeMs,
+      editWindowMs,
+      correctionWindowMs,
+      hasMessageId: Boolean(whatsappMessageId),
+      supportsEdit: Boolean(whatsappClient.editMessage),
+      supportsDelete: Boolean(whatsappClient.deleteMessage),
+      currentMediaType: String(log.media_type || '').trim() || null,
+      desiredMediaType
+    });
 
-    if (hasEditCandidate) {
+    if (correctionStrategy === 'edit') {
       try {
         await withGlobalSendLock(async () => {
           await waitForDelays(target as Target, settings);
           await withTimeout(
             whatsappClient.editMessage!(
               jid,
-              String(log.whatsapp_message_id || '').trim(),
+              whatsappMessageId,
               desiredText
             ),
             sendTimeoutMs,
@@ -2029,14 +2134,65 @@ const reconcileUpdatedFeedItems = async (
         result.edited += 1;
         continue;
       } catch (error) {
-        result.failed += 1;
         logger.warn(
           { error, logId: log.id, targetId, feedItemId },
-          'Failed to edit sent message; skipping because replacement sends are disabled'
+          'Failed to edit sent message during feed reconciliation; falling back to replacement when available'
+        );
+        if (!whatsappClient.deleteMessage) {
+          result.failed += 1;
+          continue;
+        }
+      }
+    }
+
+    if (correctionStrategy === 'replace' || (correctionStrategy === 'edit' && Boolean(whatsappClient.deleteMessage))) {
+      try {
+        const replacementResult = await withGlobalSendLock(async () => {
+          await waitForDelays(target as Target, settings);
+          await withTimeout(
+            whatsappClient.deleteMessage!(jid, whatsappMessageId),
+            sendTimeoutMs,
+            'Timed out deleting message before replacement'
+          );
+          return sendMessageWithTemplate(
+            whatsappClient,
+            target,
+            template,
+            feedItem,
+            {
+              supabase,
+              sendTimeoutMs
+            }
+          );
+        });
+
+        await supabase
+          .from('message_logs')
+          .update({
+            status: 'sent',
+            sent_at: new Date().toISOString(),
+            message_content: replacementResult?.text || null,
+            whatsapp_message_id: replacementResult?.response?.key?.id || null,
+            media_url: replacementResult?.media?.url || null,
+            media_type: replacementResult?.media?.type || null,
+            media_sent: Boolean(replacementResult?.media?.sent),
+            media_error: replacementResult?.media?.error || null,
+            error_message: null
+          })
+          .eq('id', log.id);
+
+        result.replaced += 1;
+        continue;
+      } catch (error) {
+        result.failed += 1;
+        logger.warn(
+          { error, logId: log.id, targetId, feedItemId, targetType: target.type },
+          'Failed to replace sent message during feed reconciliation'
         );
         continue;
       }
     }
+
     result.skipped += 1;
     logger.debug(
       {
@@ -2045,10 +2201,12 @@ const reconcileUpdatedFeedItems = async (
         feedItemId,
         sentAgeMs,
         editWindowMs,
-        hasEditMessageId: Boolean(String(log.whatsapp_message_id || '').trim()),
-        targetType: target.type
+        correctionWindowMs,
+        hasEditMessageId: Boolean(whatsappMessageId),
+        targetType: target.type,
+        desiredMediaType
       },
-      'Skipping correction because in-place edit is not possible and replacement sends are disabled'
+      'Skipping correction because this target/message does not support edit or replacement'
     );
   }
 
@@ -3197,6 +3355,7 @@ const sendQueuedForSchedule = async (
             ? `${AUTH_ERROR_HINT} (${rawErrorMessage || 'unknown auth error'})`
             : rawErrorMessage;
           const timeoutUnknownDelivery = isUnknownDeliveryTimeout(rawErrorMessage);
+          const connectionStateError = isConnectionStateError(rawErrorMessage);
           const nonRetryable = [
             'Template rendered empty message',
             'Target phone number missing',
@@ -3222,6 +3381,22 @@ const sendQueuedForSchedule = async (
             continue;
           }
 
+          const maxRetries = Number(settings.max_retries || 3);
+          const currentRetry = log.retry_count || 0;
+
+          if (connectionStateError) {
+            await supabase
+              .from('message_logs')
+              .update({
+                status: 'pending',
+                processing_started_at: null,
+                error_message: buildConnectionWaitErrorMessage(errorMessage),
+                retry_count: currentRetry
+              })
+              .eq('id', log.id);
+            continue;
+          }
+
           if (nonRetryable) {
             await supabase
               .from('message_logs')
@@ -3237,10 +3412,6 @@ const sendQueuedForSchedule = async (
               .eq('id', log.id);
             continue;
           }
-
-          // Check if we should retry
-          const maxRetries = Number(settings.max_retries || 3);
-          const currentRetry = log.retry_count || 0;
 
           if (currentRetry < maxRetries) {
             logger.info({
@@ -3385,6 +3556,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
     const log = logRow as {
       id: string;
       status: string;
+      retry_count?: number | null;
       schedule_id?: string | null;
       target_id?: string | null;
       feed_item_id?: string | null;
@@ -3400,6 +3572,9 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
     if (isSuccessfulSendStatus(log.status)) {
       return { ok: false, error: 'Queue item is already sent' };
     }
+
+    const originalStatus = String(log.status || '').trim().toLowerCase() || 'pending';
+    const originalRetryCount = Math.max(Number(log.retry_count || 0), 0);
 
     if (!log.target_id) {
       return { ok: false, error: 'Queue item is missing target' };
@@ -3981,22 +4156,31 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       const errorMessage = authError
         ? `${AUTH_ERROR_HINT} (${rawErrorMessage || 'unknown auth error'})`
         : rawErrorMessage;
+      const connectionStateError = isConnectionStateError(rawErrorMessage);
       const timedOut = isUnknownDeliveryTimeout(rawErrorMessage);
-      const terminalStatus = timedOut ? 'uncertain' : 'failed';
+      const terminalStatus = timedOut ? 'uncertain' : connectionStateError ? originalStatus : 'failed';
 
       const keepMedia = !isAutomationBacked && Boolean(String(log.media_url || '').trim());
+      const failurePatch: Record<string, unknown> = {
+        status: terminalStatus,
+        processing_started_at: timedOut ? log.processing_started_at || new Date().toISOString() : null,
+        error_message: timedOut
+          ? buildUncertainErrorMessage(errorMessage)
+          : connectionStateError
+            ? buildConnectionWaitErrorMessage(errorMessage)
+            : errorMessage,
+        message_content: timedOut ? uncertainMessageContent : log.message_content || null,
+        media_url: timedOut ? uncertainMediaUrl : keepMedia ? log.media_url || null : null,
+        media_type: timedOut ? uncertainMediaType : keepMedia ? log.media_type || null : null,
+        media_sent: false,
+        media_error: timedOut || keepMedia ? errorMessage : null
+      };
+      if (connectionStateError) {
+        failurePatch.retry_count = originalRetryCount;
+      }
       await supabase
         .from('message_logs')
-        .update({
-          status: terminalStatus,
-          processing_started_at: timedOut ? log.processing_started_at || new Date().toISOString() : null,
-          error_message: timedOut ? buildUncertainErrorMessage(errorMessage) : errorMessage,
-          message_content: timedOut ? uncertainMessageContent : log.message_content || null,
-          media_url: timedOut ? uncertainMediaUrl : keepMedia ? log.media_url || null : null,
-          media_type: timedOut ? uncertainMediaType : keepMedia ? log.media_type || null : null,
-          media_sent: false,
-          media_error: timedOut || keepMedia ? errorMessage : null
-        })
+        .update(failurePatch)
         .eq('id', log.id);
 
       return { ok: false, error: errorMessage };
@@ -4188,6 +4372,10 @@ module.exports = {
     compareFeedDispatchOrder,
     planFeedDispatchPage,
     inferChatMessageMediaKind,
-    doesChatMessageMatchExpectedAttempt
+    doesChatMessageMatchExpectedAttempt,
+    hasCorrectionChanges,
+    chooseCorrectionStrategy,
+    isConnectionStateError,
+    buildConnectionWaitErrorMessage
   }
 };

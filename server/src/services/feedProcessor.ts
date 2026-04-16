@@ -41,6 +41,21 @@ type FeedItemInput = {
 
 type FeedItemRecord = { id: string } & Record<string, unknown>;
 
+const DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS = Math.max(Number(process.env.MAX_AUTO_QUEUE_ITEM_AGE_HOURS || 72), 1);
+
+const isFeedItemFreshEnoughForAutoQueue = (
+  item: Record<string, unknown>,
+  maxAgeHours = DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS,
+  nowMs = Date.now()
+) => {
+  const maxAgeMs = Math.max(Number(maxAgeHours) || DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS, 1) * 60 * 60 * 1000;
+  const preferredTimestamp = String(item.pub_date || '').trim() || String(item.created_at || '').trim();
+  if (!preferredTimestamp) return true;
+  const timestampMs = Date.parse(preferredTimestamp);
+  if (!Number.isFinite(timestampMs)) return true;
+  return nowMs - timestampMs <= maxAgeMs;
+};
+
 const extractWordpressNumericId = (value?: string) => {
   if (!value) return null;
   const text = String(value);
@@ -412,7 +427,10 @@ const queueFeedItemsForSchedules = async (feedId: string, items: FeedItemRecord[
   const supabase = getSupabaseClient();
   if (!supabase || !items.length) return [];
 
-  const feedItemIds = items.map((item) => item.id).filter(Boolean) as string[];
+  const queueableItems = items.filter((item) => isFeedItemFreshEnoughForAutoQueue(item));
+  if (!queueableItems.length) return [];
+
+  const feedItemIds = queueableItems.map((item) => item.id).filter(Boolean) as string[];
   if (!feedItemIds.length) return [];
 
   try {
@@ -454,7 +472,9 @@ const queueFeedItemsForSchedules = async (feedId: string, items: FeedItemRecord[
           .filter(Boolean) as string[]
       );
 
-      for (const feedItemId of feedItemIds) {
+      for (const item of queueableItems) {
+        const feedItemId = String(item.id || '').trim();
+        if (!feedItemId) continue;
         for (const targetId of targetIds) {
           const key = `${feedItemId}:${targetId}`;
           if (existingKeys.has(key)) continue;

@@ -145,6 +145,31 @@ describe('queueFeedItemsForSchedules', () => {
         );
     });
 
+    it('does not queue newly discovered feed items whose publish time is outside the auto-queue age limit', async () => {
+        const supabase = createQueueSupabase({
+            schedules: [
+                {
+                    id: 'schedule-active',
+                    target_ids: ['target-a'],
+                    template_id: 'template-1',
+                    state: 'active',
+                    active: true
+                }
+            ],
+            existingLogsBySchedule: {}
+        });
+
+        mockGetSupabaseClient.mockReturnValue(supabase);
+
+        const stalePubDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+        const queued = await queueFeedItemsForSchedules('feed-1', [
+            { id: 'old-item', pub_date: stalePubDate, created_at: new Date().toISOString() }
+        ]);
+
+        expect(queued).toEqual([]);
+        expect(supabase.upsertMock).not.toHaveBeenCalled();
+    });
+
     it('matches expected queue coverage across seeded randomized schedule layouts', async () => {
         const nextRandom = createSeededRandom(1337);
 

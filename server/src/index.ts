@@ -332,8 +332,8 @@ const start = async () => {
     })
   );
 
-  // Most API routes should not accept large JSON bodies. Only a small subset (for example,
-  // /api/whatsapp/send-test) needs a higher limit for base64 media payloads.
+  // Most API routes should not accept large JSON bodies. Only routes that accept base64
+  // media payloads need the higher limit.
   const defaultJsonLimit = process.env.JSON_BODY_LIMIT_DEFAULT || process.env.JSON_BODY_LIMIT || '2mb';
   const largeJsonLimit = process.env.JSON_BODY_LIMIT_LARGE || process.env.JSON_BODY_LIMIT || '50mb';
   const defaultJson = express.json({ limit: defaultJsonLimit });
@@ -342,7 +342,9 @@ const start = async () => {
     const path = String(req?.path || '');
     const wantsLargeJson =
       path === '/api/whatsapp/send-test' ||
-      path === '/api/whatsapp/send-test/';
+      path === '/api/whatsapp/send-test/' ||
+      path === '/api/whatsapp/send-status' ||
+      path === '/api/whatsapp/send-status/';
     return (wantsLargeJson ? largeJson : defaultJson)(req, res, next);
   });
 

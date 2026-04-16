@@ -306,4 +306,10 @@ describe('queueService __testUtils', () => {
       )
     ).toBe(false);
   });
+
+  it('accepts only real image candidates for feed automation images', () => {
+    expect(testUtils.isUsableFeedImageUrl('https://example.com/photo.jpg')).toBe(true);
+    expect(testUtils.isUsableFeedImageUrl('https://example.com/video.mp4')).toBe(false);
+    expect(testUtils.isUsableFeedImageUrl('https://example.com/images/default-image.jpg')).toBe(false);
+  });
 });

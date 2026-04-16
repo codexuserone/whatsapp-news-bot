@@ -98,4 +98,20 @@ describe('normalizeFeedMedia', () => {
             imageUrl: 'https://example.com/cover.jpg'
         });
     });
+
+    it('does not preserve video URLs as image candidates', () => {
+        expect(
+            normalizeFeedMedia({
+                mediaUrl: 'https://example.com/post-video.mp4',
+                mediaKind: 'video',
+                imageUrl: 'https://example.com/post-video.mp4'
+            })
+        ).toEqual({
+            mediaUrl: 'https://example.com/post-video.mp4',
+            mediaKind: 'video',
+            mediaMime: '',
+            mediaFilename: '',
+            imageUrl: ''
+        });
+    });
 });

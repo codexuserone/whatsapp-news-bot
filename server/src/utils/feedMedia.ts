@@ -87,6 +87,14 @@ const readMediaKind = (value: unknown): FeedMediaKind | null => {
   return null;
 };
 
+const normalizeImageUrlCandidate = (value: unknown) => {
+  const normalized = normalizeUrl(value);
+  if (!normalized) return '';
+  const inferred = inferMediaKindFromUrl(normalized);
+  if (inferred && inferred !== 'image') return '';
+  return normalized;
+};
+
 const normalizeFeedMedia = (input: {
   mediaUrl?: unknown;
   mediaKind?: unknown;
@@ -96,7 +104,7 @@ const normalizeFeedMedia = (input: {
   rawData?: Record<string, unknown> | null;
 }) => {
   const rawData = input.rawData && typeof input.rawData === 'object' ? input.rawData : null;
-  const normalizedImageUrl = normalizeUrl(input.imageUrl || rawData?.image_url);
+  const normalizedImageUrl = normalizeImageUrlCandidate(input.imageUrl || rawData?.image_url);
   const selectKind = (...candidates: Array<FeedMediaKind | null>) => {
     for (const candidate of candidates) {
       if (candidate) return candidate;

@@ -897,6 +897,23 @@ const isDocumentUrl = (url: string): boolean => {
   return DOCUMENT_EXTENSIONS.some(hasExt);
 };
 
+const isLikelyDefaultFeedImageUrl = (url: string) => {
+  try {
+    const parsed = new URL(url);
+    const pathname = parsed.pathname.toLowerCase();
+    return /(^|[-_/])(default|placeholder|no-image|noimage|missing-image|generic)([-_.\/]|$)/i.test(pathname);
+  } catch {
+    return false;
+  }
+};
+
+const isUsableFeedImageUrl = (url: string) =>
+  isHttpUrl(url) &&
+  !isVideoUrl(url) &&
+  !isAudioUrl(url) &&
+  !isDocumentUrl(url) &&
+  !isLikelyDefaultFeedImageUrl(url);
+
 const DEFAULT_USER_AGENT = buildDefaultUserAgent();
 
 const normalizeUrlCandidate = (candidate?: string | null, baseUrl?: string | null) => {
@@ -1314,7 +1331,7 @@ const resolveMediaUrlForFeedItem = async (
     rawData: feedItem.raw_data || null
   });
   const preferredImageUrl = normalizedMedia.imageUrl || null;
-  if (preferredImageUrl && isHttpUrl(preferredImageUrl)) {
+  if (preferredImageUrl && isUsableFeedImageUrl(preferredImageUrl)) {
     try {
       await assertSafeOutboundUrl(preferredImageUrl);
       return {
@@ -2881,13 +2898,17 @@ const queueRecentMissingForSchedule = async (
     return 0;
   }
 
+  const freshRecentItems = (recentItems as Array<{ id?: string; created_at?: string | null; pub_date?: string | null }> || [])
+    .filter((item) => isFeedItemFreshEnoughForAutoQueue(item, lookback));
+  if (!freshRecentItems.length) return 0;
+
   const targetIds = targets.map((target) => target.id).filter(Boolean) as string[];
   if (!targetIds.length) return 0;
 
   const queuedStatus = schedule.approval_required === true ? 'awaiting_approval' : 'pending';
 
   const pendingRows: Array<Record<string, unknown>> = [];
-  for (const item of recentItems as Array<{ id?: string }>) {
+  for (const item of freshRecentItems) {
     const feedItemId = item?.id ? String(item.id) : null;
     if (!feedItemId) continue;
     for (const targetId of targetIds) {
@@ -3278,6 +3299,14 @@ const sendQueuedForSchedule = async (
       const sinceResult = await queueSinceLastRunForSchedule(supabase, schedule, targets);
       queuedCount += sinceResult.queued;
       queueCursorAt = sinceResult.cursorAt || queueCursorAt;
+
+      const missingQueued = await queueRecentMissingForSchedule(
+        supabase,
+        schedule,
+        targets,
+        Number(settings.reconcile_queue_lookback_hours || 12)
+      );
+      queuedCount += missingQueued;
     }
 
     // Persist the queue cursor even if we skip sending (e.g. WhatsApp disconnected or Shabbos).
@@ -4750,6 +4779,7 @@ module.exports = {
     hasEditableQueuePayload,
     chooseCorrectionStrategy,
     isFeedItemFreshEnoughForAutoQueue,
+    isUsableFeedImageUrl,
     isConnectionStateError,
     buildConnectionWaitErrorMessage
   }

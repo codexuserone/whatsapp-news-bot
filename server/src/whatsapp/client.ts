@@ -1089,6 +1089,12 @@ class WhatsAppClient {
       Boolean(value && /Input file contains unsupported image format/i.test(value));
     const isThrottleTrace = (value: string | null) =>
       Boolean(value && /rate-overlimit|too many requests/i.test(value));
+    const isBenignInitQueryTrace = (message: string | null, errorMessage: string | null) =>
+      Boolean(
+        message &&
+        /unexpected error in ['"]?init queries['"]?/i.test(message) &&
+        (!errorMessage || /bad-request/i.test(errorMessage))
+      );
     const handleArgs = (args: unknown[]) => {
       const message = this.extractLogMessage(args);
       const errorMessage = this.extractErrorMessage(args);
@@ -1101,6 +1107,10 @@ class WhatsAppClient {
     baileysLogger.error = (...args: unknown[]) => {
       const message = this.extractLogMessage(args);
       const errorMessage = this.extractErrorMessage(args);
+      if (isBenignInitQueryTrace(message, errorMessage)) {
+        baseLogger.debug({ reason: 'init_query_bad_request' }, 'Baileys init query rejected during reconnect');
+        return;
+      }
       if (isBenignMediaTrace(errorMessage) || isBenignMediaTrace(message)) {
         baseLogger.info(
           { reason: 'unsupported_image_format' },
@@ -1118,6 +1128,10 @@ class WhatsAppClient {
     baileysLogger.warn = (...args: unknown[]) => {
       const message = this.extractLogMessage(args);
       const errorMessage = this.extractErrorMessage(args);
+      if (isBenignInitQueryTrace(message, errorMessage)) {
+        baseLogger.debug({ reason: 'init_query_bad_request' }, 'Baileys init query rejected during reconnect');
+        return;
+      }
       if (isBenignMediaTrace(errorMessage) || isBenignMediaTrace(message)) {
         baseLogger.info(
           { reason: 'unsupported_image_format' },

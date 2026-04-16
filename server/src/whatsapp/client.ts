@@ -13,6 +13,9 @@ const { refreshStatusRecipients } = require('../services/statusAudienceService')
 const { runTargetAutoSyncPass } = require('../services/targetSyncService');
 const { persistReceiptUpdates } = require('../services/receiptService');
 
+const SEND_EPHEMERAL_EXPIRATION =
+  String(process.env.WHATSAPP_SEND_EPHEMERAL_EXPIRATION || '').trim().toLowerCase() === 'true';
+
 const resolveBrowserTuple = (Browsers: Record<string, unknown> | null | undefined, browserName: string) => {
   const requestedPlatform = String(
     process.env.WHATSAPP_BROWSER_PLATFORM ||
@@ -2069,9 +2072,34 @@ class WhatsAppClient {
       return options;
     }
 
+    const isGroup = normalizedJid.endsWith('@g.us');
+    const groupBaseOptions = () =>
+      Object.prototype.hasOwnProperty.call(options, 'useUserDevicesCache')
+        ? { ...options }
+        : {
+            ...options,
+            useUserDevicesCache: false
+          };
+
+    if (!SEND_EPHEMERAL_EXPIRATION) {
+      if (isGroup) {
+        logger.info(
+          {
+            jid: normalizedJid,
+            resolutionMs: 0,
+            cachedMetadata: this.groupMetadataCache.has(normalizedJid),
+            ephemeralExpiration: null,
+            ephemeralExpirationSkipped: true
+          },
+          'Resolved group send options'
+        );
+        return groupBaseOptions();
+      }
+      return options;
+    }
+
     let ephemeralExpiration: number | null = null;
     const resolutionStartedAt = Date.now();
-    const isGroup = normalizedJid.endsWith('@g.us');
 
     if (normalizedJid.endsWith('@g.us')) {
       const cached = this.groupMetadataCache.get(normalizedJid) as Record<string, unknown> | undefined;
@@ -2097,12 +2125,7 @@ class WhatsAppClient {
     }
 
     if (isGroup) {
-      const resolvedOptions = Object.prototype.hasOwnProperty.call(options, 'useUserDevicesCache')
-        ? { ...options }
-        : {
-            ...options,
-            useUserDevicesCache: false
-          };
+      const resolvedOptions = groupBaseOptions();
       if (!ephemeralExpiration) {
         return resolvedOptions;
       }

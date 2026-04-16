@@ -197,7 +197,7 @@ describe('queueService __testUtils', () => {
     ).toBe(true);
   });
 
-  it('prefers in-place edit for text rows and same-media caption updates inside the edit window', () => {
+  it('prefers in-place edit only for text rows inside the edit window', () => {
     expect(
       testUtils.chooseCorrectionStrategy({
         targetType: 'group',
@@ -228,7 +228,7 @@ describe('queueService __testUtils', () => {
         desiredMediaType: 'image',
         desiredMediaUrl: 'https://example.com/a.jpg'
       })
-    ).toBe('edit');
+    ).toBe('skip');
 
     expect(
       testUtils.chooseCorrectionStrategy({
@@ -244,10 +244,10 @@ describe('queueService __testUtils', () => {
         desiredMediaType: 'image',
         desiredMediaUrl: 'https://example.com/b.jpg'
       })
-    ).toBe('replace');
+    ).toBe('skip');
   });
 
-  it('allows channel edits when the same payload can be edited and skips status corrections', () => {
+  it('skips channel and status corrections by default', () => {
     expect(
       testUtils.chooseCorrectionStrategy({
         targetType: 'channel',
@@ -262,7 +262,7 @@ describe('queueService __testUtils', () => {
         desiredMediaType: null,
         desiredMediaUrl: null
       })
-    ).toBe('edit');
+    ).toBe('skip');
 
     expect(
       testUtils.chooseCorrectionStrategy({
@@ -279,5 +279,31 @@ describe('queueService __testUtils', () => {
         desiredMediaUrl: null
       })
     ).toBe('skip');
+  });
+
+  it('blocks stale feed items from auto-queue replay', () => {
+    const nowMs = Date.parse('2026-04-16T14:00:00.000Z');
+
+    expect(
+      testUtils.isFeedItemFreshEnoughForAutoQueue(
+        {
+          pub_date: '2026-04-16T13:30:00.000Z',
+          created_at: '2026-04-16T13:31:00.000Z'
+        },
+        72,
+        nowMs
+      )
+    ).toBe(true);
+
+    expect(
+      testUtils.isFeedItemFreshEnoughForAutoQueue(
+        {
+          pub_date: '2026-03-25T10:00:00.000Z',
+          created_at: '2026-04-16T13:31:00.000Z'
+        },
+        72,
+        nowMs
+      )
+    ).toBe(false);
   });
 });

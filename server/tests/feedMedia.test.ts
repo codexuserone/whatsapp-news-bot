@@ -47,7 +47,7 @@ describe('normalizeFeedMedia', () => {
             mediaKind: 'video',
             mediaMime: '',
             mediaFilename: '',
-            imageUrl: ''
+            imageUrl: 'https://example.com/image.jpg'
         });
     });
 
@@ -87,14 +87,15 @@ describe('normalizeFeedMedia', () => {
             normalizeFeedMedia({
                 mediaUrl: 'https://example.com/download',
                 mediaMime: 'audio/mpeg',
-                mediaFilename: 'episode.mp3'
+                mediaFilename: 'episode.mp3',
+                imageUrl: 'https://example.com/cover.jpg'
             })
         ).toEqual({
             mediaUrl: 'https://example.com/download',
             mediaKind: 'audio',
             mediaMime: 'audio/mpeg',
             mediaFilename: 'episode.mp3',
-            imageUrl: ''
+            imageUrl: 'https://example.com/cover.jpg'
         });
     });
 });

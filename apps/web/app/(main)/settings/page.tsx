@@ -20,6 +20,13 @@ import { Settings, Clock, MapPin, Loader2, Copy, AlertCircle, CheckCircle2 } fro
 const WHATSAPP_EDIT_MAX_MINUTES = 15;
 const CORRECTION_SCAN_MAX_MINUTES = 15;
 
+const optionalNumberInput = (schema: z.ZodNumber) =>
+  z.preprocess((value) => {
+    if (value === '' || value == null) return undefined;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }, schema.optional());
+
 const schema = z.object({
   app_name: z.string().min(1),
   app_paused: z.boolean().default(false),
@@ -32,7 +39,7 @@ const schema = z.object({
   post_send_edit_window_minutes: z.coerce.number().min(1).max(WHATSAPP_EDIT_MAX_MINUTES),
   post_send_correction_window_minutes: z.coerce.number().min(1).max(CORRECTION_SCAN_MAX_MINUTES),
   processingTimeoutMinutes: z.coerce.number().min(5),
-  dedupeThreshold: z.coerce.number().min(0).max(1).optional(),
+  dedupeThreshold: optionalNumberInput(z.number().min(0).max(1)),
   authRetentionDays: z.coerce.number().min(1).max(3650),
   initial_fetch_limit: z.coerce.number().min(1).max(50),
   max_pending_age_hours: z.coerce.number().min(1).max(336),

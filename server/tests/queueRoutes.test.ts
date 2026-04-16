@@ -77,7 +77,7 @@ describe('queue route retry safeguards', () => {
     );
   });
 
-  it('allows in-place edits for text rows and same-media caption rows', () => {
+  it('allows in-place edits only for text rows', () => {
     expect(testUtils.hasEditableQueuePayload({
       media_type: null,
       media_url: null
@@ -86,7 +86,7 @@ describe('queue route retry safeguards', () => {
     expect(testUtils.hasEditableQueuePayload({
       media_type: 'image',
       media_url: 'https://example.com/image.jpg'
-    })).toBe(true);
+    })).toBe(false);
 
     expect(testUtils.hasEditableQueuePayload({
       media_type: 'audio',

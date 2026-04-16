@@ -68,7 +68,7 @@ describe('fetchFeedItemsWithMeta', () => {
             url: 'https://example.com/post',
             mediaUrl: 'https://cdn.example.com/clip.mp4',
             mediaKind: 'video',
-            imageUrl: undefined,
+            imageUrl: 'https://cdn.example.com/poster.jpg',
             categories: ['News']
         });
         expect(result.items[0].raw).toMatchObject({
@@ -172,7 +172,7 @@ describe('fetchFeedItemsWithMeta', () => {
             url: 'https://example.com/rss-item',
             mediaUrl: 'https://cdn.example.com/rss-video.mp4',
             mediaKind: 'video',
-            imageUrl: undefined,
+            imageUrl: 'https://cdn.example.com/rss-thumb.jpg',
             categories: ['Alerts']
         });
         expect(result.items[1]).toMatchObject({

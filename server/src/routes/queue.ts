@@ -665,7 +665,7 @@ const queueRoutes = () => {
         }
 
         if (!hasEditableQueuePayload(current as { media_type?: unknown; media_url?: unknown })) {
-          return res.status(400).json({ error: 'In-place edit requires text-only messages or the same attached image, video, or document' });
+          return res.status(400).json({ error: 'In-place edit currently supports only text-only messages' });
         }
 
         const targetId = String((current as { target_id?: string | null }).target_id || '').trim();

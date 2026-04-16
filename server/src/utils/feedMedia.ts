@@ -96,6 +96,7 @@ const normalizeFeedMedia = (input: {
   rawData?: Record<string, unknown> | null;
 }) => {
   const rawData = input.rawData && typeof input.rawData === 'object' ? input.rawData : null;
+  const normalizedImageUrl = normalizeUrl(input.imageUrl || rawData?.image_url);
   const selectKind = (...candidates: Array<FeedMediaKind | null>) => {
     for (const candidate of candidates) {
       if (candidate) return candidate;
@@ -120,7 +121,7 @@ const normalizeFeedMedia = (input: {
         mediaKind: inferred,
         mediaMime: directMediaMime,
         mediaFilename: directMediaFilename,
-        imageUrl: inferred === 'image' ? directMediaUrl : ''
+        imageUrl: inferred === 'image' ? directMediaUrl : normalizedImageUrl
       };
     }
   }
@@ -142,20 +143,19 @@ const normalizeFeedMedia = (input: {
         mediaKind: inferred,
         mediaMime: rawMediaMime,
         mediaFilename: rawMediaFilename,
-        imageUrl: inferred === 'image' ? rawMediaUrl : ''
+        imageUrl: inferred === 'image' ? rawMediaUrl : normalizedImageUrl
       };
     }
   }
 
-  const imageUrl = normalizeUrl(input.imageUrl || rawData?.image_url);
-  if (imageUrl) {
-    const inferred = inferMediaKindFromUrl(imageUrl) || 'image';
+  if (normalizedImageUrl) {
+    const inferred = inferMediaKindFromUrl(normalizedImageUrl) || 'image';
     return {
-      mediaUrl: imageUrl,
+      mediaUrl: normalizedImageUrl,
       mediaKind: inferred,
       mediaMime: inferred === 'image' ? 'image/*' : '',
       mediaFilename: '',
-      imageUrl: inferred === 'image' ? imageUrl : ''
+      imageUrl: inferred === 'image' ? normalizedImageUrl : ''
     };
   }
 

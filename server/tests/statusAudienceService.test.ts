@@ -189,7 +189,7 @@ describe('statusAudienceService', () => {
     });
 
     it('preserves a healthy stored snapshot when a connected client only resolves a cold self-only audience', async () => {
-        const refreshedAt = '2026-03-15T12:00:00.000Z';
+        const refreshedAt = '2026-04-15T12:00:00.000Z';
         const storedRecipients = Array.from({ length: 40 }, (_value, index) => `${1000000000 + index}@s.whatsapp.net`);
         const { supabase, tables } = buildSupabaseMock({
             status_recipients: storedRecipients.map((recipient) => ({
@@ -239,7 +239,7 @@ describe('statusAudienceService', () => {
     });
 
     it('does not preserve an old snapshot when the current audience has real warm sources', async () => {
-        const refreshedAt = '2026-03-15T12:00:00.000Z';
+        const refreshedAt = '2026-04-15T12:00:00.000Z';
         const { supabase } = buildSupabaseMock({
             status_recipients: Array.from({ length: 30 }, (_value, index) => ({
                 session_id: 'primary',

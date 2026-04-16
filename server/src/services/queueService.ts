@@ -95,6 +95,7 @@ const DEFAULT_POST_SEND_EDIT_WINDOW_MINUTES = 15;
 const DEFAULT_POST_SEND_CORRECTION_WINDOW_MINUTES = 15;
 const MAX_POST_SEND_EDIT_WINDOW_MINUTES = 15;
 const MAX_POST_SEND_CORRECTION_WINDOW_MINUTES = 15;
+const DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS = Math.max(Number(process.env.MAX_AUTO_QUEUE_ITEM_AGE_HOURS || 72), 1);
 const DEFAULT_UNCERTAIN_RETRY_DELAY_MS = 120000;
 const UNCERTAIN_MATCH_LOOKBACK_MS = 30000;
 const UNCERTAIN_MATCH_GRACE_MS = 30000;
@@ -107,7 +108,11 @@ const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']
 const QUEUED_CORRECTION_STATUSES = new Set(['awaiting_approval', 'pending', 'failed', 'uncertain', 'skipped']);
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.wma'];
 const DOCUMENT_EXTENSIONS = ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv', '.txt', '.rtf', '.zip'];
-const EDITABLE_MEDIA_TYPES = new Set(['image', 'video', 'document']);
+const EDITABLE_MEDIA_TYPES = new Set(['image']);
+const ALLOW_AUTOMATION_NON_IMAGE_MEDIA = String(process.env.FEED_AUTOMATION_ALLOW_NON_IMAGE_MEDIA || '').trim().toLowerCase() === 'true';
+const ALLOW_POST_SEND_MEDIA_EDITS = String(process.env.WHATSAPP_ALLOW_POST_SEND_MEDIA_EDITS || '').trim().toLowerCase() === 'true';
+const ALLOW_AUTO_REPLACE_CORRECTIONS =
+  String(process.env.WHATSAPP_ALLOW_AUTO_REPLACE_CORRECTIONS || '').trim().toLowerCase() === 'true';
 
 const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
 
@@ -157,6 +162,7 @@ const hasEditableQueuePayload = (row: {
   const mediaType = normalizeComparableMediaType(row.media_type);
   const mediaUrl = normalizeComparableText(row.media_url);
   if (!mediaType && !mediaUrl) return true;
+  if (!ALLOW_POST_SEND_MEDIA_EDITS) return false;
   return canEditCaptionInPlace({
     currentMediaType: mediaType,
     desiredMediaType: mediaType,
@@ -207,7 +213,11 @@ const chooseCorrectionStrategy = (options: {
 
   const currentMediaType = normalizeComparableMediaType(options.currentMediaType);
   const desiredMediaType = normalizeComparableMediaType(options.desiredMediaType);
-  const isTextOnly = !currentMediaType && !desiredMediaType;
+  const isTextOnly =
+    !currentMediaType &&
+    !desiredMediaType &&
+    !normalizeComparableText(options.currentMediaUrl) &&
+    !normalizeComparableText(options.desiredMediaUrl);
   const isSameEditableMedia = canEditCaptionInPlace({
     currentMediaType,
     desiredMediaType,
@@ -217,13 +227,14 @@ const chooseCorrectionStrategy = (options: {
 
   if (
     options.supportsEdit &&
-    (isTextOnly || isSameEditableMedia) &&
+    targetType !== 'channel' &&
+    (isTextOnly || (ALLOW_POST_SEND_MEDIA_EDITS && isSameEditableMedia)) &&
     sentAgeMs <= options.editWindowMs
   ) {
     return 'edit' as const;
   }
 
-  if (options.supportsDelete) {
+  if (ALLOW_AUTO_REPLACE_CORRECTIONS && options.supportsDelete && targetType !== 'status') {
     return 'replace' as const;
   }
 
@@ -1302,6 +1313,24 @@ const resolveMediaUrlForFeedItem = async (
     imageUrl: typeof feedItem.image_url === 'string' ? feedItem.image_url : null,
     rawData: feedItem.raw_data || null
   });
+  const preferredImageUrl = normalizedMedia.imageUrl || null;
+  if (preferredImageUrl && isHttpUrl(preferredImageUrl)) {
+    try {
+      await assertSafeOutboundUrl(preferredImageUrl);
+      return {
+        url: preferredImageUrl,
+        kind: 'image',
+        mime: 'image/*',
+        filename: null,
+        source: feedItem.image_source || 'feed',
+        scraped: false,
+        error: null
+      };
+    } catch (error) {
+      existingUrlIssue = getErrorMessage(error);
+    }
+  }
+
   const existing = normalizedMedia.mediaUrl || null;
   if (existing && isHttpUrl(existing)) {
     const normalizedKind =
@@ -1316,19 +1345,23 @@ const resolveMediaUrlForFeedItem = async (
               ? 'image'
               : null);
     if (normalizedKind === 'image' || normalizedKind === 'video' || normalizedKind === 'audio' || normalizedKind === 'document') {
-      try {
-        await assertSafeOutboundUrl(existing);
-        return {
-          url: existing,
-          kind: normalizedKind,
-          mime: normalizedMedia.mediaMime || null,
-          filename: normalizedMedia.mediaFilename || null,
-          source: feedItem.image_source || 'feed',
-          scraped: false,
-          error: null
-        };
-      } catch (error) {
-        existingUrlIssue = getErrorMessage(error);
+      if (normalizedKind !== 'image' && !ALLOW_AUTOMATION_NON_IMAGE_MEDIA) {
+        existingUrlIssue = `Feed media ${normalizedKind} suppressed by image-first automation policy`;
+      } else {
+        try {
+          await assertSafeOutboundUrl(existing);
+          return {
+            url: existing,
+            kind: normalizedKind,
+            mime: normalizedMedia.mediaMime || null,
+            filename: normalizedMedia.mediaFilename || null,
+            source: feedItem.image_source || 'feed',
+            scraped: false,
+            error: null
+          };
+        } catch (error) {
+          existingUrlIssue = getErrorMessage(error);
+        }
       }
     } else {
       existingUrlIssue = 'Feed media URL is not a supported WhatsApp media type';
@@ -1932,7 +1965,11 @@ const buildEditableMessageContent = async (options: {
     currentMediaUrl: normalizedMediaUrl,
     desiredMediaUrl: normalizedMediaUrl
   })) {
-    throw new Error('Only image, video, and document messages can keep the same media during edits');
+    throw new Error('Only text-only messages support safe in-place edits in this deployment');
+  }
+
+  if (!ALLOW_POST_SEND_MEDIA_EDITS) {
+    throw new Error('Post-send media edits are disabled to avoid duplicate WhatsApp messages');
   }
 
   const safeUrl = (await assertSafeOutboundUrl(normalizedMediaUrl)).toString();
@@ -2664,6 +2701,19 @@ const planFeedDispatchPage = <T extends { pub_date?: string | null; created_at?:
   };
 };
 
+const isFeedItemFreshEnoughForAutoQueue = (
+  item: { pub_date?: string | null; created_at?: string | null },
+  maxAgeHours = DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS,
+  nowMs = Date.now()
+) => {
+  const maxAgeMs = Math.max(Number(maxAgeHours) || DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS, 1) * 60 * 60 * 1000;
+  const preferredTimestamp = String(item.pub_date || '').trim() || String(item.created_at || '').trim();
+  if (!preferredTimestamp) return true;
+  const timestampMs = Date.parse(preferredTimestamp);
+  if (!Number.isFinite(timestampMs)) return true;
+  return nowMs - timestampMs <= maxAgeMs;
+};
+
 const queueSinceLastRunForSchedule = async (
   supabase: SupabaseClient,
   schedule: Schedule,
@@ -2758,9 +2808,14 @@ const queueSinceLastRunForSchedule = async (
     }
 
     const pagePlan = planFeedDispatchPage((page || []) as Array<{ id?: string; created_at?: string; pub_date?: string }>);
-    const items = pagePlan.dispatchItems;
+    const items = pagePlan.dispatchItems.filter((item) => isFeedItemFreshEnoughForAutoQueue(item));
     if (!items.length) {
-      break;
+      cursorAt = pagePlan.cursorAt || cursorAt;
+      cursorId = pagePlan.cursorId || cursorId;
+      if (!pagePlan.dispatchItems.length) {
+        break;
+      }
+      continue;
     }
 
     totalFeedItems += items.length;
@@ -2925,6 +2980,18 @@ const queueLatestForSchedule = async (
 
   if (!latestFeedItem?.id) {
     return { queued: 0, inserted: 0, revived: 0, skipped: 0, reason: 'No feed items found' };
+  }
+
+  if (!isFeedItemFreshEnoughForAutoQueue(latestFeedItem)) {
+    return {
+      queued: 0,
+      inserted: 0,
+      revived: 0,
+      skipped: targets.length,
+      reason: 'Latest feed item is outside the auto-queue age limit',
+      feedItemId: latestFeedItem.id,
+      feedItemTitle: latestFeedItem.title || null
+    };
   }
 
   const targetIds = targets.map((target) => target.id).filter(Boolean) as string[];
@@ -4682,6 +4749,7 @@ module.exports = {
     canEditCaptionInPlace,
     hasEditableQueuePayload,
     chooseCorrectionStrategy,
+    isFeedItemFreshEnoughForAutoQueue,
     isConnectionStateError,
     buildConnectionWaitErrorMessage
   }

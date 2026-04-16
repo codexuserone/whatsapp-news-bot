@@ -241,6 +241,14 @@ const chooseCorrectionStrategy = (options: {
   return 'skip' as const;
 };
 
+const shouldAttemptReplacementAfterCorrectionFailure = (
+  correctionStrategy: 'skip' | 'edit' | 'replace',
+  supportsDelete: boolean
+) => {
+  if (correctionStrategy === 'replace') return supportsDelete;
+  return ALLOW_AUTO_REPLACE_CORRECTIONS && correctionStrategy === 'edit' && supportsDelete;
+};
+
 type ChatMessageRow = {
   id?: string;
   whatsapp_id?: string | null;
@@ -2473,11 +2481,15 @@ const reconcileUpdatedFeedItems = async (
         result.edited += 1;
         continue;
       } catch (error) {
-        logger.warn(
-          { error, logId: log.id, targetId, feedItemId },
-          'Failed to edit sent message during feed reconciliation; falling back to replacement when available'
+        const canAttemptReplacement = shouldAttemptReplacementAfterCorrectionFailure(
+          correctionStrategy,
+          Boolean(whatsappClient.deleteMessage)
         );
-        if (!whatsappClient.deleteMessage) {
+        logger.warn(
+          { error, logId: log.id, targetId, feedItemId, canAttemptReplacement },
+          'Failed to edit sent message during feed reconciliation'
+        );
+        if (!canAttemptReplacement) {
           result.failed += 1;
           await supabase
             .from('message_logs')
@@ -2490,7 +2502,7 @@ const reconcileUpdatedFeedItems = async (
       }
     }
 
-    if (correctionStrategy === 'replace' || (correctionStrategy === 'edit' && Boolean(whatsappClient.deleteMessage))) {
+    if (shouldAttemptReplacementAfterCorrectionFailure(correctionStrategy, Boolean(whatsappClient.deleteMessage))) {
       try {
         const replacementResult = await withGlobalSendLock(async () => {
           await waitForDelays(target as Target, settings);
@@ -4778,6 +4790,7 @@ module.exports = {
     canEditCaptionInPlace,
     hasEditableQueuePayload,
     chooseCorrectionStrategy,
+    shouldAttemptReplacementAfterCorrectionFailure,
     isFeedItemFreshEnoughForAutoQueue,
     isUsableFeedImageUrl,
     isConnectionStateError,

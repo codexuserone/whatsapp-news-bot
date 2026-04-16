@@ -4,16 +4,25 @@ const { createClient } = require('@supabase/supabase-js');
 const { getErrorMessage } = require('../utils/errorUtils');
 
 let supabaseClient: SupabaseClient | null = null;
+const isProd = process.env.NODE_ENV === 'production';
 
-const resolveSupabaseUrl = () =>
-  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const resolveSupabaseUrl = () => process.env.SUPABASE_URL || '';
 
-const resolveSupabaseKey = () =>
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_SERVICE_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_ANON_KEY ||
-  '';
+const resolveSupabaseKey = () => {
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    '';
+  if (serviceRoleKey) {
+    return serviceRoleKey;
+  }
+
+  if (!isProd) {
+    return process.env.SUPABASE_ANON_KEY || '';
+  }
+
+  return '';
+};
 
 function getSupabaseClient(): SupabaseClient | null {
   if (supabaseClient) return supabaseClient;
@@ -29,7 +38,8 @@ function getSupabaseClient(): SupabaseClient | null {
   supabaseClient = createClient(supabaseUrl, supabaseKey, {
     auth: {
       autoRefreshToken: false,
-      persistSession: false
+      persistSession: false,
+      detectSessionInUrl: false
     }
   });
 

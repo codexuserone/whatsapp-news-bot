@@ -281,6 +281,17 @@ describe('queueService __testUtils', () => {
     ).toBe('skip');
   });
 
+  it('does not replace a message after failed edit unless auto replacement is enabled', () => {
+    expect(testUtils.shouldAttemptReplacementAfterCorrectionFailure('edit', true)).toBe(false);
+    expect(testUtils.shouldAttemptReplacementAfterCorrectionFailure('edit', false)).toBe(false);
+    expect(testUtils.shouldAttemptReplacementAfterCorrectionFailure('skip', true)).toBe(false);
+  });
+
+  it('still allows direct replacement strategy when delete is supported', () => {
+    expect(testUtils.shouldAttemptReplacementAfterCorrectionFailure('replace', true)).toBe(true);
+    expect(testUtils.shouldAttemptReplacementAfterCorrectionFailure('replace', false)).toBe(false);
+  });
+
   it('blocks stale feed items from auto-queue replay', () => {
     const nowMs = Date.parse('2026-04-16T14:00:00.000Z');
 

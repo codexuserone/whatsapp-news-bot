@@ -2,6 +2,7 @@ const { getSupabaseClient } = require('../db/supabase');
 const logger = require('../utils/logger');
 const { getErrorMessage } = require('../utils/errorUtils');
 const { normalizeChannelJid, normalizePhoneForType } = require('../utils/targetJid');
+const { WHATSAPP_STATUS_ENABLED } = require('../config/features');
 
 type SyncCandidate = {
   name: string;
@@ -159,7 +160,7 @@ const syncTargetsFromWhatsApp = async (
       ? await whatsapp.getChannelsWithDiagnostics(seededChannelJids)
       : null;
   const channelsRaw = channelsWithDiagnostics?.channels || (await (whatsapp.getChannels?.(seededChannelJids) || []));
-  const includeStatus = options?.includeStatus !== false;
+  const includeStatus = WHATSAPP_STATUS_ENABLED && options?.includeStatus !== false;
   const strict = options?.strict !== false;
 
   const candidates: SyncCandidate[] = [];
@@ -327,8 +328,8 @@ const syncTargetsFromWhatsApp = async (
         shouldDeactivate = canStrictDeactivateChannels
           ? !discoveredChannels.has(normalizedChannelJid)
           : failedSeededChannels.has(normalizedChannelJid);
-      } else if (row.type === 'status' && includeStatus) {
-        shouldDeactivate = !discoveredStatus.has(jid);
+      } else if (row.type === 'status') {
+        shouldDeactivate = includeStatus ? !discoveredStatus.has(jid) : true;
       }
 
       if (!shouldDeactivate) continue;
@@ -372,7 +373,7 @@ const runTargetAutoSyncPass = async (
   syncInFlight = true;
   try {
     const result = await syncTargetsFromWhatsApp(whatsapp, {
-      includeStatus: true,
+      includeStatus: WHATSAPP_STATUS_ENABLED,
       skipIfDisconnected: true,
       strict: true
     });

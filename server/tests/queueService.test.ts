@@ -292,6 +292,11 @@ describe('queueService __testUtils', () => {
     expect(testUtils.shouldAttemptReplacementAfterCorrectionFailure('replace', false)).toBe(false);
   });
 
+  it('only allows replacement corrections for non-channel targets', () => {
+    expect(testUtils.canAttemptReplacementCorrection('channel', true)).toBe(false);
+    expect(testUtils.canAttemptReplacementCorrection('status', true)).toBe(false);
+  });
+
   it('blocks stale feed items from auto-queue replay', () => {
     const nowMs = Date.parse('2026-04-16T14:00:00.000Z');
 
@@ -318,9 +323,33 @@ describe('queueService __testUtils', () => {
     ).toBe(false);
   });
 
+  it('blocks stale queued rows whose source post is older than the automation replay window', () => {
+    const nowMs = Date.parse('2026-04-16T14:00:00.000Z');
+
+    expect(
+      testUtils.isAutoQueueReplayTooOld(
+        { created_at: '2026-04-16T13:30:00.000Z' },
+        { pub_date: '2026-04-01T10:00:00.000Z', created_at: '2026-04-01T10:00:01.000Z' },
+        72,
+        nowMs
+      )
+    ).toBe(true);
+
+    expect(
+      testUtils.isAutoQueueReplayTooOld(
+        { created_at: '2026-04-02T10:30:00.000Z' },
+        { pub_date: '2026-04-01T10:00:00.000Z', created_at: '2026-04-01T10:00:01.000Z' },
+        72,
+        nowMs
+      )
+    ).toBe(false);
+  });
+
   it('accepts only real image candidates for feed automation images', () => {
     expect(testUtils.isUsableFeedImageUrl('https://example.com/photo.jpg')).toBe(true);
     expect(testUtils.isUsableFeedImageUrl('https://example.com/video.mp4')).toBe(false);
     expect(testUtils.isUsableFeedImageUrl('https://example.com/images/default-image.jpg')).toBe(false);
+    expect(testUtils.isUsableFeedImageUrl('https://files.anash.org/uploads/2025/09/Anash-Logo.svg')).toBe(false);
+    expect(testUtils.isUsableFeedImageUrl('https://example.com/icons/site-icon.png')).toBe(false);
   });
 });

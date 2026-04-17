@@ -1,6 +1,7 @@
 type FeedMediaKind = 'image' | 'video' | 'audio' | 'document';
 
-const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp', '.svg'];
+const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp'];
+const UNSUPPORTED_WHATSAPP_IMAGE_EXTENSIONS = ['.svg'];
 const VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v'];
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.wma'];
 const DOCUMENT_EXTENSIONS = [
@@ -90,6 +91,7 @@ const readMediaKind = (value: unknown): FeedMediaKind | null => {
 const normalizeImageUrlCandidate = (value: unknown) => {
   const normalized = normalizeUrl(value);
   if (!normalized) return '';
+  if (UNSUPPORTED_WHATSAPP_IMAGE_EXTENSIONS.some((extension) => hasExtension(normalized, extension))) return '';
   const inferred = inferMediaKindFromUrl(normalized);
   if (inferred && inferred !== 'image') return '';
   return normalized;

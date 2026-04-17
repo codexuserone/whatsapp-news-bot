@@ -15,6 +15,7 @@ describe('inferMediaKindFromUrl', () => {
 
     it('returns null for non-media URLs', () => {
         expect(inferMediaKindFromUrl('https://example.com/post')).toBeNull();
+        expect(inferMediaKindFromUrl('https://example.com/logo.svg')).toBeNull();
         expect(inferMediaKindFromUrl('')).toBeNull();
     });
 
@@ -109,6 +110,20 @@ describe('normalizeFeedMedia', () => {
         ).toEqual({
             mediaUrl: 'https://example.com/post-video.mp4',
             mediaKind: 'video',
+            mediaMime: '',
+            mediaFilename: '',
+            imageUrl: ''
+        });
+    });
+
+    it('does not preserve svg files as image candidates', () => {
+        expect(
+            normalizeFeedMedia({
+                imageUrl: 'https://example.com/anash-logo.svg'
+            })
+        ).toEqual({
+            mediaUrl: '',
+            mediaKind: null,
             mediaMime: '',
             mediaFilename: '',
             imageUrl: ''

@@ -131,9 +131,21 @@ type CachedNewsletterChat = {
 };
 
 const HARD_REFRESH_RECENT_CONNECTION_GRACE_MS = 2 * 60 * 1000;
+const CONTACTS_CACHE_MAX_SIZE = Math.max(Number(process.env.WHATSAPP_CONTACTS_CACHE_MAX_SIZE || 2500), 100);
 
 const INITIAL_QR_TTL_MS = 60_000;
 const ROTATED_QR_TTL_MS = 20_000;
+
+const trimMapToMaxSize = <K, V>(map: Map<K, V>, maxSize: number) => {
+  let removed = 0;
+  while (map.size > maxSize) {
+    const oldestKey = map.keys().next().value;
+    if (oldestKey === undefined) break;
+    map.delete(oldestKey);
+    removed++;
+  }
+  return removed;
+};
 
 const redactSensitiveText = (value?: string | null) => {
   const text = String(value || '');
@@ -1761,7 +1773,11 @@ class WhatsAppClient {
             this.contactsCache.set(jid, contactName ? { name: contactName } : {});
           }
         }
-        logger.debug({ count: contacts.length, cacheSize: this.contactsCache.size }, 'Contacts upserted into cache');
+        const trimmed = trimMapToMaxSize(this.contactsCache, CONTACTS_CACHE_MAX_SIZE);
+        logger.debug(
+          { count: contacts.length, cacheSize: this.contactsCache.size, trimmed },
+          'Contacts upserted into cache'
+        );
       });
 
       socket.ev.on('contacts.update', (updates) => {
@@ -1774,7 +1790,11 @@ class WhatsAppClient {
             this.contactsCache.set(jid, updatedName ? { ...existing, name: updatedName } : existing);
           }
         }
-        logger.debug({ count: updates.length, cacheSize: this.contactsCache.size }, 'Contacts updated in cache');
+        const trimmed = trimMapToMaxSize(this.contactsCache, CONTACTS_CACHE_MAX_SIZE);
+        logger.debug(
+          { count: updates.length, cacheSize: this.contactsCache.size, trimmed },
+          'Contacts updated in cache'
+        );
       });
 
       socket.ev.on('messages.upsert', async ({ type, messages }) => {

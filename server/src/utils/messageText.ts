@@ -12,7 +12,10 @@ const normalizeMessageText = (value: unknown): string => {
   const normalized = String(value ?? '')
     .replace(/\r\n?/g, '\n')
     .replace(/\u00a0/g, ' ')
-    .replace(/[\u200b\u200c\u200d\ufeff]/g, '');
+    .replace(/\u001a/g, '->')
+    .replace(/[→➡➔➜➝➞➠]/g, '->')
+    .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u0019\u001b-\u001f\u007f]/g, '');
 
   return normalized.trim();
 };

@@ -227,8 +227,10 @@ const persistStatusRecipientsSnapshot = async (
 
 const getStoredRecipients = async (
   supabase: SupabaseClient,
-  sampleSize = 25
+  sampleSize = 25,
+  options?: { includeRecipients?: boolean }
 ): Promise<RefreshResult> => {
+  const includeRecipients = options?.includeRecipients !== false;
   const countQuery = await supabase
     .from('status_recipients')
     .select('id', { count: 'exact', head: true })
@@ -242,11 +244,13 @@ const getStoredRecipients = async (
     .order('recipient_jid', { ascending: true })
     .limit(Math.max(1, Math.min(Math.floor(sampleSize || 25), 200)));
 
-  const { data: allRows } = await supabase
-    .from('status_recipients')
-    .select('recipient_jid')
-    .eq('session_id', SESSION_ID)
-    .order('recipient_jid', { ascending: true });
+  const { data: allRows } = includeRecipients
+    ? await supabase
+      .from('status_recipients')
+      .select('recipient_jid')
+      .eq('session_id', SESSION_ID)
+      .order('recipient_jid', { ascending: true })
+    : { data: [] };
 
   const firstRow = Array.isArray(sampleRows) && sampleRows.length ? sampleRows[0] as {
     refreshed_at?: string | null;
@@ -291,7 +295,7 @@ const refreshStatusRecipients = async (
     };
   }
 
-  const stored = await getStoredRecipients(supabase, options?.sampleSize);
+  const stored = await getStoredRecipients(supabase, options?.sampleSize, { includeRecipients: true });
 
   const connectionStatus = String(whatsappClient?.getStatus?.()?.status || '').trim().toLowerCase();
   if (!whatsappClient || connectionStatus !== 'connected') {
@@ -383,7 +387,7 @@ const ensureFreshStatusRecipients = async (
     return refreshStatusRecipients(whatsappClient, options);
   }
 
-  const stored = await getStoredRecipients(supabase, options?.sampleSize);
+  const stored = await getStoredRecipients(supabase, options?.sampleSize, { includeRecipients: true });
   const maxAgeMinutes = Math.max(1, Math.min(Math.floor(Number(options?.maxAgeMinutes || 10)), 120));
   const refreshedAtMs = stored.refreshedAt ? Date.parse(stored.refreshedAt) : Number.NaN;
   const isFresh = Number.isFinite(refreshedAtMs) && Date.now() - refreshedAtMs <= maxAgeMinutes * 60 * 1000;
@@ -407,7 +411,7 @@ const getStatusRecipientSnapshot = async (options?: { sampleSize?: number }): Pr
     };
   }
 
-  const stored = await getStoredRecipients(supabase, options?.sampleSize);
+  const stored = await getStoredRecipients(supabase, options?.sampleSize, { includeRecipients: false });
   return {
     participantCount: stored.participantCount,
     sample: stored.sample,

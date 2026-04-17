@@ -189,6 +189,18 @@ const hasCorrectionChanges = (
   );
 };
 
+const canAttemptReplacementCorrection = (
+  targetType: string | null | undefined,
+  supportsDelete: boolean
+) => {
+  const normalizedTargetType = String(targetType || '').trim().toLowerCase();
+  return (
+    ALLOW_AUTO_REPLACE_CORRECTIONS &&
+    supportsDelete &&
+    (normalizedTargetType === 'group' || normalizedTargetType === 'individual')
+  );
+};
+
 const chooseCorrectionStrategy = (options: {
   targetType: string | null | undefined;
   sentAgeMs: number | null;
@@ -234,7 +246,7 @@ const chooseCorrectionStrategy = (options: {
     return 'edit' as const;
   }
 
-  if (ALLOW_AUTO_REPLACE_CORRECTIONS && options.supportsDelete && targetType !== 'status') {
+  if (canAttemptReplacementCorrection(targetType, options.supportsDelete)) {
     return 'replace' as const;
   }
 
@@ -874,7 +886,7 @@ const isImageUrl = (url: string): boolean => {
   const lower = String(url || '').toLowerCase();
   const hasExt = (ext: string) => new RegExp(`${ext.replace('.', '\\.')}([?#]|$)`).test(lower);
 
-  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp', '.svg'];
+  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp'];
   const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v'];
   const audioExtensions = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.wma'];
 
@@ -909,7 +921,7 @@ const isLikelyDefaultFeedImageUrl = (url: string) => {
   try {
     const parsed = new URL(url);
     const pathname = parsed.pathname.toLowerCase();
-    return /(^|[-_/])(default|placeholder|no-image|noimage|missing-image|generic)([-_.\/]|$)/i.test(pathname);
+    return /(^|[-_/])(default|placeholder|no-image|noimage|missing-image|generic|fallback)([-_.\/]|$)/i.test(pathname);
   } catch {
     return false;
   }
@@ -917,10 +929,12 @@ const isLikelyDefaultFeedImageUrl = (url: string) => {
 
 const isUsableFeedImageUrl = (url: string) =>
   isHttpUrl(url) &&
+  isImageUrl(url) &&
   !isVideoUrl(url) &&
   !isAudioUrl(url) &&
   !isDocumentUrl(url) &&
-  !isLikelyDefaultFeedImageUrl(url);
+  !isLikelyDefaultFeedImageUrl(url) &&
+  !isLikelyDecorativeImageUrl(url);
 
 const DEFAULT_USER_AGENT = buildDefaultUserAgent();
 
@@ -1420,8 +1434,6 @@ const resolveMediaUrlForFeedItem = async (
         await assertSafeOutboundUrl(scraped);
       } catch (error) {
         const message = getErrorMessage(error);
-        feedItem.image_scraped_at = nowIso;
-        feedItem.image_scrape_error = message;
         await maybeUpdateFeedItemImage(supabase, feedItem.id, {
           image_scraped_at: nowIso,
           image_scrape_error: message
@@ -1429,10 +1441,6 @@ const resolveMediaUrlForFeedItem = async (
         return { url: null, kind: null, mime: null, filename: null, source: null, scraped: true, error: message };
       }
 
-      feedItem.image_url = scraped;
-      feedItem.image_source = 'page';
-      feedItem.image_scraped_at = nowIso;
-      feedItem.image_scrape_error = null;
       await maybeUpdateFeedItemImage(supabase, feedItem.id, {
         image_url: scraped,
         image_source: 'page',
@@ -1442,8 +1450,6 @@ const resolveMediaUrlForFeedItem = async (
       return { url: scraped, kind: 'image', mime: 'image/*', filename: null, source: 'page', scraped: true, error: null };
     }
 
-    feedItem.image_scraped_at = nowIso;
-    feedItem.image_scrape_error = 'No image found on page';
     await maybeUpdateFeedItemImage(supabase, feedItem.id, {
       image_scraped_at: nowIso,
       image_scrape_error: 'No image found on page'
@@ -1452,8 +1458,6 @@ const resolveMediaUrlForFeedItem = async (
   } catch (error) {
     const message = getErrorMessage(error);
     const nowIso = new Date().toISOString();
-    feedItem.image_scraped_at = nowIso;
-    feedItem.image_scrape_error = message;
     await maybeUpdateFeedItemImage(supabase, feedItem.id, {
       image_scraped_at: nowIso,
       image_scrape_error: message
@@ -2743,6 +2747,31 @@ const isFeedItemFreshEnoughForAutoQueue = (
   return nowMs - timestampMs <= maxAgeMs;
 };
 
+const resolveFeedItemTimestampMs = (
+  item: { pub_date?: string | null; created_at?: string | null } | null | undefined
+) => {
+  const preferredTimestamp = String(item?.pub_date || '').trim() || String(item?.created_at || '').trim();
+  if (!preferredTimestamp) return Number.NaN;
+  const timestampMs = Date.parse(preferredTimestamp);
+  return Number.isFinite(timestampMs) ? timestampMs : Number.NaN;
+};
+
+const isAutoQueueReplayTooOld = (
+  log: { created_at?: string | null },
+  item: { pub_date?: string | null; created_at?: string | null } | null | undefined,
+  maxAgeHours = DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS,
+  nowMs = Date.now()
+) => {
+  const itemTimestampMs = resolveFeedItemTimestampMs(item);
+  if (!Number.isFinite(itemTimestampMs)) return false;
+  const maxAgeMs = Math.max(Number(maxAgeHours) || DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS, 1) * 60 * 60 * 1000;
+  if (nowMs - itemTimestampMs <= maxAgeMs) return false;
+
+  const queuedAtMs = log?.created_at ? Date.parse(String(log.created_at)) : Number.NaN;
+  if (!Number.isFinite(queuedAtMs)) return true;
+  return queuedAtMs - itemTimestampMs > maxAgeMs;
+};
+
 const queueSinceLastRunForSchedule = async (
   supabase: SupabaseClient,
   schedule: Schedule,
@@ -2772,7 +2801,7 @@ const queueSinceLastRunForSchedule = async (
   // Pre-fetch existing combinations to avoid duplicates in batch
   const existingCombos = new Set<string>();
   const refreshExistingCombos = async () => {
-    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(); // Last 7 days
+    const since = new Date(Date.now() - DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS * 60 * 60 * 1000).toISOString();
     const { data: existing } = await supabase
       .from('message_logs')
       .select('schedule_id,feed_item_id,target_id')
@@ -3531,7 +3560,7 @@ const sendQueuedForSchedule = async (
           .in('id', staleLogIds);
       }
 
-      const runnableLogs = (logs || []).filter(
+      let runnableLogs = (logs || []).filter(
         (entry: { id?: string }) => Boolean(entry?.id) && !staleLogIds.includes(String(entry.id))
       );
 
@@ -3564,6 +3593,37 @@ const sendQueuedForSchedule = async (
             });
           }
         }
+      }
+
+      const staleReplayLogIds = (runnableLogs || [])
+        .filter((entry: { id?: string; created_at?: string | null; feed_item_id?: string | null }) => {
+          const feedItemId = String(entry.feed_item_id || '').trim();
+          return Boolean(entry?.id) && isAutoQueueReplayTooOld(entry, feedItemTimingById.get(feedItemId));
+        })
+        .map((entry: { id?: string }) => entry.id)
+        .filter(Boolean) as string[];
+
+      if (staleReplayLogIds.length) {
+        await supabase
+          .from('message_logs')
+          .update({
+            status: 'skipped',
+            processing_started_at: null,
+            error_message: `Skipped stale source feed item (> ${DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS}h old)`,
+            media_url: null,
+            media_type: null,
+            media_sent: false,
+            media_error: null
+          })
+          .in('id', staleReplayLogIds);
+
+        runnableLogs = runnableLogs.filter(
+          (entry: { id?: string }) => Boolean(entry?.id) && !staleReplayLogIds.includes(String(entry.id))
+        );
+      }
+
+      if (!runnableLogs.length) {
+        continue;
       }
 
       const toTs = (value?: string | null) => {
@@ -4790,8 +4850,10 @@ module.exports = {
     canEditCaptionInPlace,
     hasEditableQueuePayload,
     chooseCorrectionStrategy,
+    canAttemptReplacementCorrection,
     shouldAttemptReplacementAfterCorrectionFailure,
     isFeedItemFreshEnoughForAutoQueue,
+    isAutoQueueReplayTooOld,
     isUsableFeedImageUrl,
     isConnectionStateError,
     buildConnectionWaitErrorMessage

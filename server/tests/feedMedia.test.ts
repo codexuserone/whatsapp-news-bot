@@ -129,4 +129,30 @@ describe('normalizeFeedMedia', () => {
             imageUrl: ''
         });
     });
+
+    it('does not preserve default or decorative site images as feed media', () => {
+        expect(
+            normalizeFeedMedia({
+                imageUrl: 'https://files.anash.org/uploads/2025/09/Anash-Logo.jpg'
+            })
+        ).toEqual({
+            mediaUrl: '',
+            mediaKind: null,
+            mediaMime: '',
+            mediaFilename: '',
+            imageUrl: ''
+        });
+
+        expect(
+            normalizeFeedMedia({
+                imageUrl: 'https://example.com/images/default-image.jpg'
+            })
+        ).toEqual({
+            mediaUrl: '',
+            mediaKind: null,
+            mediaMime: '',
+            mediaFilename: '',
+            imageUrl: ''
+        });
+    });
 });

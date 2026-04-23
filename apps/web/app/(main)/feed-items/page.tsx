@@ -111,7 +111,7 @@ const FeedItemsPage = () => {
     if (queued > 0 && sent > 0 && failed > 0) {
       return {
         label: joinStatusSummary([
-          formatTargetSummary(sent, 'recorded by app'),
+          formatTargetSummary(sent, 'accepted by WhatsApp'),
           formatTargetSummary(queued, 'still queued'),
           formatTargetSummary(failed, 'need review'),
           ...correctionParts
@@ -122,7 +122,7 @@ const FeedItemsPage = () => {
     if (queued > 0 && sent > 0) {
       return {
         label: joinStatusSummary([
-          formatTargetSummary(sent, 'recorded by app'),
+          formatTargetSummary(sent, 'accepted by WhatsApp'),
           formatTargetSummary(queued, 'still queued'),
           ...correctionParts
         ]),
@@ -148,7 +148,7 @@ const FeedItemsPage = () => {
     if (sent > 0 && failed > 0) {
       return {
         label: joinStatusSummary([
-          formatTargetSummary(sent, 'recorded by app'),
+          formatTargetSummary(sent, 'accepted by WhatsApp'),
           formatTargetSummary(failed, 'need review'),
           ...correctionParts
         ]),
@@ -163,7 +163,7 @@ const FeedItemsPage = () => {
     }
     if (sent > 0) {
       return {
-        label: joinStatusSummary([formatTargetSummary(sent, 'recorded by app'), ...correctionParts]),
+        label: joinStatusSummary([formatTargetSummary(sent, 'accepted by WhatsApp'), ...correctionParts]),
         variant: 'success' as const
       };
     }

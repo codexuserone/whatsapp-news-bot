@@ -4,12 +4,12 @@ import React from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Target, WhatsAppChannel, WhatsAppGroup, WhatsAppQrState, WhatsAppStatus } from '@/lib/types';
-import { dedupeTargets, formatTargetLabel, normalizeDisplayText, normalizeTargetName } from '@/lib/targetUtils';
+import type { Target, WhatsAppQrState, WhatsAppStatus, WhatsAppStatusAudience } from '@/lib/types';
+import { dedupeTargets, formatTargetLabel } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RefreshCw, Power, CheckCircle, QrCode, Users, Loader2, Send, MessageSquare } from 'lucide-react';
+import { RefreshCw, Power, CheckCircle, QrCode, Loader2, Send, MessageSquare, RadioTower } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -66,8 +66,6 @@ const isSafeImageSrc = (value: unknown) => {
   return src.startsWith('http://') || src.startsWith('https://');
 };
 
-const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : '');
-
 const formatQrCountdown = (remainingMs: number | null | undefined) => {
   if (!Number.isFinite(remainingMs) || Number(remainingMs) <= 0) {
     return 'Refreshing QR...';
@@ -93,6 +91,7 @@ const WhatsAppPage = () => {
   const [attachmentName, setAttachmentName] = React.useState('');
   const [showAdvancedRecovery, setShowAdvancedRecovery] = React.useState(false);
   const [qrTickMs, setQrTickMs] = React.useState<number | null>(null);
+  const lastAutoSyncStatusRef = React.useRef<string | null>(null);
 
   const { data: status, isLoading: statusLoading } = useQuery<WhatsAppStatus>({
     queryKey: ['whatsapp-status'],
@@ -119,86 +118,17 @@ const WhatsAppPage = () => {
     return () => window.clearInterval(timer);
   }, [qr?.qr]);
 
-  const { data: groupsRaw, error: groupsError } = useQuery<unknown>({
-    queryKey: ['whatsapp-groups'],
-    queryFn: () => api.get('/api/whatsapp/groups'),
-    enabled: status?.status === 'connected'
-  });
-
-  const { data: channelsRaw, error: channelsError } = useQuery<unknown>({
-    queryKey: ['whatsapp-channels'],
-    queryFn: () => api.get('/api/whatsapp/channels'),
-    enabled: status?.status === 'connected'
-  });
-
   const { data: existingTargetsRaw } = useQuery<unknown>({
     queryKey: ['targets'],
     queryFn: () => api.get('/api/targets'),
     refetchInterval: status?.status === 'connected' ? 10000 : 30000
   });
 
-  const groups = React.useMemo<WhatsAppGroup[]>(() => {
-    try {
-      if (!Array.isArray(groupsRaw)) return [];
-      return groupsRaw
-        .slice(0, 250)
-        .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
-        .map((entry) => {
-          const jid = normalizeDisplayText(entry.jid || entry.id);
-          const name =
-            normalizeTargetName(entry.name || entry.subject || jid, 'group', jid) ||
-            normalizeDisplayText(jid);
-          return {
-            id: String(entry.id || jid),
-            jid,
-            name: name || jid,
-            size: Number(entry.size || 0),
-            announce: entry.announce === true,
-            restrict: entry.restrict === true,
-            participantCount: Number(entry.participantCount || entry.size || 0),
-            me: {
-              jid: normalizeDisplayText((entry.me as { jid?: unknown } | undefined)?.jid) || null,
-              isAdmin: (entry.me as { isAdmin?: unknown } | undefined)?.isAdmin === true,
-              admin: normalizeDisplayText((entry.me as { admin?: unknown } | undefined)?.admin) || null
-            }
-          };
-        })
-        .filter((group) => Boolean(group.jid));
-    } catch {
-      return [];
-    }
-  }, [groupsRaw]);
-
-  const channels = React.useMemo<WhatsAppChannel[]>(() => {
-    try {
-      if (!Array.isArray(channelsRaw)) return [];
-      return channelsRaw
-        .slice(0, 250)
-        .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
-        .map((entry) => {
-          const jid = normalizeDisplayText(entry.jid || entry.id);
-          const name =
-            normalizeTargetName(entry.name || entry.subject || jid, 'channel', jid) ||
-            '';
-          const baseChannel: WhatsAppChannel = {
-            id: String(entry.id || jid),
-            jid,
-            name,
-            subscribers: Number(entry.subscribers || 0),
-            role: normalizeDisplayText(entry.role) || null,
-            canPost: entry.canPost === true
-          };
-          const sourceRaw = entry.source;
-          if (sourceRaw === 'verified_target' || sourceRaw === 'saved' || sourceRaw === 'live') {
-            return { ...baseChannel, source: sourceRaw as 'live' | 'saved' | 'verified_target' };
-          }
-          return baseChannel;
-        })
-        .filter((channel) => Boolean(channel.jid) && Boolean(channel.name));
-    } catch {
-      return [];
-    }
-  }, [channelsRaw]);
+  const { data: statusAudience } = useQuery<WhatsAppStatusAudience>({
+    queryKey: ['whatsapp-status-audience'],
+    queryFn: () => api.get('/api/whatsapp/status-audience'),
+    refetchInterval: status?.status === 'connected' ? 30000 : 60000
+  });
 
   const existingTargets = React.useMemo<Target[]>(() => {
     if (!Array.isArray(existingTargetsRaw)) return [];
@@ -209,8 +139,7 @@ const WhatsAppPage = () => {
     mutationFn: () => api.post('/api/whatsapp/disconnect'),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
     }
   });
 
@@ -219,8 +148,7 @@ const WhatsAppPage = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
       queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
     }
   });
 
@@ -229,8 +157,7 @@ const WhatsAppPage = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
       queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
     }
   });
 
@@ -239,8 +166,15 @@ const WhatsAppPage = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
       queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] });
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+    }
+  });
+
+  const syncTargets = useMutation({
+    mutationFn: () => api.post('/api/targets/sync', { includeStatus: true, strict: true }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-status-audience'] });
     }
   });
 
@@ -266,20 +200,47 @@ const WhatsAppPage = () => {
   const activeQr = isQrExpired ? null : qr?.qr || null;
   const qrCountdownLabel = formatQrCountdown(isQrExpired ? 0 : qrRemainingMsValue);
   const activeTargets = React.useMemo(() => {
-    return existingTargets.filter((target) => target.active && target.type !== 'status');
+    return existingTargets.filter((target) => target.active);
   }, [existingTargets]);
+  const statusTargets = React.useMemo(() => activeTargets.filter((target) => target.type === 'status'), [activeTargets]);
   const groupedTargets = React.useMemo(() => {
     const groups = activeTargets.filter((target) => target.type === 'group');
     const channels = activeTargets.filter((target) => target.type === 'channel');
     const individuals = activeTargets.filter((target) => target.type === 'individual');
-    return { groups, channels, individuals };
+    const statuses = activeTargets.filter((target) => target.type === 'status');
+    return { groups, channels, individuals, statuses };
   }, [activeTargets]);
+  const destinationSummary = React.useMemo(
+    () => ({
+      groups: groupedTargets.groups.length,
+      channels: groupedTargets.channels.length,
+      individuals: groupedTargets.individuals.length,
+      status: statusTargets.length
+    }),
+    [groupedTargets, statusTargets]
+  );
+  const plainSessionState = React.useMemo(() => {
+    if (isConnected) return 'Connected and ready for normal queue work.';
+    if (isPaused) return 'Paused. Automation and WhatsApp sends are intentionally stopped.';
+    if (isQrReady || activeQr) return 'Waiting for you to scan the login code.';
+    if (status?.status === 'connecting') return 'Connecting to WhatsApp.';
+    if (status?.status === 'conflict') return 'Another instance still has the WhatsApp session.';
+    return 'Disconnected. Resume or request a fresh login code.';
+  }, [activeQr, isConnected, isPaused, isQrReady, status?.status]);
+
+  React.useEffect(() => {
+    if (!isConnected) return;
+    if (lastAutoSyncStatusRef.current === status?.status) return;
+    lastAutoSyncStatusRef.current = status?.status || 'connected';
+    syncTargets.mutate();
+  }, [isConnected, status?.status]);
   const targetBuckets = React.useMemo(
     () => ({
       all: activeTargets.map((target) => target.phone_number),
       group: groupedTargets.groups.map((target) => target.phone_number),
       channel: groupedTargets.channels.map((target) => target.phone_number),
-      individual: groupedTargets.individuals.map((target) => target.phone_number)
+      individual: groupedTargets.individuals.map((target) => target.phone_number),
+      status: groupedTargets.statuses.map((target) => target.phone_number)
     }),
     [activeTargets, groupedTargets]
   );
@@ -440,7 +401,7 @@ const WhatsAppPage = () => {
               <CardTitle>WhatsApp Session</CardTitle>
               {getStatusBadge()}
             </div>
-            <CardDescription>Current account session</CardDescription>
+            <CardDescription>{plainSessionState}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-3">
@@ -450,7 +411,11 @@ const WhatsAppPage = () => {
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Synced destinations</span>
-                <span className="font-medium">{activeTargets.length}</span>
+                <span className="font-medium">{activeTargets.length + statusTargets.length}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Target sync</span>
+                <span className="font-medium">{syncTargets.isPending ? 'Checking now' : isConnected ? 'Automatic' : 'Waiting for connection'}</span>
               </div>
             </div>
 
@@ -556,6 +521,67 @@ const WhatsAppPage = () => {
         </Card>
       </div>
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <RadioTower className="h-5 w-5" />
+            Publishing Destinations
+          </CardTitle>
+          <CardDescription>
+            Groups, channels, and Status are synced from the connected WhatsApp account.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-4">
+            <div className="rounded-lg border p-3">
+              <p className="text-sm text-muted-foreground">Groups</p>
+              <p className="text-2xl font-semibold">{destinationSummary.groups}</p>
+            </div>
+            <div className="rounded-lg border p-3">
+              <p className="text-sm text-muted-foreground">Channels</p>
+              <p className="text-2xl font-semibold">{destinationSummary.channels}</p>
+            </div>
+            <div className="rounded-lg border p-3">
+              <p className="text-sm text-muted-foreground">Private</p>
+              <p className="text-2xl font-semibold">{destinationSummary.individuals}</p>
+            </div>
+            <div className="rounded-lg border p-3">
+              <p className="text-sm text-muted-foreground">Status</p>
+              <p className="text-2xl font-semibold">{destinationSummary.status}</p>
+            </div>
+          </div>
+
+          <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
+            Status audience: {Number(statusAudience?.participantCount || 0) > 0
+              ? `${statusAudience?.participantCount} possible viewers from the current snapshot`
+              : 'not ready yet'}
+            {statusAudience?.refreshedAt ? `, refreshed ${new Date(statusAudience.refreshedAt).toLocaleString()}` : ''}.
+            {Array.isArray(statusAudience?.warnings) && statusAudience.warnings.length ? ` ${statusAudience.warnings[0]}` : ''}
+          </div>
+
+          {syncTargets.isError ? (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              Sync could not finish: {(syncTargets.error as Error)?.message || 'Unknown error'}
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => syncTargets.mutate()}
+              disabled={!isConnected || syncTargets.isPending}
+            >
+              {syncTargets.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              Check destinations now
+            </Button>
+            <Button asChild variant="outline">
+              <Link href="/targets">Review destinations</Link>
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
       {isConnected ? (
         <Card>
           <CardHeader>
@@ -618,6 +644,15 @@ const WhatsAppPage = () => {
                 >
                   Individuals ({targetBuckets.individual.length})
                 </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setSelectedTargets(targetBuckets.status)}
+                  disabled={!targetBuckets.status.length}
+                >
+                  Status ({targetBuckets.status.length})
+                </Button>
               </div>
               <div className="max-h-60 space-y-3 overflow-y-auto rounded-lg border p-3">
                 {!activeTargets.length ? (
@@ -627,7 +662,8 @@ const WhatsAppPage = () => {
                     {[
                       { label: 'Channels', items: groupedTargets.channels },
                       { label: 'Groups', items: groupedTargets.groups },
-                      { label: 'Individuals', items: groupedTargets.individuals }
+                      { label: 'Individuals', items: groupedTargets.individuals },
+                      { label: 'Status', items: groupedTargets.statuses }
                     ].map((group) =>
                       group.items.length ? (
                         <div key={group.label} className="space-y-1">
@@ -742,41 +778,6 @@ const WhatsAppPage = () => {
         </Card>
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Users className="h-5 w-5" />
-            Available destinations
-          </CardTitle>
-          <CardDescription>Groups and channels loaded from your connected account.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {groupsError || channelsError ? (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              Could not load all destinations right now. {String(getErrorMessage(groupsError) || getErrorMessage(channelsError)).trim()}
-            </div>
-          ) : null}
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-lg border p-3">
-              <div className="flex items-center justify-between">
-                <span className="font-medium">Groups</span>
-                <Badge variant="secondary">{groups.length}</Badge>
-              </div>
-            </div>
-
-            <div className="rounded-lg border p-3">
-              <div className="flex items-center justify-between">
-                <span className="font-medium">Channels</span>
-                <Badge variant="secondary">{channels.length}</Badge>
-              </div>
-            </div>
-          </div>
-
-          <Button asChild variant="outline" className="w-full">
-            <Link href="/targets">Manage Targets</Link>
-          </Button>
-        </CardContent>
-      </Card>
     </div>
   );
 };

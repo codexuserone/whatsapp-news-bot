@@ -244,13 +244,15 @@ const getStoredRecipients = async (
     .order('recipient_jid', { ascending: true })
     .limit(Math.max(1, Math.min(Math.floor(sampleSize || 25), 200)));
 
-  const { data: allRows } = includeRecipients
-    ? await supabase
+  let allRows: Array<{ recipient_jid?: string | null }> = [];
+  if (includeRecipients) {
+    const allRowsResult = await supabase
       .from('status_recipients')
       .select('recipient_jid')
       .eq('session_id', SESSION_ID)
-      .order('recipient_jid', { ascending: true })
-    : { data: [] };
+      .order('recipient_jid', { ascending: true });
+    allRows = Array.isArray(allRowsResult.data) ? allRowsResult.data : [];
+  }
 
   const firstRow = Array.isArray(sampleRows) && sampleRows.length ? sampleRows[0] as {
     refreshed_at?: string | null;
@@ -260,11 +262,9 @@ const getStoredRecipients = async (
 
   return {
     participantCount,
-    recipients: Array.isArray(allRows)
-      ? allRows
-        .map((row: { recipient_jid?: string | null }) => normalizeRecipientJid(row.recipient_jid))
-        .filter(Boolean)
-      : [],
+    recipients: allRows
+      .map((row: { recipient_jid?: string | null }) => normalizeRecipientJid(row.recipient_jid))
+      .filter(Boolean),
     sample: Array.isArray(sampleRows)
       ? sampleRows
         .map((row: { recipient_jid?: string | null }) => normalizeRecipientJid(row.recipient_jid))

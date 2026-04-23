@@ -421,7 +421,7 @@ const QueueInner = () => {
       case 'processing':
         return <Badge variant="warning">Attempting send</Badge>;
       case 'sent':
-        return <Badge variant="success">Recorded locally</Badge>;
+        return <Badge variant="success">Accepted by WhatsApp</Badge>;
       case 'delivered':
         return <Badge variant="success">Delivered</Badge>;
       case 'read':
@@ -516,15 +516,15 @@ const QueueInner = () => {
 
     if (isSuccessfulSendStatus(item.status)) {
       if (mediaType === 'image' && mediaSent) {
-        return { label: 'Recorded as image', tone: 'success' as const };
+      return { label: 'Accepted as image', tone: 'success' as const };
       }
       if (mediaType === 'video' && mediaSent) {
-        return { label: 'Recorded as video', tone: 'success' as const };
+        return { label: 'Accepted as video', tone: 'success' as const };
       }
       if (mediaType && !mediaSent) {
-        return { label: 'Recorded as text (media fallback)', tone: 'warning' as const };
+        return { label: 'Accepted as text (media fallback)', tone: 'warning' as const };
       }
-      return { label: 'Recorded as text/link', tone: 'secondary' as const };
+      return { label: 'Accepted as text/link', tone: 'secondary' as const };
     }
 
     if (item.image_url) {
@@ -617,7 +617,7 @@ const QueueInner = () => {
               <SelectItem value="awaiting_approval">Awaiting approval ({queueStats?.awaiting_approval ?? 0})</SelectItem>
               <SelectItem value="pending">Queued ({queueStats?.pending ?? 0})</SelectItem>
               <SelectItem value="processing">Attempting send ({queueStats?.processing ?? 0})</SelectItem>
-              <SelectItem value="sent">Recorded by app ({queueStats?.sent ?? 0})</SelectItem>
+              <SelectItem value="sent">Accepted by WhatsApp ({queueStats?.sent ?? 0})</SelectItem>
               <SelectItem value="failed">Needs review ({queueStats?.failed ?? 0})</SelectItem>
               <SelectItem value="uncertain">Checking possible send ({queueStats?.uncertain ?? 0})</SelectItem>
               <SelectItem value="skipped">Skipped ({queueStats?.skipped ?? 0})</SelectItem>

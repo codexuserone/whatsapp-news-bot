@@ -2,6 +2,8 @@ type FeedMediaKind = 'image' | 'video' | 'audio' | 'document';
 
 const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp'];
 const UNSUPPORTED_WHATSAPP_IMAGE_EXTENSIONS = ['.svg'];
+const DECORATIVE_IMAGE_HINTS = ['logo', 'sprite', 'icon', 'avatar', 'gravatar', 'emoji', 'pixel'];
+const DEFAULT_IMAGE_PATTERN = /(^|[-_/])(default|placeholder|no-image|noimage|missing-image|generic|fallback)([-_.\/]|$)/i;
 const VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v'];
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.wma'];
 const DOCUMENT_EXTENSIONS = [
@@ -88,12 +90,27 @@ const readMediaKind = (value: unknown): FeedMediaKind | null => {
   return null;
 };
 
+const isLikelyDecorativeImageUrl = (value: string) => {
+  const lower = String(value || '').toLowerCase();
+  return DECORATIVE_IMAGE_HINTS.some((hint) => lower.includes(hint));
+};
+
+const isLikelyDefaultImageUrl = (value: string) => {
+  try {
+    const parsed = new URL(value);
+    return DEFAULT_IMAGE_PATTERN.test(parsed.pathname.toLowerCase());
+  } catch {
+    return false;
+  }
+};
+
 const normalizeImageUrlCandidate = (value: unknown) => {
   const normalized = normalizeUrl(value);
   if (!normalized) return '';
   if (UNSUPPORTED_WHATSAPP_IMAGE_EXTENSIONS.some((extension) => hasExtension(normalized, extension))) return '';
   const inferred = inferMediaKindFromUrl(normalized);
   if (inferred && inferred !== 'image') return '';
+  if (isLikelyDecorativeImageUrl(normalized) || isLikelyDefaultImageUrl(normalized)) return '';
   return normalized;
 };
 
@@ -175,6 +192,8 @@ const normalizeFeedMedia = (input: {
 module.exports = {
   inferMediaKindFromUrl,
   inferMediaKindFromMimeType,
+  isLikelyDecorativeImageUrl,
+  isLikelyDefaultImageUrl,
   normalizeFeedMedia
 };
 

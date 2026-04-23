@@ -175,7 +175,7 @@ const scheduleRoutes = () => {
       const supabase = getDb();
       const { data: currentSchedule, error: currentScheduleError } = await supabase
         .from('schedules')
-        .select('id,active,state')
+        .select('id,active,state,last_queued_at')
         .eq('id', req.params.id)
         .single();
 
@@ -205,6 +205,12 @@ const scheduleRoutes = () => {
         feedInactiveWarning = 'Feed is disabled, so this automation was saved as paused.';
       }
 
+      const wasRunning = isScheduleRunning(currentSchedule);
+      const willRun = payload.active === true && payload.state === 'active';
+      if (!wasRunning && willRun) {
+        payload.last_queued_at = new Date().toISOString();
+      }
+
       const { data: schedule, error } = await supabase
         .from('schedules')
         .update(payload)
@@ -215,7 +221,7 @@ const scheduleRoutes = () => {
       if (error) throw error;
 
       let pausedQueueItems = 0;
-      const turnedOff = isScheduleRunning(currentSchedule) && !isScheduleRunning(schedule);
+      const turnedOff = wasRunning && !isScheduleRunning(schedule);
       if (turnedOff) {
         const { data: pausedRows, error: pauseError } = await supabase
           .from('message_logs')
@@ -341,6 +347,7 @@ const scheduleRoutes = () => {
         }
       }
 
+      const wasRunning = isScheduleRunning(currentSchedule);
       const nextState = applyScheduleStatePayload(
         { state: requestedState, active: requestedState === 'active' },
         currentSchedule as Record<string, unknown>
@@ -352,6 +359,8 @@ const scheduleRoutes = () => {
       };
       if (nextState.state !== 'active') {
         updatePayload.next_run_at = null;
+      } else if (!wasRunning) {
+        updatePayload.last_queued_at = new Date().toISOString();
       } else if (!String((currentSchedule as { last_queued_at?: string | null }).last_queued_at || '').trim()) {
         updatePayload.last_queued_at = new Date().toISOString();
       }
@@ -385,7 +394,7 @@ const scheduleRoutes = () => {
       if (updateError || !schedule) throw updateError || new Error('Failed to update schedule state');
 
       let pausedQueueItems = 0;
-      const turnedOff = isScheduleRunning(currentSchedule) && !isScheduleRunning(schedule);
+      const turnedOff = wasRunning && !isScheduleRunning(schedule);
       if (turnedOff) {
         const { data: pausedRows, error: pauseError } = await supabase
           .from('message_logs')

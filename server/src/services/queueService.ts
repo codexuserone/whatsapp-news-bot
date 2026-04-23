@@ -2925,7 +2925,12 @@ const queueRecentMissingForSchedule = async (
   if (!schedule.last_run_at && !schedule.last_queued_at) return 0;
 
   const lookback = Math.min(Math.max(Number(lookbackHours) || 0, 1), 72);
-  const sinceIso = new Date(Date.now() - lookback * 60 * 60 * 1000).toISOString();
+  const lookbackCutoffMs = Date.now() - lookback * 60 * 60 * 1000;
+  const cursorCutoffMs = Date.parse(String(schedule.last_queued_at || schedule.last_run_at || ''));
+  const sinceMs = Number.isFinite(cursorCutoffMs)
+    ? Math.max(lookbackCutoffMs, cursorCutoffMs)
+    : lookbackCutoffMs;
+  const sinceIso = new Date(sinceMs).toISOString();
 
   const { data: recentItems, error: itemsError } = await supabase
     .from('feed_items')

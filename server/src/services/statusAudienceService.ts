@@ -97,6 +97,12 @@ const isGroupMetadataOnlySnapshot = (snapshot: RefreshResult) =>
   Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0))) > 0 &&
   getTrustedAudienceSignalCount(snapshot.sources) === 0;
 
+const isGroupMetadataDominatedSnapshot = (snapshot: RefreshResult) => {
+  const groupSignals = Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0)));
+  const trustedSignals = getTrustedAudienceSignalCount(snapshot.sources);
+  return groupSignals > 0 && groupSignals > Math.max(trustedSignals * 10, 25);
+};
+
 const isLidHeavySnapshot = (snapshot: RefreshResult) => {
   if (!snapshot.recipients.length) return false;
   const lidCount = snapshot.recipients.filter((recipient) => recipient.endsWith('@lid')).length;
@@ -106,6 +112,7 @@ const isLidHeavySnapshot = (snapshot: RefreshResult) => {
 const shouldTrustStoredSnapshot = (snapshot: RefreshResult) => {
   if (snapshot.participantCount <= 0) return false;
   if (isGroupMetadataOnlySnapshot(snapshot)) return false;
+  if (isGroupMetadataDominatedSnapshot(snapshot) && isLidHeavySnapshot(snapshot)) return false;
   if (isLidHeavySnapshot(snapshot) && getTrustedAudienceSignalCount(snapshot.sources) === 0) return false;
   return true;
 };

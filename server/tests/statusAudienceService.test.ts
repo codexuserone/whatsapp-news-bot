@@ -238,6 +238,54 @@ describe('statusAudienceService', () => {
         expect(tables.status_recipients).toHaveLength(1);
     });
 
+    it('does not preserve a group-heavy lid snapshot with only tiny trusted signal', async () => {
+        const refreshedAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+        const storedRecipients = Array.from({ length: 50 }, (_value, index) => `${1000000000 + index}@lid`);
+        const { supabase, tables } = buildSupabaseMock({
+            status_recipients: storedRecipients.map((recipient) => ({
+                session_id: 'primary',
+                recipient_jid: recipient,
+                refreshed_at: refreshedAt,
+                sources: {
+                    contactsCache: 2,
+                    storeContacts: 0,
+                    storeChats: 0,
+                    groupMetadata: 48,
+                    env: 0,
+                    me: 1,
+                    recentSuccessfulDirectRecipients: 0
+                },
+                warnings: []
+            }))
+        });
+        getSupabaseClientMock.mockReturnValue(supabase);
+
+        const result = await refreshStatusRecipients(
+            {
+                getStatus: () => ({ status: 'connected' }),
+                getStatusParticipants: () => ['16465527019@s.whatsapp.net'],
+                getStatusAudience: () => ({
+                    participantCount: 1,
+                    sample: ['16465527019@s.whatsapp.net'],
+                    sources: {
+                        contactsCache: 1,
+                        storeContacts: 0,
+                        storeChats: 0,
+                        groupMetadata: 0,
+                        env: 0,
+                        me: 1
+                    },
+                    warnings: []
+                })
+            },
+            { sampleSize: 10 }
+        );
+
+        expect(result.participantCount).toBe(1);
+        expect(result.recipients).toEqual(['16465527019@s.whatsapp.net']);
+        expect(tables.status_recipients).toHaveLength(1);
+    });
+
     it('does not preserve an old snapshot when the current audience has real warm sources', async () => {
         const refreshedAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
         const { supabase } = buildSupabaseMock({

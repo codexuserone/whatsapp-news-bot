@@ -110,7 +110,9 @@ export type FeedItem = {
     processing: number;
     sent: number;
     failed: number;
+    uncertain?: number;
     skipped: number;
+    superseded?: number;
     manual_paused?: number;
     corrected?: number;
     corrected_before_send?: number;

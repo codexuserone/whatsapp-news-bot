@@ -30,7 +30,9 @@ type DeliverySummary = {
   processing: number;
   sent: number;
   failed: number;
+  uncertain: number;
   skipped: number;
+  superseded: number;
   manual_paused: number;
   corrected: number;
   corrected_before_send: number;
@@ -42,7 +44,9 @@ const createEmptyDeliverySummary = (): DeliverySummary => ({
   processing: 0,
   sent: 0,
   failed: 0,
+  uncertain: 0,
   skipped: 0,
+  superseded: 0,
   manual_paused: 0,
   corrected: 0,
   corrected_before_send: 0,
@@ -108,6 +112,8 @@ const summarizeDeliveryRows = (rows: DeliveryLogRow[]) => {
     else if (status === 'processing') current.processing += 1;
     else if (status === 'sent' || status === 'delivered' || status === 'read' || status === 'played') current.sent += 1;
     else if (status === 'failed') current.failed += 1;
+    else if (status === 'uncertain') current.uncertain += 1;
+    else if (status === 'superseded') current.superseded += 1;
     else if (status === 'skipped') {
       current.skipped += 1;
       if (String(row.error_message || '') === MANUAL_POST_PAUSE_REASON) {
@@ -257,14 +263,24 @@ const feedItemRoutes = () => {
           processing: 0,
           sent: 0,
           failed: 0,
+          uncertain: 0,
           skipped: 0,
+          superseded: 0,
           manual_paused: 0,
           corrected: 0,
           corrected_before_send: 0,
           corrected_after_send: 0
         };
         const queued = delivery.pending + delivery.processing;
-        const total = delivery.pending + delivery.processing + delivery.sent + delivery.failed + delivery.skipped;
+        const unresolved = delivery.failed + delivery.uncertain;
+        const total =
+          delivery.pending +
+          delivery.processing +
+          delivery.sent +
+          delivery.failed +
+          delivery.uncertain +
+          delivery.skipped +
+          delivery.superseded;
         const hasQueued = queued > 0;
         const hasSent = delivery.sent > 0;
         const hasFailed = delivery.failed > 0;
@@ -274,6 +290,10 @@ const feedItemRoutes = () => {
         const dispatchableAutomationCount = dispatchableAutomationCountByFeedId.get(feedId) || 0;
         const queueCursorMs = queueCursorByFeedId.get(feedId) || 0;
         const normalizedMedia = normalizeFeedMedia({
+          mediaUrl: item.media_url,
+          mediaKind: item.media_kind,
+          mediaMime: item.media_mime,
+          mediaFilename: item.media_filename,
           imageUrl: item.image_url,
           rawData: item.raw_data as Record<string, unknown> | null
         });
@@ -287,20 +307,22 @@ const feedItemRoutes = () => {
             ? 'paused_with_queue'
             : hasManualPause
               ? 'paused'
-              : hasQueued && hasSent && hasFailed
+            : hasQueued && hasSent && unresolved > 0
             ? 'mixed'
             : hasQueued && hasSent
               ? 'partially_sent'
-              : hasQueued && hasFailed
+              : hasQueued && unresolved > 0
                 ? 'retrying'
                 : hasQueued
                   ? 'queued'
-                  : hasSent && hasFailed
+                  : hasSent && unresolved > 0
                     ? 'partially_sent'
-                    : hasSent
-                      ? 'sent'
-                      : hasFailed
+                  : hasSent
+                    ? 'sent'
+                    : unresolved > 0
                         ? 'failed'
+                        : delivery.superseded > 0
+                          ? 'superseded'
                         : dispatchableAutomationCount > 0
                           ? outsideCursorWindow
                             ? 'not_queued_old'
@@ -346,6 +368,10 @@ const feedItemRoutes = () => {
       res.json(
         (items || []).map((item: Record<string, unknown>) => {
           const normalizedMedia = normalizeFeedMedia({
+            mediaUrl: item.media_url,
+            mediaKind: item.media_kind,
+            mediaMime: item.media_mime,
+            mediaFilename: item.media_filename,
             imageUrl: item.image_url,
             rawData: item.raw_data as Record<string, unknown> | null
           });

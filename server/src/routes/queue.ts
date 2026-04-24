@@ -160,6 +160,32 @@ const resolveQueueOrder = (statusFilter?: string): QueueOrder => {
   return { primaryColumn: 'created_at', ascending: false };
 };
 
+const compareLiveQueueItemsForDisplay = (
+  left: { pub_date?: unknown; created_at?: unknown; id?: unknown },
+  right: { pub_date?: unknown; created_at?: unknown; id?: unknown }
+) => {
+  const toMs = (value: unknown) => {
+    const parsed = Date.parse(String(value || ''));
+    return Number.isFinite(parsed) ? parsed : Number.NaN;
+  };
+  const leftPrimary = toMs(left.pub_date);
+  const rightPrimary = toMs(right.pub_date);
+  if (Number.isFinite(leftPrimary) && Number.isFinite(rightPrimary) && leftPrimary !== rightPrimary) {
+    return leftPrimary - rightPrimary;
+  }
+  if (Number.isFinite(leftPrimary) !== Number.isFinite(rightPrimary)) {
+    return Number.isFinite(leftPrimary) ? -1 : 1;
+  }
+
+  const leftCreated = toMs(left.created_at);
+  const rightCreated = toMs(right.created_at);
+  if (Number.isFinite(leftCreated) && Number.isFinite(rightCreated) && leftCreated !== rightCreated) {
+    return leftCreated - rightCreated;
+  }
+
+  return String(left.id || '').localeCompare(String(right.id || ''));
+};
+
 const encodeQueueCursor = (cursor: QueueCursorPayload) =>
   Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
 
@@ -408,12 +434,17 @@ const queueRoutes = () => {
         };
       });
 
+      const visibleItems =
+        !useCursorPagination && statusFilter && LIVE_QUEUE_STATUS_VALUES.includes(statusFilter)
+          ? [...items].sort(compareLiveQueueItemsForDisplay)
+          : items;
+
       if (!useCursorPagination) {
-        return res.json(items);
+        return res.json(visibleItems);
       }
 
-      const hasMore = items.length > limit;
-      const visibleItems = hasMore ? items.slice(0, limit) : items;
+      const hasMore = visibleItems.length > limit;
+      const pagedItems = hasMore ? visibleItems.slice(0, limit) : visibleItems;
       const lastVisible = hasMore ? (rows || [])[limit - 1] as Record<string, unknown> | undefined : (rows || [])[items.length - 1] as Record<string, unknown> | undefined;
       const nextCursor =
         hasMore && lastVisible
@@ -425,7 +456,7 @@ const queueRoutes = () => {
           : null;
 
       return res.json({
-        items: visibleItems,
+        items: pagedItems,
         next_cursor: nextCursor,
         limit
       });

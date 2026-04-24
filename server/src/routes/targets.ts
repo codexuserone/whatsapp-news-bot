@@ -322,7 +322,7 @@ const targetRoutes = () => {
         String((req.body as { includeStatus?: unknown })?.includeStatus ?? req.query.includeStatus ?? 'true').toLowerCase() !==
         'false';
       const strict =
-        String((req.body as { strict?: unknown })?.strict ?? req.query.strict ?? 'true').toLowerCase() !== 'false';
+        String((req.body as { strict?: unknown })?.strict ?? req.query.strict ?? 'false').toLowerCase() === 'true';
 
       const result = await syncTargetsFromWhatsApp(whatsapp, { includeStatus, strict });
       if (!result.ok) {

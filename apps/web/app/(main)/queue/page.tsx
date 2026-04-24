@@ -529,8 +529,18 @@ const QueueInner = () => {
       return { label: 'Accepted as text/link', tone: 'secondary' as const };
     }
 
-    if (item.image_url) {
+    const plannedKind = String(item.media_kind || item.media_type || '').toLowerCase();
+    if (plannedKind === 'image' || item.image_url) {
       return { label: 'Will try image send', tone: 'secondary' as const };
+    }
+    if (plannedKind === 'video') {
+      return { label: 'Will try video send', tone: 'secondary' as const };
+    }
+    if (plannedKind === 'audio') {
+      return { label: 'Will try audio send', tone: 'secondary' as const };
+    }
+    if (plannedKind === 'document') {
+      return { label: 'Will try document send', tone: 'secondary' as const };
     }
 
     return { label: 'Text/link send', tone: 'secondary' as const };

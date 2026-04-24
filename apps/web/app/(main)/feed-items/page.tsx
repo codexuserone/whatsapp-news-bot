@@ -21,7 +21,9 @@ const buildComposeHref = (item: FeedItem) => {
   if (title) params.set('title', title);
   if (url) params.set('url', url);
   if (mediaUrl && mediaKind === 'video') params.set('videoUrl', mediaUrl);
-  if (mediaUrl && mediaKind !== 'video') params.set('imageUrl', mediaUrl);
+  if (mediaUrl && mediaKind === 'audio') params.set('audioUrl', mediaUrl);
+  if (mediaUrl && mediaKind === 'document') params.set('documentUrl', mediaUrl);
+  if (mediaUrl && (!mediaKind || mediaKind === 'image')) params.set('imageUrl', mediaUrl);
   const query = params.toString();
   return query ? `/compose?${query}` : '/compose';
 };
@@ -75,13 +77,18 @@ const FeedItemsPage = () => {
       processing: 0,
       sent: 0,
       failed: 0,
+      uncertain: 0,
       skipped: 0,
+      superseded: 0,
       manual_paused: 0,
       total: 0
     };
     const queued = (delivery.pending || 0) + (delivery.processing || 0);
     const sent = delivery.sent || 0;
     const failed = delivery.failed || 0;
+    const uncertain = delivery.uncertain || 0;
+    const superseded = delivery.superseded || 0;
+    const unresolved = failed + uncertain;
     const manualPaused = delivery.manual_paused || 0;
     const correctedBeforeSend = delivery.corrected_before_send || 0;
     const correctedAfterSend = delivery.corrected_after_send || 0;
@@ -108,12 +115,12 @@ const FeedItemsPage = () => {
       };
     }
 
-    if (queued > 0 && sent > 0 && failed > 0) {
+    if (queued > 0 && sent > 0 && unresolved > 0) {
       return {
         label: joinStatusSummary([
           formatTargetSummary(sent, 'accepted by WhatsApp'),
           formatTargetSummary(queued, 'still queued'),
-          formatTargetSummary(failed, 'need review'),
+          formatTargetSummary(unresolved, 'need review'),
           ...correctionParts
         ]),
         variant: 'warning' as const
@@ -129,11 +136,11 @@ const FeedItemsPage = () => {
         variant: 'warning' as const
       };
     }
-    if (queued > 0 && failed > 0) {
+    if (queued > 0 && unresolved > 0) {
       return {
         label: joinStatusSummary([
           formatTargetSummary(queued, 'still queued'),
-          formatTargetSummary(failed, 'need review'),
+          formatTargetSummary(unresolved, 'need review'),
           ...correctionParts
         ]),
         variant: 'warning' as const
@@ -145,20 +152,26 @@ const FeedItemsPage = () => {
         variant: 'warning' as const
       };
     }
-    if (sent > 0 && failed > 0) {
+    if (sent > 0 && unresolved > 0) {
       return {
         label: joinStatusSummary([
           formatTargetSummary(sent, 'accepted by WhatsApp'),
-          formatTargetSummary(failed, 'need review'),
+          formatTargetSummary(unresolved, 'need review'),
           ...correctionParts
         ]),
         variant: 'warning' as const
       };
     }
-    if (failed > 0) {
+    if (unresolved > 0) {
       return {
-        label: joinStatusSummary([formatTargetSummary(failed, 'need review'), ...correctionParts]),
+        label: joinStatusSummary([formatTargetSummary(unresolved, 'need review'), ...correctionParts]),
         variant: 'destructive' as const
+      };
+    }
+    if (superseded > 0) {
+      return {
+        label: joinStatusSummary([formatTargetSummary(superseded, 'replaced by a newer row'), ...correctionParts]),
+        variant: 'secondary' as const
       };
     }
     if (sent > 0) {

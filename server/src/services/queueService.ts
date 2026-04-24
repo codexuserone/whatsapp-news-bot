@@ -121,6 +121,27 @@ const ALLOW_AUTO_REPLACE_CORRECTIONS =
 
 const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
 
+const getStatusAudienceTrustedSourceCount = (snapshot: Record<string, any> | null | undefined) => {
+  const sources = snapshot?.sources || {};
+  return (
+    Math.max(0, Math.floor(Number(sources.contactsCache || 0))) +
+    Math.max(0, Math.floor(Number(sources.storeContacts || 0))) +
+    Math.max(0, Math.floor(Number(sources.storeChats || 0))) +
+    Math.max(0, Math.floor(Number(sources.env || 0))) +
+    Math.max(0, Math.floor(Number(sources.recentSuccessfulDirectRecipients || 0)))
+  );
+};
+
+const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undefined) => {
+  const recipients = Array.isArray(snapshot?.recipients) ? snapshot!.recipients : [];
+  if (!recipients.length) {
+    throw new Error('No fresh status recipients are available for this status send.');
+  }
+  if (recipients.length <= 1 && getStatusAudienceTrustedSourceCount(snapshot) <= 0) {
+    throw new Error('Status audience only contains this WhatsApp account; refusing to mark a self-only Status send as sent.');
+  }
+};
+
 const getStatusSendTimeoutMs = (kind: 'text' | 'media', fallbackMs: number) => {
   const baseline = Math.max(Number(fallbackMs || DEFAULT_SEND_TIMEOUT_MS), 10000);
   return kind === 'media' ? Math.max(baseline, 90000) : Math.max(baseline, 60000);
@@ -1652,9 +1673,7 @@ const sendMessageWithTemplate = async (
   const buildStatusOptions = async () => {
     if (target.type !== 'status') return undefined;
     const snapshot = await ensureFreshStatusRecipients(whatsappClient, { maxAgeMinutes: 10, sampleSize: 25 });
-    if (!snapshot.recipients.length) {
-      throw new Error('No fresh status recipients are available for this status send.');
-    }
+    assertUsableStatusAudience(snapshot);
     return { statusJidList: snapshot.recipients };
   };
 
@@ -4202,9 +4221,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       const content: Record<string, unknown> = disableLinkPreview ? { text, linkPreview: null } : { text };
       if (targetRow.type === 'status') {
         const statusSnapshot = await ensureFreshStatusRecipients(activeWhatsappClient, { maxAgeMinutes: 10, sampleSize: 25 });
-        if (!statusSnapshot.recipients.length) {
-          throw new Error('No fresh status recipients are available for this status send.');
-        }
+        assertUsableStatusAudience(statusSnapshot);
         return withTimeout(
           activeWhatsappClient.sendStatusBroadcast(content, { statusJidList: statusSnapshot.recipients }),
           getStatusSendTimeoutMs('text', Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS)),
@@ -4447,6 +4464,9 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
               targetRow.type === 'status'
                 ? await ensureFreshStatusRecipients(activeWhatsappClient, { maxAgeMinutes: 10, sampleSize: 25 })
                 : null;
+            if (targetRow.type === 'status') {
+              assertUsableStatusAudience(statusSnapshot);
+            }
 
             const response =
               targetRow.type === 'status'
@@ -4586,6 +4606,9 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             targetRow.type === 'status'
               ? await ensureFreshStatusRecipients(activeWhatsappClient, { maxAgeMinutes: 10, sampleSize: 25 })
               : null;
+          if (targetRow.type === 'status') {
+            assertUsableStatusAudience(statusSnapshot);
+          }
 
           const response =
             targetRow.type === 'status'

@@ -52,6 +52,27 @@ const buildUncertainSendMessage = (value: unknown) => {
   return `Send result is uncertain. Verifying delivery before retrying. ${message}`.trim();
 };
 
+const getStatusAudienceTrustedSourceCount = (snapshot: Record<string, any> | null | undefined) => {
+  const sources = snapshot?.sources || {};
+  return (
+    Math.max(0, Math.floor(Number(sources.contactsCache || 0))) +
+    Math.max(0, Math.floor(Number(sources.storeContacts || 0))) +
+    Math.max(0, Math.floor(Number(sources.storeChats || 0))) +
+    Math.max(0, Math.floor(Number(sources.env || 0))) +
+    Math.max(0, Math.floor(Number(sources.recentSuccessfulDirectRecipients || 0)))
+  );
+};
+
+const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undefined) => {
+  const recipients = Array.isArray(snapshot?.recipients) ? snapshot!.recipients : [];
+  if (!recipients.length) {
+    throw badRequest('No fresh status recipients are available for this status send.');
+  }
+  if (recipients.length <= 1 && getStatusAudienceTrustedSourceCount(snapshot) <= 0) {
+    throw badRequest('Status audience only contains this WhatsApp account. Add explicit Status audience JIDs or wait for real contacts to sync before sending.');
+  }
+};
+
 const resolveTestSendLogResolution = (options: {
   messageId?: string | null;
   confirmRequested?: boolean;
@@ -1681,8 +1702,9 @@ const whatsappRoutes = () => {
       ? statusJidList.map((value) => String(value || '').trim()).filter(Boolean)
       : [];
     const statusSnapshot = explicitStatusJids.length
-      ? { recipients: explicitStatusJids }
+      ? { recipients: explicitStatusJids, sources: { env: explicitStatusJids.length } }
       : await ensureFreshStatusRecipients(whatsapp, { maxAgeMinutes: 10, sampleSize: 25 });
+    assertUsableStatusAudience(statusSnapshot);
     const sendOptions: Record<string, unknown> = {};
     if (statusSnapshot.recipients.length) sendOptions.statusJidList = statusSnapshot.recipients;
     if (normalizedBackgroundColor) {

@@ -60,6 +60,57 @@ const createSchedulesSupabase = (schedules: Array<Record<string, unknown>>) => (
     }
 });
 
+const createRecentCorrectionSupabase = (options: {
+    logRows: Array<Record<string, unknown>>;
+    feedItems: Array<Record<string, unknown>>;
+    feeds: Array<Record<string, unknown>>;
+    schedules: Array<Record<string, unknown>>;
+}) => ({
+    from: (table: string) => {
+        if (table === 'message_logs') {
+            return {
+                select: jest.fn(() => ({
+                    in: jest.fn(() => ({
+                        gte: jest.fn(() => ({
+                            not: jest.fn(() => ({
+                                limit: jest.fn(async () => ({ data: options.logRows, error: null }))
+                            }))
+                        }))
+                    }))
+                }))
+            };
+        }
+
+        if (table === 'feed_items') {
+            return {
+                select: jest.fn(() => ({
+                    in: jest.fn(async () => ({ data: options.feedItems, error: null }))
+                }))
+            };
+        }
+
+        if (table === 'feeds') {
+            return {
+                select: jest.fn(() => ({
+                    in: jest.fn(() => ({
+                        eq: jest.fn(async () => ({ data: options.feeds, error: null }))
+                    }))
+                }))
+            };
+        }
+
+        if (table === 'schedules') {
+            return {
+                select: jest.fn(() => ({
+                    eq: jest.fn(async () => ({ data: options.schedules, error: null }))
+                }))
+            };
+        }
+
+        throw new Error(`Unexpected table: ${table}`);
+    }
+});
+
 describe('schedulerService dispatch entry points', () => {
     beforeEach(() => {
         jest.clearAllMocks();
@@ -148,5 +199,44 @@ describe('schedulerService dispatch entry points', () => {
         expect(schedulerService.__testUtils.parseCorrectionWindowMinutes(5)).toBe(5);
         expect(schedulerService.__testUtils.parseCorrectionWindowMinutes(90)).toBe(15);
         expect(schedulerService.__testUtils.parseCorrectionWindowMinutes(undefined)).toBe(15);
+    });
+
+    it('queues immediate schedules when the correction watcher discovers new feed items', async () => {
+        const whatsappClient = {
+            getStatus: () => ({ status: 'connected' })
+        };
+        const immediateSchedule = {
+            id: 'immediate-active',
+            feed_id: 'feed-1',
+            state: 'active',
+            active: true,
+            delivery_mode: 'immediate',
+            cron_expression: null
+        };
+
+        mockFetchAndProcessFeed.mockResolvedValue({
+            items: [{ id: 'new-item' }],
+            updatedItems: []
+        });
+        mockGetSupabaseClient.mockReturnValue(
+            createRecentCorrectionSupabase({
+                logRows: [{ feed_item_id: 'old-item' }],
+                feedItems: [{ id: 'old-item', feed_id: 'feed-1' }],
+                feeds: [{ id: 'feed-1', active: true }],
+                schedules: [immediateSchedule]
+            })
+        );
+
+        await schedulerService.__testUtils.runRecentFeedCorrectionPass(whatsappClient);
+
+        expect(mockFetchAndProcessFeed).toHaveBeenCalledWith({ id: 'feed-1', active: true });
+        expect(mockSendQueuedForSchedule).toHaveBeenCalledWith(
+            'immediate-active',
+            whatsappClient,
+            {
+                skipFeedRefresh: true,
+                allowOverdueBatchDispatch: true
+            }
+        );
     });
 });

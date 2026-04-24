@@ -82,8 +82,8 @@ type WhatsAppClient = {
   waitForMessage?: (messageId: string, timeoutMs?: number) => Promise<any>;
   confirmSend?: (
     messageId: string,
-    options?: { upsertTimeoutMs?: number; ackTimeoutMs?: number }
-  ) => Promise<{ ok: boolean; via: 'upsert' | 'ack' | 'none'; status?: number | null; statusLabel?: string | null }>;
+    options?: { upsertTimeoutMs?: number; ackTimeoutMs?: number; requireServerAck?: boolean }
+  ) => Promise<{ ok: boolean; via: 'upsert' | 'ack' | 'none'; status?: number | null; statusLabel?: string | null; error?: string | null }>;
   getGroupInfo?: (
     jid: string,
     timeoutMs?: number
@@ -151,7 +151,8 @@ const getStatusSendTimeoutMs = (kind: 'text' | 'media', fallbackMs: number) => {
 const computeUncertainRetryDelayMs = (sendTimeoutMs: number) =>
   Math.max(Math.round(Math.max(sendTimeoutMs, 10000) * 2), DEFAULT_UNCERTAIN_RETRY_DELAY_MS);
 
-const isUnknownDeliveryTimeout = (message: unknown) => /timed out sending/i.test(String(message || ''));
+const isUnknownDeliveryTimeout = (message: unknown) =>
+  /timed out sending|message send not confirmed/i.test(String(message || ''));
 
 const buildUncertainErrorMessage = (message: string) =>
   `Send result is uncertain. Verifying delivery before retrying. ${String(message || '').trim()}`.trim();
@@ -622,6 +623,8 @@ const reconcileUncertainMessageLogs = async (supabase: SupabaseClient, settings:
 
     const target = targetById.get(String(row?.target_id || '').trim()) as Target | undefined;
     const targetJid = target ? normalizeTargetJid(target) : '';
+    const targetType = String(target?.type || '').trim().toLowerCase();
+    const localEchoCanConfirmDelivery = targetType !== 'channel';
     const startedAtMs = resolveAttemptWindowStartMs(row);
     const lowerBoundIso = new Date(startedAtMs - UNCERTAIN_MATCH_LOOKBACK_MS).toISOString();
     const upperBoundIso = new Date(Math.min(Date.now(), startedAtMs + sendTimeoutMs + UNCERTAIN_MATCH_GRACE_MS)).toISOString();
@@ -631,39 +634,42 @@ const reconcileUncertainMessageLogs = async (supabase: SupabaseClient, settings:
       continue;
     }
 
-    const { data: chatRows, error: chatRowsError } = await supabase
-      .from('chat_messages')
-      .select('id,whatsapp_id,remote_jid,from_me,content,message_type,media_url,timestamp,created_at,raw_message')
-      .eq('remote_jid', targetJid)
-      .eq('from_me', true)
-      .gte('created_at', lowerBoundIso)
-      .lte('created_at', upperBoundIso)
-      .order('created_at', { ascending: true })
-      .limit(20);
+    let matchedCandidate: ChatMessageRow | null = null;
+    if (localEchoCanConfirmDelivery) {
+      const { data: chatRows, error: chatRowsError } = await supabase
+        .from('chat_messages')
+        .select('id,whatsapp_id,remote_jid,from_me,content,message_type,media_url,timestamp,created_at,raw_message')
+        .eq('remote_jid', targetJid)
+        .eq('from_me', true)
+        .gte('created_at', lowerBoundIso)
+        .lte('created_at', upperBoundIso)
+        .order('created_at', { ascending: true })
+        .limit(20);
 
-    if (chatRowsError) {
-      logger.warn({ error: chatRowsError, logId: id, targetJid }, 'Failed to inspect local WhatsApp messages for uncertain delivery');
-      pendingReview += 1;
-      continue;
-    }
+      if (chatRowsError) {
+        logger.warn({ error: chatRowsError, logId: id, targetJid }, 'Failed to inspect local WhatsApp messages for uncertain delivery');
+        pendingReview += 1;
+        continue;
+      }
 
-    const candidates = (chatRows || []) as ChatMessageRow[];
-    const explicitMessageId = String(row?.whatsapp_message_id || '').trim();
-    let matchedCandidate =
-      explicitMessageId
-        ? candidates.find((candidate) => String(candidate?.whatsapp_id || '').trim() === explicitMessageId) || null
-        : null;
+      const candidates = (chatRows || []) as ChatMessageRow[];
+      const explicitMessageId = String(row?.whatsapp_message_id || '').trim();
+      matchedCandidate =
+        explicitMessageId
+          ? candidates.find((candidate) => String(candidate?.whatsapp_id || '').trim() === explicitMessageId) || null
+          : null;
 
-    if (!matchedCandidate) {
-      const expected = {
-        text: String(row?.message_content || '').trim(),
-        mediaType: String(row?.media_type || '').trim().toLowerCase() || null
-      };
-      const matchingCandidates = candidates.filter((candidate) => doesChatMessageMatchExpectedAttempt(candidate, expected));
-      if (matchingCandidates.length === 1) {
-        matchedCandidate = matchingCandidates[0] || null;
-      } else if (!expected.text && !expected.mediaType && candidates.length === 1) {
-        matchedCandidate = candidates[0] || null;
+      if (!matchedCandidate) {
+        const expected = {
+          text: String(row?.message_content || '').trim(),
+          mediaType: String(row?.media_type || '').trim().toLowerCase() || null
+        };
+        const matchingCandidates = candidates.filter((candidate) => doesChatMessageMatchExpectedAttempt(candidate, expected));
+        if (matchingCandidates.length === 1) {
+          matchedCandidate = matchingCandidates[0] || null;
+        } else if (!expected.text && !expected.mediaType && candidates.length === 1) {
+          matchedCandidate = candidates[0] || null;
+        }
       }
     }
 
@@ -3799,19 +3805,21 @@ const sendQueuedForSchedule = async (
               const isMedia =
                 (sendResult?.media?.type === 'image' || sendResult?.media?.type === 'video') &&
                 Boolean(sendResult?.media?.sent);
+              const requireServerAck = target.type === 'channel';
               const confirmation = await whatsappClient.confirmSend(
                 messageId,
                 target.type === 'status'
                   ? {
                       upsertTimeoutMs: isMedia ? 30000 : 5000,
-                      ackTimeoutMs: isMedia ? 90000 : 60000
+                      ackTimeoutMs: isMedia ? 90000 : 60000,
+                      requireServerAck
                     }
                   : isMedia
-                    ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
-                    : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 }
+                    ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck }
+                    : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck }
               );
               if (!confirmation?.ok) {
-                throw new Error('Message send not confirmed (no upsert/ack)');
+                throw new Error(`Message send not confirmed (${confirmation?.error || 'no upsert/ack'})`);
               }
             } else if (whatsappClient.waitForMessage) {
               const observed = await whatsappClient.waitForMessage(messageId, 15000);
@@ -4239,19 +4247,21 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
     const ensureSendConfirmed = async (messageId: string | null | undefined, isMedia: boolean, isStatus = false) => {
       if (!messageId) return;
       if (activeWhatsappClient.confirmSend) {
+        const requireServerAck = targetRow.type === 'channel';
         const confirmation = await activeWhatsappClient.confirmSend(
           messageId,
           isStatus
             ? {
                 upsertTimeoutMs: isMedia ? 30000 : 5000,
-                ackTimeoutMs: isMedia ? 90000 : 60000
+                ackTimeoutMs: isMedia ? 90000 : 60000,
+                requireServerAck
               }
             : isMedia
-              ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
-              : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 }
+              ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck }
+              : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck }
         );
         if (!confirmation?.ok) {
-          throw new Error('Message send not confirmed (no upsert/ack)');
+          throw new Error(`Message send not confirmed (${confirmation?.error || 'no upsert/ack'})`);
         }
         return;
       }

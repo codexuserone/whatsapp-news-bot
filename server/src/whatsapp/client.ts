@@ -68,6 +68,13 @@ type MessageStatusSnapshot = {
   updatedAtMs: number;
 };
 
+type MessageFailureSnapshot = {
+  errorCode: string | null;
+  errorMessage: string;
+  remoteJid: string | null;
+  updatedAtMs: number;
+};
+
 type ChannelSummary = {
   id: string;
   jid: string;
@@ -486,6 +493,7 @@ class WhatsAppClient {
   contactsCache: Map<string, { name?: string }>;
   recentSentMessages: Map<string, proto.IWebMessageInfo>;
   recentMessageStatuses: Map<string, MessageStatusSnapshot>;
+  recentMessageFailures: Map<string, MessageFailureSnapshot>;
   pendingReceiptUpdates: Map<string, MessageStatusSnapshot>;
   pendingReceiptFlushTimer: NodeJS.Timeout | null;
   newsletterChatCache: Map<string, CachedNewsletterChat>;
@@ -532,6 +540,7 @@ class WhatsAppClient {
     this.contactsCache = new Map();
     this.recentSentMessages = new Map();
     this.recentMessageStatuses = new Map();
+    this.recentMessageFailures = new Map();
     this.pendingReceiptUpdates = new Map();
     this.pendingReceiptFlushTimer = null;
     this.newsletterChatCache = new Map();
@@ -661,6 +670,19 @@ class WhatsAppClient {
       const oldest = this.recentMessageStatuses.keys().next().value;
       if (oldest) {
         this.recentMessageStatuses.delete(oldest);
+      }
+    }
+  }
+
+  rememberMessageFailure(messageId: string, snapshot: MessageFailureSnapshot): void {
+    const id = String(messageId || '').trim();
+    if (!id) return;
+
+    this.recentMessageFailures.set(id, snapshot);
+    if (this.recentMessageFailures.size > 1000) {
+      const oldest = this.recentMessageFailures.keys().next().value;
+      if (oldest) {
+        this.recentMessageFailures.delete(oldest);
       }
     }
   }
@@ -1106,6 +1128,47 @@ class WhatsAppClient {
     return typeof last === 'string' ? last : null;
   }
 
+  extractAckFailure(args: unknown[]): { messageId: string; remoteJid: string | null; errorCode: string | null } | null {
+    const logMessage = this.extractLogMessage(args);
+    const stack = args.filter((arg) => arg && typeof arg === 'object') as Record<string, unknown>[];
+    const seen = new Set<unknown>();
+
+    while (stack.length) {
+      const current = stack.shift();
+      if (!current || seen.has(current)) continue;
+      seen.add(current);
+
+      const attrs = current.attrs && typeof current.attrs === 'object'
+        ? current.attrs as Record<string, unknown>
+        : null;
+      const id = attrs?.id != null ? String(attrs.id).trim() : '';
+      const error = attrs?.error != null ? String(attrs.error).trim() : '';
+      const packetClass = attrs?.class != null ? String(attrs.class).trim() : '';
+      const looksLikeAckFailure =
+        Boolean(error && id) &&
+        (
+          /received error in ack/i.test(String(logMessage || '')) ||
+          /message/i.test(packetClass)
+        );
+
+      if (looksLikeAckFailure) {
+        return {
+          messageId: id,
+          remoteJid: attrs?.from != null ? String(attrs.from) : null,
+          errorCode: error || null
+        };
+      }
+
+      for (const value of Object.values(current)) {
+        if (value && typeof value === 'object' && !seen.has(value)) {
+          stack.push(value as Record<string, unknown>);
+        }
+      }
+    }
+
+    return null;
+  }
+
   createBaileysLogger() {
     const baseLogger = logger.child({ class: 'baileys' });
     const baileysLogger = Object.create(baseLogger);
@@ -1122,6 +1185,17 @@ class WhatsAppClient {
     const handleArgs = (args: unknown[]) => {
       const message = this.extractLogMessage(args);
       const errorMessage = this.extractErrorMessage(args);
+      const ackFailure = this.extractAckFailure(args);
+      if (ackFailure) {
+        this.rememberMessageFailure(ackFailure.messageId, {
+          errorCode: ackFailure.errorCode,
+          errorMessage: ackFailure.errorCode
+            ? `WhatsApp server rejected message ack ${ackFailure.errorCode}`
+            : 'WhatsApp server rejected message ack',
+          remoteJid: ackFailure.remoteJid,
+          updatedAtMs: Date.now()
+        });
+      }
       if (this.isAuthStateCorrupted(message) || this.isAuthStateCorrupted(errorMessage)) {
         void this.handleCorruptedAuthState(
           errorMessage ? new Error(errorMessage) : new Error(message || 'Auth error')
@@ -2284,12 +2358,37 @@ class WhatsAppClient {
     });
   }
 
+  async waitForMessageFailure(messageId: string, timeoutMs = 15000): Promise<MessageFailureSnapshot | null> {
+    const id = String(messageId || '').trim();
+    if (!id) return null;
+
+    const cached = this.recentMessageFailures.get(id);
+    if (cached) return cached;
+
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+      const interval = setInterval(() => {
+        const failure = this.recentMessageFailures.get(id);
+        if (failure) {
+          clearInterval(interval);
+          resolve(failure);
+          return;
+        }
+        if (Date.now() - startedAt >= timeoutMs) {
+          clearInterval(interval);
+          resolve(null);
+        }
+      }, 100);
+    });
+  }
+
   async confirmSend(
     messageId: string,
-    options?: { upsertTimeoutMs?: number; ackTimeoutMs?: number }
-  ): Promise<{ ok: boolean; via: 'upsert' | 'ack' | 'none'; status?: number | null; statusLabel?: string | null }> {
+    options?: { upsertTimeoutMs?: number; ackTimeoutMs?: number; requireServerAck?: boolean }
+  ): Promise<{ ok: boolean; via: 'upsert' | 'ack' | 'none'; status?: number | null; statusLabel?: string | null; error?: string | null }> {
     const upsertTimeoutMs = Number(options?.upsertTimeoutMs ?? 5000);
     const ackTimeoutMs = Number(options?.ackTimeoutMs ?? 15000);
+    const requireServerAck = Boolean(options?.requireServerAck);
     const minStatus = 2;
     let sawLocalUpsert = false;
 
@@ -2300,6 +2399,11 @@ class WhatsAppClient {
       }
     } catch {
       // ignore
+    }
+
+    const cachedFailure = this.recentMessageFailures.get(messageId);
+    if (cachedFailure) {
+      return { ok: false, via: 'none', error: cachedFailure.errorMessage };
     }
 
     if (sawLocalUpsert) {
@@ -2313,15 +2417,41 @@ class WhatsAppClient {
         };
       }
 
+      if (requireServerAck) {
+        const [acked, failed] = await Promise.all([
+          this.waitForMessageStatus(messageId, minStatus, ackTimeoutMs),
+          this.waitForMessageFailure(messageId, ackTimeoutMs)
+        ]);
+        if (failed) {
+          return { ok: false, via: 'none', error: failed.errorMessage };
+        }
+        if (acked) {
+          return { ok: true, via: 'ack', status: acked.status, statusLabel: acked.statusLabel };
+        }
+        return {
+          ok: false,
+          via: 'upsert',
+          status: 1,
+          statusLabel: 'pending',
+          error: 'Server ack not observed'
+        };
+      }
+
       return { ok: true, via: 'upsert', status: 1, statusLabel: 'pending' };
     }
 
-    const acked = await this.waitForMessageStatus(messageId, minStatus, ackTimeoutMs);
+    const [acked, failed] = await Promise.all([
+      this.waitForMessageStatus(messageId, minStatus, ackTimeoutMs),
+      this.waitForMessageFailure(messageId, ackTimeoutMs)
+    ]);
+    if (failed) {
+      return { ok: false, via: 'none', error: failed.errorMessage };
+    }
     if (acked) {
       return { ok: true, via: 'ack', status: acked.status, statusLabel: acked.statusLabel };
     }
 
-    return { ok: false, via: 'none' };
+    return { ok: false, via: 'none', error: requireServerAck ? 'Server ack not observed' : null };
   }
 
   getQrCode(): string | null {
@@ -3175,6 +3305,7 @@ class WhatsAppClient {
     this.contactsCache.clear();
     this.recentSentMessages.clear();
     this.recentMessageStatuses.clear();
+    this.recentMessageFailures.clear();
     this.pendingReceiptUpdates.clear();
     if (this.pendingReceiptFlushTimer) {
       clearTimeout(this.pendingReceiptFlushTimer);
@@ -3227,6 +3358,7 @@ class WhatsAppClient {
     this.groupMetadataCache.clear();
     this.recentSentMessages.clear();
     this.recentMessageStatuses.clear();
+    this.recentMessageFailures.clear();
     this.pendingReceiptUpdates.clear();
     if (this.pendingReceiptFlushTimer) {
       clearTimeout(this.pendingReceiptFlushTimer);

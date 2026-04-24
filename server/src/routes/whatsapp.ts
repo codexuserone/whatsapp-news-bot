@@ -27,6 +27,7 @@ type TestSendConfirmation = {
   via: string;
   status?: number | null;
   statusLabel?: string | null;
+  error?: string | null;
 };
 
 type TestSendLogResolution = {
@@ -1480,14 +1481,15 @@ const whatsappRoutes = () => {
         );
 
         const messageId = result?.key?.id || null;
-        let confirmation: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null = null;
+        let confirmation: TestSendConfirmation | null = null;
         if (confirmationRequired && !messageId) {
           throw new Error('Test message was not assigned a WhatsApp message id');
         }
         if (confirmationRequired && messageId && whatsapp?.confirmSend) {
+          const requireServerAck = isNewsletterJid(normalizedJid);
           const timeouts = (imageUrl || videoUrl || imageDataUrl || videoDataUrl)
-            ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
-            : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 };
+            ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck }
+            : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck };
           confirmation = await whatsapp.confirmSend(messageId, timeouts);
         }
         results.push({

@@ -505,6 +505,69 @@ const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
   }
 };
 
+const processFeedResultForSchedules = async (
+  feedId: string,
+  result: { items?: unknown[]; updatedItems?: unknown[] },
+  whatsappClient?: WhatsAppClient,
+  source = 'feed polling'
+) => {
+  if (Array.isArray(result.updatedItems) && result.updatedItems.length) {
+    const reconcile = await reconcileUpdatedFeedItems(result.updatedItems, whatsappClient);
+    logger.info(
+      { feedId, reconcile, source },
+      'Applied post-send reconciliation after feed refresh'
+    );
+  }
+
+  if (Array.isArray(result.items) && result.items.length) {
+    logger.info(
+      { feedId, count: result.items.length, source },
+      'Queueing schedules after feed refresh discovered new items'
+    );
+    await queueBatchSchedulesForFeed(feedId, whatsappClient);
+    await triggerImmediateSchedules(feedId, whatsappClient);
+  }
+};
+
+const runRecentFeedCorrectionPass = async (whatsappClient?: WhatsAppClient) => {
+  try {
+    if (await isAppPaused()) return;
+    if (!canRunSchedulers(whatsappClient)) return;
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+
+    const feedIds = await listRecentlyCorrectableFeedIds(supabase);
+    if (!feedIds.length) return;
+
+    const { data: feeds, error } = await supabase
+      .from('feeds')
+      .select('*')
+      .in('id', feedIds)
+      .eq('active', true);
+
+    if (error) throw error;
+
+    for (const feed of feeds || []) {
+      if (!feed?.id) continue;
+      if (feedInFlight.get(feed.id)) {
+        continue;
+      }
+
+      feedInFlight.set(feed.id, true);
+      try {
+        const result = await fetchAndProcessFeed(feed);
+        await processFeedResultForSchedules(feed.id, result, whatsappClient, 'recent-send correction watcher');
+      } catch (error) {
+        logger.error({ error, feedId: feed.id }, 'Failed recent-send correction watcher pass');
+      } finally {
+        feedInFlight.set(feed.id, false);
+      }
+    }
+  } catch (error) {
+    logger.error({ error }, 'Failed recent-feed correction watcher');
+  }
+};
+
 const startRecentFeedCorrectionWatcher = (whatsappClient?: WhatsAppClient) => {
   if (recentFeedCorrectionTimer) {
     clearInterval(recentFeedCorrectionTimer);
@@ -512,54 +575,9 @@ const startRecentFeedCorrectionWatcher = (whatsappClient?: WhatsAppClient) => {
   }
 
   const intervalMs = Math.max(Number(process.env.FEED_CORRECTION_POLL_MS || 60000), 30000);
-  const runCorrectionPass = async () => {
-    try {
-      if (await isAppPaused()) return;
-      if (!canRunSchedulers(whatsappClient)) return;
-      const supabase = getSupabaseClient();
-      if (!supabase) return;
-
-      const feedIds = await listRecentlyCorrectableFeedIds(supabase);
-      if (!feedIds.length) return;
-
-      const { data: feeds, error } = await supabase
-        .from('feeds')
-        .select('*')
-        .in('id', feedIds)
-        .eq('active', true);
-
-      if (error) throw error;
-
-      for (const feed of feeds || []) {
-        if (!feed?.id) continue;
-        if (feedInFlight.get(feed.id)) {
-          continue;
-        }
-
-        feedInFlight.set(feed.id, true);
-        try {
-          const result = await fetchAndProcessFeed(feed);
-          if (Array.isArray(result.updatedItems) && result.updatedItems.length) {
-            const reconcile = await reconcileUpdatedFeedItems(result.updatedItems, whatsappClient);
-            logger.info(
-              { feedId: feed.id, reconcile },
-              'Applied correction-window reconciliation during recent-send watch pass'
-            );
-          }
-        } catch (error) {
-          logger.error({ error, feedId: feed.id }, 'Failed recent-send correction watcher pass');
-        } finally {
-          feedInFlight.set(feed.id, false);
-        }
-      }
-    } catch (error) {
-      logger.error({ error }, 'Failed recent-feed correction watcher');
-    }
-  };
-
-  void runCorrectionPass();
+  void runRecentFeedCorrectionPass(whatsappClient);
   recentFeedCorrectionTimer = setInterval(() => {
-    void runCorrectionPass();
+    void runRecentFeedCorrectionPass(whatsappClient);
   }, intervalMs);
 };
 
@@ -760,6 +778,8 @@ module.exports = {
   queueBatchSchedulesForFeed,
   waitForFeedIdle,
   __testUtils: {
-    parseCorrectionWindowMinutes
+    parseCorrectionWindowMinutes,
+    processFeedResultForSchedules,
+    runRecentFeedCorrectionPass
   }
 };

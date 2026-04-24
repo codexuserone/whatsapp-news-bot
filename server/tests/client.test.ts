@@ -358,8 +358,51 @@ describe('WhatsAppClient', () => {
             ackTimeoutMs: 10
         });
 
-        expect(result).toEqual({ ok: false, via: 'none' });
+        expect(result).toEqual({ ok: false, via: 'none', error: null });
         expect(client.waitForMessageStatus).toHaveBeenCalledWith('msg-pending', 2, 10);
+    });
+
+    it('should not accept local upsert when server ack is required', async () => {
+        client.waitForMessage = jest.fn(async () => ({ key: { id: 'msg-local-only' } }));
+        client.waitForMessageStatus = jest.fn(async () => null);
+
+        const result = await client.confirmSend('msg-local-only', {
+            upsertTimeoutMs: 10,
+            ackTimeoutMs: 10,
+            requireServerAck: true
+        });
+
+        expect(result).toEqual({
+            ok: false,
+            via: 'upsert',
+            status: 1,
+            statusLabel: 'pending',
+            error: 'Server ack not observed'
+        });
+        expect(client.waitForMessageStatus).toHaveBeenCalledWith('msg-local-only', 2, 10);
+    });
+
+    it('should fail confirmation when Baileys reports an ack error', async () => {
+        const baileysLogger = client.createBaileysLogger();
+        client.waitForMessage = jest.fn(async () => ({ key: { id: 'msg-ack-error' } }));
+        client.waitForMessageStatus = jest.fn(async () => null);
+
+        baileysLogger.warn(
+            { node: { attrs: { class: 'message', from: '120363401649232180@newsletter', id: 'msg-ack-error', error: '479' } } },
+            'received error in ack'
+        );
+
+        const result = await client.confirmSend('msg-ack-error', {
+            upsertTimeoutMs: 10,
+            ackTimeoutMs: 10,
+            requireServerAck: true
+        });
+
+        expect(result).toEqual({
+            ok: false,
+            via: 'none',
+            error: 'WhatsApp server rejected message ack 479'
+        });
     });
 
     it('should require server ack or better before confirming a send', async () => {

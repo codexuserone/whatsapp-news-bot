@@ -220,9 +220,14 @@ const shouldPreserveStoredSnapshot = (
   freshParticipantCount: number,
   freshSources: Partial<StatusAudienceSources> | null | undefined
 ) => {
-  if (stored.participantCount < MIN_PRESERVED_SNAPSHOT_PARTICIPANTS) return false;
   if (!stored.recipients.length) return false;
   if (!shouldTrustStoredSnapshot(stored)) return false;
+  if (
+    stored.participantCount < MIN_PRESERVED_SNAPSHOT_PARTICIPANTS &&
+    getTrustedAudienceSignalCount(stored.sources) <= 0
+  ) {
+    return false;
+  }
   const storedRefreshedAtMs = stored.refreshedAt ? Date.parse(stored.refreshedAt) : Number.NaN;
   if (!Number.isFinite(storedRefreshedAtMs)) return false;
   const snapshotAgeMs = Date.now() - storedRefreshedAtMs;

@@ -288,6 +288,56 @@ describe('statusAudienceService', () => {
         expect(tables.status_recipients).toHaveLength(0);
     });
 
+    it('preserves a small trusted contact snapshot during cold reconnect', async () => {
+        const refreshedAt = new Date(Date.now() - 60_000).toISOString();
+        const storedRecipients = ['16465527019@s.whatsapp.net', '16465527020@s.whatsapp.net'];
+        const { supabase, tables } = buildSupabaseMock({
+            status_recipients: storedRecipients.map((recipient) => ({
+                session_id: 'primary',
+                recipient_jid: recipient,
+                refreshed_at: refreshedAt,
+                sources: {
+                    contactsCache: 2,
+                    storeContacts: 0,
+                    storeChats: 0,
+                    groupMetadata: 0,
+                    env: 0,
+                    me: 1,
+                    activeIndividualTargets: 0,
+                    recentSuccessfulDirectRecipients: 0
+                },
+                warnings: []
+            }))
+        });
+        getSupabaseClientMock.mockReturnValue(supabase);
+
+        const result = await refreshStatusRecipients(
+            {
+                getStatus: () => ({ status: 'connected' }),
+                getStatusParticipants: () => ['16465527018@s.whatsapp.net'],
+                getStatusAudience: () => ({
+                    participantCount: 1,
+                    sample: ['16465527018@s.whatsapp.net'],
+                    selfJid: '16465527018@s.whatsapp.net',
+                    sources: {
+                        contactsCache: 0,
+                        storeContacts: 0,
+                        storeChats: 0,
+                        groupMetadata: 0,
+                        env: 0,
+                        me: 1
+                    },
+                    warnings: []
+                })
+            },
+            { sampleSize: 10 }
+        );
+
+        expect(result.recipients).toEqual(storedRecipients);
+        expect(result.warnings.some((warning: string) => warning.includes('Preserved the previous status audience snapshot'))).toBe(true);
+        expect(tables.status_recipients).toHaveLength(2);
+    });
+
     it('does not preserve an old snapshot when the current audience has real warm sources', async () => {
         const refreshedAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
         const { supabase } = buildSupabaseMock({

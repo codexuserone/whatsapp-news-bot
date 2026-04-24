@@ -54,7 +54,8 @@ const createSchedulesSupabase = (schedules: Array<Record<string, unknown>>) => (
         }
         return {
             select: jest.fn(() => ({
-                eq: jest.fn(async () => ({ data: schedules, error: null }))
+                eq: jest.fn(async () => ({ data: schedules, error: null })),
+                not: jest.fn(async () => ({ data: schedules, error: null }))
             }))
         };
     }
@@ -143,7 +144,8 @@ describe('schedulerService dispatch entry points', () => {
             whatsappClient,
             {
                 skipFeedRefresh: true,
-                allowOverdueBatchDispatch: true
+                allowOverdueBatchDispatch: true,
+                maxQueueLookbackHours: undefined
             }
         );
     });
@@ -166,7 +168,8 @@ describe('schedulerService dispatch entry points', () => {
             undefined,
             {
                 skipFeedRefresh: true,
-                allowOverdueBatchDispatch: true
+                allowOverdueBatchDispatch: true,
+                maxQueueLookbackHours: undefined
             }
         );
     });
@@ -235,7 +238,34 @@ describe('schedulerService dispatch entry points', () => {
             whatsappClient,
             {
                 skipFeedRefresh: true,
-                allowOverdueBatchDispatch: true
+                allowOverdueBatchDispatch: true,
+                maxQueueLookbackHours: undefined
+            }
+        );
+    });
+
+    it('runs bounded catch-up for immediate feed schedules even when no pending rows exist', async () => {
+        const whatsappClient = {
+            getStatus: () => ({ status: 'connected' })
+        };
+        mockGetSupabaseClient.mockReturnValue(
+            createSchedulesSupabase([
+                { id: 'immediate-active', feed_id: 'feed-1', state: 'active', active: true, delivery_mode: 'immediate', cron_expression: null },
+                { id: 'cron-active', feed_id: 'feed-1', state: 'active', active: true, delivery_mode: 'immediate', cron_expression: '*/5 * * * *' },
+                { id: 'batch-active', feed_id: 'feed-1', state: 'active', active: true, delivery_mode: 'batched', cron_expression: null }
+            ])
+        );
+
+        await schedulerService.__testUtils.runImmediateScheduleCatchupPass(whatsappClient);
+
+        expect(mockSendQueuedForSchedule).toHaveBeenCalledTimes(1);
+        expect(mockSendQueuedForSchedule).toHaveBeenCalledWith(
+            'immediate-active',
+            whatsappClient,
+            {
+                skipFeedRefresh: true,
+                allowOverdueBatchDispatch: true,
+                maxQueueLookbackHours: 1
             }
         );
     });

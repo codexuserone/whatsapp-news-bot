@@ -338,6 +338,57 @@ describe('statusAudienceService', () => {
         expect(tables.status_recipients).toHaveLength(2);
     });
 
+    it('does not trust a one-recipient cache-only stored status audience', async () => {
+        const refreshedAt = new Date().toISOString();
+        const { supabase, tables } = buildSupabaseMock({
+            status_recipients: [
+                {
+                    session_id: 'primary',
+                    recipient_jid: '103140015788103@lid',
+                    refreshed_at: refreshedAt,
+                    sources: {
+                        contactsCache: 1,
+                        storeContacts: 0,
+                        storeChats: 0,
+                        groupMetadata: 0,
+                        env: 0,
+                        me: 1,
+                        activeIndividualTargets: 0,
+                        recentSuccessfulDirectRecipients: 0
+                    },
+                    warnings: []
+                }
+            ]
+        });
+        getSupabaseClientMock.mockReturnValue(supabase);
+
+        const result = await ensureFreshStatusRecipients(
+            {
+                getStatus: () => ({ status: 'connected' }),
+                getStatusParticipants: () => [],
+                getStatusAudience: () => ({
+                    participantCount: 0,
+                    sample: [],
+                    selfJid: '103140015788103@lid',
+                    sources: {
+                        contactsCache: 0,
+                        storeContacts: 0,
+                        storeChats: 0,
+                        groupMetadata: 0,
+                        env: 0,
+                        me: 1
+                    },
+                    warnings: []
+                })
+            },
+            { maxAgeMinutes: 10, sampleSize: 10 }
+        );
+
+        expect(result.participantCount).toBe(0);
+        expect(result.recipients).toEqual([]);
+        expect(tables.status_recipients).toHaveLength(0);
+    });
+
     it('does not preserve an old snapshot when the current audience has real warm sources', async () => {
         const refreshedAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
         const { supabase } = buildSupabaseMock({

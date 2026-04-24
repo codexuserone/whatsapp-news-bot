@@ -53,12 +53,9 @@ const buildUncertainSendMessage = (value: unknown) => {
   return `Send result is uncertain. Verifying delivery before retrying. ${message}`.trim();
 };
 
-const getStatusAudienceTrustedSourceCount = (snapshot: Record<string, any> | null | undefined) => {
+const getStatusAudienceExplicitSourceCount = (snapshot: Record<string, any> | null | undefined) => {
   const sources = snapshot?.sources || {};
   return (
-    Math.max(0, Math.floor(Number(sources.contactsCache || 0))) +
-    Math.max(0, Math.floor(Number(sources.storeContacts || 0))) +
-    Math.max(0, Math.floor(Number(sources.storeChats || 0))) +
     Math.max(0, Math.floor(Number(sources.env || 0))) +
     Math.max(0, Math.floor(Number(sources.activeIndividualTargets || 0))) +
     Math.max(0, Math.floor(Number(sources.recentSuccessfulDirectRecipients || 0)))
@@ -70,7 +67,7 @@ const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undef
   if (!recipients.length) {
     throw badRequest('No fresh status recipients are available for this status send.');
   }
-  if (recipients.length <= 1 && getStatusAudienceTrustedSourceCount(snapshot) <= 0) {
+  if (recipients.length <= 1 && getStatusAudienceExplicitSourceCount(snapshot) <= 0) {
     throw badRequest('Status audience has no private viewers yet. Add or sync at least one private WhatsApp contact before sending Status.');
   }
 };

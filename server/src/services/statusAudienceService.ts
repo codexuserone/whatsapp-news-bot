@@ -122,6 +122,11 @@ const getTrustedAudienceSignalCount = (sources: Partial<StatusAudienceSources> |
   Math.max(0, Math.floor(Number(sources?.activeIndividualTargets || 0))) +
   Math.max(0, Math.floor(Number(sources?.recentSuccessfulDirectRecipients || 0)));
 
+const getExplicitAudienceSignalCount = (sources: Partial<StatusAudienceSources> | null | undefined) =>
+  Math.max(0, Math.floor(Number(sources?.env || 0))) +
+  Math.max(0, Math.floor(Number(sources?.activeIndividualTargets || 0))) +
+  Math.max(0, Math.floor(Number(sources?.recentSuccessfulDirectRecipients || 0)));
+
 const isGroupMetadataOnlySnapshot = (snapshot: RefreshResult) =>
   Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0))) > 0 &&
   getTrustedAudienceSignalCount(snapshot.sources) === 0;
@@ -141,6 +146,7 @@ const isLidHeavySnapshot = (snapshot: RefreshResult) => {
 const shouldTrustStoredSnapshot = (snapshot: RefreshResult) => {
   if (snapshot.participantCount <= 0) return false;
   if (getTrustedAudienceSignalCount(snapshot.sources) <= 0) return false;
+  if (snapshot.participantCount <= 1 && getExplicitAudienceSignalCount(snapshot.sources) <= 0) return false;
   if (isGroupMetadataOnlySnapshot(snapshot)) return false;
   if (isGroupMetadataDominatedSnapshot(snapshot) && isLidHeavySnapshot(snapshot)) return false;
   if (isLidHeavySnapshot(snapshot) && getTrustedAudienceSignalCount(snapshot.sources) === 0) return false;

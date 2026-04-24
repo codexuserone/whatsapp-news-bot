@@ -132,12 +132,9 @@ const isNonRevivableFailureMessage = (...messages: unknown[]) => {
   return NON_REVIVABLE_FAILURE_PATTERNS.some((pattern) => pattern.test(combined));
 };
 
-const getStatusAudienceTrustedSourceCount = (snapshot: Record<string, any> | null | undefined) => {
+const getStatusAudienceExplicitSourceCount = (snapshot: Record<string, any> | null | undefined) => {
   const sources = snapshot?.sources || {};
   return (
-    Math.max(0, Math.floor(Number(sources.contactsCache || 0))) +
-    Math.max(0, Math.floor(Number(sources.storeContacts || 0))) +
-    Math.max(0, Math.floor(Number(sources.storeChats || 0))) +
     Math.max(0, Math.floor(Number(sources.env || 0))) +
     Math.max(0, Math.floor(Number(sources.activeIndividualTargets || 0))) +
     Math.max(0, Math.floor(Number(sources.recentSuccessfulDirectRecipients || 0)))
@@ -149,7 +146,7 @@ const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undef
   if (!recipients.length) {
     throw new Error('No fresh status recipients are available for this status send.');
   }
-  if (recipients.length <= 1 && getStatusAudienceTrustedSourceCount(snapshot) <= 0) {
+  if (recipients.length <= 1 && getStatusAudienceExplicitSourceCount(snapshot) <= 0) {
     throw new Error('Status audience has no private viewers yet; refusing to mark a self-only Status send as sent.');
   }
 };
@@ -2818,6 +2815,7 @@ type SendQueuedOptions = {
   skipFeedRefresh?: boolean;
   allowOverdueBatchDispatch?: boolean;
   skipQueueGeneration?: boolean;
+  maxQueueLookbackHours?: number;
 };
 
 const parseBatchTimes = (value: unknown): string[] => {
@@ -2966,6 +2964,25 @@ const resolveFeedItemTimestampMs = (
   return Number.isFinite(timestampMs) ? timestampMs : Number.NaN;
 };
 
+const normalizeQueueLookbackHours = (value: unknown, fallback = DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS) => {
+  const parsed = Number(value);
+  const normalizedFallback = Math.max(Number(fallback) || DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS, 1);
+  if (!Number.isFinite(parsed)) return normalizedFallback;
+  return Math.min(Math.max(Math.floor(parsed), 1), DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS);
+};
+
+const clampQueueCursorToLookback = (
+  cursorIso: string,
+  maxLookbackHours = DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS,
+  nowMs = Date.now()
+) => {
+  const cursorMs = Date.parse(String(cursorIso || ''));
+  const lookbackHours = normalizeQueueLookbackHours(maxLookbackHours);
+  const lookbackMs = nowMs - lookbackHours * 60 * 60 * 1000;
+  const sinceMs = Number.isFinite(cursorMs) ? Math.max(cursorMs, lookbackMs) : lookbackMs;
+  return new Date(sinceMs).toISOString();
+};
+
 const isAutoQueueReplayTooOld = (
   log: { created_at?: string | null },
   item: { pub_date?: string | null; created_at?: string | null } | null | undefined,
@@ -2985,14 +3002,17 @@ const isAutoQueueReplayTooOld = (
 const queueSinceLastRunForSchedule = async (
   supabase: SupabaseClient,
   schedule: Schedule,
-  targets: Target[]
+  targets: Target[],
+  options?: { maxLookbackHours?: number }
 ): Promise<{ queued: number; feedItemCount: number; cursorAt: string | null }> => {
   if (!schedule.feed_id) return { queued: 0, feedItemCount: 0, cursorAt: null };
-  const sinceIso =
+  const rawSinceIso =
     schedule.last_queued_at ||
     schedule.last_run_at ||
     schedule.created_at ||
     new Date().toISOString();
+  const maxLookbackHours = normalizeQueueLookbackHours(options?.maxLookbackHours);
+  const sinceIso = clampQueueCursorToLookback(rawSinceIso, maxLookbackHours);
   if (!targets.length) return { queued: 0, feedItemCount: 0, cursorAt: null };
 
   const targetIds = targets.map((t) => t.id).filter(Boolean) as string[];
@@ -3011,7 +3031,7 @@ const queueSinceLastRunForSchedule = async (
   // Pre-fetch existing combinations to avoid duplicates in batch
   const existingCombos = new Set<string>();
   const refreshExistingCombos = async () => {
-    const since = new Date(Date.now() - DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS * 60 * 60 * 1000).toISOString();
+    const since = new Date(Date.now() - maxLookbackHours * 60 * 60 * 1000).toISOString();
     const { data: existing } = await supabase
       .from('message_logs')
       .select('schedule_id,feed_item_id,target_id')
@@ -3076,7 +3096,7 @@ const queueSinceLastRunForSchedule = async (
     }
 
     const pagePlan = planFeedDispatchPage((page || []) as Array<{ id?: string; created_at?: string; pub_date?: string }>);
-    const items = pagePlan.dispatchItems.filter((item) => isFeedItemFreshEnoughForAutoQueue(item));
+    const items = pagePlan.dispatchItems.filter((item) => isFeedItemFreshEnoughForAutoQueue(item, maxLookbackHours));
     if (!items.length) {
       cursorAt = pagePlan.cursorAt || cursorAt;
       cursorId = pagePlan.cursorId || cursorId;
@@ -3559,7 +3579,12 @@ const sendQueuedForSchedule = async (
       null;
 
     if (!options?.skipQueueGeneration) {
-      const sinceResult = await queueSinceLastRunForSchedule(supabase, schedule, targets);
+      const maxQueueLookbackHours = normalizeQueueLookbackHours(
+        options?.maxQueueLookbackHours ?? settings.reconcile_queue_lookback_hours ?? DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS
+      );
+      const sinceResult = await queueSinceLastRunForSchedule(supabase, schedule, targets, {
+        maxLookbackHours: maxQueueLookbackHours
+      });
       queuedCount += sinceResult.queued;
       queueCursorAt = sinceResult.cursorAt || queueCursorAt;
 
@@ -3567,7 +3592,7 @@ const sendQueuedForSchedule = async (
         supabase,
         schedule,
         targets,
-        Number(settings.reconcile_queue_lookback_hours || 12)
+        maxQueueLookbackHours
       );
       queuedCount += missingQueued;
     }
@@ -5207,6 +5232,8 @@ module.exports = {
     shouldAttemptReplacementAfterCorrectionFailure,
     isFeedItemFreshEnoughForAutoQueue,
     isAutoQueueReplayTooOld,
+    normalizeQueueLookbackHours,
+    clampQueueCursorToLookback,
     isUsableFeedImageUrl,
     isConnectionStateError,
     buildConnectionWaitErrorMessage,

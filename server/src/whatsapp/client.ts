@@ -2384,13 +2384,24 @@ class WhatsAppClient {
 
   async confirmSend(
     messageId: string,
-    options?: { upsertTimeoutMs?: number; ackTimeoutMs?: number; requireServerAck?: boolean }
+    options?: { upsertTimeoutMs?: number; ackTimeoutMs?: number; requireServerAck?: boolean; failureGraceMs?: number }
   ): Promise<{ ok: boolean; via: 'upsert' | 'ack' | 'none'; status?: number | null; statusLabel?: string | null; error?: string | null }> {
     const upsertTimeoutMs = Number(options?.upsertTimeoutMs ?? 5000);
     const ackTimeoutMs = Number(options?.ackTimeoutMs ?? 15000);
     const requireServerAck = Boolean(options?.requireServerAck);
+    const failureGraceMs = Math.max(Number(options?.failureGraceMs ?? 0), 0);
     const minStatus = 2;
     let sawLocalUpsert = false;
+
+    const waitForAckOrFailure = async (timeoutMs: number) => {
+      const ackPromise = this.waitForMessageStatus(messageId, minStatus, timeoutMs).then((acked) =>
+        acked ? ({ type: 'ack' as const, value: acked }) : ({ type: 'none' as const })
+      );
+      const failurePromise = this.waitForMessageFailure(messageId, timeoutMs).then((failed) =>
+        failed ? ({ type: 'failure' as const, value: failed }) : ({ type: 'none' as const })
+      );
+      return Promise.race([ackPromise, failurePromise]);
+    };
 
     try {
       const observed = await this.waitForMessage(messageId, upsertTimeoutMs);
@@ -2418,15 +2429,12 @@ class WhatsAppClient {
       }
 
       if (requireServerAck) {
-        const [acked, failed] = await Promise.all([
-          this.waitForMessageStatus(messageId, minStatus, ackTimeoutMs),
-          this.waitForMessageFailure(messageId, ackTimeoutMs)
-        ]);
-        if (failed) {
-          return { ok: false, via: 'none', error: failed.errorMessage };
+        const outcome = await waitForAckOrFailure(ackTimeoutMs);
+        if (outcome.type === 'failure') {
+          return { ok: false, via: 'none', error: outcome.value.errorMessage };
         }
-        if (acked) {
-          return { ok: true, via: 'ack', status: acked.status, statusLabel: acked.statusLabel };
+        if (outcome.type === 'ack') {
+          return { ok: true, via: 'ack', status: outcome.value.status, statusLabel: outcome.value.statusLabel };
         }
         return {
           ok: false,
@@ -2437,18 +2445,22 @@ class WhatsAppClient {
         };
       }
 
+      if (failureGraceMs > 0) {
+        const failed = await this.waitForMessageFailure(messageId, failureGraceMs);
+        if (failed) {
+          return { ok: false, via: 'none', error: failed.errorMessage };
+        }
+      }
+
       return { ok: true, via: 'upsert', status: 1, statusLabel: 'pending' };
     }
 
-    const [acked, failed] = await Promise.all([
-      this.waitForMessageStatus(messageId, minStatus, ackTimeoutMs),
-      this.waitForMessageFailure(messageId, ackTimeoutMs)
-    ]);
-    if (failed) {
-      return { ok: false, via: 'none', error: failed.errorMessage };
+    const outcome = await waitForAckOrFailure(ackTimeoutMs);
+    if (outcome.type === 'failure') {
+      return { ok: false, via: 'none', error: outcome.value.errorMessage };
     }
-    if (acked) {
-      return { ok: true, via: 'ack', status: acked.status, statusLabel: acked.statusLabel };
+    if (outcome.type === 'ack') {
+      return { ok: true, via: 'ack', status: outcome.value.status, statusLabel: outcome.value.statusLabel };
     }
 
     return { ok: false, via: 'none', error: requireServerAck ? 'Server ack not observed' : null };

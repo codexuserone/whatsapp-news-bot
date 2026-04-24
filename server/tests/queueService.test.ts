@@ -107,6 +107,41 @@ describe('queueService __testUtils', () => {
     expect(testUtils.buildConnectionWaitErrorMessage('')).toBe('Waiting for WhatsApp connection');
   });
 
+  it('requires server ack only for channel media sends', () => {
+    const mediaResult = {
+      media: { type: 'image', url: 'https://example.com/a.jpg', sent: true, error: null }
+    };
+    const textResult = {
+      media: { type: null, url: null, sent: false, error: null }
+    };
+
+    expect(testUtils.shouldRequireServerAckForSend('channel', mediaResult)).toBe(true);
+    expect(testUtils.shouldRequireServerAckForSend('channel', textResult)).toBe(false);
+    expect(testUtils.shouldRequireServerAckForSend('group', mediaResult)).toBe(false);
+  });
+
+  it('detects newsletter media ack 479 as a channel media rejection', () => {
+    const mediaResult = {
+      media: { type: 'image', url: 'https://example.com/a.jpg', sent: true, error: null }
+    };
+    const textResult = {
+      media: { type: null, url: null, sent: false, error: null }
+    };
+
+    expect(testUtils.isChannelMediaAckRejection('channel', mediaResult, 'WhatsApp server rejected message ack 479')).toBe(true);
+    expect(testUtils.isChannelMediaAckRejection('channel', textResult, 'WhatsApp server rejected message ack 479')).toBe(false);
+    expect(testUtils.isChannelMediaAckRejection('group', mediaResult, 'WhatsApp server rejected message ack 479')).toBe(false);
+  });
+
+  it('temporarily suppresses channel media after a newsletter ack rejection', () => {
+    const target = { id: 'target-1', phone_number: '120363000@newsletter', type: 'channel' };
+    const now = Date.parse('2026-04-24T12:00:00.000Z');
+
+    expect(testUtils.isChannelMediaTemporarilyBlocked(target, now)).toBe(false);
+    testUtils.rememberChannelMediaRejection(target, now);
+    expect(testUtils.isChannelMediaTemporarilyBlocked(target, now + 1000)).toBe(true);
+  });
+
   it('requeues only stale rows that do not already have a sent sibling', () => {
     const rows = [
       { id: 'log-1', schedule_id: 'schedule-1', target_id: 'target-1', feed_item_id: 'feed-1' },

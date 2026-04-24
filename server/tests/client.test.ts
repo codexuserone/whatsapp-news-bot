@@ -343,6 +343,31 @@ describe('WhatsAppClient', () => {
         expect(client.waitForMessageStatus).not.toHaveBeenCalled();
     });
 
+    it('should use a failure grace window before accepting local channel text upserts', async () => {
+        client.waitForMessage = jest.fn(async () => ({ key: { id: 'msg-local-failed' } }));
+        client.waitForMessageStatus = jest.fn(async () => null);
+        client.waitForMessageFailure = jest.fn(async () => ({
+            messageId: 'msg-local-failed',
+            errorCode: '479',
+            errorMessage: 'WhatsApp server rejected message ack 479',
+            remoteJid: '120363401649232180@newsletter',
+            updatedAtMs: Date.now()
+        }));
+
+        const result = await client.confirmSend('msg-local-failed', {
+            upsertTimeoutMs: 10,
+            ackTimeoutMs: 10,
+            failureGraceMs: 10
+        });
+
+        expect(result).toEqual({
+            ok: false,
+            via: 'none',
+            error: 'WhatsApp server rejected message ack 479'
+        });
+        expect(client.waitForMessageStatus).not.toHaveBeenCalled();
+    });
+
     it('should not treat pending status as a confirmed send', async () => {
         client.waitForMessage = jest.fn(async () => null);
         client.waitForMessageStatus = jest.fn(async () => null);

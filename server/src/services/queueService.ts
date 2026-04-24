@@ -82,7 +82,7 @@ type WhatsAppClient = {
   waitForMessage?: (messageId: string, timeoutMs?: number) => Promise<any>;
   confirmSend?: (
     messageId: string,
-    options?: { upsertTimeoutMs?: number; ackTimeoutMs?: number; requireServerAck?: boolean }
+    options?: { upsertTimeoutMs?: number; ackTimeoutMs?: number; requireServerAck?: boolean; failureGraceMs?: number }
   ) => Promise<{ ok: boolean; via: 'upsert' | 'ack' | 'none'; status?: number | null; statusLabel?: string | null; error?: string | null }>;
   getGroupInfo?: (
     jid: string,
@@ -748,7 +748,37 @@ const reconcileUncertainMessageLogs = async (supabase: SupabaseClient, settings:
 let globalLastTargetId: string | null = null;
 let globalLastSentAtMs = 0;
 const globalLastSentByTargetId = new Map<string, number>();
+const CHANNEL_MEDIA_REJECTION_SUPPRESS_MS = Math.max(
+  Number(process.env.WHATSAPP_CHANNEL_MEDIA_REJECTION_SUPPRESS_MS || 30 * 60 * 1000),
+  60 * 1000
+);
+const channelMediaBlockedUntilByTargetId = new Map<string, number>();
 
+const getTargetSendKey = (target: Target | null | undefined) =>
+  String(target?.id || target?.phone_number || '').trim();
+
+const rememberChannelMediaRejection = (target: Target | null | undefined, nowMs = Date.now()) => {
+  if (target?.type !== 'channel') return;
+  const key = getTargetSendKey(target);
+  if (!key) return;
+  channelMediaBlockedUntilByTargetId.set(key, nowMs + CHANNEL_MEDIA_REJECTION_SUPPRESS_MS);
+  if (channelMediaBlockedUntilByTargetId.size > 1000) {
+    channelMediaBlockedUntilByTargetId.clear();
+  }
+};
+
+const isChannelMediaTemporarilyBlocked = (target: Target | null | undefined, nowMs = Date.now()) => {
+  if (target?.type !== 'channel') return false;
+  const key = getTargetSendKey(target);
+  if (!key) return false;
+  const blockedUntil = channelMediaBlockedUntilByTargetId.get(key) || 0;
+  if (!blockedUntil) return false;
+  if (blockedUntil <= nowMs) {
+    channelMediaBlockedUntilByTargetId.delete(key);
+    return false;
+  }
+  return true;
+};
 
 
 // Simple Mutex with Timeout to replace the fragile Promise chain
@@ -1648,6 +1678,80 @@ type SendWithMediaResult = {
     sent: boolean;
     error: string | null;
   };
+};
+
+type SendConfirmation = {
+  ok: boolean;
+  via: 'upsert' | 'ack' | 'none';
+  status?: number | null;
+  statusLabel?: string | null;
+  error?: string | null;
+};
+
+const isMediaSendResult = (sendResult: SendWithMediaResult | null | undefined) =>
+  Boolean(sendResult?.media?.sent && sendResult?.media?.type);
+
+const shouldRequireServerAckForSend = (
+  targetType: Target['type'] | null | undefined,
+  sendResult: SendWithMediaResult | null | undefined
+) => targetType === 'channel' && isMediaSendResult(sendResult);
+
+const isChannelMediaAckRejection = (
+  targetType: Target['type'] | null | undefined,
+  sendResult: SendWithMediaResult | null | undefined,
+  errorMessage: unknown
+) => {
+  if (targetType !== 'channel' || !isMediaSendResult(sendResult)) return false;
+  return /(?:ack|server rejected|rejected).*479|479.*(?:ack|server rejected|rejected)/i.test(String(errorMessage || ''));
+};
+
+const buildChannelMediaFallbackError = (mediaType: string | null | undefined, errorMessage: unknown) => {
+  const kind = String(mediaType || 'media').trim() || 'media';
+  const reason = String(errorMessage || 'WhatsApp rejected the channel media send').trim();
+  return `Channel ${kind} was rejected by WhatsApp (${reason}); sent text/link preview instead.`;
+};
+
+const confirmSendResult = async (
+  whatsappClient: WhatsAppClient,
+  targetType: Target['type'],
+  sendResult: SendWithMediaResult,
+  options?: { isStatus?: boolean; allowChannelTextUpsert?: boolean }
+): Promise<SendConfirmation> => {
+  const messageId = sendResult?.response?.key?.id;
+  if (!messageId) {
+    return { ok: false, via: 'none', error: 'Message send not confirmed (missing message id)' };
+  }
+
+  if (whatsappClient.confirmSend) {
+    const media = isMediaSendResult(sendResult);
+    const requireServerAck = shouldRequireServerAckForSend(targetType, sendResult);
+    const isStatus = Boolean(options?.isStatus);
+    const failureGraceMs = targetType === 'channel' && !requireServerAck && options?.allowChannelTextUpsert
+      ? 3000
+      : 0;
+    return whatsappClient.confirmSend(
+      messageId,
+      isStatus
+        ? {
+            upsertTimeoutMs: media ? 30000 : 5000,
+            ackTimeoutMs: media ? 90000 : 60000,
+            requireServerAck,
+            failureGraceMs
+          }
+        : media
+          ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck, failureGraceMs }
+          : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck, failureGraceMs }
+    );
+  }
+
+  if (whatsappClient.waitForMessage) {
+    const observed = await whatsappClient.waitForMessage(messageId, 15000);
+    if (!observed) {
+      return { ok: false, via: 'none', error: 'Message send not confirmed (no local upsert)' };
+    }
+  }
+
+  return { ok: true, via: 'upsert', status: 1, statusLabel: 'pending' };
 };
 
 const sendMessageWithTemplate = async (
@@ -3777,11 +3881,27 @@ const sendQueuedForSchedule = async (
 
             didClaim = true;
             await waitForDelays(target as Target, settings);
-            const result = await sendMessageWithTemplate(whatsappClient, target, template, feedItem, {
+            const channelMediaSuppressed = isChannelMediaTemporarilyBlocked(target as Target);
+            const effectiveTemplate = channelMediaSuppressed
+              ? ({ ...template, send_mode: 'text_preview' } as Template)
+              : template;
+            const result = await sendMessageWithTemplate(whatsappClient, target, effectiveTemplate, feedItem, {
               supabase,
               sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
               overrideText: typeof log.message_content === 'string' ? log.message_content : null
             });
+            const finalResult =
+              channelMediaSuppressed && expectedMedia.url
+                ? {
+                    ...result,
+                    media: {
+                      type: expectedMedia.kind,
+                      url: expectedMedia.url,
+                      sent: false,
+                      error: buildChannelMediaFallbackError(expectedMedia.kind, 'recent WhatsApp newsletter ack 479')
+                    }
+                  }
+                : result;
             const nowMs = Date.now();
             globalLastSentAtMs = nowMs;
             globalLastTargetId = String(target.id);
@@ -3789,42 +3909,75 @@ const sendQueuedForSchedule = async (
             if (globalLastSentByTargetId.size > 1000) {
               globalLastSentByTargetId.clear();
             }
-            return result;
+            return finalResult;
           });
           if (!didClaim || !sendResult) {
             continue;
           }
-          const response = sendResult?.response;
-
-          const messageId = response?.key?.id;
+          let confirmedSendResult = sendResult;
+          let response = confirmedSendResult?.response;
+          let messageId = response?.key?.id;
           if (!messageId) {
             throw new Error('Message send not confirmed (missing message id)');
           }
           if (messageId) {
-            if (whatsappClient.confirmSend) {
-              const isMedia =
-                (sendResult?.media?.type === 'image' || sendResult?.media?.type === 'video') &&
-                Boolean(sendResult?.media?.sent);
-              const requireServerAck = target.type === 'channel';
-              const confirmation = await whatsappClient.confirmSend(
-                messageId,
-                target.type === 'status'
-                  ? {
-                      upsertTimeoutMs: isMedia ? 30000 : 5000,
-                      ackTimeoutMs: isMedia ? 90000 : 60000,
-                      requireServerAck
-                    }
-                  : isMedia
-                    ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck }
-                    : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck }
-              );
-              if (!confirmation?.ok) {
-                throw new Error(`Message send not confirmed (${confirmation?.error || 'no upsert/ack'})`);
-              }
-            } else if (whatsappClient.waitForMessage) {
-              const observed = await whatsappClient.waitForMessage(messageId, 15000);
-              if (!observed) {
-                throw new Error('Message send not confirmed (no local upsert)');
+            const confirmation = await confirmSendResult(whatsappClient, target.type, confirmedSendResult, {
+              isStatus: target.type === 'status'
+            });
+            if (!confirmation?.ok) {
+              const confirmationError = confirmation?.error || 'no upsert/ack';
+              if (isChannelMediaAckRejection(target.type, confirmedSendResult, confirmationError)) {
+                rememberChannelMediaRejection(target as Target);
+                const fallbackError = buildChannelMediaFallbackError(
+                  confirmedSendResult?.media?.type || null,
+                  confirmationError
+                );
+                logger.warn(
+                  {
+                    scheduleId,
+                    feedItemId: feedItem.id,
+                    targetId: target.id,
+                    mediaType: confirmedSendResult?.media?.type || null,
+                    mediaUrl: confirmedSendResult?.media?.url || null,
+                    error: confirmationError
+                  },
+                  'Channel media rejected; sending text/link preview fallback'
+                );
+                const fallbackTemplate = { ...template, send_mode: 'text_preview' } as Template;
+                const fallbackResult = await withTargetSendLock(target as Target, async () => {
+                  const result = await sendMessageWithTemplate(whatsappClient, target, fallbackTemplate, feedItem, {
+                    supabase,
+                    sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+                    overrideText: typeof log.message_content === 'string' ? log.message_content : null
+                  });
+                  const nowMs = Date.now();
+                  globalLastSentAtMs = nowMs;
+                  globalLastTargetId = String(target.id);
+                  globalLastSentByTargetId.set(String(target.id), nowMs);
+                  if (globalLastSentByTargetId.size > 1000) {
+                    globalLastSentByTargetId.clear();
+                  }
+                  return result;
+                });
+                const fallbackConfirmation = await confirmSendResult(whatsappClient, target.type, fallbackResult, {
+                  allowChannelTextUpsert: true
+                });
+                if (!fallbackConfirmation?.ok) {
+                  throw new Error(`Channel media fallback not confirmed (${fallbackConfirmation?.error || 'no upsert/ack'})`);
+                }
+                confirmedSendResult = {
+                  ...fallbackResult,
+                  media: {
+                    type: confirmedSendResult?.media?.type || null,
+                    url: confirmedSendResult?.media?.url || null,
+                    sent: false,
+                    error: fallbackError
+                  }
+                };
+                response = confirmedSendResult.response;
+                messageId = response?.key?.id;
+              } else {
+                throw new Error(`Message send not confirmed (${confirmationError})`);
               }
             }
           }
@@ -3836,12 +3989,12 @@ const sendQueuedForSchedule = async (
               sent_at: new Date().toISOString(),
               processing_started_at: null,
               error_message: null,
-              message_content: sendResult?.text || null,
+              message_content: confirmedSendResult?.text || null,
               whatsapp_message_id: messageId,
-              media_url: sendResult?.media?.url || null,
-              media_type: sendResult?.media?.type || null,
-              media_sent: Boolean(sendResult?.media?.sent),
-              media_error: sendResult?.media?.error || null
+              media_url: confirmedSendResult?.media?.url || null,
+              media_type: confirmedSendResult?.media?.type || null,
+              media_sent: Boolean(confirmedSendResult?.media?.sent),
+              media_error: confirmedSendResult?.media?.error || null
             })
             .eq('id', log.id);
 
@@ -4247,18 +4400,24 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
     const ensureSendConfirmed = async (messageId: string | null | undefined, isMedia: boolean, isStatus = false) => {
       if (!messageId) return;
       if (activeWhatsappClient.confirmSend) {
-        const requireServerAck = targetRow.type === 'channel';
+        const requireServerAck = targetRow.type === 'channel' && isMedia;
         const confirmation = await activeWhatsappClient.confirmSend(
           messageId,
           isStatus
             ? {
                 upsertTimeoutMs: isMedia ? 30000 : 5000,
                 ackTimeoutMs: isMedia ? 90000 : 60000,
-                requireServerAck
+                requireServerAck,
+                failureGraceMs: targetRow.type === 'channel' && !requireServerAck ? 3000 : 0
               }
             : isMedia
               ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck }
-              : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck }
+              : {
+                  upsertTimeoutMs: 5000,
+                  ackTimeoutMs: 15000,
+                  requireServerAck,
+                  failureGraceMs: targetRow.type === 'channel' && !requireServerAck ? 3000 : 0
+                }
         );
         if (!confirmation?.ok) {
           throw new Error(`Message send not confirmed (${confirmation?.error || 'no upsert/ack'})`);
@@ -4330,10 +4489,14 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
 
         const sendResult = await withTargetSendLock(targetRow, async () => {
           await waitForDelays(targetRow, settings);
+          const channelMediaSuppressed = isChannelMediaTemporarilyBlocked(targetRow);
+          const effectiveTemplate = channelMediaSuppressed
+            ? ({ ...(template as Template), send_mode: 'text_preview' } as Template)
+            : (template as Template);
           const result = await sendMessageWithTemplate(
             activeWhatsappClient,
             targetRow,
-            template as Template,
+            effectiveTemplate,
             feedItemRes.data as FeedItem,
             {
               supabase,
@@ -4341,6 +4504,18 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
               overrideText: typeof log.message_content === 'string' ? log.message_content : null
             }
           );
+          const finalResult =
+            channelMediaSuppressed && expectedMedia.url
+              ? {
+                  ...result,
+                  media: {
+                    type: expectedMedia.kind,
+                    url: expectedMedia.url,
+                    sent: false,
+                    error: buildChannelMediaFallbackError(expectedMedia.kind, 'recent WhatsApp newsletter ack 479')
+                  }
+                }
+              : result;
           const nowMs = Date.now();
           globalLastSentAtMs = nowMs;
           globalLastTargetId = String(targetRow.id);
@@ -4348,16 +4523,74 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           if (globalLastSentByTargetId.size > 1000) {
             globalLastSentByTargetId.clear();
           }
-          return result;
+          return finalResult;
         });
 
-        const messageId = sendResult?.response?.key?.id;
-        await ensureSendConfirmed(
-          messageId || null,
-          ['image', 'video', 'audio', 'document'].includes(String(sendResult?.media?.type || '')) &&
-            Boolean(sendResult?.media?.sent),
-          targetRow.type === 'status'
-        );
+        let confirmedSendResult = sendResult;
+        let messageId = confirmedSendResult?.response?.key?.id;
+        const confirmation = await confirmSendResult(activeWhatsappClient, targetRow.type, confirmedSendResult, {
+          isStatus: targetRow.type === 'status'
+        });
+        if (!confirmation?.ok) {
+          const confirmationError = confirmation?.error || 'no upsert/ack';
+          if (isChannelMediaAckRejection(targetRow.type, confirmedSendResult, confirmationError)) {
+            rememberChannelMediaRejection(targetRow);
+            const fallbackError = buildChannelMediaFallbackError(
+              confirmedSendResult?.media?.type || null,
+              confirmationError
+            );
+            logger.warn(
+              {
+                logId: log.id,
+                targetId: targetRow.id,
+                mediaType: confirmedSendResult?.media?.type || null,
+                mediaUrl: confirmedSendResult?.media?.url || null,
+                error: confirmationError
+              },
+              'Channel media rejected during send-now; sending text/link preview fallback'
+            );
+            const fallbackTemplate = { ...(template as Template), send_mode: 'text_preview' } as Template;
+            const fallbackResult = await withTargetSendLock(targetRow, async () => {
+              const result = await sendMessageWithTemplate(
+                activeWhatsappClient,
+                targetRow,
+                fallbackTemplate,
+                feedItemRes.data as FeedItem,
+                {
+                  supabase,
+                  sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+                  overrideText: typeof log.message_content === 'string' ? log.message_content : null
+                }
+              );
+              const nowMs = Date.now();
+              globalLastSentAtMs = nowMs;
+              globalLastTargetId = String(targetRow.id);
+              globalLastSentByTargetId.set(String(targetRow.id), nowMs);
+              if (globalLastSentByTargetId.size > 1000) {
+                globalLastSentByTargetId.clear();
+              }
+              return result;
+            });
+            const fallbackConfirmation = await confirmSendResult(activeWhatsappClient, targetRow.type, fallbackResult, {
+              allowChannelTextUpsert: true
+            });
+            if (!fallbackConfirmation?.ok) {
+              throw new Error(`Channel media fallback not confirmed (${fallbackConfirmation?.error || 'no upsert/ack'})`);
+            }
+            confirmedSendResult = {
+              ...fallbackResult,
+              media: {
+                type: confirmedSendResult?.media?.type || null,
+                url: confirmedSendResult?.media?.url || null,
+                sent: false,
+                error: fallbackError
+              }
+            };
+            messageId = confirmedSendResult?.response?.key?.id;
+          } else {
+            throw new Error(`Message send not confirmed (${confirmationError})`);
+          }
+        }
 
         await supabase
           .from('message_logs')
@@ -4366,12 +4599,12 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             sent_at: new Date().toISOString(),
             processing_started_at: null,
             error_message: null,
-            message_content: sendResult?.text || null,
+            message_content: confirmedSendResult?.text || null,
             whatsapp_message_id: messageId || null,
-            media_url: sendResult?.media?.url || null,
-            media_type: sendResult?.media?.type || null,
-            media_sent: Boolean(sendResult?.media?.sent),
-            media_error: sendResult?.media?.error || null
+            media_url: confirmedSendResult?.media?.url || null,
+            media_type: confirmedSendResult?.media?.type || null,
+            media_sent: Boolean(confirmedSendResult?.media?.sent),
+            media_error: confirmedSendResult?.media?.error || null
           })
           .eq('id', log.id);
 
@@ -4381,7 +4614,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           .eq('id', String((feedItemRes.data as FeedItem).id || ''))
           .eq('sent', false);
 
-        return { ok: true, messageId: messageId || null, mediaSent: Boolean(sendResult?.media?.sent) };
+        return { ok: true, messageId: messageId || null, mediaSent: Boolean(confirmedSendResult?.media?.sent) };
       }
 
       // Manual queue entry: message + optional media_url/media_type.
@@ -4910,6 +5143,11 @@ module.exports = {
     isAutoQueueReplayTooOld,
     isUsableFeedImageUrl,
     isConnectionStateError,
-    buildConnectionWaitErrorMessage
+    buildConnectionWaitErrorMessage,
+    shouldRequireServerAckForSend,
+    isChannelMediaAckRejection,
+    buildChannelMediaFallbackError,
+    rememberChannelMediaRejection,
+    isChannelMediaTemporarilyBlocked
   }
 };

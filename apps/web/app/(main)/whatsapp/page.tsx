@@ -223,6 +223,29 @@ const WhatsAppPage = () => {
     }),
     [groupedTargets, statusTargets]
   );
+  const statusAudienceCount = Number(statusAudience?.participantCount || 0);
+  const statusSources = statusAudience?.sources || {
+    contactsCache: 0,
+    storeContacts: 0,
+    storeChats: 0,
+    groupMetadata: 0,
+    env: 0,
+    me: 0,
+    recentSuccessfulDirectRecipients: 0
+  };
+  const statusHasOnlySelfAudience =
+    statusAudienceCount <= 1 &&
+    Number(statusSources.me || 0) >= statusAudienceCount &&
+    Number(statusSources.contactsCache || 0) === 0 &&
+    Number(statusSources.storeContacts || 0) === 0 &&
+    Number(statusSources.storeChats || 0) === 0 &&
+    Number(statusSources.env || 0) === 0 &&
+    Number(statusSources.recentSuccessfulDirectRecipients || 0) === 0;
+  const statusAudienceLabel = statusHasOnlySelfAudience
+    ? 'blocked: only this account is resolved as a viewer'
+    : statusAudienceCount > 0
+      ? `${statusAudienceCount} possible viewers from the current snapshot`
+      : 'not ready yet';
   const plainSessionState = React.useMemo(() => {
     if (isConnected) return 'Connected and ready for normal queue work.';
     if (isPaused) return 'Paused. Automation and WhatsApp sends are intentionally stopped.';
@@ -554,12 +577,11 @@ const WhatsAppPage = () => {
             </div>
           </div>
 
-          <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
-            Status audience: {Number(statusAudience?.participantCount || 0) > 0
-              ? `${statusAudience?.participantCount} possible viewers from the current snapshot`
-              : 'not ready yet'}
+          <div className={`rounded-lg border p-3 text-sm ${statusHasOnlySelfAudience ? 'border-warning/40 bg-warning/10 text-warning-foreground' : 'bg-muted/30 text-muted-foreground'}`}>
+            Status audience: {statusAudienceLabel}
             {statusAudience?.refreshedAt ? `, refreshed ${new Date(statusAudience.refreshedAt).toLocaleString()}` : ''}.
             {Array.isArray(statusAudience?.warnings) && statusAudience.warnings.length ? ` ${statusAudience.warnings[0]}` : ''}
+            {statusHasOnlySelfAudience ? ' Status sends are blocked until real viewers are resolved; this prevents false sent claims.' : ''}
           </div>
 
           {syncTargets.isError ? (
@@ -652,7 +674,7 @@ const WhatsAppPage = () => {
                   size="sm"
                   variant="outline"
                   onClick={() => setSelectedTargets(targetBuckets.status)}
-                  disabled={!targetBuckets.status.length}
+                  disabled={!targetBuckets.status.length || statusHasOnlySelfAudience}
                 >
                   Status ({targetBuckets.status.length})
                 </Button>
@@ -711,7 +733,7 @@ const WhatsAppPage = () => {
                   Text / link message
                 </Button>
                 <Button type="button" variant={attachMedia ? 'default' : 'outline'} onClick={() => setAttachMedia(true)}>
-                  Attach image/video
+                  Attach media/file
                 </Button>
               </div>
               {!attachMedia ? (

@@ -467,6 +467,25 @@ const toTextLike = (value: unknown): string | undefined => {
   );
 };
 
+const firstTextLike = (...values: unknown[]) => {
+  for (const value of values) {
+    const text = toTextLike(value);
+    if (text !== undefined && String(text).trim() !== '') return text;
+  }
+  return undefined;
+};
+
+const pickWordPressFeaturedImageUrl = (item: Record<string, unknown>) =>
+  pickFirstUrl(
+    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.medium_large.source_url')),
+    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.large.source_url')),
+    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.medium.source_url')),
+    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.full.source_url')),
+    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.thumbnail.source_url')),
+    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].source_url')),
+    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].guid.rendered'))
+  );
+
 const extractJsonRawFields = (
   item: Record<string, unknown>,
   media?: {
@@ -569,16 +588,24 @@ const mapJsonFeedItem = (feed: FeedConfig, item: Record<string, unknown>): FeedI
     toTextLike(getPath(item, (feed.parseConfig?.titlePath as string) || 'title')) ||
     toTextLike(getPath(item, 'title.rendered'));
 
-  const description =
-    toTextLike(getPath(item, (feed.parseConfig?.descriptionPath as string) || 'description')) ||
-    toTextLike(getPath(item, 'excerpt.rendered')) ||
-    toTextLike(getPath(item, 'summary'));
+  const description = firstTextLike(
+    getPath(item, (feed.parseConfig?.descriptionPath as string) || 'description'),
+    getPath(item, 'excerpt.rendered'),
+    getPath(item, 'excerpt'),
+    getPath(item, 'summary'),
+    getPath(item, 'content_text'),
+    getPath(item, 'content.rendered'),
+    getPath(item, 'content_html'),
+    getPath(item, 'content')
+  );
 
-  const content =
-    toTextLike(getPath(item, 'content.rendered')) ||
-    toTextLike(getPath(item, 'content')) ||
-    toTextLike(getPath(item, 'content_html')) ||
-    toTextLike(getPath(item, 'content_text'));
+  const content = firstTextLike(
+    getPath(item, 'content.rendered'),
+    getPath(item, 'content'),
+    getPath(item, 'content_html'),
+    getPath(item, 'content_text'),
+    description
+  );
 
   const imageCandidate = pickFirstUrl(
     toTextLike(getPath(item, (feed.parseConfig?.imagePath as string) || 'image')),
@@ -591,8 +618,7 @@ const mapJsonFeedItem = (feed: FeedConfig, item: Record<string, unknown>): FeedI
     toTextLike(getPath(item, 'featured_image')),
     toTextLike(getPath(item, 'banner_image')),
     toTextLike(getPath(item, 'yoast_head_json.og_image[0].url')),
-    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].source_url')),
-    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.full.source_url'))
+    pickWordPressFeaturedImageUrl(item)
   );
   const mediaCandidate = pickFirstUrl(
     toTextLike(getPath(item, 'video_url')),
@@ -681,8 +707,20 @@ const fetchRssItems = async (feed: FeedConfig): Promise<FeedItemResult[]> => {
         guid: guidValue,
         title: toStringValue(rssItem.title),
         url: removeUtm(toStringValue(rssItem.link) || ''),
-        description: toStringValue(rssItem.contentSnippet || rssItem.content || rssItem['content:encoded']),
-        content: toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet),
+        description: firstTextLike(
+          rssItem.description,
+          rssItem.summary,
+          rssItem.contentSnippet,
+          rssItem.content,
+          rssItem['content:encoded']
+        ),
+        content: firstTextLike(
+          rssItem['content:encoded'],
+          rssItem.content,
+          rssItem.description,
+          rssItem.summary,
+          rssItem.contentSnippet
+        ),
         author: toStringValue(rssItem.creator || rssItem.author || rssItem['dc:creator']),
         ...(() => {
           const explicitImageCandidate = undefined;
@@ -794,8 +832,20 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
       guid: guidValue,
       title: toStringValue(rssItem.title),
       url: removeUtm(toStringValue(rssItem.link) || ''),
-      description: toStringValue(rssItem.contentSnippet || rssItem.content || rssItem['content:encoded']),
-      content: toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet),
+      description: firstTextLike(
+        rssItem.description,
+        rssItem.summary,
+        rssItem.contentSnippet,
+        rssItem.content,
+        rssItem['content:encoded']
+      ),
+      content: firstTextLike(
+        rssItem['content:encoded'],
+        rssItem.content,
+        rssItem.description,
+        rssItem.summary,
+        rssItem.contentSnippet
+      ),
       author: toStringValue(rssItem.creator || rssItem.author || rssItem['dc:creator']),
       imageUrl: normalizedMedia.imageUrl || undefined,
       mediaUrl: normalizedMedia.mediaUrl || undefined,

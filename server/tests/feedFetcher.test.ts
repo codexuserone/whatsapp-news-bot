@@ -87,6 +87,100 @@ describe('fetchFeedItemsWithMeta', () => {
         });
     });
 
+    it('uses WordPress rendered content as an excerpt when description/excerpt are missing', async () => {
+        mockSafeAxiosRequest.mockResolvedValueOnce({
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            data: [
+                {
+                    id: 1050755,
+                    title: { rendered: 'Anash Status 1050755' },
+                    link: 'https://anash.org/status/1050755/',
+                    excerpt: null,
+                    content: { rendered: '<p>Real status text with <strong>details</strong>.</p>' },
+                    date: '2026-04-23T18:42:15',
+                    featured_media: 1050765,
+                    _embedded: {
+                        'wp:featuredmedia': [
+                            {
+                                media_type: 'image',
+                                mime_type: 'image/jpeg',
+                                source_url: 'https://files.anash.org/uploads/2026/04/full.jpeg',
+                                media_details: {
+                                    sizes: {
+                                        medium_large: {
+                                            source_url: 'https://files.anash.org/uploads/2026/04/medium-large.jpeg'
+                                        },
+                                        full: {
+                                            source_url: 'https://files.anash.org/uploads/2026/04/full.jpeg'
+                                        }
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        const result = await fetchFeedItemsWithMeta({
+            url: 'https://anash.org/wp-json/wp/v2/anash_status',
+            type: 'json'
+        });
+
+        expect(result.items).toHaveLength(1);
+        expect(result.items[0]).toMatchObject({
+            guid: '1050755',
+            description: 'Real status text with details.',
+            content: 'Real status text with details.',
+            imageUrl: 'https://files.anash.org/uploads/2026/04/medium-large.jpeg',
+            mediaUrl: 'https://files.anash.org/uploads/2026/04/medium-large.jpeg',
+            mediaKind: 'image'
+        });
+    });
+
+    it('uses WordPress generated image sizes for video attachments instead of the video URL or site default', async () => {
+        mockSafeAxiosRequest.mockResolvedValueOnce({
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            data: [
+                {
+                    id: 1050900,
+                    title: { rendered: 'Video status' },
+                    link: 'https://anash.org/status/1050900/',
+                    content: { rendered: 'Video post text' },
+                    _embedded: {
+                        'wp:featuredmedia': [
+                            {
+                                media_type: 'video',
+                                mime_type: 'video/mp4',
+                                source_url: 'https://files.anash.org/uploads/2026/04/status-video.mp4',
+                                media_details: {
+                                    sizes: {
+                                        medium: {
+                                            source_url: 'https://files.anash.org/uploads/2026/04/status-video-poster-768x432.jpg'
+                                        }
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        const result = await fetchFeedItemsWithMeta({
+            url: 'https://anash.org/wp-json/wp/v2/anash_status',
+            type: 'json'
+        });
+
+        expect(result.items[0]).toMatchObject({
+            imageUrl: 'https://files.anash.org/uploads/2026/04/status-video-poster-768x432.jpg',
+            mediaUrl: 'https://files.anash.org/uploads/2026/04/status-video-poster-768x432.jpg',
+            mediaKind: 'image'
+        });
+    });
+
     it('discovers feed endpoints from HTML sources before parsing items', async () => {
         mockSafeAxiosRequest
             .mockResolvedValueOnce({
@@ -132,7 +226,7 @@ describe('fetchFeedItemsWithMeta', () => {
         });
     });
 
-    it('prefers RSS enclosure videos over image thumbnails when both exist', async () => {
+    it('preserves RSS enclosure videos while keeping image thumbnails as preferred automation images', async () => {
         mockSafeAxiosRequest.mockResolvedValueOnce({
             status: 200,
             headers: { 'content-type': 'application/rss+xml' },

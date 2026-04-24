@@ -79,6 +79,12 @@ const getScheduleState = (schedule?: Schedule | null): 'active' | 'paused' | 'st
 const isRunning = (schedule?: Schedule | null) => getScheduleState(schedule) === 'active';
 const DEFAULT_BATCH_TIMES = ['09:00', '20:00'];
 const BATCH_TIME_PRESETS = ['07:00', '09:00', '12:00', '15:00', '18:00', '20:00', '22:00'];
+const TARGET_BADGE_VARIANTS: Record<Target['type'], 'default' | 'secondary' | 'success' | 'warning'> = {
+  individual: 'secondary',
+  group: 'success',
+  channel: 'default',
+  status: 'warning'
+};
 
 const SchedulesPage = () => {
   const queryClient = useQueryClient();
@@ -103,9 +109,16 @@ const SchedulesPage = () => {
   });
   const [active, setActive] = useState<Schedule | null>(null);
   const activeTargets = React.useMemo(
-    () => dedupeTargets(targets, { activeOnly: true }).filter((target) => target.type !== 'status'),
+    () => dedupeTargets(targets, { activeOnly: true }),
     [targets]
   );
+  const targetById = React.useMemo(() => {
+    const map = new Map<string, Target>();
+    for (const target of targets) {
+      map.set(target.id, target);
+    }
+    return map;
+  }, [targets]);
 
   const formatDateTime = (value?: string | null) => {
     if (!value) return '-';
@@ -825,6 +838,7 @@ const SchedulesPage = () => {
                     const groups = all.filter(t => t.type === 'group');
                     const channels = all.filter(t => t.type === 'channel');
                     const individuals = all.filter(t => t.type === 'individual');
+                    const statuses = all.filter(t => t.type === 'status');
 
                     const renderGroup = (title: string, items: Target[]) => {
                       if (!items.length) return null;
@@ -853,22 +867,75 @@ const SchedulesPage = () => {
                     };
 
                     return (
-                      <div className="rounded-lg border p-2 max-h-60 overflow-y-auto space-y-3">
-                        {all.length === 0 ? (
-                          <p className="text-sm text-muted-foreground p-2">
-                            No active destinations yet. Connect WhatsApp and wait for sync.
-                          </p>
-                        ) : (
-                          <>
-                            {renderGroup('Channels', channels)}
-                            {renderGroup('Groups', groups)}
-                            {renderGroup('People', individuals)}
-                          </>
-                        )}
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => field.onChange(channels.map((target) => target.id))}
+                            disabled={!channels.length}
+                          >
+                            Channels
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => field.onChange(groups.map((target) => target.id))}
+                            disabled={!groups.length}
+                          >
+                            Groups
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => field.onChange(statuses.map((target) => target.id))}
+                            disabled={!statuses.length}
+                          >
+                            Status
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => field.onChange([...channels, ...groups].map((target) => target.id))}
+                            disabled={!channels.length && !groups.length}
+                          >
+                            Channels + groups
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => field.onChange([])}
+                            disabled={!field.value.length}
+                          >
+                            Clear
+                          </Button>
+                        </div>
+                        <div className="rounded-lg border p-2 max-h-60 overflow-y-auto space-y-3">
+                          {all.length === 0 ? (
+                            <p className="text-sm text-muted-foreground p-2">
+                              No active destinations yet. Connect WhatsApp and wait for sync.
+                            </p>
+                          ) : (
+                            <>
+                              {renderGroup('Channels', channels)}
+                              {renderGroup('Groups', groups)}
+                              {renderGroup('People', individuals)}
+                              {renderGroup('Status', statuses)}
+                            </>
+                          )}
+                        </div>
                       </div>
                     );
                   }}
                 />
+                <p className="text-xs text-muted-foreground">
+                  Enabled targets do not receive this feed unless they are selected here.
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -941,12 +1008,21 @@ const SchedulesPage = () => {
               {schedules.map((schedule) => {
                 const feedRow = feeds.find((feed) => feed.id === schedule.feed_id);
                 const feedDisabled = feedRow?.active === false;
-                const hasTargets = Array.isArray(schedule.target_ids) && schedule.target_ids.length > 0;
-                const canActivate = Boolean(schedule.feed_id && schedule.template_id && hasTargets && !feedDisabled);
+                const scheduleTargetIds = Array.isArray(schedule.target_ids) ? schedule.target_ids : [];
+                const scheduleTargets = scheduleTargetIds
+                  .map((targetId) => targetById.get(String(targetId || '').trim()))
+                  .filter((target): target is Target => Boolean(target));
+                const inactiveTargets = scheduleTargets.filter((target) => target.active === false);
+                const missingTargetCount = Math.max(scheduleTargetIds.length - scheduleTargets.length, 0);
+                const hasTargets = scheduleTargetIds.length > 0;
+                const hasUsableTargets = hasTargets && missingTargetCount === 0 && inactiveTargets.length === 0;
+                const canActivate = Boolean(schedule.feed_id && schedule.template_id && hasUsableTargets && !feedDisabled);
                 const activateBlockedReason = !canActivate
                   ? feedDisabled
                     ? 'Enable this feed first to run this automation.'
-                    : 'Automation is missing feed, template, or targets.'
+                    : !hasUsableTargets
+                      ? 'Automation has no active destinations.'
+                      : 'Automation is missing feed or template.'
                   : null;
 
                 return (
@@ -967,6 +1043,22 @@ const SchedulesPage = () => {
                         ) : null}
                         {schedule.approval_required ? (
                           <span className="text-warning-foreground">Manual review on</span>
+                        ) : null}
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {scheduleTargets.slice(0, 5).map((target) => (
+                          <Badge key={target.id} variant={target.active ? TARGET_BADGE_VARIANTS[target.type] || 'secondary' : 'secondary'}>
+                            {formatTargetLabel(target)}
+                          </Badge>
+                        ))}
+                        {scheduleTargets.length > 5 ? (
+                          <Badge variant="secondary">+{scheduleTargets.length - 5} more</Badge>
+                        ) : null}
+                        {missingTargetCount > 0 ? (
+                          <Badge variant="warning">{missingTargetCount} missing destination{missingTargetCount !== 1 ? 's' : ''}</Badge>
+                        ) : null}
+                        {!scheduleTargets.length ? (
+                          <Badge variant="warning">No destinations</Badge>
                         ) : null}
                       </div>
                     </div>

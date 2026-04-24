@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Target, WhatsAppChannel, WhatsAppGroup, WhatsAppStatus } from '@/lib/types';
+import type { Schedule, Target, WhatsAppChannel, WhatsAppGroup, WhatsAppStatus } from '@/lib/types';
 import { normalizeDisplayText, normalizeTargetName } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -102,6 +102,12 @@ const TargetsPage = () => {
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
     queryKey: ['targets'],
     queryFn: () => api.get('/api/targets'),
+    refetchInterval: 15000
+  });
+
+  const { data: schedules = [] } = useQuery<Schedule[]>({
+    queryKey: ['schedules'],
+    queryFn: () => api.get('/api/schedules'),
     refetchInterval: 15000
   });
 
@@ -209,6 +215,35 @@ const TargetsPage = () => {
   });
 
   const visibleTargets = targets;
+  const runningSchedules = React.useMemo(
+    () =>
+      schedules.filter((schedule) => {
+        const state = String(schedule.state || '').trim().toLowerCase();
+        return schedule.active !== false && (state === '' || state === 'active');
+      }),
+    [schedules]
+  );
+  const targetUsageById = React.useMemo(() => {
+    const usage = new Map<string, Schedule[]>();
+    for (const schedule of runningSchedules) {
+      for (const targetId of schedule.target_ids || []) {
+        const key = String(targetId || '').trim();
+        if (!key) continue;
+        usage.set(key, [...(usage.get(key) || []), schedule]);
+      }
+    }
+    return usage;
+  }, [runningSchedules]);
+  const activeTargetsNotReceivingFeeds = React.useMemo(
+    () =>
+      visibleTargets.filter(
+        (target) =>
+          target.active &&
+          target.type !== 'status' &&
+          !targetUsageById.has(target.id)
+      ),
+    [targetUsageById, visibleTargets]
+  );
 
   const filteredTargets = visibleTargets.filter((target) => {
     const matchesSearch =
@@ -231,7 +266,7 @@ const TargetsPage = () => {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Targets</h1>
-        <p className="text-muted-foreground">Destinations are synced automatically from your connected WhatsApp account.</p>
+        <p className="text-muted-foreground">Destinations are synced automatically. Feed posts only go to targets selected in an automation.</p>
       </div>
 
       {!isConnected ? (
@@ -377,7 +412,7 @@ const TargetsPage = () => {
           </div>
 
           <div className="flex flex-wrap gap-1 pt-2">
-            {(['all', 'group', 'channel', 'individual'] as const).map((type) => (
+            {(['all', 'group', 'channel', 'individual', 'status'] as const).map((type) => (
               <Button
                 key={type}
                 size="sm"
@@ -393,6 +428,18 @@ const TargetsPage = () => {
           </div>
         </CardHeader>
         <CardContent>
+          {activeTargetsNotReceivingFeeds.length ? (
+            <div className="mb-4 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-warning-foreground">
+              <p className="font-medium">Some enabled destinations are not receiving feed posts.</p>
+              <p className="mt-1 text-xs">
+                They are saved targets, but no running automation includes them: {activeTargetsNotReceivingFeeds.slice(0, 5).map((target) => target.name).join(', ')}
+                {activeTargetsNotReceivingFeeds.length > 5 ? `, and ${activeTargetsNotReceivingFeeds.length - 5} more` : ''}.
+              </p>
+              <Button asChild size="sm" variant="outline" className="mt-3">
+                <Link href="/schedules">Add them to an automation</Link>
+              </Button>
+            </div>
+          ) : null}
           {targetsLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -406,9 +453,10 @@ const TargetsPage = () => {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHeaderCell className="w-12">Active</TableHeaderCell>
+                    <TableHeaderCell className="w-12">Enabled</TableHeaderCell>
                     <TableHeaderCell>Name</TableHeaderCell>
                     <TableHeaderCell>Type</TableHeaderCell>
+                    <TableHeaderCell className="hidden lg:table-cell">Feed routing</TableHeaderCell>
                     <TableHeaderCell className="hidden md:table-cell">Address</TableHeaderCell>
                     <TableHeaderCell className="w-20">Actions</TableHeaderCell>
                   </TableRow>
@@ -416,6 +464,7 @@ const TargetsPage = () => {
                 <TableBody>
                   {filteredTargets.map((target) => {
                     const isEditing = editingTargetId === target.id;
+                    const usedBy = targetUsageById.get(target.id) || [];
                     const openDelayEditor = () => {
                       setEditingTargetId(target.id);
                       setDelayDraft({
@@ -500,6 +549,20 @@ const TargetsPage = () => {
                               {TYPE_BADGES[target.type]?.label || target.type}
                             </Badge>
                           </TableCell>
+                          <TableCell className="hidden max-w-[260px] text-xs lg:table-cell">
+                            {usedBy.length ? (
+                              <div className="space-y-1">
+                                <Badge variant="success">{usedBy.length} automation{usedBy.length !== 1 ? 's' : ''}</Badge>
+                                <p className="truncate text-muted-foreground">{usedBy.map((schedule) => schedule.name).join(', ')}</p>
+                              </div>
+                            ) : target.type === 'status' ? (
+                              <span className="text-muted-foreground">Status target; audience is managed on WhatsApp</span>
+                            ) : target.active ? (
+                              <span className="text-warning-foreground">Not selected in a running automation</span>
+                            ) : (
+                              <span className="text-muted-foreground">Disabled</span>
+                            )}
+                          </TableCell>
                           <TableCell className="hidden max-w-[280px] truncate text-xs text-muted-foreground md:table-cell">
                             {target.phone_number}
                           </TableCell>
@@ -527,7 +590,7 @@ const TargetsPage = () => {
 
                         {isEditing ? (
                           <TableRow>
-                            <TableCell colSpan={5} className="bg-muted/20">
+                            <TableCell colSpan={6} className="bg-muted/20">
                               <div className="grid gap-3 sm:grid-cols-3">
                                 <div className="space-y-1.5">
                                   <Label htmlFor={`delay_ms_${target.id}`}>Message delay override (ms)</Label>

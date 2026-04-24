@@ -281,9 +281,11 @@ export type WhatsAppStatusAudience = {
     groupMetadata: number;
     env: number;
     me: number;
+    activeIndividualTargets?: number;
     recentSuccessfulDirectRecipients?: number;
   };
   warnings?: string[];
+  stale?: boolean;
 };
 
 export type WhatsAppChannel = {

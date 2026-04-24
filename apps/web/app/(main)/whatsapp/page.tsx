@@ -231,18 +231,27 @@ const WhatsAppPage = () => {
     groupMetadata: 0,
     env: 0,
     me: 0,
+    activeIndividualTargets: 0,
     recentSuccessfulDirectRecipients: 0
   };
+  const statusTrustedAudienceCount =
+    Number(statusSources.contactsCache || 0) +
+    Number(statusSources.storeContacts || 0) +
+    Number(statusSources.storeChats || 0) +
+    Number(statusSources.env || 0) +
+    Number(statusSources.activeIndividualTargets || 0) +
+    Number(statusSources.recentSuccessfulDirectRecipients || 0);
   const statusHasOnlySelfAudience =
     statusAudienceCount <= 1 &&
-    Number(statusSources.me || 0) >= statusAudienceCount &&
+    statusTrustedAudienceCount <= 0 &&
     Number(statusSources.contactsCache || 0) === 0 &&
     Number(statusSources.storeContacts || 0) === 0 &&
     Number(statusSources.storeChats || 0) === 0 &&
     Number(statusSources.env || 0) === 0 &&
+    Number(statusSources.activeIndividualTargets || 0) === 0 &&
     Number(statusSources.recentSuccessfulDirectRecipients || 0) === 0;
   const statusAudienceLabel = statusHasOnlySelfAudience
-    ? 'blocked: only this account is resolved as a viewer'
+    ? 'needs private viewers'
     : statusAudienceCount > 0
       ? `${statusAudienceCount} possible viewers from the current snapshot`
       : 'not ready yet';
@@ -462,8 +471,12 @@ const WhatsAppPage = () => {
                 WhatsApp is paused. Resume to reconnect (and to generate a QR code if needed).
               </div>
             ) : !isConnected && !isQrReady ? (
-              <div className="rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
-                Tap <strong>Get QR code</strong> to request a fresh login QR.
+              <div className="space-y-3 rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
+                <p>Request a fresh login QR, then scan it from WhatsApp Linked Devices.</p>
+                <Button onClick={() => refreshQr.mutate()} disabled={refreshQr.isPending} variant="outline" size="sm">
+                  <RefreshCw className={`mr-2 h-4 w-4 ${refreshQr.isPending ? 'animate-spin' : ''}`} />
+                  {refreshQr.isPending ? 'Refreshing QR...' : 'Get QR code'}
+                </Button>
               </div>
             ) : null}
 
@@ -581,7 +594,8 @@ const WhatsAppPage = () => {
             Status audience: {statusAudienceLabel}
             {statusAudience?.refreshedAt ? `, refreshed ${new Date(statusAudience.refreshedAt).toLocaleString()}` : ''}.
             {Array.isArray(statusAudience?.warnings) && statusAudience.warnings.length ? ` ${statusAudience.warnings[0]}` : ''}
-            {statusHasOnlySelfAudience ? ' Status sends are blocked until real viewers are resolved; this prevents false sent claims.' : ''}
+            {statusHasOnlySelfAudience ? ' Add or sync a private WhatsApp contact before using Status, so the app does not create false sent rows.' : ''}
+            {statusAudience?.stale ? ' This snapshot is stale because WhatsApp is not connected.' : ''}
           </div>
 
           {syncTargets.isError ? (
@@ -784,16 +798,25 @@ const WhatsAppPage = () => {
                 Send
               </Button>
               {sendTestMessage.isSuccess ? (
-                <span className="text-sm text-success">
-                  Recorded locally {sendTestMessage.data?.sent ?? 1}
-                  {(sendTestMessage.data?.confirmed ?? 0) > 0
-                    ? `, confirmed ${sendTestMessage.data?.confirmed}`
-                    : ''}
-                  {(sendTestMessage.data?.uncertain ?? 0) > 0
-                    ? `, awaiting confirmation ${sendTestMessage.data?.uncertain}`
-                    : ''}
-                  {(sendTestMessage.data?.failed ?? 0) > 0 ? `, failed ${sendTestMessage.data?.failed}` : ''}.
-                </span>
+                (() => {
+                  const sent = Number(sendTestMessage.data?.sent || 0);
+                  const confirmed = Number(sendTestMessage.data?.confirmed || 0);
+                  const uncertain = Number(sendTestMessage.data?.uncertain || 0);
+                  const failed = Number(sendTestMessage.data?.failed || 0);
+                  const className = failed > 0 && sent === 0 ? 'text-sm text-destructive' : confirmed > 0 ? 'text-sm text-success' : 'text-sm text-warning-foreground';
+                  const primary = confirmed > 0
+                    ? `Sent to WhatsApp, confirmed ${confirmed}`
+                    : sent > 0
+                      ? `Submitted to WhatsApp ${sent}`
+                      : 'No WhatsApp send was accepted';
+                  return (
+                    <span className={className}>
+                      {primary}
+                      {uncertain > 0 ? `, awaiting confirmation ${uncertain}` : ''}
+                      {failed > 0 ? `, failed ${failed}` : ''}.
+                    </span>
+                  );
+                })()
               ) : null}
               {sendTestMessage.isError ? (
                 <span className="text-sm text-destructive">Failed: {(sendTestMessage.error as Error)?.message || 'Unknown error'}</span>

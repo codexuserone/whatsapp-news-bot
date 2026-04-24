@@ -115,7 +115,7 @@ describe('WhatsAppClient', () => {
         expect(client.qrExpiresAtMs).toBeNull();
     });
 
-    it('should resolve status audience from trusted cache/store contacts and own jid', async () => {
+    it('should resolve status audience from trusted cache/store contacts without counting own jid as a viewer', async () => {
         client.contactsCache.set('972501234567@s.whatsapp.net', {});
         client.groupMetadataCache.set('120363000000000000@g.us', {
             participants: [{ id: '972509999999@s.whatsapp.net' }]
@@ -132,9 +132,10 @@ describe('WhatsAppClient', () => {
         };
 
         const audience = await client.getStatusAudience({ sampleSize: 20 });
-        expect(audience.participantCount).toBeGreaterThanOrEqual(4);
+        expect(audience.participantCount).toBeGreaterThanOrEqual(3);
         expect(audience.sample).toContain('972501234567@s.whatsapp.net');
-        expect(audience.sample).toContain('972506666666@s.whatsapp.net');
+        expect(audience.sample).not.toContain('972506666666@s.whatsapp.net');
+        expect(audience.selfJid).toBe('972506666666@s.whatsapp.net');
         expect(audience.sample).not.toContain('972509999999@s.whatsapp.net');
     });
 

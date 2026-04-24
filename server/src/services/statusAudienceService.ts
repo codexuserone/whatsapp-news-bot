@@ -16,9 +16,11 @@ type StatusAudienceSnapshot = {
     groupMetadata: number;
     env: number;
     me: number;
+    activeIndividualTargets: number;
     recentSuccessfulDirectRecipients: number;
   };
   warnings: string[];
+  stale?: boolean;
 };
 
 type StatusAudienceSources = StatusAudienceSnapshot['sources'];
@@ -33,11 +35,13 @@ type StatusAudienceClient = {
   getStatusAudience?: (options?: { sampleSize?: number }) => Promise<{
     participantCount?: number;
     sample?: string[];
+    selfJid?: string | null;
     sources?: Record<string, unknown>;
     warnings?: string[];
   } | null> | {
     participantCount?: number;
     sample?: string[];
+    selfJid?: string | null;
     sources?: Record<string, unknown>;
     warnings?: string[];
   } | null;
@@ -49,10 +53,33 @@ const SUCCESSFUL_SEND_STATUSES = ['sent', 'delivered', 'read', 'played'];
 const MAX_PRESERVED_SNAPSHOT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MIN_PRESERVED_SNAPSHOT_PARTICIPANTS = 25;
 const MAX_COLD_START_PARTICIPANTS = 10;
+const USE_RECENT_DIRECT_RECIPIENTS =
+  String(process.env.WHATSAPP_STATUS_USE_RECENT_DIRECT_RECIPIENTS || '').trim().toLowerCase() === 'true';
 
 let refreshJob: { stop?: () => void } | null = null;
 
-const normalizeRecipientJid = (value: unknown) => String(value || '').trim().toLowerCase();
+const normalizeRecipientJid = (value: unknown) => {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw || raw === 'status@broadcast') return '';
+  if (raw.endsWith('@g.us') || raw.includes('@newsletter')) return '';
+
+  const splitUser = (input: string) => String(input.split('@')[0] || '').split(':')[0] || '';
+
+  if (raw.endsWith('@lid')) {
+    const user = splitUser(raw).replace(/[^a-z0-9._-]/g, '');
+    return user ? `${user}@lid` : '';
+  }
+
+  if (raw.endsWith('@s.whatsapp.net') || raw.endsWith('@c.us')) {
+    const digits = splitUser(raw).replace(/[^0-9]/g, '');
+    return digits.length >= 6 ? `${digits}@s.whatsapp.net` : '';
+  }
+
+  if (raw.includes('@')) return '';
+
+  const digits = raw.replace(/[^0-9]/g, '');
+  return digits.length >= 6 ? `${digits}@s.whatsapp.net` : '';
+};
 
 const emptySources = () => ({
   contactsCache: 0,
@@ -61,6 +88,7 @@ const emptySources = () => ({
   groupMetadata: 0,
   env: 0,
   me: 0,
+  activeIndividualTargets: 0,
   recentSuccessfulDirectRecipients: 0
 });
 
@@ -91,6 +119,7 @@ const getTrustedAudienceSignalCount = (sources: Partial<StatusAudienceSources> |
   Math.max(0, Math.floor(Number(sources?.storeContacts || 0))) +
   Math.max(0, Math.floor(Number(sources?.storeChats || 0))) +
   Math.max(0, Math.floor(Number(sources?.env || 0))) +
+  Math.max(0, Math.floor(Number(sources?.activeIndividualTargets || 0))) +
   Math.max(0, Math.floor(Number(sources?.recentSuccessfulDirectRecipients || 0)));
 
 const isGroupMetadataOnlySnapshot = (snapshot: RefreshResult) =>
@@ -111,6 +140,7 @@ const isLidHeavySnapshot = (snapshot: RefreshResult) => {
 
 const shouldTrustStoredSnapshot = (snapshot: RefreshResult) => {
   if (snapshot.participantCount <= 0) return false;
+  if (getTrustedAudienceSignalCount(snapshot.sources) <= 0) return false;
   if (isGroupMetadataOnlySnapshot(snapshot)) return false;
   if (isGroupMetadataDominatedSnapshot(snapshot) && isLidHeavySnapshot(snapshot)) return false;
   if (isLidHeavySnapshot(snapshot) && getTrustedAudienceSignalCount(snapshot.sources) === 0) return false;
@@ -150,6 +180,27 @@ const getRecentSuccessfulDirectRecipients = async (supabase: SupabaseClient): Pr
     .in('id', targetIds)
     .eq('type', 'individual')
     .eq('active', true);
+
+  if (targetError || !Array.isArray(targets) || !targets.length) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      targets
+        .map((row: { phone_number?: string | null }) => normalizeRecipientJid(row.phone_number))
+        .filter(Boolean)
+    )
+  );
+};
+
+const getActiveIndividualTargetRecipients = async (supabase: SupabaseClient): Promise<string[]> => {
+  const { data: targets, error: targetError } = await supabase
+    .from('targets')
+    .select('phone_number,type,active')
+    .eq('type', 'individual')
+    .eq('active', true)
+    .limit(2000);
 
   if (targetError || !Array.isArray(targets) || !targets.length) {
     return [];
@@ -332,19 +383,27 @@ const refreshStatusRecipients = async (
   const audienceOptions = Number.isFinite(options?.sampleSize)
     ? { sampleSize: Number(options?.sampleSize) }
     : undefined;
-  const [participantsRaw, audienceRaw, recentDirectRecipients] = await Promise.all([
+  const [participantsRaw, audienceRaw, recentDirectRecipients, activeIndividualTargetRecipients] = await Promise.all([
     Promise.resolve(whatsappClient.getStatusParticipants?.() || []),
     Promise.resolve(whatsappClient.getStatusAudience?.(audienceOptions) || null),
-    getRecentSuccessfulDirectRecipients(supabase)
+    USE_RECENT_DIRECT_RECIPIENTS ? getRecentSuccessfulDirectRecipients(supabase) : Promise.resolve([]),
+    getActiveIndividualTargetRecipients(supabase)
   ]);
+  const selfJid = normalizeRecipientJid(
+    audienceRaw && typeof audienceRaw === 'object'
+      ? (audienceRaw as { selfJid?: string | null }).selfJid
+      : null
+  );
 
   const participants = Array.from(
     new Set(
       [
         ...(Array.isArray(participantsRaw) ? participantsRaw : []),
+        ...activeIndividualTargetRecipients,
         ...recentDirectRecipients
       ]
         .map((value) => normalizeRecipientJid(value))
+        .filter((value) => !selfJid || value !== selfJid)
         .filter(Boolean)
     )
   ).sort();
@@ -356,8 +415,15 @@ const refreshStatusRecipients = async (
       : {};
   const warnings = Array.isArray(audienceRaw?.warnings) ? audienceRaw!.warnings.map((value) => String(value || '').trim()).filter(Boolean) : [];
   const sources = mergeSources(baseSources as Partial<StatusAudienceSources>, {
+    activeIndividualTargets: activeIndividualTargetRecipients.filter((recipient) => !selfJid || recipient !== selfJid).length,
     recentSuccessfulDirectRecipients: recentDirectRecipients.length
   });
+  if (activeIndividualTargetRecipients.length && !warnings.some((warning) => warning.includes('active private targets'))) {
+    warnings.push('Status audience includes active private targets saved in this app.');
+  }
+  if (!USE_RECENT_DIRECT_RECIPIENTS && recentDirectRecipients.length) {
+    warnings.push('Recent direct recipients are ignored unless WHATSAPP_STATUS_USE_RECENT_DIRECT_RECIPIENTS=true.');
+  }
 
   if (shouldPreserveStoredSnapshot(stored, participants.length, sources)) {
     const preservedRecipients = Array.from(new Set([...stored.recipients, ...participants])).sort();

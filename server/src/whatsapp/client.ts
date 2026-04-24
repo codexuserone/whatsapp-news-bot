@@ -881,6 +881,7 @@ class WhatsAppClient {
       me: number;
     };
     warnings: string[];
+    selfJid: string | null;
   } {
     const socket = this.socket as any;
     const participants = new Set<string>();
@@ -952,7 +953,10 @@ class WhatsAppClient {
         addCandidate(candidate, 'env');
       }
 
-      addCandidate(this.meJid || socket?.user?.id, 'me');
+      const selfJid = normalizeStatusAudienceJid(this.meJid || socket?.user?.id);
+      if (selfJid) {
+        sources.me += 1;
+      }
     } catch (error) {
       warnings.push(`status-audience-resolution-error:${getErrorMessage(error)}`);
     }
@@ -962,7 +966,8 @@ class WhatsAppClient {
       warnings.push('No status recipients resolved from contacts/cache/store');
     }
 
-    return { participants: resolved, sources, warnings };
+    const selfJid = normalizeStatusAudienceJid(this.meJid || socket?.user?.id) || null;
+    return { participants: resolved.filter((participant) => participant !== selfJid), sources, warnings, selfJid };
   }
 
   getStatusParticipants(): string[] {
@@ -984,6 +989,7 @@ class WhatsAppClient {
     return {
       participantCount: audience.participants.length,
       sample: audience.participants.slice(0, sampleSize),
+      selfJid: audience.selfJid,
       sources: audience.sources,
       warnings: audience.warnings
     };

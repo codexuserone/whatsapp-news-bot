@@ -217,6 +217,7 @@ describe('statusAudienceService', () => {
                 getStatusAudience: () => ({
                     participantCount: 1,
                     sample: ['16465527019@s.whatsapp.net'],
+                    selfJid: '16465527019@s.whatsapp.net',
                     sources: {
                         contactsCache: 0,
                         storeContacts: 0,
@@ -231,11 +232,11 @@ describe('statusAudienceService', () => {
             { sampleSize: 10 }
         );
 
-        expect(result.participantCount).toBe(1);
-        expect(result.recipients).toContain('16465527019@s.whatsapp.net');
+        expect(result.participantCount).toBe(0);
+        expect(result.recipients).not.toContain('16465527019@s.whatsapp.net');
         expect(result.recipients).not.toContain('1000000000@s.whatsapp.net');
         expect(result.warnings.some((warning: string) => warning.includes('Preserved the previous status audience snapshot'))).toBe(false);
-        expect(tables.status_recipients).toHaveLength(1);
+        expect(tables.status_recipients).toHaveLength(0);
     });
 
     it('does not preserve a group-heavy lid snapshot with only tiny trusted signal', async () => {
@@ -267,6 +268,7 @@ describe('statusAudienceService', () => {
                 getStatusAudience: () => ({
                     participantCount: 1,
                     sample: ['16465527019@s.whatsapp.net'],
+                    selfJid: '16465527019@s.whatsapp.net',
                     sources: {
                         contactsCache: 1,
                         storeContacts: 0,
@@ -281,9 +283,9 @@ describe('statusAudienceService', () => {
             { sampleSize: 10 }
         );
 
-        expect(result.participantCount).toBe(1);
-        expect(result.recipients).toEqual(['16465527019@s.whatsapp.net']);
-        expect(tables.status_recipients).toHaveLength(1);
+        expect(result.participantCount).toBe(0);
+        expect(result.recipients).toEqual([]);
+        expect(tables.status_recipients).toHaveLength(0);
     });
 
     it('does not preserve an old snapshot when the current audience has real warm sources', async () => {
@@ -333,6 +335,50 @@ describe('statusAudienceService', () => {
         expect(result.warnings.some((warning: string) => warning.includes('Preserved the previous status audience snapshot'))).toBe(false);
     });
 
+    it('uses active private targets as explicit status audience recipients', async () => {
+        const { supabase } = buildSupabaseMock({
+            targets: [
+                {
+                    id: 'target-1',
+                    type: 'individual',
+                    active: true,
+                    phone_number: '16465527019'
+                },
+                {
+                    id: 'target-2',
+                    type: 'group',
+                    active: true,
+                    phone_number: '120363000000000000@g.us'
+                }
+            ]
+        });
+        getSupabaseClientMock.mockReturnValue(supabase);
+
+        const result = await refreshStatusRecipients(
+            {
+                getStatus: () => ({ status: 'connected' }),
+                getStatusParticipants: () => [],
+                getStatusAudience: () => ({
+                    participantCount: 0,
+                    sample: [],
+                    sources: {
+                        contactsCache: 0,
+                        storeContacts: 0,
+                        storeChats: 0,
+                        groupMetadata: 0,
+                        env: 0,
+                        me: 0
+                    },
+                    warnings: []
+                })
+            },
+            { sampleSize: 10 }
+        );
+
+        expect(result.recipients).toEqual(['16465527019@s.whatsapp.net']);
+        expect(result.sources.activeIndividualTargets).toBe(1);
+    });
+
     it('reuses a fresh stored snapshot without refreshing again', async () => {
         const refreshedAt = new Date().toISOString();
         const { supabase } = buildSupabaseMock({
@@ -347,7 +393,8 @@ describe('statusAudienceService', () => {
                         storeChats: 0,
                         groupMetadata: 0,
                         env: 0,
-                        me: 1,
+                        me: 0,
+                        activeIndividualTargets: 1,
                         recentSuccessfulDirectRecipients: 0
                     },
                     warnings: []

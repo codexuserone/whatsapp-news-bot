@@ -128,6 +128,7 @@ const getStatusAudienceTrustedSourceCount = (snapshot: Record<string, any> | nul
     Math.max(0, Math.floor(Number(sources.storeContacts || 0))) +
     Math.max(0, Math.floor(Number(sources.storeChats || 0))) +
     Math.max(0, Math.floor(Number(sources.env || 0))) +
+    Math.max(0, Math.floor(Number(sources.activeIndividualTargets || 0))) +
     Math.max(0, Math.floor(Number(sources.recentSuccessfulDirectRecipients || 0)))
   );
 };
@@ -138,7 +139,7 @@ const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undef
     throw new Error('No fresh status recipients are available for this status send.');
   }
   if (recipients.length <= 1 && getStatusAudienceTrustedSourceCount(snapshot) <= 0) {
-    throw new Error('Status audience only contains this WhatsApp account; refusing to mark a self-only Status send as sent.');
+    throw new Error('Status audience has no private viewers yet; refusing to mark a self-only Status send as sent.');
   }
 };
 

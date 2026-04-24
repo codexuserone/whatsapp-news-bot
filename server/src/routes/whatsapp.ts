@@ -59,6 +59,7 @@ const getStatusAudienceTrustedSourceCount = (snapshot: Record<string, any> | nul
     Math.max(0, Math.floor(Number(sources.storeContacts || 0))) +
     Math.max(0, Math.floor(Number(sources.storeChats || 0))) +
     Math.max(0, Math.floor(Number(sources.env || 0))) +
+    Math.max(0, Math.floor(Number(sources.activeIndividualTargets || 0))) +
     Math.max(0, Math.floor(Number(sources.recentSuccessfulDirectRecipients || 0)))
   );
 };
@@ -69,7 +70,7 @@ const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undef
     throw badRequest('No fresh status recipients are available for this status send.');
   }
   if (recipients.length <= 1 && getStatusAudienceTrustedSourceCount(snapshot) <= 0) {
-    throw badRequest('Status audience only contains this WhatsApp account. Add explicit Status audience JIDs or wait for real contacts to sync before sending.');
+    throw badRequest('Status audience has no private viewers yet. Add or sync at least one private WhatsApp contact before sending Status.');
   }
 };
 
@@ -1123,6 +1124,40 @@ const whatsappRoutes = () => {
   };
 
   const isStatusBroadcast = (jid: string) => jid === 'status@broadcast';
+  const normalizeStatusAudienceRecipient = (value: unknown) => {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw || raw === 'status@broadcast') return '';
+    if (raw.endsWith('@g.us') || raw.includes('@newsletter')) return '';
+
+    const splitUser = (input: string) => String(input.split('@')[0] || '').split(':')[0] || '';
+    if (raw.endsWith('@lid')) {
+      const user = splitUser(raw).replace(/[^a-z0-9._-]/g, '');
+      return user ? `${user}@lid` : '';
+    }
+    if (raw.endsWith('@s.whatsapp.net') || raw.endsWith('@c.us')) {
+      const digits = splitUser(raw).replace(/[^0-9]/g, '');
+      return digits.length >= 6 ? `${digits}@s.whatsapp.net` : '';
+    }
+    if (raw.includes('@')) return '';
+    const digits = raw.replace(/[^0-9]/g, '');
+    return digits.length >= 6 ? `${digits}@s.whatsapp.net` : '';
+  };
+  const resolveSelfStatusJid = async (whatsapp: any) => {
+    try {
+      const audience = await Promise.resolve(whatsapp?.getStatusAudience?.({ sampleSize: 1 }) || null);
+      return normalizeStatusAudienceRecipient((audience as { selfJid?: string | null } | null)?.selfJid);
+    } catch {
+      return '';
+    }
+  };
+  const normalizeExplicitStatusAudience = (values: unknown[], selfJid?: string | null) =>
+    Array.from(
+      new Set(
+        values
+          .map((value) => normalizeStatusAudienceRecipient(value))
+          .filter((jid) => jid && (!selfJid || jid !== selfJid))
+      )
+    );
 
   // Send a test message
   router.post('/send-test', validate(schemas.testMessage), asyncHandler(async (req: Request, res: Response) => {
@@ -1179,7 +1214,7 @@ const whatsappRoutes = () => {
     const documentDataUrl = payload.documentDataUrl ? String(payload.documentDataUrl).trim() : null;
     const documentFilename = payload.documentFilename ? String(payload.documentFilename).trim() : null;
     const documentMime = payload.documentMime ? String(payload.documentMime).trim() : null;
-    const explicitStatusJidList = Array.isArray(payload.statusJidList)
+    const explicitStatusJidListRaw = Array.isArray(payload.statusJidList)
       ? payload.statusJidList.map((value) => String(value || '').trim()).filter(Boolean)
       : [];
     const disableLinkPreview = payload.disableLinkPreview === true;
@@ -1212,6 +1247,13 @@ const whatsappRoutes = () => {
 	    if (!connected) {
 	      throw badRequest('WhatsApp is not connected');
 	    }
+    const selfStatusJid = normalizedJids.some((jid) => isStatusBroadcast(jid))
+      ? await resolveSelfStatusJid(whatsapp)
+      : '';
+    const explicitStatusJidList = normalizeExplicitStatusAudience(explicitStatusJidListRaw, selfStatusJid);
+    if (explicitStatusJidListRaw.length && !explicitStatusJidList.length) {
+      throw badRequest('Status audience must include at least one private recipient other than this account.');
+    }
 
     let content: Record<string, unknown>;
     if (videoDataUrl) {
@@ -1414,13 +1456,22 @@ const whatsappRoutes = () => {
           }
         }
 
+        let statusOptions: Record<string, unknown> | null = null;
+        if (isStatusBroadcast(normalizedJid)) {
+          if (explicitStatusJidList.length) {
+            assertUsableStatusAudience({
+              recipients: explicitStatusJidList,
+              sources: { env: explicitStatusJidList.length }
+            });
+            statusOptions = { statusJidList: explicitStatusJidList };
+          } else {
+            const snapshot = await ensureFreshStatusRecipients(whatsapp, { maxAgeMinutes: 10, sampleSize: 25 });
+            assertUsableStatusAudience(snapshot);
+            statusOptions = { statusJidList: snapshot.recipients };
+          }
+        }
         const sendPromise = isStatusBroadcast(normalizedJid)
-          ? whatsapp.sendStatusBroadcast(
-            effectiveContent,
-            explicitStatusJidList.length
-              ? { statusJidList: explicitStatusJidList }
-              : { statusJidList: (await ensureFreshStatusRecipients(whatsapp, { maxAgeMinutes: 10, sampleSize: 25 })).recipients }
-          )
+          ? whatsapp.sendStatusBroadcast(effectiveContent, statusOptions || {})
           : whatsapp.sendMessage(normalizedJid, effectiveContent);
         const result = await withTimeout(
           sendPromise,
@@ -1551,11 +1602,12 @@ const whatsappRoutes = () => {
           contactsCache: 0,
           storeContacts: 0,
           storeChats: 0,
-          groupMetadata: 0,
-          env: 0,
-          me: 0,
-          recentSuccessfulDirectRecipients: 0
-        },
+        groupMetadata: 0,
+        env: 0,
+        me: 0,
+        activeIndividualTargets: 0,
+        recentSuccessfulDirectRecipients: 0
+      },
         warnings: [WHATSAPP_STATUS_DISABLED_REASON]
       });
     }
@@ -1566,11 +1618,16 @@ const whatsappRoutes = () => {
     const sampleSize = Number.isFinite(rawSample) ? Math.min(Math.max(Math.floor(rawSample), 1), 200) : 25;
     const forceRefresh = String(req.query.refresh || '').toLowerCase() === 'true';
     const includeRecipients = String(req.query.include_recipients || '').toLowerCase() === 'true';
+    const connected = String((whatsapp as { getStatus?: () => { status?: string } } | null)?.getStatus?.()?.status || '')
+      .trim()
+      .toLowerCase() === 'connected';
     const audience = forceRefresh
       ? await refreshStatusRecipients(whatsapp, { sampleSize })
-      : await getStatusRecipientSnapshot({ sampleSize });
+      : connected
+        ? await ensureFreshStatusRecipients(whatsapp, { maxAgeMinutes: 10, sampleSize })
+        : await getStatusRecipientSnapshot({ sampleSize });
     if (includeRecipients) {
-      return res.json(audience);
+      return res.json({ ...audience, stale: !connected });
     }
     const { recipients: _recipients, ...snapshot } = audience as {
       recipients?: string[];
@@ -1584,11 +1641,12 @@ const whatsappRoutes = () => {
         groupMetadata: number;
         env: number;
         me: number;
+        activeIndividualTargets?: number;
         recentSuccessfulDirectRecipients: number;
       };
       warnings: string[];
     };
-    return res.json(snapshot);
+    return res.json({ ...snapshot, stale: !connected });
   }));
 
   // Send to status broadcast
@@ -1698,9 +1756,14 @@ const whatsappRoutes = () => {
       throw badRequest('message, imageUrl, imageDataUrl, videoUrl, or videoDataUrl is required');
     }
 
-    const explicitStatusJids = Array.isArray(statusJidList)
+    const explicitStatusJidsRaw = Array.isArray(statusJidList)
       ? statusJidList.map((value) => String(value || '').trim()).filter(Boolean)
       : [];
+    const selfStatusJid = explicitStatusJidsRaw.length ? await resolveSelfStatusJid(whatsapp) : '';
+    const explicitStatusJids = normalizeExplicitStatusAudience(explicitStatusJidsRaw, selfStatusJid);
+    if (explicitStatusJidsRaw.length && !explicitStatusJids.length) {
+      throw badRequest('Status audience must include at least one private recipient other than this account.');
+    }
     const statusSnapshot = explicitStatusJids.length
       ? { recipients: explicitStatusJids, sources: { env: explicitStatusJids.length } }
       : await ensureFreshStatusRecipients(whatsapp, { maxAgeMinutes: 10, sampleSize: 25 });

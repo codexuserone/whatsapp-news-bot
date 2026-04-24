@@ -18,6 +18,11 @@ const LIVE_QUEUE_STATUS_VALUES = ['awaiting_approval', 'pending', 'processing'];
 const HISTORY_QUEUE_STATUSES = new Set(['sent', 'failed', 'skipped', 'uncertain', 'superseded']);
 const DEFAULT_QUEUE_HISTORY_WINDOW_HOURS = 24;
 const MAX_QUEUE_HISTORY_WINDOW_HOURS = 168;
+const NON_RETRYABLE_FAILURE_PATTERNS = [
+  /channel .*rejected by whatsapp/i,
+  /whatsapp server rejected message ack 479/i,
+  /newsletter ack 479/i
+];
 
 const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
 
@@ -91,15 +96,26 @@ type RetryableQueueRow = {
   schedule_id?: string | null;
   updated_at?: string | null;
   created_at?: string | null;
+  error_message?: string | null;
+  media_error?: string | null;
   schedule?: {
     state?: string | null;
     active?: boolean | null;
   } | null;
 };
 
+const isTerminalChannelMediaFailure = (row: RetryableQueueRow) => {
+  const combined = [row?.error_message, row?.media_error]
+    .map((message) => String(message || '').trim())
+    .filter(Boolean)
+    .join(' ');
+  return Boolean(combined && NON_RETRYABLE_FAILURE_PATTERNS.some((pattern) => pattern.test(combined)));
+};
+
 const isRetryableQueueRow = (row: RetryableQueueRow, windowStartIso: string) => {
   const id = String(row?.id || '').trim();
   if (!id) return false;
+  if (isTerminalChannelMediaFailure(row)) return false;
 
   const comparisonIso = String(row?.updated_at || row?.created_at || '').trim();
   if (!comparisonIso || comparisonIso < windowStartIso) {
@@ -127,6 +143,8 @@ const loadRetryableQueueLogIds = async (
       schedule_id,
       updated_at,
       created_at,
+      error_message,
+      media_error,
       schedule:schedules (
         state,
         active

@@ -61,6 +61,19 @@ describe('queue route retry safeguards', () => {
         windowStartIso
       )
     ).toBe(true);
+
+    expect(
+      testUtils.isRetryableQueueRow(
+        {
+          id: 'terminal-channel-media',
+          schedule_id: 'schedule-1',
+          updated_at: '2026-03-17T05:00:00.000Z',
+          media_error: 'Channel image was rejected by WhatsApp (WhatsApp server rejected message ack 479)',
+          schedule: { state: 'active', active: true }
+        },
+        windowStartIso
+      )
+    ).toBe(false);
   });
 
   it('limits history filters to the recent window and keeps live statuses separate', () => {

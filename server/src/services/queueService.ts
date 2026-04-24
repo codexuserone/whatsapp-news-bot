@@ -109,6 +109,11 @@ const NON_REVIVABLE_SKIP_ERRORS = new Set([
   'Automation paused',
   'Paused by user'
 ]);
+const NON_REVIVABLE_FAILURE_PATTERNS = [
+  /channel .*rejected by whatsapp/i,
+  /whatsapp server rejected message ack 479/i,
+  /newsletter ack 479/i
+];
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
 const QUEUED_CORRECTION_STATUSES = new Set(['awaiting_approval', 'pending', 'failed', 'uncertain', 'skipped']);
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.wma'];
@@ -120,6 +125,12 @@ const ALLOW_AUTO_REPLACE_CORRECTIONS =
   String(process.env.WHATSAPP_ALLOW_AUTO_REPLACE_CORRECTIONS || '').trim().toLowerCase() === 'true';
 
 const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
+
+const isNonRevivableFailureMessage = (...messages: unknown[]) => {
+  const combined = messages.map((message) => String(message || '').trim()).filter(Boolean).join(' ');
+  if (!combined) return false;
+  return NON_REVIVABLE_FAILURE_PATTERNS.some((pattern) => pattern.test(combined));
+};
 
 const getStatusAudienceTrustedSourceCount = (snapshot: Record<string, any> | null | undefined) => {
   const sources = snapshot?.sources || {};
@@ -3263,7 +3274,7 @@ const queueLatestForSchedule = async (
   const targetIds = targets.map((target) => target.id).filter(Boolean) as string[];
   const { data: existingLogs, error: existingLogsError } = await supabase
     .from('message_logs')
-    .select('id, target_id, status, error_message, approved_at')
+    .select('id, target_id, status, error_message, media_error, approved_at')
     .eq('schedule_id', schedule.id)
     .eq('feed_item_id', latestFeedItem.id)
     .in('target_id', targetIds);
@@ -3277,6 +3288,7 @@ const queueLatestForSchedule = async (
     target_id: string;
     status: string;
     error_message?: string | null;
+    media_error?: string | null;
     approved_at?: string | null;
   };
   const existingByTarget = new Map<string, ExistingLogRow>();
@@ -3287,6 +3299,7 @@ const queueLatestForSchedule = async (
       target_id: String(row.target_id),
       status: String(row.status),
       error_message: row.error_message ? String(row.error_message) : null,
+      media_error: row.media_error ? String(row.media_error) : null,
       approved_at: row.approved_at ? String(row.approved_at) : null
     });
   }
@@ -3320,6 +3333,11 @@ const queueLatestForSchedule = async (
     }
 
     if (existing.status === 'skipped' && NON_REVIVABLE_SKIP_ERRORS.has(String(existing.error_message || ''))) {
+      skipped += 1;
+      continue;
+    }
+
+    if (existing.status === 'failed' && isNonRevivableFailureMessage(existing.error_message, existing.media_error)) {
       skipped += 1;
       continue;
     }

@@ -2097,6 +2097,71 @@ const sendMessageWithTemplate = async (
   };
 };
 
+const CHANNEL_TEXT_FALLBACK_ATTEMPTS = 2;
+const CHANNEL_TEXT_FALLBACK_RETRY_DELAY_MS = 1500;
+
+const sendChannelTextFallbackWithRetry = async (
+  whatsappClient: WhatsAppClient,
+  target: Target,
+  template: Template,
+  feedItem: FeedItem,
+  options: {
+    supabase: SupabaseClient;
+    sendTimeoutMs: number;
+    overrideText?: string | null;
+    logContext?: Record<string, unknown>;
+  }
+): Promise<SendWithMediaResult> => {
+  const fallbackTemplate = { ...template, send_mode: 'text_preview' } as Template;
+  let lastError = 'fallback send did not run';
+
+  for (let attempt = 1; attempt <= CHANNEL_TEXT_FALLBACK_ATTEMPTS; attempt += 1) {
+    if (attempt > 1) {
+      await sleep(CHANNEL_TEXT_FALLBACK_RETRY_DELAY_MS);
+    }
+
+    try {
+      const fallbackResult = await withTargetSendLock(target, async () => {
+        const result = await sendMessageWithTemplate(whatsappClient, target, fallbackTemplate, feedItem, {
+          supabase: options.supabase,
+          sendTimeoutMs: options.sendTimeoutMs,
+          overrideText: options.overrideText ?? null
+        });
+        const nowMs = Date.now();
+        globalLastSentAtMs = nowMs;
+        globalLastTargetId = String(target.id);
+        globalLastSentByTargetId.set(String(target.id), nowMs);
+        if (globalLastSentByTargetId.size > 1000) {
+          globalLastSentByTargetId.clear();
+        }
+        return result;
+      });
+      const fallbackConfirmation = await confirmSendResult(whatsappClient, target.type, fallbackResult, {
+        allowChannelTextUpsert: true
+      });
+      if (fallbackConfirmation?.ok) {
+        return fallbackResult;
+      }
+      lastError = fallbackConfirmation?.error || 'no upsert/ack';
+    } catch (error) {
+      lastError = getErrorMessage(error);
+    }
+
+    logger.warn(
+      {
+        ...(options.logContext || {}),
+        targetId: target.id,
+        attempt,
+        maxAttempts: CHANNEL_TEXT_FALLBACK_ATTEMPTS,
+        error: lastError
+      },
+      'Channel text fallback attempt failed'
+    );
+  }
+
+  throw new Error(`Channel media fallback not confirmed (${lastError})`);
+};
+
 const buildEditableMessageContent = async (options: {
   jid: string;
   text?: string | null;
@@ -3943,28 +4008,23 @@ const sendQueuedForSchedule = async (
                   },
                   'Channel media rejected; sending text/link preview fallback'
                 );
-                const fallbackTemplate = { ...template, send_mode: 'text_preview' } as Template;
-                const fallbackResult = await withTargetSendLock(target as Target, async () => {
-                  const result = await sendMessageWithTemplate(whatsappClient, target, fallbackTemplate, feedItem, {
+                const fallbackResult = await sendChannelTextFallbackWithRetry(
+                  whatsappClient,
+                  target as Target,
+                  template,
+                  feedItem,
+                  {
                     supabase,
                     sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
-                    overrideText: typeof log.message_content === 'string' ? log.message_content : null
-                  });
-                  const nowMs = Date.now();
-                  globalLastSentAtMs = nowMs;
-                  globalLastTargetId = String(target.id);
-                  globalLastSentByTargetId.set(String(target.id), nowMs);
-                  if (globalLastSentByTargetId.size > 1000) {
-                    globalLastSentByTargetId.clear();
+                    overrideText: typeof log.message_content === 'string' ? log.message_content : null,
+                    logContext: {
+                      scheduleId,
+                      logId: log.id,
+                      feedItemId: feedItem.id,
+                      mediaType: confirmedSendResult?.media?.type || null
+                    }
                   }
-                  return result;
-                });
-                const fallbackConfirmation = await confirmSendResult(whatsappClient, target.type, fallbackResult, {
-                  allowChannelTextUpsert: true
-                });
-                if (!fallbackConfirmation?.ok) {
-                  throw new Error(`Channel media fallback not confirmed (${fallbackConfirmation?.error || 'no upsert/ack'})`);
-                }
+                );
                 confirmedSendResult = {
                   ...fallbackResult,
                   media: {
@@ -4549,34 +4609,22 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
               },
               'Channel media rejected during send-now; sending text/link preview fallback'
             );
-            const fallbackTemplate = { ...(template as Template), send_mode: 'text_preview' } as Template;
-            const fallbackResult = await withTargetSendLock(targetRow, async () => {
-              const result = await sendMessageWithTemplate(
-                activeWhatsappClient,
-                targetRow,
-                fallbackTemplate,
-                feedItemRes.data as FeedItem,
-                {
-                  supabase,
-                  sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
-                  overrideText: typeof log.message_content === 'string' ? log.message_content : null
+            const fallbackResult = await sendChannelTextFallbackWithRetry(
+              activeWhatsappClient,
+              targetRow,
+              template as Template,
+              feedItemRes.data as FeedItem,
+              {
+                supabase,
+                sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+                overrideText: typeof log.message_content === 'string' ? log.message_content : null,
+                logContext: {
+                  logId: log.id,
+                  targetId: targetRow.id,
+                  mediaType: confirmedSendResult?.media?.type || null
                 }
-              );
-              const nowMs = Date.now();
-              globalLastSentAtMs = nowMs;
-              globalLastTargetId = String(targetRow.id);
-              globalLastSentByTargetId.set(String(targetRow.id), nowMs);
-              if (globalLastSentByTargetId.size > 1000) {
-                globalLastSentByTargetId.clear();
               }
-              return result;
-            });
-            const fallbackConfirmation = await confirmSendResult(activeWhatsappClient, targetRow.type, fallbackResult, {
-              allowChannelTextUpsert: true
-            });
-            if (!fallbackConfirmation?.ok) {
-              throw new Error(`Channel media fallback not confirmed (${fallbackConfirmation?.error || 'no upsert/ack'})`);
-            }
+            );
             confirmedSendResult = {
               ...fallbackResult,
               media: {

@@ -82,7 +82,7 @@ type DiscoverChannelsResponse = {
 const TargetsPage = () => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
-  const [filterType, setFilterType] = useState<'all' | Exclude<Target['type'], 'status'>>('all');
+  const [filterType, setFilterType] = useState<'all' | Target['type']>('all');
   const [addValue, setAddValue] = useState('');
   const [addNotice, setAddNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [discoveryNotice, setDiscoveryNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -208,7 +208,7 @@ const TargetsPage = () => {
     }
   });
 
-  const visibleTargets = targets.filter((target) => target.type !== 'status');
+  const visibleTargets = targets;
 
   const filteredTargets = visibleTargets.filter((target) => {
     const matchesSearch =
@@ -219,11 +219,12 @@ const TargetsPage = () => {
     return matchesSearch && matchesType;
   });
 
-  const counts: Record<'all' | Exclude<Target['type'], 'status'>, number> = {
+  const counts: Record<'all' | Target['type'], number> = {
     all: visibleTargets.length,
     group: visibleTargets.filter((target) => target.type === 'group').length,
     channel: visibleTargets.filter((target) => target.type === 'channel').length,
-    individual: visibleTargets.filter((target) => target.type === 'individual').length
+    individual: visibleTargets.filter((target) => target.type === 'individual').length,
+    status: visibleTargets.filter((target) => target.type === 'status').length
   };
 
   return (

@@ -82,10 +82,7 @@ const canEditSentInPlace = (item: QueueItem, editWindowMinutes: number, nowMs?: 
   const mediaType = String(item.media_type || '').trim().toLowerCase();
   const mediaUrl = String(item.media_url || '').trim();
   if (mediaType || mediaUrl) {
-    const supportsSameMediaEdit =
-      (mediaType === 'image' || mediaType === 'video' || mediaType === 'document') &&
-      Boolean(mediaUrl);
-    if (!supportsSameMediaEdit) return false;
+    return false;
   }
   if (!String(item.whatsapp_message_id || '').trim()) return false;
   const sentAt = String(item.sent_at || '').trim();
@@ -402,7 +399,12 @@ const QueueInner = () => {
     }
   };
 
-  const canSendNow = (item: QueueItem) => !isSuccessfulSendStatus(item.status) && item.status !== 'processing';
+  const canSendNow = (item: QueueItem) =>
+    !isSuccessfulSendStatus(item.status) &&
+    item.status !== 'processing' &&
+    item.status !== 'skipped' &&
+    !isPaused(item) &&
+    !isPostPaused(item);
 
   const getStatusBadge = (item: QueueItem) => {
     if (isPostPaused(item)) {
@@ -542,7 +544,7 @@ const QueueInner = () => {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Outgoing Queue</h1>
           <p className="text-muted-foreground">Review what is waiting to send, fix items, or send one right away.</p>
-          <p className="text-xs text-muted-foreground">Queued items are shown in send order (oldest publish time first).</p>
+          <p className="text-xs text-muted-foreground">Queued items are shown in the order the dispatcher will inspect them.</p>
           <p className="mt-1 text-xs text-muted-foreground">Stories appear in Feed Items first. This page shows only the sendable queue and recent delivery results.</p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -707,7 +709,7 @@ const QueueInner = () => {
                             <Badge variant="outline">Scheduled time</Badge>
                           ) : null}
                           {(statusFilter === 'pending' || statusFilter === 'processing') ? (
-                            <Badge variant="outline">#{index + 1} in send order</Badge>
+                            <Badge variant="outline">#{index + 1} in queue view</Badge>
                           ) : null}
                           {item.target_name ? <Badge variant="outline">{item.target_name}</Badge> : null}
                           {item.target_type ? <Badge variant="secondary">{item.target_type}</Badge> : null}

@@ -115,7 +115,7 @@ describe('WhatsAppClient', () => {
         expect(client.qrExpiresAtMs).toBeNull();
     });
 
-    it('should resolve status audience from cache/store metadata and own jid', async () => {
+    it('should resolve status audience from trusted cache/store contacts and own jid', async () => {
         client.contactsCache.set('972501234567@s.whatsapp.net', {});
         client.groupMetadataCache.set('120363000000000000@g.us', {
             participants: [{ id: '972509999999@s.whatsapp.net' }]
@@ -132,9 +132,10 @@ describe('WhatsAppClient', () => {
         };
 
         const audience = await client.getStatusAudience({ sampleSize: 20 });
-        expect(audience.participantCount).toBeGreaterThanOrEqual(5);
+        expect(audience.participantCount).toBeGreaterThanOrEqual(4);
         expect(audience.sample).toContain('972501234567@s.whatsapp.net');
         expect(audience.sample).toContain('972506666666@s.whatsapp.net');
+        expect(audience.sample).not.toContain('972509999999@s.whatsapp.net');
     });
 
     it('should match me participant when socket jid has a device suffix', () => {
@@ -239,7 +240,7 @@ describe('WhatsAppClient', () => {
         expect(sendMessage).not.toHaveBeenCalled();
     });
 
-    it('should not add ephemeralExpiration for disappearing groups by default', async () => {
+    it('should add ephemeralExpiration for disappearing groups by default', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'group-msg-1' } }));
         const groupMetadata: any = jest.fn(async () => ({
             id: '120363000000000010@g.us',
@@ -256,9 +257,9 @@ describe('WhatsAppClient', () => {
         expect(sendMessage).toHaveBeenCalledWith(
             '120363000000000010@g.us',
             { text: 'hello group' },
-            { useUserDevicesCache: false }
+            { ephemeralExpiration: 86400, useUserDevicesCache: false }
         );
-        expect(groupMetadata).not.toHaveBeenCalled();
+        expect(groupMetadata).toHaveBeenCalled();
     });
 
     it('should not add ephemeralExpiration for groups without disappearing mode', async () => {
@@ -282,7 +283,7 @@ describe('WhatsAppClient', () => {
         );
     });
 
-    it('should not add ephemeralExpiration for private chats by default', async () => {
+    it('should add ephemeralExpiration for private chats when the store proves disappearing mode', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'pm-msg-1' } }));
 
         client.socket = {
@@ -299,7 +300,7 @@ describe('WhatsAppClient', () => {
         expect(sendMessage).toHaveBeenCalledWith(
             '972501234567@s.whatsapp.net',
             { text: 'hello pm' },
-            {}
+            { ephemeralExpiration: 604800 }
         );
     });
 

@@ -86,12 +86,29 @@ const mergeSources = (...sourceSets: Array<Partial<StatusAudienceSources> | null
   return merged;
 };
 
-const getWarmAudienceSignalCount = (sources: Partial<StatusAudienceSources> | null | undefined) =>
+const getTrustedAudienceSignalCount = (sources: Partial<StatusAudienceSources> | null | undefined) =>
   Math.max(0, Math.floor(Number(sources?.contactsCache || 0))) +
   Math.max(0, Math.floor(Number(sources?.storeContacts || 0))) +
   Math.max(0, Math.floor(Number(sources?.storeChats || 0))) +
-  Math.max(0, Math.floor(Number(sources?.groupMetadata || 0))) +
-  Math.max(0, Math.floor(Number(sources?.env || 0)));
+  Math.max(0, Math.floor(Number(sources?.env || 0))) +
+  Math.max(0, Math.floor(Number(sources?.recentSuccessfulDirectRecipients || 0)));
+
+const isGroupMetadataOnlySnapshot = (snapshot: RefreshResult) =>
+  Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0))) > 0 &&
+  getTrustedAudienceSignalCount(snapshot.sources) === 0;
+
+const isLidHeavySnapshot = (snapshot: RefreshResult) => {
+  if (!snapshot.recipients.length) return false;
+  const lidCount = snapshot.recipients.filter((recipient) => recipient.endsWith('@lid')).length;
+  return lidCount / snapshot.recipients.length >= 0.9;
+};
+
+const shouldTrustStoredSnapshot = (snapshot: RefreshResult) => {
+  if (snapshot.participantCount <= 0) return false;
+  if (isGroupMetadataOnlySnapshot(snapshot)) return false;
+  if (isLidHeavySnapshot(snapshot) && getTrustedAudienceSignalCount(snapshot.sources) === 0) return false;
+  return true;
+};
 
 const buildSample = (recipients: string[], sampleSize = 25) =>
   recipients.slice(0, Math.max(1, Math.min(Math.floor(sampleSize || 25), 200)));
@@ -147,12 +164,13 @@ const shouldPreserveStoredSnapshot = (
 ) => {
   if (stored.participantCount < MIN_PRESERVED_SNAPSHOT_PARTICIPANTS) return false;
   if (!stored.recipients.length) return false;
+  if (!shouldTrustStoredSnapshot(stored)) return false;
   const storedRefreshedAtMs = stored.refreshedAt ? Date.parse(stored.refreshedAt) : Number.NaN;
   if (!Number.isFinite(storedRefreshedAtMs)) return false;
   const snapshotAgeMs = Date.now() - storedRefreshedAtMs;
   if (snapshotAgeMs < 0 || snapshotAgeMs > MAX_PRESERVED_SNAPSHOT_AGE_MS) return false;
 
-  const warmSignals = getWarmAudienceSignalCount(freshSources);
+  const warmSignals = getTrustedAudienceSignalCount(freshSources);
   if (warmSignals > 0) return false;
 
   const maxColdStartParticipants = Math.max(
@@ -392,7 +410,7 @@ const ensureFreshStatusRecipients = async (
   const refreshedAtMs = stored.refreshedAt ? Date.parse(stored.refreshedAt) : Number.NaN;
   const isFresh = Number.isFinite(refreshedAtMs) && Date.now() - refreshedAtMs <= maxAgeMinutes * 60 * 1000;
 
-  if (stored.participantCount > 0 && isFresh) {
+  if (isFresh && shouldTrustStoredSnapshot(stored)) {
     return stored;
   }
 

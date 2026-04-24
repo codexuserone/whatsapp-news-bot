@@ -14,7 +14,9 @@ const { runTargetAutoSyncPass } = require('../services/targetSyncService');
 const { persistReceiptUpdates } = require('../services/receiptService');
 
 const SEND_EPHEMERAL_EXPIRATION =
-  String(process.env.WHATSAPP_SEND_EPHEMERAL_EXPIRATION || '').trim().toLowerCase() === 'true';
+  String(process.env.WHATSAPP_SEND_EPHEMERAL_EXPIRATION ?? 'true').trim().toLowerCase() !== 'false';
+const INCLUDE_GROUP_METADATA_IN_STATUS_AUDIENCE =
+  String(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS || '').trim().toLowerCase() === 'true';
 
 const resolveBrowserTuple = (Browsers: Record<string, unknown> | null | undefined, browserName: string) => {
   const requestedPlatform = String(
@@ -131,7 +133,7 @@ type CachedNewsletterChat = {
 };
 
 const HARD_REFRESH_RECENT_CONNECTION_GRACE_MS = 2 * 60 * 1000;
-const CONTACTS_CACHE_MAX_SIZE = Math.max(Number(process.env.WHATSAPP_CONTACTS_CACHE_MAX_SIZE || 2500), 100);
+const CONTACTS_CACHE_MAX_SIZE = Math.max(Number(process.env.WHATSAPP_CONTACTS_CACHE_MAX_SIZE || 1000), 100);
 
 const INITIAL_QR_TTL_MS = 60_000;
 const ROTATED_QR_TTL_MS = 20_000;
@@ -927,13 +929,17 @@ class WhatsAppClient {
         addCandidate(chat?.id || chat?.jid, 'storeChats');
       }
 
-      for (const raw of this.groupMetadataCache.values()) {
-        const participantsRaw = Array.isArray((raw as { participants?: unknown[] })?.participants)
-          ? (raw as { participants?: unknown[] }).participants || []
-          : [];
-        for (const participant of participantsRaw as Array<Record<string, unknown>>) {
-          addCandidate(participant?.id, 'groupMetadata');
+      if (INCLUDE_GROUP_METADATA_IN_STATUS_AUDIENCE) {
+        for (const raw of this.groupMetadataCache.values()) {
+          const participantsRaw = Array.isArray((raw as { participants?: unknown[] })?.participants)
+            ? (raw as { participants?: unknown[] }).participants || []
+            : [];
+          for (const participant of participantsRaw as Array<Record<string, unknown>>) {
+            addCandidate(participant?.id, 'groupMetadata');
+          }
         }
+      } else if (this.groupMetadataCache.size > 0) {
+        warnings.push('Group participants are not used as Status recipients unless WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS=true.');
       }
 
       const envAudience = String(

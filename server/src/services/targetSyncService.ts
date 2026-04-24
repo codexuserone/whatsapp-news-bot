@@ -375,7 +375,7 @@ const runTargetAutoSyncPass = async (
     const result = await syncTargetsFromWhatsApp(whatsapp, {
       includeStatus: WHATSAPP_STATUS_ENABLED,
       skipIfDisconnected: true,
-      strict: true
+      strict: false
     });
     if (!options?.silent && result.ok && (result.inserted > 0 || result.updated > 0)) {
       logger.info(

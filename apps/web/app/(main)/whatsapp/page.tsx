@@ -171,10 +171,14 @@ const WhatsAppPage = () => {
   });
 
   const syncTargets = useMutation({
-    mutationFn: () => api.post('/api/targets/sync', { includeStatus: true, strict: true }),
+    mutationFn: () => api.post('/api/targets/sync', { includeStatus: true, strict: false }),
     onSuccess: () => {
+      lastAutoSyncStatusRef.current = status?.status || 'connected';
       queryClient.invalidateQueries({ queryKey: ['targets'] });
       queryClient.invalidateQueries({ queryKey: ['whatsapp-status-audience'] });
+    },
+    onError: () => {
+      lastAutoSyncStatusRef.current = null;
     }
   });
 
@@ -231,7 +235,6 @@ const WhatsAppPage = () => {
   React.useEffect(() => {
     if (!isConnected) return;
     if (lastAutoSyncStatusRef.current === status?.status) return;
-    lastAutoSyncStatusRef.current = status?.status || 'connected';
     syncTargets.mutate();
   }, [isConnected, status?.status]);
   const targetBuckets = React.useMemo(
@@ -411,7 +414,7 @@ const WhatsAppPage = () => {
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Synced destinations</span>
-                <span className="font-medium">{activeTargets.length + statusTargets.length}</span>
+                <span className="font-medium">{activeTargets.length}</span>
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Target sync</span>

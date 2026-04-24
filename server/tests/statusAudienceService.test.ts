@@ -188,7 +188,7 @@ describe('statusAudienceService', () => {
         jest.clearAllMocks();
     });
 
-    it('preserves a healthy stored snapshot when a connected client only resolves a cold self-only audience', async () => {
+    it('does not preserve a group-metadata-only stored snapshot when a connected client resolves only self', async () => {
         const refreshedAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
         const storedRecipients = Array.from({ length: 40 }, (_value, index) => `${1000000000 + index}@s.whatsapp.net`);
         const { supabase, tables } = buildSupabaseMock({
@@ -231,11 +231,11 @@ describe('statusAudienceService', () => {
             { sampleSize: 10 }
         );
 
-        expect(result.participantCount).toBe(41);
+        expect(result.participantCount).toBe(1);
         expect(result.recipients).toContain('16465527019@s.whatsapp.net');
-        expect(result.recipients).toContain('1000000000@s.whatsapp.net');
-        expect(result.warnings.some((warning: string) => warning.includes('Preserved the previous status audience snapshot'))).toBe(true);
-        expect(tables.status_recipients).toHaveLength(41);
+        expect(result.recipients).not.toContain('1000000000@s.whatsapp.net');
+        expect(result.warnings.some((warning: string) => warning.includes('Preserved the previous status audience snapshot'))).toBe(false);
+        expect(tables.status_recipients).toHaveLength(1);
     });
 
     it('does not preserve an old snapshot when the current audience has real warm sources', async () => {

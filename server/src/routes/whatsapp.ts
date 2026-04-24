@@ -1694,7 +1694,24 @@ const whatsappRoutes = () => {
     if (Number.isFinite(Number(mediaUploadTimeoutMs))) sendOptions.mediaUploadTimeoutMs = Number(mediaUploadTimeoutMs);
 
     const result = await whatsapp.sendStatusBroadcast(content, sendOptions);
-    res.json({ ok: true, messageId: result?.key?.id });
+    const messageId = String(result?.key?.id || '').trim() || null;
+    const confirmation = messageId && whatsapp?.confirmSend
+      ? await whatsapp.confirmSend(
+          messageId,
+          normalizedImageUrl || normalizedImageDataUrl || normalizedVideoUrl || normalizedVideoDataUrl
+            ? { upsertTimeoutMs: 30000, ackTimeoutMs: 90000 }
+            : { upsertTimeoutMs: 5000, ackTimeoutMs: 60000 }
+        )
+      : null;
+    res.json({
+      ok: Boolean(messageId),
+      accepted: Boolean(messageId),
+      confirmed: Boolean(confirmation?.ok),
+      uncertain: Boolean(messageId && !confirmation?.ok),
+      messageId,
+      confirmation,
+      audienceCount: statusSnapshot.recipients.length
+    });
   }));
 
   // Get recent outbox: messages the client believes it sent (for debugging ordering/media)

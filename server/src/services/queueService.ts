@@ -985,8 +985,7 @@ const isLikelyDecorativeImageUrl = (value: string) => {
 const normalizeImageCandidate = (candidate?: string | null, baseUrl?: string | null) => {
   const resolved = normalizeUrlCandidate(candidate, baseUrl);
   if (!resolved) return undefined;
-  if (!isImageUrl(resolved)) return undefined;
-  if (isLikelyDecorativeImageUrl(resolved)) return undefined;
+  if (!isUsableFeedImageUrl(resolved)) return undefined;
   return resolved;
 };
 
@@ -3782,9 +3781,14 @@ const sendQueuedForSchedule = async (
                 Boolean(sendResult?.media?.sent);
               const confirmation = await whatsappClient.confirmSend(
                 messageId,
-                isMedia
-                  ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
-                  : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 }
+                target.type === 'status'
+                  ? {
+                      upsertTimeoutMs: isMedia ? 30000 : 5000,
+                      ackTimeoutMs: isMedia ? 90000 : 60000
+                    }
+                  : isMedia
+                    ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
+                    : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 }
               );
               if (!confirmation?.ok) {
                 throw new Error('Message send not confirmed (no upsert/ack)');
@@ -4214,14 +4218,19 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       );
     };
 
-    const ensureSendConfirmed = async (messageId: string | null | undefined, isMedia: boolean) => {
+    const ensureSendConfirmed = async (messageId: string | null | undefined, isMedia: boolean, isStatus = false) => {
       if (!messageId) return;
       if (activeWhatsappClient.confirmSend) {
         const confirmation = await activeWhatsappClient.confirmSend(
           messageId,
-          isMedia
-            ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
-            : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 }
+          isStatus
+            ? {
+                upsertTimeoutMs: isMedia ? 30000 : 5000,
+                ackTimeoutMs: isMedia ? 90000 : 60000
+              }
+            : isMedia
+              ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000 }
+              : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000 }
         );
         if (!confirmation?.ok) {
           throw new Error('Message send not confirmed (no upsert/ack)');
@@ -4318,7 +4327,8 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
         await ensureSendConfirmed(
           messageId || null,
           ['image', 'video', 'audio', 'document'].includes(String(sendResult?.media?.type || '')) &&
-            Boolean(sendResult?.media?.sent)
+            Boolean(sendResult?.media?.sent),
+          targetRow.type === 'status'
         );
 
         await supabase
@@ -4612,7 +4622,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
 
       const messageId = sendResult?.response?.key?.id;
       const isMediaConfirmed = Boolean(sendResult?.media?.type) && Boolean(sendResult?.media?.sent);
-      await ensureSendConfirmed(messageId || null, isMediaConfirmed);
+      await ensureSendConfirmed(messageId || null, isMediaConfirmed, targetRow.type === 'status');
 
       await supabase
         .from('message_logs')

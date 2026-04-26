@@ -399,8 +399,14 @@ const runMigrations = async () => {
       process.stdout.write(`Failed to notify PostgREST schema reload: ${message}\n`);
     }
   } finally {
-    detachClientErrorLogger?.();
-    await client.end();
+    try {
+      await client.end();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stdout.write(`Failed to close migration client cleanly: ${message}\n`);
+    } finally {
+      detachClientErrorLogger?.();
+    }
   }
 };
 

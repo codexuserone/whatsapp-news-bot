@@ -175,6 +175,31 @@ const runStartupTask = (label: string, task: () => Promise<void> | void) => {
     });
 };
 
+const isTransientStartupMigrationError = (error: unknown) => {
+  const message = String((error as { message?: unknown })?.message || error || '');
+  return (
+    message.includes('ECHECKOUTTIMEOUT') ||
+    message.includes('UND_ERR_HEADERS_TIMEOUT') ||
+    message.includes('Headers Timeout Error') ||
+    message.includes('fetch failed') ||
+    message.includes('Connection timed out') ||
+    message.includes('Error code 522') ||
+    message.includes('ENETUNREACH')
+  );
+};
+
+const shouldFailStartupForMigrationError = (error: unknown) => {
+  if (process.env.MIGRATIONS_STRICT !== 'true') {
+    return false;
+  }
+
+  if (process.env.NODE_ENV === 'production' && isTransientStartupMigrationError(error)) {
+    return false;
+  }
+
+  return true;
+};
+
 const start = async () => {
   const app: Express = express();
   app.disable('x-powered-by');
@@ -378,10 +403,10 @@ const start = async () => {
       logger.info('Database migrations complete');
     } catch (error) {
       logger.error({ error }, 'Database migrations failed');
-      const strict = process.env.MIGRATIONS_STRICT === 'true';
-      if (strict) {
+      if (shouldFailStartupForMigrationError(error)) {
         throw error;
       }
+      logger.warn('Continuing startup after a non-fatal migration failure');
     }
   }
 

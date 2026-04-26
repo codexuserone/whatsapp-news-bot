@@ -21,6 +21,11 @@ type ConnectionCandidate = {
   config: ClientConfig;
 };
 
+type PgClientWithEvents = Client & {
+  on(event: 'error', listener: (error: Error) => void): PgClientWithEvents;
+  off(event: 'error', listener: (error: Error) => void): PgClientWithEvents;
+};
+
 const preferIpv4 = () => {
   try {
     const setter = (dns as unknown as { setDefaultResultOrder?: (order: string) => void }).setDefaultResultOrder;
@@ -277,6 +282,22 @@ const buildConnectionCandidates = async (databaseUrl: string) => {
   return output;
 };
 
+const attachClientErrorLogger = (client: Client, label: string) => {
+  const clientWithEvents = client as PgClientWithEvents;
+  const handler = (error: Error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stdout.write(`Postgres client error for ${label}: ${message}\n`);
+  };
+  clientWithEvents.on('error', handler);
+  return () => {
+    try {
+      clientWithEvents.off('error', handler);
+    } catch {
+      // ignore listener cleanup failures
+    }
+  };
+};
+
 const runMigrations = async () => {
   preferIpv4();
   loadEnv();
@@ -305,14 +326,17 @@ const runMigrations = async () => {
 
   const candidates = await buildConnectionCandidates(databaseUrl);
   let client: Client | null = null;
+  let detachClientErrorLogger: (() => void) | null = null;
   let lastError: unknown = null;
 
   for (const candidate of candidates) {
     process.stdout.write(`Connecting with ${candidate.label}: ${candidate.summary}\n`);
     const attempt = new Client(candidate.config);
+    const detachAttemptErrorLogger = attachClientErrorLogger(attempt, candidate.label);
     try {
       await attempt.connect();
       client = attempt;
+      detachClientErrorLogger = detachAttemptErrorLogger;
       process.stdout.write(`Connected using ${candidate.label}.\n`);
       break;
     } catch (error) {
@@ -324,6 +348,7 @@ const runMigrations = async () => {
       } catch {
         // ignore
       }
+      detachAttemptErrorLogger();
     }
   }
 
@@ -374,6 +399,7 @@ const runMigrations = async () => {
       process.stdout.write(`Failed to notify PostgREST schema reload: ${message}\n`);
     }
   } finally {
+    detachClientErrorLogger?.();
     await client.end();
   }
 };

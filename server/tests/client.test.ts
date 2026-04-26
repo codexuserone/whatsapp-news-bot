@@ -155,6 +155,52 @@ describe('WhatsAppClient', () => {
         expect(audience.sample).toContain('972509999999@s.whatsapp.net');
     });
 
+    it('should map implicit status audience LIDs to phone JIDs when Baileys has mappings', async () => {
+        const getPNForLID: any = jest.fn(async (lid: string) => (
+            lid === '103140015788103@lid' ? '972501234567@s.whatsapp.net' : null
+        ));
+        client.groupMetadataCache.set('120363000000000000@g.us', {
+            participants: [
+                { id: '103140015788103@lid' },
+                { id: '103140015788104@lid' }
+            ]
+        });
+        client.socket = {
+            user: { id: '972506666666@s.whatsapp.net' },
+            signalRepository: {
+                lidMapping: { getPNForLID }
+            }
+        };
+
+        const audience = await client.getStatusAudience({ sampleSize: 20 });
+
+        expect(getPNForLID).toHaveBeenCalledWith('103140015788103@lid');
+        expect(audience.sample).toContain('972501234567@s.whatsapp.net');
+        expect(audience.sample).not.toContain('103140015788103@lid');
+        expect(audience.sample).toContain('103140015788104@lid');
+        expect(audience.sources.lidMappings).toBe(1);
+        expect(audience.warnings.some((warning: string) => warning.includes('without phone-number mappings'))).toBe(true);
+    });
+
+    it('should reject implicit group-only LID status audience without phone mappings', async () => {
+        const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-lid-only' } }));
+        client.groupMetadataCache.set('120363000000000000@g.us', {
+            participants: [
+                { id: '103140015788103@lid' },
+                { id: '103140015788104@lid' }
+            ]
+        });
+        client.socket = {
+            sendMessage,
+            user: { id: '972506666666@s.whatsapp.net' }
+        };
+
+        await expect(client.sendStatusBroadcast({ text: 'hello' }))
+            .rejects
+            .toThrow('Status audience only contains group-participant LID recipients');
+        expect(sendMessage).not.toHaveBeenCalled();
+    });
+
     it('marks Baileys crypto/session mismatch errors as outbound-blocking without clearing auth immediately', () => {
         expect(client.isAuthStateCorrupted('Bad MAC')).toBe(false);
         expect(client.isRecoverableSessionCryptoError('Bad MAC')).toBe(true);

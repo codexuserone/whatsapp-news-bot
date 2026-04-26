@@ -120,6 +120,13 @@ describe('queueService __testUtils', () => {
     expect(testUtils.shouldRequireServerAckForSend('group', mediaResult)).toBe(false);
   });
 
+  it('blocks text fallback after media failure for status and channel targets', () => {
+    expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('status')).toBe(true);
+    expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('channel')).toBe(true);
+    expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('group')).toBe(false);
+    expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('individual')).toBe(false);
+  });
+
   it('detects newsletter media ack 479 as a channel media rejection', () => {
     const mediaResult = {
       media: { type: 'image', url: 'https://example.com/a.jpg', sent: true, error: null }
@@ -146,6 +153,36 @@ describe('queueService __testUtils', () => {
     expect(testUtils.buildChannelMediaHoldError('image', 'WhatsApp server rejected message ack 479')).not.toContain(
       'sent text/link preview'
     );
+  });
+
+  it('rejects status snapshots made only of implicit LID recipients', () => {
+    expect(() =>
+      testUtils.assertUsableStatusAudience({
+        recipients: ['103140015788103@lid', '103140015788104@lid'],
+        sources: {
+          groupMetadata: 2,
+          env: 0,
+          activeIndividualTargets: 0,
+          recentSuccessfulDirectRecipients: 0,
+          lidMappings: 0
+        }
+      })
+    ).toThrow('implicit LID recipients');
+  });
+
+  it('allows status snapshots with mapped phone recipients', () => {
+    expect(() =>
+      testUtils.assertUsableStatusAudience({
+        recipients: ['972501234567@s.whatsapp.net'],
+        sources: {
+          groupMetadata: 2,
+          env: 0,
+          activeIndividualTargets: 0,
+          recentSuccessfulDirectRecipients: 0,
+          lidMappings: 1
+        }
+      })
+    ).not.toThrow();
   });
 
   it('requeues only stale rows that do not already have a sent sibling', () => {

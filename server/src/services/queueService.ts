@@ -90,6 +90,9 @@ type WhatsAppClient = {
   ) => Promise<{ announce: boolean; me: { isAdmin: boolean } } | null>;
 };
 
+const shouldBlockTextFallbackAfterMediaFailure = (targetType: Target['type'] | null | undefined) =>
+  targetType === 'status' || targetType === 'channel';
+
 const DEFAULT_SEND_TIMEOUT_MS = 45000;
 const DEFAULT_POST_SEND_EDIT_WINDOW_MINUTES = 15;
 const DEFAULT_POST_SEND_CORRECTION_WINDOW_MINUTES = 15;
@@ -141,12 +144,22 @@ const getStatusAudienceExplicitSourceCount = (snapshot: Record<string, any> | nu
   );
 };
 
+const getStatusAudienceMappedSourceCount = (snapshot: Record<string, any> | null | undefined) => {
+  const sources = snapshot?.sources || {};
+  return Math.max(0, Math.floor(Number(sources.lidMappings || 0)));
+};
+
 const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undefined) => {
   const recipients = Array.isArray(snapshot?.recipients) ? snapshot!.recipients : [];
   if (!recipients.length) {
     throw new Error('No fresh status recipients are available for this status send.');
   }
-  if (recipients.length <= 1 && getStatusAudienceExplicitSourceCount(snapshot) <= 0) {
+  const lidCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@lid')).length;
+  const phoneCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@s.whatsapp.net')).length;
+  if (lidCount > 0 && phoneCount === 0 && getStatusAudienceExplicitSourceCount(snapshot) <= 0 && getStatusAudienceMappedSourceCount(snapshot) <= 0) {
+    throw new Error('Status audience only contains implicit LID recipients; refusing to mark a Status send as sent.');
+  }
+  if (recipients.length <= 1 && getStatusAudienceExplicitSourceCount(snapshot) <= 0 && getStatusAudienceMappedSourceCount(snapshot) <= 0) {
     throw new Error('Status audience has no private viewers yet; refusing to mark a self-only Status send as sent.');
   }
 };
@@ -1746,12 +1759,6 @@ const isChannelMediaAckRejection = (
 ) => {
   if (targetType !== 'channel' || !isMediaSendResult(sendResult)) return false;
   return /(?:ack|server rejected|rejected).*479|479.*(?:ack|server rejected|rejected)/i.test(String(errorMessage || ''));
-};
-
-const buildChannelMediaFallbackError = (mediaType: string | null | undefined, errorMessage: unknown) => {
-  const kind = String(mediaType || 'media').trim() || 'media';
-  const reason = String(errorMessage || 'WhatsApp rejected the channel media send').trim();
-  return `Channel ${kind} was rejected by WhatsApp (${reason}); sent text/link preview instead.`;
 };
 
 const buildChannelMediaHoldError = (mediaType: string | null | undefined, errorMessage: unknown) => {
@@ -4784,6 +4791,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       const manualMediaUrlRaw = String(log.media_url || '').trim();
       const manualMediaType = String(log.media_type || '').trim().toLowerCase();
       const manualHasMedia = Boolean(manualMediaUrlRaw);
+      const blockManualTextFallbackAfterMediaFailure = shouldBlockTextFallbackAfterMediaFailure(targetRow.type);
 
       if (!manualHasMedia && !manualText) {
         throw new Error('Manual message must include message text or a media URL');
@@ -4898,7 +4906,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             return { response, media: { type: 'video', url: safeUrl, sent: true, error: null } };
           } catch (error) {
             const message = getErrorMessage(error);
-            if (!manualText) {
+            if (!manualText || blockManualTextFallbackAfterMediaFailure) {
               throw error;
             }
             logger.warn({ error, jid, videoUrl: safeUrl }, 'Manual video send failed; using text fallback');
@@ -4931,7 +4939,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             return { response, media: { type: 'audio', url: safeUrl, sent: true, error: null } };
           } catch (error) {
             const message = getErrorMessage(error);
-            if (!manualText) {
+            if (!manualText || blockManualTextFallbackAfterMediaFailure) {
               throw error;
             }
             logger.warn({ error, jid, audioUrl: safeUrl }, 'Manual audio send failed; using text fallback');
@@ -4971,7 +4979,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             return { response, media: { type: 'document', url: safeUrl, sent: true, error: null } };
           } catch (error) {
             const message = getErrorMessage(error);
-            if (!manualText) {
+            if (!manualText || blockManualTextFallbackAfterMediaFailure) {
               throw error;
             }
             logger.warn({ error, jid, documentUrl: safeUrl }, 'Manual document send failed; using text fallback');
@@ -5040,7 +5048,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           return { response, media: { type: 'image', url: safeUrl, sent: true, error: null } };
         } catch (error) {
           const message = getErrorMessage(error);
-          if (!manualText) {
+          if (!manualText || blockManualTextFallbackAfterMediaFailure) {
             throw error;
           }
           logger.warn({ error, jid, imageUrl: safeUrl }, 'Manual image send failed; using text fallback');
@@ -5078,6 +5086,42 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
         : rawErrorMessage;
       const connectionStateError = isConnectionStateError(rawErrorMessage);
       const timedOut = isUnknownDeliveryTimeout(rawErrorMessage);
+      const manualChannelMediaRejected =
+        !isAutomationBacked &&
+        targetRow.type === 'channel' &&
+        Boolean(uncertainMediaUrl) &&
+        isChannelMediaAckRejection(
+          targetRow.type,
+          {
+            media: {
+              type: uncertainMediaType,
+              url: uncertainMediaUrl,
+              sent: true,
+              error: rawErrorMessage
+            }
+          } as SendWithMediaResult,
+          rawErrorMessage
+        );
+      if (manualChannelMediaRejected) {
+        rememberChannelMediaRejection(targetRow);
+        const holdError = buildChannelMediaHoldError(uncertainMediaType, rawErrorMessage);
+        await supabase
+          .from('message_logs')
+          .update({
+            status: 'awaiting_approval',
+            sent_at: null,
+            processing_started_at: null,
+            error_message: holdError,
+            message_content: log.message_content || uncertainMessageContent,
+            whatsapp_message_id: null,
+            media_url: uncertainMediaUrl,
+            media_type: uncertainMediaType,
+            media_sent: false,
+            media_error: holdError
+          })
+          .eq('id', log.id);
+        return { ok: false, held: true, error: holdError };
+      }
       const terminalStatus = timedOut ? 'uncertain' : connectionStateError ? originalStatus : 'failed';
 
       const keepMedia = !isAutomationBacked && Boolean(String(log.media_url || '').trim());
@@ -5309,9 +5353,10 @@ module.exports = {
     isAuthStateError,
     isConnectionStateError,
     buildConnectionWaitErrorMessage,
+    shouldBlockTextFallbackAfterMediaFailure,
+    assertUsableStatusAudience,
     shouldRequireServerAckForSend,
     isChannelMediaAckRejection,
-    buildChannelMediaFallbackError,
     buildChannelMediaHoldError,
     rememberChannelMediaRejection,
     isChannelMediaTemporarilyBlocked

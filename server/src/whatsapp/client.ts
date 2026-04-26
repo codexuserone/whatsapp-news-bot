@@ -18,6 +18,12 @@ const SEND_EPHEMERAL_EXPIRATION =
   String(process.env.WHATSAPP_SEND_EPHEMERAL_EXPIRATION ?? 'true').trim().toLowerCase() !== 'false';
 const INCLUDE_GROUP_METADATA_IN_STATUS_AUDIENCE =
   String(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS ?? 'true').trim().toLowerCase() !== 'false';
+const ALLOW_UNMAPPED_LID_STATUS_AUDIENCE =
+  String(process.env.WHATSAPP_STATUS_ALLOW_UNMAPPED_LID_AUDIENCE || '').trim().toLowerCase() === 'true';
+const STATUS_LID_MAPPING_LIMIT = Math.max(
+  0,
+  Math.min(Math.floor(Number(process.env.WHATSAPP_STATUS_LID_MAPPING_LIMIT || 2000)), 10000)
+);
 const ENABLE_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH =
   String(process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH ?? 'true').trim().toLowerCase() !== 'false';
 const AUTO_CLEAR_CORRUPTED_AUTH =
@@ -372,6 +378,34 @@ const normalizeStatusAudienceJid = (value: unknown) => {
   if (!normalized || normalized === 'status@broadcast') return '';
   if (normalized.endsWith('@s.whatsapp.net') || normalized.endsWith('@lid')) return normalized;
   return '';
+};
+
+type StatusAudienceSources = {
+  contactsCache: number;
+  storeContacts: number;
+  storeChats: number;
+  groupMetadata: number;
+  env: number;
+  me: number;
+  lidMappings: number;
+};
+
+const getStatusAudienceSafeSourceCount = (sources: Partial<StatusAudienceSources> | null | undefined) =>
+  Math.max(0, Math.floor(Number(sources?.contactsCache || 0))) +
+  Math.max(0, Math.floor(Number(sources?.storeContacts || 0))) +
+  Math.max(0, Math.floor(Number(sources?.storeChats || 0))) +
+  Math.max(0, Math.floor(Number(sources?.env || 0))) +
+  Math.max(0, Math.floor(Number(sources?.lidMappings || 0)));
+
+const isUnsafeImplicitStatusAudience = (
+  recipients: string[],
+  sources: Partial<StatusAudienceSources> | null | undefined
+) => {
+  if (!recipients.length || ALLOW_UNMAPPED_LID_STATUS_AUDIENCE) return false;
+  const groupSignals = Math.max(0, Math.floor(Number(sources?.groupMetadata || 0)));
+  if (groupSignals <= 0 || getStatusAudienceSafeSourceCount(sources) > 0) return false;
+  const lidCount = recipients.filter((recipient) => recipient.endsWith('@lid')).length;
+  return lidCount / recipients.length >= 0.9;
 };
 
 const stripTargetTypeTags = (value: string) =>
@@ -974,14 +1008,7 @@ class WhatsAppClient {
    */
   private resolveStatusAudience(): {
     participants: string[];
-    sources: {
-      contactsCache: number;
-      storeContacts: number;
-      storeChats: number;
-      groupMetadata: number;
-      env: number;
-      me: number;
-    };
+    sources: StatusAudienceSources;
     warnings: string[];
     selfJid: string | null;
   } {
@@ -993,7 +1020,8 @@ class WhatsAppClient {
       storeChats: 0,
       groupMetadata: 0,
       env: 0,
-      me: 0
+      me: 0,
+      lidMappings: 0
     };
     const warnings: string[] = [];
 
@@ -1072,8 +1100,66 @@ class WhatsAppClient {
     return { participants: resolved.filter((participant) => participant !== selfJid), sources, warnings, selfJid };
   }
 
-  getStatusParticipants(): string[] {
+  private async resolveStatusAudienceWithLidMappings(): Promise<{
+    participants: string[];
+    sources: StatusAudienceSources;
+    warnings: string[];
+    selfJid: string | null;
+  }> {
     const audience = this.resolveStatusAudience();
+    const participants = new Set(audience.participants);
+    const lidRecipients = audience.participants.filter((participant) => participant.endsWith('@lid'));
+    const lidMapping = (this.socket as any)?.signalRepository?.lidMapping;
+    const getPNForLID = typeof lidMapping?.getPNForLID === 'function'
+      ? lidMapping.getPNForLID.bind(lidMapping)
+      : null;
+
+    if (lidRecipients.length && !getPNForLID) {
+      audience.warnings.push('Status audience has LID recipients but no Baileys phone-number mapping store is available.');
+      return { ...audience, participants: Array.from(participants.values()).sort() };
+    }
+
+    if (!getPNForLID || !STATUS_LID_MAPPING_LIMIT) {
+      return { ...audience, participants: Array.from(participants.values()).sort() };
+    }
+
+    let attempted = 0;
+    let resolved = 0;
+    for (const lid of lidRecipients.slice(0, STATUS_LID_MAPPING_LIMIT)) {
+      attempted += 1;
+      try {
+        const pn = normalizeStatusAudienceJid(await getPNForLID(lid));
+        if (!pn || !pn.endsWith('@s.whatsapp.net')) continue;
+        participants.delete(lid);
+        participants.add(pn);
+        resolved += 1;
+      } catch (error) {
+        audience.warnings.push(`status-lid-mapping-error:${getErrorMessage(error)}`);
+        break;
+      }
+    }
+
+    if (resolved > 0) {
+      audience.sources.lidMappings += resolved;
+    }
+    if (attempted < lidRecipients.length) {
+      audience.warnings.push(`Status LID mapping capped at ${STATUS_LID_MAPPING_LIMIT} of ${lidRecipients.length} recipients.`);
+    }
+    if (lidRecipients.length && resolved < lidRecipients.length) {
+      audience.warnings.push(`Status audience has ${lidRecipients.length - resolved} LID recipients without phone-number mappings.`);
+    }
+
+    const selfJid = audience.selfJid;
+    return {
+      ...audience,
+      participants: Array.from(participants.values())
+        .filter((participant) => !selfJid || participant !== selfJid)
+        .sort()
+    };
+  }
+
+  async getStatusParticipants(): Promise<string[]> {
+    const audience = await this.resolveStatusAudienceWithLidMappings();
     logger.debug(
       {
         participantCount: audience.participants.length,
@@ -1086,7 +1172,7 @@ class WhatsAppClient {
   }
 
   async getStatusAudience(options?: { sampleSize?: number }) {
-    const audience = this.resolveStatusAudience();
+    const audience = await this.resolveStatusAudienceWithLidMappings();
     const sampleSize = Math.max(1, Math.min(Number(options?.sampleSize || 25), 200));
     return {
       participantCount: audience.participants.length,
@@ -3191,12 +3277,17 @@ class WhatsAppClient {
         : [];
       const dedupedExplicit = Array.from(new Set(explicitStatusJids));
 
-      const resolvedAudience = this.resolveStatusAudience();
+      const resolvedAudience = await this.resolveStatusAudienceWithLidMappings();
       const statusJidList = dedupedExplicit.length ? dedupedExplicit : resolvedAudience.participants;
 
       if (!statusJidList.length) {
         throw new Error(
           'No status recipients resolved. Open WhatsApp contacts/chats first or set WHATSAPP_STATUS_AUDIENCE_JIDS.'
+        );
+      }
+      if (!dedupedExplicit.length && isUnsafeImplicitStatusAudience(statusJidList, resolvedAudience.sources)) {
+        throw new Error(
+          'Status audience only contains group-participant LID recipients. Add explicit private Status recipients or wait for Baileys to resolve phone-number mappings before sending.'
         );
       }
 

@@ -16,6 +16,7 @@ type StatusAudienceSnapshot = {
     groupMetadata: number;
     env: number;
     me: number;
+    lidMappings: number;
     activeIndividualTargets: number;
     recentSuccessfulDirectRecipients: number;
   };
@@ -88,6 +89,7 @@ const emptySources = () => ({
   groupMetadata: 0,
   env: 0,
   me: 0,
+  lidMappings: 0,
   activeIndividualTargets: 0,
   recentSuccessfulDirectRecipients: 0
 });
@@ -119,6 +121,7 @@ const getTrustedAudienceSignalCount = (sources: Partial<StatusAudienceSources> |
   Math.max(0, Math.floor(Number(sources?.storeContacts || 0))) +
   Math.max(0, Math.floor(Number(sources?.storeChats || 0))) +
   Math.max(0, Math.floor(Number(sources?.env || 0))) +
+  Math.max(0, Math.floor(Number(sources?.lidMappings || 0))) +
   Math.max(0, Math.floor(Number(sources?.activeIndividualTargets || 0))) +
   Math.max(0, Math.floor(Number(sources?.recentSuccessfulDirectRecipients || 0)));
 
@@ -126,6 +129,16 @@ const getExplicitAudienceSignalCount = (sources: Partial<StatusAudienceSources> 
   Math.max(0, Math.floor(Number(sources?.env || 0))) +
   Math.max(0, Math.floor(Number(sources?.activeIndividualTargets || 0))) +
   Math.max(0, Math.floor(Number(sources?.recentSuccessfulDirectRecipients || 0)));
+
+const ALLOW_UNMAPPED_LID_STATUS_AUDIENCE =
+  String(process.env.WHATSAPP_STATUS_ALLOW_UNMAPPED_LID_AUDIENCE || '').trim().toLowerCase() === 'true';
+
+const shouldDropImplicitLidRecipients = (sources: Partial<StatusAudienceSources> | null | undefined) => {
+  if (ALLOW_UNMAPPED_LID_STATUS_AUDIENCE) return false;
+  const groupSignals = Math.max(0, Math.floor(Number(sources?.groupMetadata || 0)));
+  if (groupSignals <= 0) return false;
+  return getExplicitAudienceSignalCount(sources) <= 0;
+};
 
 const isGroupMetadataOnlySnapshot = (snapshot: RefreshResult) =>
   Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0))) > 0 &&
@@ -406,7 +419,7 @@ const refreshStatusRecipients = async (
       : null
   );
 
-  const participants = Array.from(
+  let participants = Array.from(
     new Set(
       [
         ...(Array.isArray(participantsRaw) ? participantsRaw : []),
@@ -434,6 +447,16 @@ const refreshStatusRecipients = async (
   }
   if (!USE_RECENT_DIRECT_RECIPIENTS && recentDirectRecipients.length) {
     warnings.push('Recent direct recipients are ignored unless WHATSAPP_STATUS_USE_RECENT_DIRECT_RECIPIENTS=true.');
+  }
+  if (shouldDropImplicitLidRecipients(sources)) {
+    const beforeDrop = participants.length;
+    participants = participants.filter((recipient) => !recipient.endsWith('@lid'));
+    const dropped = beforeDrop - participants.length;
+    if (dropped > 0) {
+      warnings.push(
+        `Dropped ${dropped} implicit group-participant LID Status recipients because no phone-number mappings or explicit private recipients were available.`
+      );
+    }
   }
 
   if (shouldPreserveStoredSnapshot(stored, participants.length, sources)) {

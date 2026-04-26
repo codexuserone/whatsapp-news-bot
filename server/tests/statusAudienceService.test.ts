@@ -480,6 +480,69 @@ describe('statusAudienceService', () => {
         expect(result.sources.activeIndividualTargets).toBe(1);
     });
 
+    it('drops implicit group LID recipients when no phone mappings or explicit recipients exist', async () => {
+        const { supabase, tables } = buildSupabaseMock();
+        getSupabaseClientMock.mockReturnValue(supabase);
+
+        const result = await refreshStatusRecipients(
+            {
+                getStatus: () => ({ status: 'connected' }),
+                getStatusParticipants: () => ['103140015788103@lid', '103140015788104@lid'],
+                getStatusAudience: () => ({
+                    participantCount: 2,
+                    sample: ['103140015788103@lid', '103140015788104@lid'],
+                    sources: {
+                        contactsCache: 0,
+                        storeContacts: 0,
+                        storeChats: 0,
+                        groupMetadata: 2,
+                        env: 0,
+                        me: 1,
+                        lidMappings: 0
+                    },
+                    warnings: []
+                })
+            },
+            { sampleSize: 10 }
+        );
+
+        expect(result.participantCount).toBe(0);
+        expect(result.recipients).toEqual([]);
+        expect(result.warnings.some((warning: string) => warning.includes('Dropped 2 implicit group-participant LID'))).toBe(true);
+        expect(tables.status_recipients).toHaveLength(0);
+    });
+
+    it('keeps phone recipients resolved from LID mappings and drops remaining implicit LIDs', async () => {
+        const { supabase, tables } = buildSupabaseMock();
+        getSupabaseClientMock.mockReturnValue(supabase);
+
+        const result = await refreshStatusRecipients(
+            {
+                getStatus: () => ({ status: 'connected' }),
+                getStatusParticipants: () => ['972501234567@s.whatsapp.net', '103140015788104@lid'],
+                getStatusAudience: () => ({
+                    participantCount: 2,
+                    sample: ['972501234567@s.whatsapp.net', '103140015788104@lid'],
+                    sources: {
+                        contactsCache: 0,
+                        storeContacts: 0,
+                        storeChats: 0,
+                        groupMetadata: 2,
+                        env: 0,
+                        me: 1,
+                        lidMappings: 1
+                    },
+                    warnings: []
+                })
+            },
+            { sampleSize: 10 }
+        );
+
+        expect(result.recipients).toEqual(['972501234567@s.whatsapp.net']);
+        expect(result.sources.lidMappings).toBe(1);
+        expect(tables.status_recipients).toHaveLength(1);
+    });
+
     it('reuses a fresh stored snapshot without refreshing again', async () => {
         const refreshedAt = new Date().toISOString();
         const { supabase } = buildSupabaseMock({

@@ -50,7 +50,70 @@ type AuthStore = {
 let authStatePool: InstanceType<typeof Pool> | null | undefined;
 let authStatePoolErrorHandlerBound = false;
 
-const resolveAuthStateDbUrl = () => String(process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || '').trim();
+const extractSupabaseRef = (databaseUrl: string) => {
+  try {
+    const parsed = new URL(databaseUrl);
+    const hostMatch = parsed.hostname.match(/^db\.([a-z0-9]+)\.supabase\.co$/i);
+    if (hostMatch?.[1]) {
+      return hostMatch[1].toLowerCase();
+    }
+
+    const userMatch = decodeURIComponent(parsed.username || '').match(/^postgres\.([a-z0-9]+)$/i);
+    if (userMatch?.[1]) {
+      return userMatch[1].toLowerCase();
+    }
+  } catch {
+    // ignore
+  }
+
+  const supabaseUrl = String(process.env.SUPABASE_URL || '').trim();
+  if (!supabaseUrl) return null;
+
+  try {
+    const parsed = new URL(supabaseUrl);
+    const ref = String(parsed.hostname.split('.')[0] || '').trim().toLowerCase();
+    return ref || null;
+  } catch {
+    return null;
+  }
+};
+
+const resolveAuthStateDbUrl = () => {
+  const explicitPoolerUrl = String(process.env.SUPABASE_POOLER_URL || '').trim();
+  if (explicitPoolerUrl) {
+    return explicitPoolerUrl;
+  }
+
+  const configuredUrl = String(process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || '').trim();
+  if (!configuredUrl) return '';
+
+  try {
+    const parsed = new URL(configuredUrl);
+    if (!/^db\.[a-z0-9]+\.supabase\.co$/i.test(parsed.hostname)) {
+      return configuredUrl;
+    }
+
+    const ref = extractSupabaseRef(configuredUrl);
+    if (!ref) {
+      return configuredUrl;
+    }
+
+    const poolerHost =
+      String(process.env.SUPABASE_POOLER_HOST || '').trim() ||
+      (String(process.env.SUPABASE_POOLER_REGION || '').trim()
+        ? `aws-0-${String(process.env.SUPABASE_POOLER_REGION || '').trim()}.pooler.supabase.com`
+        : 'aws-0-us-west-2.pooler.supabase.com');
+    const poolerPort = String(process.env.SUPABASE_POOLER_PORT || '6543').trim() || '6543';
+    const poolerUser = String(process.env.SUPABASE_POOLER_USER || '').trim() || `postgres.${ref}`;
+
+    parsed.hostname = poolerHost;
+    parsed.port = poolerPort;
+    parsed.username = encodeURIComponent(poolerUser);
+    return parsed.toString();
+  } catch {
+    return configuredUrl;
+  }
+};
 
 const preferIpv4 = () => {
   try {

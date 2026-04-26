@@ -1907,7 +1907,7 @@ const sendMessageWithTemplate = async (
   const sendMode = rendered.sendMode;
   const includeImageCaption = rendered.includeImageCaption;
   const allowTextFallback = rendered.allowTextFallback;
-  const blockTextFallbackAfterMediaFailure = target.type === 'status' || target.type === 'channel';
+  const blockTextFallbackAfterMediaFailure = shouldBlockTextFallbackAfterMediaFailure(target.type);
   const renderedText = rendered.renderedText;
   const textWithPreview = rendered.textWithPreview;
   const buildStatusOptions = async () => {

@@ -1880,13 +1880,20 @@ const whatsappRoutes = () => {
       : await ensureFreshStatusRecipients(whatsapp, { maxAgeMinutes: 10, sampleSize: 25 });
     assertUsableStatusAudience(statusSnapshot);
     const sendOptions: Record<string, unknown> = {};
+    const strippedStatusStyleOptions: string[] = [];
     if (statusSnapshot.recipients.length) sendOptions.statusJidList = statusSnapshot.recipients;
-    if (normalizedBackgroundColor) {
+    if (!requestedStatusMediaType && normalizedBackgroundColor) {
       sendOptions.backgroundColor = normalizedBackgroundColor.startsWith('#')
         ? normalizedBackgroundColor
         : `#${normalizedBackgroundColor}`;
+    } else if (requestedStatusMediaType && normalizedBackgroundColor) {
+      strippedStatusStyleOptions.push('backgroundColor');
     }
-    if (Number.isFinite(Number(font))) sendOptions.font = Number(font);
+    if (!requestedStatusMediaType && Number.isFinite(Number(font))) {
+      sendOptions.font = Number(font);
+    } else if (requestedStatusMediaType && Number.isFinite(Number(font))) {
+      strippedStatusStyleOptions.push('font');
+    }
     if (Number.isFinite(Number(mediaUploadTimeoutMs))) sendOptions.mediaUploadTimeoutMs = Number(mediaUploadTimeoutMs);
 
     const result = await whatsapp.sendStatusBroadcast(content, sendOptions);
@@ -1907,7 +1914,8 @@ const whatsappRoutes = () => {
       uncertain: Boolean(messageId && !confirmation?.ok),
       messageId,
       confirmation,
-      audienceCount: statusSnapshot.recipients.length
+      audienceCount: statusSnapshot.recipients.length,
+      ...(strippedStatusStyleOptions.length ? { strippedStatusStyleOptions } : {})
     });
   }));
 

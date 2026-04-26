@@ -439,6 +439,61 @@ describe('WhatsAppClient', () => {
         );
     });
 
+    it('should strip text-only status styling options from media status sends', async () => {
+        const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-5' } }));
+        client.socket = { sendMessage };
+
+        await client.sendStatusBroadcast(
+            { image: Buffer.from('fake-image'), caption: 'hello', mimetype: 'image/jpeg' } as any,
+            {
+                statusJidList: ['972501234567@s.whatsapp.net'],
+                backgroundColor: '#112233',
+                font: 3
+            }
+        );
+
+        const sentOptions = sendMessage.mock.calls[0]?.[2];
+        expect(sendMessage).toHaveBeenCalledWith(
+            'status@broadcast',
+            expect.objectContaining({
+                image: expect.any(Buffer),
+                caption: 'hello',
+                mimetype: 'image/jpeg'
+            }),
+            expect.objectContaining({
+                broadcast: true,
+                statusJidList: ['972501234567@s.whatsapp.net']
+            })
+        );
+        expect(sentOptions).not.toHaveProperty('backgroundColor');
+        expect(sentOptions).not.toHaveProperty('font');
+    });
+
+    it('should preserve text-only status styling options for text status sends', async () => {
+        const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-6' } }));
+        client.socket = { sendMessage };
+
+        await client.sendStatusBroadcast(
+            { text: 'hello' },
+            {
+                statusJidList: ['972501234567@s.whatsapp.net'],
+                backgroundColor: '#112233',
+                font: 3
+            }
+        );
+
+        expect(sendMessage).toHaveBeenCalledWith(
+            'status@broadcast',
+            { text: 'hello' },
+            expect.objectContaining({
+                broadcast: true,
+                statusJidList: ['972501234567@s.whatsapp.net'],
+                backgroundColor: '#112233',
+                font: 3
+            })
+        );
+    });
+
     it('should edit media messages with structured content payloads', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'edit-msg-1' } }));
         client.socket = { sendMessage };

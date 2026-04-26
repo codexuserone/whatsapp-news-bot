@@ -124,6 +124,34 @@ const getNewsletterRelayMediaType = (content: AnyMessageContent): 'image' | 'vid
   return null;
 };
 
+const STATUS_MEDIA_CONTENT_KEYS = ['image', 'video', 'audio', 'document', 'sticker'] as const;
+
+const isStatusMediaContent = (content: AnyMessageContent) =>
+  Boolean(
+    content &&
+    typeof content === 'object' &&
+    STATUS_MEDIA_CONTENT_KEYS.some((key) => Object.prototype.hasOwnProperty.call(content as Record<string, unknown>, key))
+  );
+
+const sanitizeStatusBroadcastOptions = (
+  content: AnyMessageContent,
+  options: Record<string, unknown>
+): { options: Record<string, unknown>; strippedOptions: string[] } => {
+  const nextOptions = { ...(options || {}) };
+  const strippedOptions: string[] = [];
+
+  if (isStatusMediaContent(content)) {
+    for (const key of ['backgroundColor', 'font']) {
+      if (Object.prototype.hasOwnProperty.call(nextOptions, key)) {
+        delete nextOptions[key];
+        strippedOptions.push(key);
+      }
+    }
+  }
+
+  return { options: nextOptions, strippedOptions };
+};
+
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict' | 'paused';
 
 type MessageStatusSnapshot = {
@@ -3477,6 +3505,7 @@ class WhatsAppClient {
     if (!this.socket) throw new Error('WhatsApp not connected');
     if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
     try {
+      const sanitized = sanitizeStatusBroadcastOptions(content, options);
       const explicitStatusJids = Array.isArray((options as { statusJidList?: unknown[] }).statusJidList)
         ? ((options as { statusJidList?: unknown[] }).statusJidList || [])
             .map((value) => normalizeStatusAudienceJid(value))
@@ -3498,7 +3527,7 @@ class WhatsAppClient {
         );
       }
 
-      options = { ...options, broadcast: true, statusJidList };
+      options = { ...sanitized.options, broadcast: true, statusJidList };
       logger.debug(
         {
           participantCount: statusJidList.length,
@@ -3508,6 +3537,14 @@ class WhatsAppClient {
         },
         'Sending status broadcast'
       );
+      if (sanitized.strippedOptions.length) {
+        logger.warn(
+          {
+            strippedOptions: sanitized.strippedOptions
+          },
+          'Removed text-only status styling options from media status payload'
+        );
+      }
 
       const msg = await this.socket.sendMessage('status@broadcast', content, options);
 

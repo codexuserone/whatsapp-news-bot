@@ -888,7 +888,7 @@ const statusSendMutex = new SendMutex();
 
 // Replaces withGlobalSendLock
 const withGlobalSendLock = async <T>(fn: () => Promise<T>): Promise<T> => {
-  return sendMutex.run(fn, 120000); // 2 minute max wait to acquire lock
+  return sendMutex.run(fn, 300000);
 };
 
 const withStatusSendLock = async <T>(fn: () => Promise<T>): Promise<T> => {

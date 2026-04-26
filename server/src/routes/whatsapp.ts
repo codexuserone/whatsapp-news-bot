@@ -72,6 +72,37 @@ const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undef
   }
 };
 
+const inferMessageMediaType = (message: unknown) => {
+  const record = (message || {}) as Record<string, unknown>;
+  if (record.image || record.imageMessage) return 'image';
+  if (record.video || record.videoMessage) return 'video';
+  if (record.audio || record.audioMessage) return 'audio';
+  if (record.document || record.documentMessage) return 'document';
+  if (record.text || record.conversation || record.extendedTextMessage) return 'text';
+  return null;
+};
+
+const assertRequestedMediaWasPrepared = (requestedMediaType: string | null, content: Record<string, unknown>) => {
+  if (!requestedMediaType) return;
+  const preparedMediaType = inferMessageMediaType(content);
+  if (preparedMediaType !== requestedMediaType) {
+    throw badRequest(`Requested ${requestedMediaType} could not be prepared; refusing to send a text fallback.`);
+  }
+};
+
+const assertStatusMediaResponseMatches = (
+  requestedMediaType: string | null,
+  result: Record<string, any> | null | undefined
+) => {
+  if (requestedMediaType !== 'image' && requestedMediaType !== 'video') return;
+  const actualMediaType = inferMessageMediaType(result?.message || null);
+  if (actualMediaType !== requestedMediaType) {
+    throw badRequest(
+      `Status ${requestedMediaType} was not verified in the outgoing WhatsApp payload; refusing to claim it was sent.`
+    );
+  }
+};
+
 const resolveTestSendLogResolution = (options: {
   messageId?: string | null;
   confirmRequested?: boolean;
@@ -1372,6 +1403,7 @@ const whatsappRoutes = () => {
 	    } else {
 	      content = disableLinkPreview ? { text: captionText, linkPreview: null } : { text: captionText };
 	    }
+      assertRequestedMediaWasPrepared(requestedMediaType, content);
 
 	    const results: Array<{
 	      jid: string;
@@ -1476,6 +1508,9 @@ const whatsappRoutes = () => {
           resolveSendTestTimeoutMs(normalizedJid, requestedMediaType),
           'Timed out sending test message'
         );
+        if (isStatusBroadcast(normalizedJid)) {
+          assertStatusMediaResponseMatches(requestedMediaType, result);
+        }
 
         const messageId = result?.key?.id || null;
         let confirmation: TestSendConfirmation | null = null;
@@ -1754,6 +1789,12 @@ const whatsappRoutes = () => {
     } else {
       throw badRequest('message, imageUrl, imageDataUrl, videoUrl, or videoDataUrl is required');
     }
+    const requestedStatusMediaType = normalizedVideoUrl || normalizedVideoDataUrl
+      ? 'video'
+      : normalizedImageUrl || normalizedImageDataUrl
+        ? 'image'
+        : null;
+    assertRequestedMediaWasPrepared(requestedStatusMediaType, content);
 
     const explicitStatusJidsRaw = Array.isArray(statusJidList)
       ? statusJidList.map((value) => String(value || '').trim()).filter(Boolean)
@@ -1778,6 +1819,7 @@ const whatsappRoutes = () => {
     if (Number.isFinite(Number(mediaUploadTimeoutMs))) sendOptions.mediaUploadTimeoutMs = Number(mediaUploadTimeoutMs);
 
     const result = await whatsapp.sendStatusBroadcast(content, sendOptions);
+    assertStatusMediaResponseMatches(requestedStatusMediaType, result);
     const messageId = String(result?.key?.id || '').trim() || null;
     const confirmation = messageId && whatsapp?.confirmSend
       ? await whatsapp.confirmSend(

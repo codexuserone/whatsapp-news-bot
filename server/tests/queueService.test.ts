@@ -133,13 +133,19 @@ describe('queueService __testUtils', () => {
     expect(testUtils.isChannelMediaAckRejection('group', mediaResult, 'WhatsApp server rejected message ack 479')).toBe(false);
   });
 
-  it('temporarily suppresses channel media after a newsletter ack rejection', () => {
+  it('temporarily holds channel media after a newsletter ack rejection', () => {
     const target = { id: 'target-1', phone_number: '120363000@newsletter', type: 'channel' };
     const now = Date.parse('2026-04-24T12:00:00.000Z');
 
     expect(testUtils.isChannelMediaTemporarilyBlocked(target, now)).toBe(false);
     testUtils.rememberChannelMediaRejection(target, now);
     expect(testUtils.isChannelMediaTemporarilyBlocked(target, now + 1000)).toBe(true);
+    expect(testUtils.buildChannelMediaHoldError('image', 'WhatsApp server rejected message ack 479')).toContain(
+      'held for review'
+    );
+    expect(testUtils.buildChannelMediaHoldError('image', 'WhatsApp server rejected message ack 479')).not.toContain(
+      'sent text/link preview'
+    );
   });
 
   it('requeues only stale rows that do not already have a sent sibling', () => {
@@ -400,5 +406,11 @@ describe('queueService __testUtils', () => {
     expect(testUtils.isUsableFeedImageUrl('https://example.com/images/default-image.jpg')).toBe(false);
     expect(testUtils.isUsableFeedImageUrl('https://files.anash.org/uploads/2025/09/Anash-Logo.svg')).toBe(false);
     expect(testUtils.isUsableFeedImageUrl('https://example.com/icons/site-icon.png')).toBe(false);
+  });
+
+  it('treats repeated Baileys crypto/session errors as auth-state failures for queue handling', () => {
+    expect(testUtils.isAuthStateError('Bad MAC')).toBe(true);
+    expect(testUtils.isAuthStateError('No matching sessions found for message')).toBe(true);
+    expect(testUtils.isAuthStateError('no session record')).toBe(true);
   });
 });

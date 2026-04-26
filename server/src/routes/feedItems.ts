@@ -26,6 +26,7 @@ type DeliveryLogRow = {
 };
 
 type DeliverySummary = {
+  awaiting_approval: number;
   pending: number;
   processing: number;
   sent: number;
@@ -40,6 +41,7 @@ type DeliverySummary = {
 };
 
 const createEmptyDeliverySummary = (): DeliverySummary => ({
+  awaiting_approval: 0,
   pending: 0,
   processing: 0,
   sent: 0,
@@ -108,7 +110,8 @@ const summarizeDeliveryRows = (rows: DeliveryLogRow[]) => {
       !hasCorrectionError &&
       (SUCCESSFUL_CORRECTION_KINDS.has(correctionKind) || Boolean(String(row.corrected_at || '').trim()));
 
-    if (status === 'pending' || status === 'awaiting_approval') current.pending += 1;
+    if (status === 'awaiting_approval') current.awaiting_approval += 1;
+    else if (status === 'pending') current.pending += 1;
     else if (status === 'processing') current.processing += 1;
     else if (status === 'sent' || status === 'delivered' || status === 'read' || status === 'played') current.sent += 1;
     else if (status === 'failed') current.failed += 1;
@@ -259,6 +262,7 @@ const feedItemRoutes = () => {
       const enriched = (items || []).map((item: Record<string, unknown>) => {
         const id = String(item.id || '');
         const delivery = deliveryByItem.get(id) || {
+          awaiting_approval: 0,
           pending: 0,
           processing: 0,
           sent: 0,
@@ -271,9 +275,11 @@ const feedItemRoutes = () => {
           corrected_before_send: 0,
           corrected_after_send: 0
         };
+        const held = delivery.awaiting_approval || 0;
         const queued = delivery.pending + delivery.processing;
-        const unresolved = delivery.failed + delivery.uncertain;
+        const unresolved = delivery.failed + delivery.uncertain + held;
         const total =
+          delivery.awaiting_approval +
           delivery.pending +
           delivery.processing +
           delivery.sent +

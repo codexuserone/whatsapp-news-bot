@@ -417,13 +417,13 @@ const QueueInner = () => {
 
     switch (item.status) {
       case 'awaiting_approval':
-        return <Badge variant="warning">Awaiting approval</Badge>;
+        return <Badge variant="warning">Held</Badge>;
       case 'pending':
-        return <Badge variant="secondary">Waiting to send</Badge>;
+        return <Badge variant="secondary">Queued</Badge>;
       case 'processing':
-        return <Badge variant="warning">Attempting send</Badge>;
+        return <Badge variant="warning">Sending</Badge>;
       case 'sent':
-        return <Badge variant="success">Accepted by WhatsApp</Badge>;
+        return <Badge variant="success">Sent</Badge>;
       case 'delivered':
         return <Badge variant="success">Delivered</Badge>;
       case 'read':
@@ -433,7 +433,7 @@ const QueueInner = () => {
       case 'failed':
         return <Badge variant="destructive">Failed</Badge>;
       case 'uncertain':
-        return <Badge variant="warning">Checking possible send</Badge>;
+        return <Badge variant="warning">Uncertain</Badge>;
       case 'skipped':
         return <Badge variant="warning">Skipped</Badge>;
       default:
@@ -515,35 +515,45 @@ const QueueInner = () => {
   const getDeliveryPath = (item: QueueItem) => {
     const mediaType = String(item.media_type || '').toLowerCase();
     const mediaSent = Boolean(item.media_sent);
+    const hasRequestedMedia = Boolean(mediaType || item.media_url || item.image_url);
 
     if (isSuccessfulSendStatus(item.status)) {
-      if (mediaType === 'image' && mediaSent) {
-      return { label: 'Accepted as image', tone: 'success' as const };
-      }
-      if (mediaType === 'video' && mediaSent) {
-        return { label: 'Accepted as video', tone: 'success' as const };
+      if (mediaSent && mediaType) {
+        return { label: `Sent with ${mediaType}`, tone: 'success' as const };
       }
       if (mediaType && !mediaSent) {
-        return { label: 'Accepted as text (media fallback)', tone: 'warning' as const };
+        return { label: 'Sent text-only', tone: 'warning' as const };
       }
-      return { label: 'Accepted as text/link', tone: 'secondary' as const };
+      return { label: 'Sent text-only', tone: 'secondary' as const };
+    }
+
+    if (item.status === 'awaiting_approval') {
+      return hasRequestedMedia
+        ? { label: 'Held - media not sent', tone: 'warning' as const }
+        : { label: 'Held', tone: 'warning' as const };
+    }
+
+    if (item.status === 'uncertain') {
+      return hasRequestedMedia
+        ? { label: 'Uncertain - verify media', tone: 'warning' as const }
+        : { label: 'Uncertain', tone: 'warning' as const };
     }
 
     const plannedKind = String(item.media_kind || item.media_type || '').toLowerCase();
     if (plannedKind === 'image' || item.image_url) {
-      return { label: 'Will try image send', tone: 'secondary' as const };
+      return { label: 'Queued with image', tone: 'secondary' as const };
     }
     if (plannedKind === 'video') {
-      return { label: 'Will try video send', tone: 'secondary' as const };
+      return { label: 'Queued with video', tone: 'secondary' as const };
     }
     if (plannedKind === 'audio') {
-      return { label: 'Will try audio send', tone: 'secondary' as const };
+      return { label: 'Queued with audio', tone: 'secondary' as const };
     }
     if (plannedKind === 'document') {
-      return { label: 'Will try document send', tone: 'secondary' as const };
+      return { label: 'Queued with document', tone: 'secondary' as const };
     }
 
-    return { label: 'Text/link send', tone: 'secondary' as const };
+    return { label: 'Queued text-only', tone: 'secondary' as const };
   };
 
   const isHistoryItem = (item: QueueItem) => HISTORY_STATUSES.has(String(item.status || '').toLowerCase());
@@ -901,7 +911,7 @@ const QueueInner = () => {
                       {item.error_message ? <span className="text-destructive">Error: {item.error_message}</span> : null}
                       {item.correction_error ? <span className="text-warning-foreground">Correction: {item.correction_error}</span> : null}
                       {isSuccessfulSendStatus(item.status) && item.media_type === 'image' && !item.media_sent && item.media_error ? (
-                        <span className="text-warning-foreground">Sent as text fallback (image unavailable)</span>
+                        <span className="text-warning-foreground">Sent text-only; requested image was not sent</span>
                       ) : null}
                       {item.media_error && !item.error_message ? <span className="text-destructive">Media: {item.media_error}</span> : null}
                     </div>

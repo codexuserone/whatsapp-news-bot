@@ -16,7 +16,7 @@ const { persistReceiptUpdates } = require('../services/receiptService');
 const SEND_EPHEMERAL_EXPIRATION =
   String(process.env.WHATSAPP_SEND_EPHEMERAL_EXPIRATION ?? 'true').trim().toLowerCase() !== 'false';
 const INCLUDE_GROUP_METADATA_IN_STATUS_AUDIENCE =
-  String(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS || '').trim().toLowerCase() === 'true';
+  String(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS ?? 'true').trim().toLowerCase() !== 'false';
 
 const resolveBrowserTuple = (Browsers: Record<string, unknown> | null | undefined, browserName: string) => {
   const requestedPlatform = String(
@@ -748,6 +748,8 @@ class WhatsAppClient {
       // Check if it's a crypto/auth error
       if (this.isAuthStateCorrupted(err?.message)) {
         await this.handleCorruptedAuthState(err);
+      } else if (this.isRecoverableSessionCryptoError(err?.message)) {
+        this.markSessionUnhealthy(err);
       } else {
         // For other errors, log and exit
         logger.error({ err }, 'Uncaught exception');
@@ -759,6 +761,8 @@ class WhatsAppClient {
       const message = reason instanceof Error ? reason.message : String(reason);
       if (this.isAuthStateCorrupted(message)) {
         await this.handleCorruptedAuthState(reason);
+      } else if (this.isRecoverableSessionCryptoError(message)) {
+        this.markSessionUnhealthy(reason);
       } else {
         logger.error({ err: reason }, 'Unhandled promise rejection');
       }
@@ -781,6 +785,38 @@ class WhatsAppClient {
       'not valid json'
     ];
     return checks.some((check) => normalized.includes(check.toLowerCase()));
+  }
+
+  isRecoverableSessionCryptoError(message?: string | null): boolean {
+    if (!message) return false;
+    const normalized = String(message || '').toLowerCase();
+    return [
+      'bad mac',
+      'no matching sessions',
+      'no session record'
+    ].some((check) => normalized.includes(check));
+  }
+
+  markSessionUnhealthy(error: unknown): void {
+    const message = getErrorMessage(error);
+    this.status = 'error';
+    this.isAuthCorrupted = true;
+    this.lastError = `WhatsApp session key mismatch detected. Background sends are blocked until recovery. ${message}`.trim();
+    logger.warn({ error }, 'WhatsApp session marked unhealthy after crypto/session mismatch');
+    if (this.socket) {
+      try {
+        this.cleanupSocket();
+        this.socket.end(new Error('Socket closed after session key mismatch'));
+      } catch {
+        // ignore cleanup errors
+      }
+      this.socket = null;
+    }
+    if (this.authStore?.updateStatus) {
+      void this.authStore.updateStatus('error').catch((updateError: unknown) => {
+        logger.warn({ error: updateError }, 'Failed to persist unhealthy WhatsApp session status');
+      });
+    }
   }
 
   isRateOverLimitError(error: unknown): boolean {
@@ -1200,6 +1236,8 @@ class WhatsAppClient {
         void this.handleCorruptedAuthState(
           errorMessage ? new Error(errorMessage) : new Error(message || 'Auth error')
         );
+      } else if (this.isRecoverableSessionCryptoError(message) || this.isRecoverableSessionCryptoError(errorMessage)) {
+        this.markSessionUnhealthy(errorMessage ? new Error(errorMessage) : new Error(message || 'Session crypto error'));
       }
     };
     baileysLogger.error = (...args: unknown[]) => {
@@ -2006,6 +2044,11 @@ class WhatsAppClient {
       if (this.isAuthStateCorrupted(message)) {
         logger.warn('Auth state corrupted, clearing and retrying');
         await this.handleCorruptedAuthState(error);
+        return;
+      }
+
+      if (this.isRecoverableSessionCryptoError(message)) {
+        this.markSessionUnhealthy(error);
         return;
       }
 
@@ -3037,6 +3080,8 @@ class WhatsAppClient {
       const message = err instanceof Error ? err.message : String(err);
       if (this.isAuthStateCorrupted(message)) {
         void this.handleCorruptedAuthState(err);
+      } else if (this.isRecoverableSessionCryptoError(message)) {
+        this.markSessionUnhealthy(err);
       }
       throw err;
     }
@@ -3096,6 +3141,8 @@ class WhatsAppClient {
       const message = err instanceof Error ? err.message : String(err);
       if (this.isAuthStateCorrupted(message)) {
         void this.handleCorruptedAuthState(err);
+      } else if (this.isRecoverableSessionCryptoError(message)) {
+        this.markSessionUnhealthy(err);
       }
       throw err;
     }
@@ -3145,6 +3192,8 @@ class WhatsAppClient {
       const message = err instanceof Error ? err.message : String(err);
       if (this.isAuthStateCorrupted(message)) {
         void this.handleCorruptedAuthState(err);
+      } else if (this.isRecoverableSessionCryptoError(message)) {
+        this.markSessionUnhealthy(err);
       }
       throw err;
     }
@@ -3174,6 +3223,8 @@ class WhatsAppClient {
       const message = err instanceof Error ? err.message : String(err);
       if (this.isAuthStateCorrupted(message)) {
         void this.handleCorruptedAuthState(err);
+      } else if (this.isRecoverableSessionCryptoError(message)) {
+        this.markSessionUnhealthy(err);
       }
       throw err;
     }

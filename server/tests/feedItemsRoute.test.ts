@@ -113,6 +113,7 @@ describe('feed item delivery summaries', () => {
     ]);
 
     expect(summary.get('item-1')).toEqual({
+      awaiting_approval: 0,
       pending: 0,
       processing: 1,
       sent: 1,

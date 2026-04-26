@@ -106,6 +106,7 @@ export type FeedItem = {
   categories?: string[] | string | null;
   sent?: boolean | null;
   delivery?: {
+    awaiting_approval?: number;
     pending: number;
     processing: number;
     sent: number;

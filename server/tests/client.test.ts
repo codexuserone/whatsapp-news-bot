@@ -136,7 +136,19 @@ describe('WhatsAppClient', () => {
         expect(audience.sample).toContain('972501234567@s.whatsapp.net');
         expect(audience.sample).not.toContain('972506666666@s.whatsapp.net');
         expect(audience.selfJid).toBe('972506666666@s.whatsapp.net');
-        expect(audience.sample).not.toContain('972509999999@s.whatsapp.net');
+        expect(audience.sample).toContain('972509999999@s.whatsapp.net');
+    });
+
+    it('marks Baileys crypto/session mismatch errors as outbound-blocking without clearing auth immediately', () => {
+        expect(client.isAuthStateCorrupted('Bad MAC')).toBe(false);
+        expect(client.isRecoverableSessionCryptoError('Bad MAC')).toBe(true);
+        expect(client.isRecoverableSessionCryptoError('No matching sessions found for message')).toBe(true);
+
+        client.markSessionUnhealthy(new Error('Bad MAC'));
+
+        expect(client.isAuthCorrupted).toBe(true);
+        expect(client.status).toBe('error');
+        expect(client.lastError).toContain('WhatsApp session key mismatch');
     });
 
     it('should match me participant when socket jid has a device suffix', () => {

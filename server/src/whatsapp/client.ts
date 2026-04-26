@@ -1110,6 +1110,7 @@ class WhatsAppClient {
         normalized.includes('not valid json');
 
       const looksLikeBadKeyMaterial = normalized.includes('incorrect private key length');
+      const looksLikePairingSignatureFailure = normalized.includes('invalid account signature');
 
       if (looksLikeSenderKeyCorruption && this.authStore?.clearKeys) {
         const now = Date.now();
@@ -1162,6 +1163,40 @@ class WhatsAppClient {
           this.scheduleReconnect(2000);
           return;
         }
+      }
+
+      const hasActiveQr = Boolean(this.qrCode && (!this.qrExpiresAtMs || this.qrExpiresAtMs > Date.now()));
+      const socketUserId = (() => {
+        try {
+          return (this.socket as any)?.user?.id ? String((this.socket as any).user.id) : null;
+        } catch {
+          return null;
+        }
+      })();
+      const hasAuthenticatedIdentity = Boolean(this.hasConnectedOnce || this.lastSeenAt || this.meJid || socketUserId);
+
+      if (looksLikePairingSignatureFailure && hasActiveQr && !hasAuthenticatedIdentity && this.authStore?.clearState) {
+        logger.warn({ err }, 'QR pairing was rejected before login completed; generating a fresh QR');
+        this.isConnecting = false;
+        this.isAuthCorrupted = false;
+        this.status = 'disconnected';
+        this.lastError = 'QR was rejected by WhatsApp before login completed. A fresh QR is being generated.';
+        this.resetQrLifecycle();
+        if (this.socket) {
+          try {
+            this.cleanupSocket();
+            this.socket.end(new Error('Socket closed after rejected QR pairing'));
+          } catch {
+            // ignore cleanup errors
+          }
+          this.socket = null;
+        }
+        await this.authStore.clearState();
+        if (this.authStore?.updateStatus) {
+          await this.authStore.updateStatus('disconnected', null);
+        }
+        this.scheduleReconnect(1000);
+        return;
       }
 
       if (!AUTO_CLEAR_CORRUPTED_AUTH) {

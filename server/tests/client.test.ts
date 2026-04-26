@@ -502,6 +502,39 @@ describe('WhatsAppClient', () => {
         expect(client.lastError).toContain('WhatsApp session key mismatch');
     });
 
+    it('should discard a rejected unregistered QR pairing attempt and generate a fresh QR', async () => {
+        const clearState = jest.fn(async () => {});
+        const updateStatus = jest.fn(async () => {});
+        const socketEnd = jest.fn();
+        client.authStore = {
+            ...client.authStore,
+            clearState,
+            updateStatus
+        };
+
+        client.status = 'qr';
+        client.qrCode = 'data:image/png;base64,active';
+        client.qrGeneratedAtMs = Date.now();
+        client.qrExpiresAtMs = Date.now() + 30_000;
+        client.hasConnectedOnce = false;
+        client.lastSeenAt = null;
+        client.meJid = null;
+        client.socket = { end: socketEnd };
+        client.scheduleReconnect = jest.fn();
+        client.cleanupSocket = jest.fn();
+
+        await client.handleCorruptedAuthState(new Error('Invalid account signature'));
+
+        expect(clearState).toHaveBeenCalled();
+        expect(updateStatus as any).toHaveBeenCalledWith('disconnected', null);
+        expect(client.cleanupSocket).toHaveBeenCalled();
+        expect(socketEnd).toHaveBeenCalled();
+        expect(client.socket).toBeNull();
+        expect(client.isAuthCorrupted).toBe(false);
+        expect(client.lastError).toContain('QR was rejected');
+        expect(client.scheduleReconnect).toHaveBeenCalledWith(1000);
+    });
+
     it('should treat info-level pairing traces as auth corruption', async () => {
         const corrupted = jest.fn(async () => {});
         client.handleCorruptedAuthState = corrupted;

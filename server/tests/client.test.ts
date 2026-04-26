@@ -480,7 +480,7 @@ describe('WhatsAppClient', () => {
         });
     });
 
-    it('should clear auth state when invalid account signature is detected', async () => {
+    it('should mark auth corruption unhealthy without clearing auth state automatically', async () => {
         const clearState = jest.fn(async () => {});
         const updateStatus = jest.fn(async () => {});
         client.authStore = {
@@ -495,9 +495,11 @@ describe('WhatsAppClient', () => {
 
         await client.handleCorruptedAuthState(new Error('Invalid account signature'));
 
-        expect(clearState).toHaveBeenCalled();
+        expect(clearState).not.toHaveBeenCalled();
         expect((updateStatus as any).mock.calls[0]?.[0]).toBe('error');
-        expect(client.scheduleReconnect).toHaveBeenCalledWith(5000);
+        expect(client.scheduleReconnect).not.toHaveBeenCalled();
+        expect(client.isAuthCorrupted).toBe(true);
+        expect(client.lastError).toContain('WhatsApp session key mismatch');
     });
 
     it('should treat info-level pairing traces as auth corruption', async () => {

@@ -20,6 +20,8 @@ const INCLUDE_GROUP_METADATA_IN_STATUS_AUDIENCE =
   String(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS ?? 'true').trim().toLowerCase() !== 'false';
 const ENABLE_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH =
   String(process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH ?? 'true').trim().toLowerCase() !== 'false';
+const AUTO_CLEAR_CORRUPTED_AUTH =
+  String(process.env.WHATSAPP_AUTH_AUTO_CLEAR_CORRUPTION ?? 'false').trim().toLowerCase() === 'true';
 const newsletterMediaPatchContext = new AsyncLocalStorage();
 
 const resolveBrowserTuple = (Browsers: Record<string, unknown> | null | undefined, browserName: string) => {
@@ -1162,6 +1164,12 @@ class WhatsAppClient {
         }
       }
 
+      if (!AUTO_CLEAR_CORRUPTED_AUTH) {
+        logger.error({ err }, 'Crypto/auth error detected - marking session unhealthy without clearing auth state');
+        this.markSessionUnhealthy(err);
+        return;
+      }
+
       logger.error({ err }, 'Crypto/auth error detected - clearing auth state');
       this.status = 'error';
       this.lastError = 'Session corrupted. Please scan QR code again.';
@@ -2086,9 +2094,9 @@ class WhatsAppClient {
       this.lastError = message;
       this.status = 'error';
 
-      // If it's a crypto/auth error, clear state and retry
+      // If it's a crypto/auth error, block sends and require explicit recovery.
       if (this.isAuthStateCorrupted(message)) {
-        logger.warn('Auth state corrupted, clearing and retrying');
+        logger.warn('Auth state appears corrupted; entering guarded recovery state');
         await this.handleCorruptedAuthState(error);
         return;
       }

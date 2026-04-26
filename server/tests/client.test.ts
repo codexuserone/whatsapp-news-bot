@@ -403,7 +403,7 @@ describe('WhatsAppClient', () => {
         );
     });
 
-    it('should preserve @lid recipients in explicit statusJidList when phone mapping is unavailable', async () => {
+    it('should prefer phone-number recipients over @lid recipients in mixed explicit statusJidList values', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-3' } }));
         client.socket = { sendMessage };
 
@@ -416,7 +416,7 @@ describe('WhatsAppClient', () => {
             'status@broadcast',
             { text: 'hello' },
             expect.objectContaining({
-                statusJidList: ['anon_contact_123@lid', '972501234567@s.whatsapp.net']
+                statusJidList: ['972501234567@s.whatsapp.net']
             })
         );
     });

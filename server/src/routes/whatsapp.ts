@@ -1574,9 +1574,10 @@ const whatsappRoutes = () => {
         }
         if (confirmationRequired && messageId && whatsapp?.confirmSend) {
           const requireServerAck = isNewsletterJid(normalizedJid);
+          const failureGraceMs = isStatusBroadcast(normalizedJid) ? 5000 : 0;
           const timeouts = (imageUrl || videoUrl || imageDataUrl || videoDataUrl)
-            ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck }
-            : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck };
+            ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck, failureGraceMs }
+            : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck, failureGraceMs };
           confirmation = await whatsapp.confirmSend(messageId, timeouts);
         }
         const held = shouldHoldRejectedChannelMediaTestSend({
@@ -1903,8 +1904,8 @@ const whatsappRoutes = () => {
       ? await whatsapp.confirmSend(
           messageId,
           normalizedImageUrl || normalizedImageDataUrl || normalizedVideoUrl || normalizedVideoDataUrl
-            ? { upsertTimeoutMs: 30000, ackTimeoutMs: 90000 }
-            : { upsertTimeoutMs: 5000, ackTimeoutMs: 60000 }
+            ? { upsertTimeoutMs: 30000, ackTimeoutMs: 90000, failureGraceMs: 5000 }
+            : { upsertTimeoutMs: 5000, ackTimeoutMs: 60000, failureGraceMs: 5000 }
         )
       : null;
     res.json({

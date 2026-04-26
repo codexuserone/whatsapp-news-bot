@@ -152,6 +152,29 @@ const sanitizeStatusBroadcastOptions = (
   return { options: nextOptions, strippedOptions };
 };
 
+const preferDeliverableStatusRecipients = (
+  recipients: string[]
+): { recipients: string[]; droppedLidCount: number } => {
+  const normalizedRecipients = Array.from(
+    new Set(
+      (Array.isArray(recipients) ? recipients : [])
+        .map((recipient) => normalizeStatusAudienceJid(recipient))
+        .filter(Boolean)
+    )
+  );
+
+  const phoneRecipients = normalizedRecipients.filter((recipient) => recipient.endsWith('@s.whatsapp.net'));
+  if (!phoneRecipients.length) {
+    return { recipients: normalizedRecipients, droppedLidCount: 0 };
+  }
+
+  const droppedLidCount = normalizedRecipients.filter((recipient) => recipient.endsWith('@lid')).length;
+  return {
+    recipients: phoneRecipients,
+    droppedLidCount
+  };
+};
+
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict' | 'paused';
 
 type MessageStatusSnapshot = {
@@ -3514,7 +3537,10 @@ class WhatsAppClient {
       const dedupedExplicit = Array.from(new Set(explicitStatusJids));
 
       const resolvedAudience = await this.resolveStatusAudienceWithLidMappings();
-      const statusJidList = dedupedExplicit.length ? dedupedExplicit : resolvedAudience.participants;
+      const preferredAudience = preferDeliverableStatusRecipients(
+        dedupedExplicit.length ? dedupedExplicit : resolvedAudience.participants
+      );
+      const statusJidList = preferredAudience.recipients;
 
       if (!statusJidList.length) {
         throw new Error(
@@ -3543,6 +3569,15 @@ class WhatsAppClient {
             strippedOptions: sanitized.strippedOptions
           },
           'Removed text-only status styling options from media status payload'
+        );
+      }
+      if (preferredAudience.droppedLidCount > 0) {
+        logger.warn(
+          {
+            droppedLidCount: preferredAudience.droppedLidCount,
+            participantCount: statusJidList.length
+          },
+          'Dropped LID-only status recipients because phone-number recipients were available'
         );
       }
 

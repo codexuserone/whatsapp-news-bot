@@ -1854,9 +1854,11 @@ const confirmSendResult = async (
     const media = isMediaSendResult(sendResult);
     const requireServerAck = shouldRequireServerAckForSend(targetType, sendResult);
     const isStatus = Boolean(options?.isStatus);
-    const failureGraceMs = targetType === 'channel' && !requireServerAck && options?.allowChannelTextUpsert
-      ? 3000
-      : 0;
+    const failureGraceMs = isStatus
+      ? 5000
+      : targetType === 'channel' && !requireServerAck && options?.allowChannelTextUpsert
+        ? 3000
+        : 0;
     return whatsappClient.confirmSend(
       messageId,
       isStatus
@@ -4614,6 +4616,11 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       if (!messageId) return;
       if (activeWhatsappClient.confirmSend) {
         const requireServerAck = targetRow.type === 'channel' && isMedia;
+        const failureGraceMs = isStatus
+          ? 5000
+          : targetRow.type === 'channel' && !requireServerAck
+            ? 3000
+            : 0;
         const confirmation = await activeWhatsappClient.confirmSend(
           messageId,
           isStatus
@@ -4621,7 +4628,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
                 upsertTimeoutMs: isMedia ? 30000 : 5000,
                 ackTimeoutMs: isMedia ? 90000 : 60000,
                 requireServerAck,
-                failureGraceMs: targetRow.type === 'channel' && !requireServerAck ? 3000 : 0
+                failureGraceMs
               }
             : isMedia
               ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck }
@@ -4629,7 +4636,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
                   upsertTimeoutMs: 5000,
                   ackTimeoutMs: 15000,
                   requireServerAck,
-                  failureGraceMs: targetRow.type === 'channel' && !requireServerAck ? 3000 : 0
+                  failureGraceMs
                 }
         );
         if (!confirmation?.ok) {

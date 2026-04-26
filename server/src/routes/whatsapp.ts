@@ -142,9 +142,12 @@ const resolveTestSendLogResolution = (options: {
     } satisfies TestSendLogResolution;
   }
 
+  const confirmationError = String(confirmation?.error || '').trim();
   const statusLabel = String(confirmation?.statusLabel || '').trim();
   const via = String(confirmation?.via || '').trim();
-  const detail = statusLabel
+  const detail = confirmationError
+    ? confirmationError
+    : statusLabel
     ? `No confirmation yet (${statusLabel})`
     : via
       ? `No confirmation yet (${via})`
@@ -1410,7 +1413,7 @@ const whatsappRoutes = () => {
 	      ok: boolean;
 	      messageId?: string | null;
           confirmed?: boolean;
-	      confirmation?: { ok: boolean; via: string; status?: number | null; statusLabel?: string | null } | null;
+	      confirmation?: TestSendConfirmation | null;
 	      warning?: string;
 	      error?: string;
 	    }> = [];
@@ -1586,7 +1589,7 @@ const whatsappRoutes = () => {
               resolution.status === 'read' ||
               resolution.status === 'played')
           ),
-            media_error: mediaWarning
+            media_error: mediaWarning || (requestedMediaType ? String(entry.confirmation?.error || '').trim() || null : null)
           };
         });
 
@@ -1604,7 +1607,7 @@ const whatsappRoutes = () => {
     if (normalizedJids.length === 1) {
       const first = successful[0];
       return res.json({
-        ok: results.every((entry) => entry.ok),
+        ok: results.every((entry) => entry.ok) && uncertainCount === 0,
         sent: successful.length,
         confirmed: confirmedCount,
         uncertain: uncertainCount,
@@ -1616,7 +1619,7 @@ const whatsappRoutes = () => {
     }
 
     res.json({
-      ok: results.every((entry) => entry.ok),
+      ok: results.every((entry) => entry.ok) && uncertainCount === 0,
       sent: successful.length,
       confirmed: confirmedCount,
       uncertain: uncertainCount,

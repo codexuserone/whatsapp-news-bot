@@ -45,6 +45,21 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
+  it('preserves confirmation errors on uncertain test sends', () => {
+    const result = __testUtils.resolveTestSendLogResolution({
+      messageId: 'abc123',
+      confirmRequested: true,
+      confirmation: { ok: false, via: 'none', error: 'WhatsApp server rejected message ack 479' },
+      confirmedAt: '2026-03-18T22:00:00.000Z'
+    });
+
+    expect(result).toEqual({
+      status: 'uncertain',
+      errorMessage: 'Send result is uncertain. Verifying delivery before retrying. WhatsApp server rejected message ack 479',
+      sentAt: null
+    });
+  });
+
   it('marks test sends sent when local upsert was observed', () => {
     const result = __testUtils.resolveTestSendLogResolution({
       messageId: 'abc123',

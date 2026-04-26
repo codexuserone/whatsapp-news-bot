@@ -1,6 +1,7 @@
 import type { AnyMessageContent, AnyRegularMessageContent, MiscMessageGenerationOptions, WASocket, proto } from '@whiskeysockets/baileys';
 import { randomUUID } from 'crypto';
 
+const { AsyncLocalStorage } = require('async_hooks');
 const { loadBaileys } = require('./baileys');
 const qrcode = require('qrcode');
 const logger = require('../utils/logger');
@@ -17,6 +18,9 @@ const SEND_EPHEMERAL_EXPIRATION =
   String(process.env.WHATSAPP_SEND_EPHEMERAL_EXPIRATION ?? 'true').trim().toLowerCase() !== 'false';
 const INCLUDE_GROUP_METADATA_IN_STATUS_AUDIENCE =
   String(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS ?? 'true').trim().toLowerCase() !== 'false';
+const ENABLE_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH =
+  String(process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH ?? 'true').trim().toLowerCase() !== 'false';
+const newsletterMediaPatchContext = new AsyncLocalStorage();
 
 const resolveBrowserTuple = (Browsers: Record<string, unknown> | null | undefined, browserName: string) => {
   const requestedPlatform = String(
@@ -57,6 +61,44 @@ const resolveBrowserTuple = (Browsers: Record<string, unknown> | null | undefine
   }
 
   return ['Ubuntu', browserName, '22.04.4'];
+};
+
+const rewriteNewsletterMediaPath = (value: unknown) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('/o1/')) return raw.replace(/^\/o1\//, '/m1/');
+  if (/^https:\/\/mmg\.whatsapp\.net\/o1\//i.test(raw)) {
+    return raw.replace(/^https:\/\/mmg\.whatsapp\.net\/o1\//i, 'https://mmg.whatsapp.net/m1/');
+  }
+  return raw;
+};
+
+const patchNewsletterMediaDirectPaths = <T extends Record<string, any>>(message: T): T => {
+  if (!ENABLE_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH || !message || typeof message !== 'object') return message;
+
+  const containers = [
+    (message as any).imageMessage,
+    (message as any).videoMessage,
+    (message as any).documentMessage
+  ].filter((container) => container && typeof container === 'object');
+
+  let patched = false;
+  for (const container of containers) {
+    for (const key of ['directPath', 'thumbnailDirectPath', 'url']) {
+      const current = container[key];
+      const next = rewriteNewsletterMediaPath(current);
+      if (next && next !== current) {
+        container[key] = next;
+        patched = true;
+      }
+    }
+  }
+
+  if (patched) {
+    logger.warn('Patched newsletter media directPath from /o1/ to /m1/');
+  }
+
+  return message;
 };
 
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict' | 'paused';
@@ -1695,6 +1737,10 @@ class WhatsAppClient {
         retryRequestDelayMs: 500,
         logger: this.createBaileysLogger(),
         cachedGroupMetadata: async (jid: string) => this.groupMetadataCache.get(jid),
+        patchMessageBeforeSending: async (message: Record<string, any>) =>
+          newsletterMediaPatchContext.getStore()
+            ? patchNewsletterMediaDirectPaths(message)
+            : message,
         getMessage: async (key: { id?: string | null }) => {
           const messageId = String(key?.id || '').trim();
           if (!messageId) return undefined;
@@ -3034,6 +3080,7 @@ class WhatsAppClient {
     if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
     const normalizedJid = String(jid || '').trim();
     const isGroup = normalizedJid.endsWith('@g.us');
+    const isNewsletter = Boolean(normalizeNewsletterJid(normalizedJid, { allowNumeric: false }));
     const sendStartedAt = Date.now();
     try {
       const effectiveOptions = await this.resolveSendOptions(jid, options);
@@ -3047,7 +3094,10 @@ class WhatsAppClient {
           'Starting group send'
         );
       }
-      const msg = await this.socket.sendMessage(jid, content, effectiveOptions);
+      const sendOperation = async () => this.socket!.sendMessage(jid, content, effectiveOptions);
+      const msg = isNewsletter
+        ? await newsletterMediaPatchContext.run(true, sendOperation)
+        : await sendOperation();
       if (isGroup) {
         logger.info(
           {
@@ -3467,5 +3517,6 @@ class WhatsAppClient {
 const createWhatsAppClient = () => new WhatsAppClient();
 
 module.exports = Object.assign(createWhatsAppClient, {
-  resolveBrowserTuple
+  resolveBrowserTuple,
+  patchNewsletterMediaDirectPaths
 });

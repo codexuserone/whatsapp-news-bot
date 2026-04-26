@@ -76,6 +76,22 @@ describe('WhatsAppClient', () => {
         }
     });
 
+    it('should patch newsletter media direct paths from /o1/ to /m1/', () => {
+        const message: any = {
+            imageMessage: {
+                directPath: '/o1/v/t24/example-image',
+                thumbnailDirectPath: '/o1/v/t24/example-thumb',
+                url: 'https://mmg.whatsapp.net/o1/v/t24/example-image'
+            }
+        };
+
+        const patched = WhatsAppClient.patchNewsletterMediaDirectPaths(message);
+
+        expect(patched.imageMessage.directPath).toBe('/m1/v/t24/example-image');
+        expect(patched.imageMessage.thumbnailDirectPath).toBe('/m1/v/t24/example-thumb');
+        expect(patched.imageMessage.url).toBe('https://mmg.whatsapp.net/m1/v/t24/example-image');
+    });
+
     it('should have a clean initial state', () => {
         expect(client.qrCode).toBeNull();
         expect(client.lastError).toBeNull();

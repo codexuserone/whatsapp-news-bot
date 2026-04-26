@@ -1067,6 +1067,11 @@ class WhatsAppClient {
             : [];
           for (const participant of participantsRaw as Array<Record<string, unknown>>) {
             addCandidate(participant?.id, 'groupMetadata');
+            addCandidate(participant?.jid, 'groupMetadata');
+            addCandidate(participant?.pn, 'groupMetadata');
+            addCandidate(participant?.phone, 'groupMetadata');
+            addCandidate(participant?.phoneNumber, 'groupMetadata');
+            addCandidate(participant?.phone_number, 'groupMetadata');
           }
         }
       } else if (this.groupMetadataCache.size > 0) {
@@ -3620,6 +3625,11 @@ class WhatsAppClient {
     this.status = 'disconnected';
     this.resetQrLifecycle();
     this.lastError = null;
+    this.isAuthCorrupted = false;
+    this.hasConnectedOnce = false;
+    this.lastSeenAt = null;
+    this.lastSenderKeyResetAt = null;
+    this.lastKeyCacheResetAt = null;
 
     // Stop renewing while we clear/recreate auth state.
     this.stopLeaseRenewal();

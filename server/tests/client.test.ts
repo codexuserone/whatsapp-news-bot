@@ -155,6 +155,25 @@ describe('WhatsAppClient', () => {
         expect(audience.sample).toContain('972509999999@s.whatsapp.net');
     });
 
+    it('should use phone aliases from group participants before falling back to LID mappings', async () => {
+        client.groupMetadataCache.set('120363000000000000@g.us', {
+            participants: [
+                { id: '103140015788103@lid', pn: '972501234567@s.whatsapp.net' },
+                { id: '103140015788104@lid', phoneNumber: '+1 (646) 555-0100' }
+            ]
+        });
+        client.socket = {
+            user: { id: '972506666666@s.whatsapp.net' }
+        };
+
+        const audience = await client.getStatusAudience({ sampleSize: 20 });
+
+        expect(audience.sample).toContain('972501234567@s.whatsapp.net');
+        expect(audience.sample).toContain('16465550100@s.whatsapp.net');
+        expect(audience.sample).toContain('103140015788103@lid');
+        expect(audience.sources.groupMetadata).toBe(4);
+    });
+
     it('should map implicit status audience LIDs to phone JIDs when Baileys has mappings', async () => {
         const getPNForLID: any = jest.fn(async (lid: string) => (
             lid === '103140015788103@lid' ? '972501234567@s.whatsapp.net' : null
@@ -648,6 +667,31 @@ describe('WhatsAppClient', () => {
         await client.hardRefresh({ force: true });
 
         expect(clearState).toHaveBeenCalled();
+        expect(client.connect).toHaveBeenCalled();
+    });
+
+    it('should clear old authenticated identity markers before generating a fresh QR', async () => {
+        const clearState = jest.fn(async () => {});
+        client.authStore = {
+            ...client.authStore,
+            clearState
+        };
+        client.status = 'error';
+        client.isAuthCorrupted = true;
+        client.hasConnectedOnce = true;
+        client.lastSeenAt = new Date();
+        client.lastSenderKeyResetAt = Date.now();
+        client.lastKeyCacheResetAt = Date.now();
+        client.connect = jest.fn(async () => {});
+
+        await client.hardRefresh({ force: true });
+
+        expect(clearState).toHaveBeenCalled();
+        expect(client.isAuthCorrupted).toBe(false);
+        expect(client.hasConnectedOnce).toBe(false);
+        expect(client.lastSeenAt).toBeNull();
+        expect(client.lastSenderKeyResetAt).toBeNull();
+        expect(client.lastKeyCacheResetAt).toBeNull();
         expect(client.connect).toHaveBeenCalled();
     });
 });

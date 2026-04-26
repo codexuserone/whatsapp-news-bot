@@ -56,4 +56,31 @@ describe('whatsapp route test-send logging resolution', () => {
       sentAt: null
     });
   });
+
+  it('blocks implicit LID-only status audiences', () => {
+    expect(() =>
+      testUtils.assertUsableStatusAudience({
+        recipients: ['103140015788103@lid', '103140015788104@lid'],
+        sources: { groupMetadata: 2, env: 0, activeIndividualTargets: 0, recentSuccessfulDirectRecipients: 0, lidMappings: 0 }
+      })
+    ).toThrow('implicit LID recipients');
+  });
+
+  it('blocks all-LID status audiences even when a stale mapping counter exists', () => {
+    expect(() =>
+      testUtils.assertUsableStatusAudience({
+        recipients: ['103140015788103@lid', '103140015788104@lid'],
+        sources: { groupMetadata: 2, env: 0, activeIndividualTargets: 0, recentSuccessfulDirectRecipients: 0, lidMappings: 1 }
+      })
+    ).toThrow('implicit LID recipients');
+  });
+
+  it('allows status audiences resolved through LID phone mappings', () => {
+    expect(() =>
+      testUtils.assertUsableStatusAudience({
+        recipients: ['972501234567@s.whatsapp.net'],
+        sources: { groupMetadata: 1, env: 0, activeIndividualTargets: 0, recentSuccessfulDirectRecipients: 0, lidMappings: 1 }
+      })
+    ).not.toThrow();
+  });
 });

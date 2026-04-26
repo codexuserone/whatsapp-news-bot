@@ -170,6 +170,21 @@ describe('queueService __testUtils', () => {
     ).toThrow('implicit LID recipients');
   });
 
+  it('rejects all-LID status snapshots even when a stale mapping counter exists', () => {
+    expect(() =>
+      testUtils.assertUsableStatusAudience({
+        recipients: ['103140015788103@lid', '103140015788104@lid'],
+        sources: {
+          groupMetadata: 2,
+          env: 0,
+          activeIndividualTargets: 0,
+          recentSuccessfulDirectRecipients: 0,
+          lidMappings: 1
+        }
+      })
+    ).toThrow('implicit LID recipients');
+  });
+
   it('allows status snapshots with mapped phone recipients', () => {
     expect(() =>
       testUtils.assertUsableStatusAudience({

@@ -62,12 +62,30 @@ const getStatusAudienceExplicitSourceCount = (snapshot: Record<string, any> | nu
   );
 };
 
+const getStatusAudienceMappedSourceCount = (snapshot: Record<string, any> | null | undefined) => {
+  const sources = snapshot?.sources || {};
+  return Math.max(0, Math.floor(Number(sources.lidMappings || 0)));
+};
+
 const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undefined) => {
   const recipients = Array.isArray(snapshot?.recipients) ? snapshot!.recipients : [];
   if (!recipients.length) {
     throw badRequest('No fresh status recipients are available for this status send.');
   }
-  if (recipients.length <= 1 && getStatusAudienceExplicitSourceCount(snapshot) <= 0) {
+  const lidCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@lid')).length;
+  const phoneCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@s.whatsapp.net')).length;
+  if (
+    lidCount > 0 &&
+    phoneCount === 0 &&
+    getStatusAudienceExplicitSourceCount(snapshot) <= 0
+  ) {
+    throw badRequest('Status audience only contains implicit LID recipients. Add explicit private Status recipients or wait for phone-number mappings before sending Status.');
+  }
+  if (
+    recipients.length <= 1 &&
+    getStatusAudienceExplicitSourceCount(snapshot) <= 0 &&
+    getStatusAudienceMappedSourceCount(snapshot) <= 0
+  ) {
     throw badRequest('Status audience has no private viewers yet. Add or sync at least one private WhatsApp contact before sending Status.');
   }
 };
@@ -1642,6 +1660,7 @@ const whatsappRoutes = () => {
         groupMetadata: 0,
         env: 0,
         me: 0,
+        lidMappings: 0,
         activeIndividualTargets: 0,
         recentSuccessfulDirectRecipients: 0
       },
@@ -1678,6 +1697,7 @@ const whatsappRoutes = () => {
         groupMetadata: number;
         env: number;
         me: number;
+        lidMappings?: number;
         activeIndividualTargets?: number;
         recentSuccessfulDirectRecipients: number;
       };
@@ -1883,6 +1903,7 @@ const whatsappRoutes = () => {
 
 module.exports = whatsappRoutes;
 module.exports.__testUtils = {
+  assertUsableStatusAudience,
   buildUncertainSendMessage,
   isGroupJid,
   resolveSendTestTimeoutMs,

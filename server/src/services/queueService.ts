@@ -156,7 +156,7 @@ const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undef
   }
   const lidCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@lid')).length;
   const phoneCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@s.whatsapp.net')).length;
-  if (lidCount > 0 && phoneCount === 0 && getStatusAudienceExplicitSourceCount(snapshot) <= 0 && getStatusAudienceMappedSourceCount(snapshot) <= 0) {
+  if (lidCount > 0 && phoneCount === 0 && getStatusAudienceExplicitSourceCount(snapshot) <= 0) {
     throw new Error('Status audience only contains implicit LID recipients; refusing to mark a Status send as sent.');
   }
   if (recipients.length <= 1 && getStatusAudienceExplicitSourceCount(snapshot) <= 0 && getStatusAudienceMappedSourceCount(snapshot) <= 0) {

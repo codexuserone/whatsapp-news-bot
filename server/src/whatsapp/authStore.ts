@@ -1,5 +1,8 @@
 const { getSupabaseClient } = require('../db/supabase');
+const dns = require('dns');
+const { Pool } = require('pg');
 const { loadBaileys } = require('./baileys');
+const { getErrorMessage } = require('../utils/errorUtils');
 
 type AuthData = Record<string, unknown>;
 type KeyStoreData = Record<string, Record<string, unknown>>;
@@ -16,6 +19,13 @@ type LeaseInfo = {
   supported: boolean;
   ownerId: string | null;
   expiresAt: string | null;
+};
+
+type AuthStateRow = {
+  creds?: unknown;
+  keys?: unknown;
+  lease_owner?: unknown;
+  lease_expires_at?: unknown;
 };
 
 type AuthStore = {
@@ -35,6 +45,94 @@ type AuthStore = {
   releaseLease: (ownerId: string) => Promise<LeaseResult>;
   forceAcquireLease: (ownerId: string, ttlMs?: number) => Promise<LeaseResult>;
   getLeaseInfo: () => Promise<LeaseInfo>;
+};
+
+let authStatePool: InstanceType<typeof Pool> | null | undefined;
+let authStatePoolErrorHandlerBound = false;
+
+const resolveAuthStateDbUrl = () => String(process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || '').trim();
+
+const preferIpv4 = () => {
+  try {
+    const setter = (dns as unknown as { setDefaultResultOrder?: (order: string) => void }).setDefaultResultOrder;
+    if (typeof setter === 'function') {
+      setter('ipv4first');
+    }
+  } catch {
+    // ignore
+  }
+};
+
+const getAuthStatePool = (): InstanceType<typeof Pool> | null => {
+  if (authStatePool !== undefined) {
+    return authStatePool;
+  }
+
+  const connectionString = resolveAuthStateDbUrl();
+  if (!connectionString) {
+    authStatePool = null;
+    return authStatePool;
+  }
+
+  preferIpv4();
+
+  authStatePool = new Pool({
+    connectionString,
+    ssl: { rejectUnauthorized: false },
+    max: 3,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 15_000,
+    keepAlive: true
+  });
+
+  if (!authStatePoolErrorHandlerBound) {
+    authStatePool.on('error', (error: Error) => {
+      console.warn('auth_state pg pool error:', getErrorMessage(error, 'Unknown pool error'));
+    });
+    authStatePoolErrorHandlerBound = true;
+  }
+
+  return authStatePool;
+};
+
+const normalizeLeaseTimestamp = (value: unknown) => {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  const parsed = new Date(String(value));
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+};
+
+const isMissingLeaseColumn = (error: unknown) => {
+  const msg = String((error as { message?: unknown })?.message || error || '').toLowerCase();
+  if (!msg) return false;
+  return msg.includes('does not exist') && (msg.includes('lease_owner') || msg.includes('lease_expires_at'));
+};
+
+const isTransientLeaseTransportError = (error: unknown) => {
+  const raw = String((error as { message?: unknown; code?: unknown })?.message || error || '');
+  const code = String((error as { code?: unknown })?.code || '').toUpperCase();
+  const normalized = raw.toLowerCase();
+
+  if (['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN'].includes(code)) {
+    return true;
+  }
+
+  return [
+    'checkouttimeout',
+    'headers timeout',
+    'connection terminated unexpectedly',
+    'connection closed',
+    'fetch failed',
+    'timed out',
+    'timeout',
+    'error code 522',
+    'unexpected eof',
+    'socket hang up',
+    'connection reset',
+    'connection refused',
+    'network is unreachable',
+    'could not connect'
+  ].some((needle) => normalized.includes(needle));
 };
 
 const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<AuthStore> => {
@@ -144,9 +242,230 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
   };
 
   const supabase = getSupabaseClient();
-  
-  // If Supabase is not available, use in-memory state
-  if (!supabase) {
+  const authStatePool = getAuthStatePool();
+
+  const runPgQuery = async <T extends Record<string, unknown> = Record<string, unknown>>(
+    query: string,
+    params: unknown[] = []
+  ) => {
+    if (!authStatePool) throw new Error('auth_state postgres pool is not configured');
+    const result = await authStatePool.query(query, params);
+    return result.rows as T[];
+  };
+
+  const getAuthStateRowViaPg = async (): Promise<AuthStateRow | null> => {
+    const rows = await runPgQuery<AuthStateRow>(
+      `select creds, keys, lease_owner, lease_expires_at
+         from auth_state
+        where session_id = $1
+        limit 1`,
+      [sessionId]
+    );
+    return rows[0] || null;
+  };
+
+  const upsertAuthStateViaPg = async (payload: {
+    creds?: unknown;
+    keys?: unknown;
+    status?: string | null;
+    qrCode?: string | null;
+    includeQrCode?: boolean;
+    lastConnectedAt?: string | null;
+  }) => {
+    const updates: string[] = [];
+    const params: unknown[] = [sessionId];
+    const insertColumns = ['session_id'];
+    const insertValues = ['$1'];
+
+    if (payload.creds !== undefined) {
+      insertColumns.push('creds');
+      params.push(JSON.stringify(payload.creds));
+      insertValues.push(`$${params.length}::jsonb`);
+      updates.push(`creds = excluded.creds`);
+    }
+
+    if (payload.keys !== undefined) {
+      insertColumns.push('keys');
+      params.push(JSON.stringify(payload.keys));
+      insertValues.push(`$${params.length}::jsonb`);
+      updates.push(`keys = excluded.keys`);
+    }
+
+    if (payload.status !== undefined) {
+      insertColumns.push('status');
+      params.push(payload.status);
+      insertValues.push(`$${params.length}`);
+      updates.push(`status = excluded.status`);
+    }
+
+    if (payload.includeQrCode) {
+      insertColumns.push('qr_code');
+      params.push(payload.qrCode ?? null);
+      insertValues.push(`$${params.length}`);
+      updates.push(`qr_code = excluded.qr_code`);
+    }
+
+    if (payload.lastConnectedAt) {
+      insertColumns.push('last_connected_at');
+      params.push(payload.lastConnectedAt);
+      insertValues.push(`$${params.length}::timestamptz`);
+      updates.push(`last_connected_at = excluded.last_connected_at`);
+    }
+
+    if (!updates.length) {
+      insertColumns.push('status');
+      params.push('disconnected');
+      insertValues.push(`$${params.length}`);
+      updates.push('session_id = excluded.session_id');
+    }
+
+    await runPgQuery(
+      `insert into auth_state (${insertColumns.join(', ')})
+       values (${insertValues.join(', ')})
+       on conflict (session_id) do update
+         set ${updates.join(', ')}`,
+      params
+    );
+  };
+
+  const clearAuthStateViaPg = async (freshCreds: unknown) => {
+    await runPgQuery(`delete from auth_state where session_id = $1`, [sessionId]);
+    await upsertAuthStateViaPg({
+      creds: freshCreds,
+      keys: {},
+      status: 'disconnected',
+      qrCode: null,
+      includeQrCode: true
+    });
+  };
+
+  const getCurrentLeaseRowViaPg = async (): Promise<{ ownerId: string | null; expiresAt: string | null }> => {
+    const row = await getAuthStateRowViaPg();
+    return {
+      ownerId: row?.lease_owner ? String(row.lease_owner) : null,
+      expiresAt: normalizeLeaseTimestamp(row?.lease_expires_at)
+    };
+  };
+
+  const acquireLeaseViaPg = async (ownerId: string, ttlMs = 90_000): Promise<LeaseResult> => {
+    const expiresAt = new Date(Date.now() + Math.max(10_000, Number(ttlMs) || 0)).toISOString();
+    const rows = await runPgQuery<AuthStateRow>(
+      `update auth_state
+          set lease_owner = $2,
+              lease_expires_at = $3::timestamptz
+        where session_id = $1
+          and (
+            lease_owner is null
+            or lease_owner = $2
+            or lease_expires_at is null
+            or lease_expires_at < $4::timestamptz
+          )
+      returning lease_owner, lease_expires_at`,
+      [sessionId, ownerId, expiresAt, new Date().toISOString()]
+    );
+
+    const row = rows[0];
+    if (row?.lease_owner && String(row.lease_owner) === ownerId) {
+      return {
+        ok: true,
+        supported: true,
+        ownerId,
+        expiresAt: normalizeLeaseTimestamp(row.lease_expires_at) || expiresAt
+      };
+    }
+
+    const current = await getCurrentLeaseRowViaPg();
+    return {
+      ok: false,
+      supported: true,
+      ownerId: current.ownerId,
+      expiresAt: current.expiresAt,
+      reason: 'lease_held'
+    };
+  };
+
+  const renewLeaseViaPg = async (ownerId: string, ttlMs = 90_000): Promise<LeaseResult> => {
+    const expiresAt = new Date(Date.now() + Math.max(10_000, Number(ttlMs) || 0)).toISOString();
+    const rows = await runPgQuery<AuthStateRow>(
+      `update auth_state
+          set lease_expires_at = $3::timestamptz
+        where session_id = $1
+          and lease_owner = $2
+      returning lease_owner, lease_expires_at`,
+      [sessionId, ownerId, expiresAt]
+    );
+
+    const row = rows[0];
+    if (row?.lease_owner && String(row.lease_owner) === ownerId) {
+      return {
+        ok: true,
+        supported: true,
+        ownerId,
+        expiresAt: normalizeLeaseTimestamp(row.lease_expires_at) || expiresAt
+      };
+    }
+
+    const current = await getCurrentLeaseRowViaPg();
+    if (current.ownerId === ownerId) {
+      return {
+        ok: true,
+        supported: true,
+        ownerId,
+        expiresAt: current.expiresAt || expiresAt
+      };
+    }
+
+    const currentExpiryMs = current.expiresAt ? Date.parse(current.expiresAt) : Number.NaN;
+    const leaseExpired = Number.isFinite(currentExpiryMs) ? currentExpiryMs <= Date.now() : true;
+    if (!current.ownerId || leaseExpired) {
+      return forceAcquireLeaseViaPg(ownerId, ttlMs);
+    }
+
+    return {
+      ok: false,
+      supported: true,
+      ownerId: current.ownerId,
+      expiresAt: current.expiresAt,
+      reason: 'lost'
+    };
+  };
+
+  const forceAcquireLeaseViaPg = async (ownerId: string, ttlMs = 90_000): Promise<LeaseResult> => {
+    const expiresAt = new Date(Date.now() + Math.max(10_000, Number(ttlMs) || 0)).toISOString();
+    const rows = await runPgQuery<AuthStateRow>(
+      `update auth_state
+          set lease_owner = $2,
+              lease_expires_at = $3::timestamptz
+        where session_id = $1
+      returning lease_owner, lease_expires_at`,
+      [sessionId, ownerId, expiresAt]
+    );
+
+    const row = rows[0];
+    const currentOwner = row?.lease_owner ? String(row.lease_owner) : ownerId;
+    return {
+      ok: currentOwner === ownerId,
+      supported: true,
+      ownerId: currentOwner,
+      expiresAt: normalizeLeaseTimestamp(row?.lease_expires_at) || expiresAt
+    };
+  };
+
+  const releaseLeaseViaPg = async (ownerId: string): Promise<LeaseResult> => {
+    await runPgQuery(
+      `update auth_state
+          set lease_owner = null,
+              lease_expires_at = null
+        where session_id = $1
+          and lease_owner = $2`,
+      [sessionId, ownerId]
+    );
+
+    return { ok: true, supported: true, ownerId: null, expiresAt: null };
+  };
+
+  // If neither Postgres nor Supabase is available, use in-memory state
+  if (!supabase && !authStatePool) {
     console.warn('Supabase not available, using in-memory auth state');
     let state: { creds: AuthData; keys: KeyStoreData } = { creds: initAuthCreds(), keys: {} };
 
@@ -196,30 +515,66 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
   }
 
   // Try to get existing auth state
-  let { data: doc, error } = await supabase
-    .from('auth_state')
-    .select('*')
-    .eq('session_id', sessionId)
-    .single();
+  let doc: AuthStateRow | null = null;
+  let error: unknown = null;
+
+  if (authStatePool) {
+    try {
+      doc = await getAuthStateRowViaPg();
+    } catch (pgError) {
+      error = pgError;
+      console.warn('Error loading auth state via Postgres:', getErrorMessage(pgError, 'Unknown auth_state load failure'));
+    }
+  }
+
+  if (!doc && supabase) {
+    const response = await supabase
+      .from('auth_state')
+      .select('*')
+      .eq('session_id', sessionId)
+      .single();
+    doc = (response.data as AuthStateRow | null) || null;
+    error = response.error || error;
+  }
 
   // Create new auth state if not found
   if (error || !doc) {
     const newCreds = initAuthCreds();
-    const { data: newDoc, error: insertError } = await supabase
-      .from('auth_state')
-      .upsert({ 
-        session_id: sessionId, 
-        creds: toStorableJson(newCreds), 
-        keys: toStorableJson({}),
-        status: 'disconnected'
-      }, { onConflict: 'session_id' })
-      .select()
-      .single();
+    let created = false;
 
-    if (insertError) {
-      console.error('Error creating auth state:', insertError);
+    if (authStatePool) {
+      try {
+        await upsertAuthStateViaPg({
+          creds: toStorableJson(newCreds),
+          keys: toStorableJson({}),
+          status: 'disconnected'
+        });
+        doc = (await getAuthStateRowViaPg()) || { creds: toStorableJson(newCreds), keys: toStorableJson({}) };
+        created = true;
+      } catch (pgError) {
+        console.error('Error creating auth state via Postgres:', pgError);
+      }
     }
-    doc = newDoc || { creds: toStorableJson(newCreds), keys: toStorableJson({}) };
+
+    if (!created && supabase) {
+      const { data: newDoc, error: insertError } = await supabase
+        .from('auth_state')
+        .upsert({
+          session_id: sessionId,
+          creds: toStorableJson(newCreds),
+          keys: toStorableJson({}),
+          status: 'disconnected'
+        }, { onConflict: 'session_id' })
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('Error creating auth state:', insertError);
+      }
+      doc = (newDoc as AuthStateRow | null) || { creds: toStorableJson(newCreds), keys: toStorableJson({}) };
+    } else if (!doc) {
+      doc = { creds: toStorableJson(newCreds), keys: toStorableJson({}) };
+    }
   }
 
   let state: { creds: AuthData; keys: KeyStoreData } = {
@@ -246,13 +601,31 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
   const saveState = async () => {
     try {
       await withSaveLock(async () => {
-        await supabase
-          .from('auth_state')
-          .upsert({
-            session_id: sessionId,
-            creds: toStorableJson(state.creds),
-            keys: toStorableJson(state.keys)
-          }, { onConflict: 'session_id' });
+        const storedCreds = toStorableJson(state.creds);
+        const storedKeys = toStorableJson(state.keys);
+
+        if (authStatePool) {
+          try {
+            await upsertAuthStateViaPg({
+              creds: storedCreds,
+              keys: storedKeys
+            });
+            return;
+          } catch (pgError) {
+            console.error('Error saving auth state via Postgres:', pgError);
+            if (!supabase) throw pgError;
+          }
+        }
+
+        if (supabase) {
+          await supabase
+            .from('auth_state')
+            .upsert({
+              session_id: sessionId,
+              creds: storedCreds,
+              keys: storedKeys
+            }, { onConflict: 'session_id' });
+        }
       });
     } catch (error) {
       console.error('Error saving auth state:', error);
@@ -263,7 +636,21 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
   let leaseSupported: boolean | null = null;
 
   const getCurrentLeaseRow = async (): Promise<{ ownerId: string | null; expiresAt: string | null } | null> => {
+    if (authStatePool) {
+      try {
+        return await getCurrentLeaseRowViaPg();
+      } catch (error) {
+        if (isMissingLeaseColumn(error)) {
+          return null;
+        }
+        if (!supabase) {
+          throw error;
+        }
+      }
+    }
+
     try {
+      if (!supabase) return null;
       const { data, error } = await supabase
         .from('auth_state')
         .select('lease_owner,lease_expires_at')
@@ -281,20 +668,43 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     }
   };
 
-  const isMissingLeaseColumn = (supabaseError: unknown) => {
-    const msg = String((supabaseError as { message?: unknown })?.message || supabaseError || '').toLowerCase();
-    if (!msg) return false;
-    // PostgREST typically returns messages like: "column auth_state.lease_owner does not exist"
-    return msg.includes('does not exist') && (msg.includes('lease_owner') || msg.includes('lease_expires_at'));
-  };
-
   const acquireLease = async (ownerId: string, ttlMs = 90_000): Promise<LeaseResult> => {
     if (leaseSupported === false) {
       return { ok: true, supported: false, ownerId: null, expiresAt: null };
     }
 
+    if (authStatePool) {
+      try {
+        leaseSupported = true;
+        return await acquireLeaseViaPg(ownerId, ttlMs);
+      } catch (leaseError) {
+        if (isMissingLeaseColumn(leaseError)) {
+          leaseSupported = false;
+          console.warn('Auth lease columns missing; skipping conflict prevention. Run latest SQL migrations.');
+          return { ok: true, supported: false, ownerId: null, expiresAt: null };
+        }
+        if (isTransientLeaseTransportError(leaseError)) {
+          leaseSupported = true;
+          return {
+            ok: false,
+            supported: true,
+            ownerId: null,
+            expiresAt: null,
+            reason: 'transient_error'
+          };
+        }
+        if (!supabase) {
+          throw leaseError;
+        }
+      }
+    }
+
     const nowIso = new Date().toISOString();
     const expiresAt = new Date(Date.now() + Math.max(10_000, Number(ttlMs) || 0)).toISOString();
+
+    if (!supabase) {
+      return { ok: false, supported: true, ownerId: null, expiresAt: null, reason: 'transient_error' };
+    }
 
     const { data, error: leaseError } = await supabase
       .from('auth_state')
@@ -311,6 +721,15 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
         return { ok: true, supported: false, ownerId: null, expiresAt: null };
       }
       leaseSupported = true;
+      if (isTransientLeaseTransportError(leaseError)) {
+        return {
+          ok: false,
+          supported: true,
+          ownerId: null,
+          expiresAt: null,
+          reason: 'transient_error'
+        };
+      }
       return {
         ok: false,
         supported: true,
@@ -348,7 +767,35 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
       return { ok: true, supported: false, ownerId: null, expiresAt: null };
     }
 
+    if (authStatePool) {
+      try {
+        leaseSupported = true;
+        return await renewLeaseViaPg(ownerId, ttlMs);
+      } catch (leaseError) {
+        if (isMissingLeaseColumn(leaseError)) {
+          leaseSupported = false;
+          return { ok: true, supported: false, ownerId: null, expiresAt: null };
+        }
+        if (isTransientLeaseTransportError(leaseError)) {
+          leaseSupported = true;
+          return {
+            ok: false,
+            supported: true,
+            ownerId: null,
+            expiresAt: null,
+            reason: 'transient_error'
+          };
+        }
+        if (!supabase) {
+          throw leaseError;
+        }
+      }
+    }
+
     const expiresAt = new Date(Date.now() + Math.max(10_000, Number(ttlMs) || 0)).toISOString();
+    if (!supabase) {
+      return { ok: false, supported: true, ownerId: null, expiresAt: null, reason: 'transient_error' };
+    }
     const { data, error: leaseError } = await supabase
       .from('auth_state')
       .update({ lease_expires_at: expiresAt })
@@ -362,6 +809,15 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
         return { ok: true, supported: false, ownerId: null, expiresAt: null };
       }
       leaseSupported = true;
+      if (isTransientLeaseTransportError(leaseError)) {
+        return {
+          ok: false,
+          supported: true,
+          ownerId: null,
+          expiresAt: null,
+          reason: 'transient_error'
+        };
+      }
       return {
         ok: false,
         supported: true,
@@ -415,7 +871,35 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
       return { ok: true, supported: false, ownerId: null, expiresAt: null };
     }
 
+    if (authStatePool) {
+      try {
+        leaseSupported = true;
+        return await forceAcquireLeaseViaPg(ownerId, ttlMs);
+      } catch (leaseError) {
+        if (isMissingLeaseColumn(leaseError)) {
+          leaseSupported = false;
+          return { ok: true, supported: false, ownerId: null, expiresAt: null };
+        }
+        if (isTransientLeaseTransportError(leaseError)) {
+          leaseSupported = true;
+          return {
+            ok: false,
+            supported: true,
+            ownerId: null,
+            expiresAt: null,
+            reason: 'transient_error'
+          };
+        }
+        if (!supabase) {
+          throw leaseError;
+        }
+      }
+    }
+
     const expiresAt = new Date(Date.now() + Math.max(10_000, Number(ttlMs) || 0)).toISOString();
+    if (!supabase) {
+      return { ok: false, supported: true, ownerId: null, expiresAt: null, reason: 'transient_error' };
+    }
     const { data, error: leaseError } = await supabase
       .from('auth_state')
       .update({ lease_owner: ownerId, lease_expires_at: expiresAt })
@@ -428,6 +912,15 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
         return { ok: true, supported: false, ownerId: null, expiresAt: null };
       }
       leaseSupported = true;
+      if (isTransientLeaseTransportError(leaseError)) {
+        return {
+          ok: false,
+          supported: true,
+          ownerId: null,
+          expiresAt: null,
+          reason: 'transient_error'
+        };
+      }
       return {
         ok: false,
         supported: true,
@@ -460,6 +953,35 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
       return { ok: true, supported: false, ownerId: null, expiresAt: null };
     }
 
+    if (authStatePool) {
+      try {
+        leaseSupported = true;
+        return await releaseLeaseViaPg(ownerId);
+      } catch (leaseError) {
+        if (isMissingLeaseColumn(leaseError)) {
+          leaseSupported = false;
+          return { ok: true, supported: false, ownerId: null, expiresAt: null };
+        }
+        if (isTransientLeaseTransportError(leaseError)) {
+          leaseSupported = true;
+          return {
+            ok: false,
+            supported: true,
+            ownerId: null,
+            expiresAt: null,
+            reason: 'transient_error'
+          };
+        }
+        if (!supabase) {
+          throw leaseError;
+        }
+      }
+    }
+
+    if (!supabase) {
+      return { ok: false, supported: true, ownerId: null, expiresAt: null, reason: 'transient_error' };
+    }
+
     const { error: leaseError } = await supabase
       .from('auth_state')
       .update({ lease_owner: null, lease_expires_at: null })
@@ -472,6 +994,15 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
         return { ok: true, supported: false, ownerId: null, expiresAt: null };
       }
       leaseSupported = true;
+      if (isTransientLeaseTransportError(leaseError)) {
+        return {
+          ok: false,
+          supported: true,
+          ownerId: null,
+          expiresAt: null,
+          reason: 'transient_error'
+        };
+      }
       return {
         ok: false,
         supported: true,
@@ -570,18 +1101,31 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
       // Initialize fresh credentials
       const freshCreds = initAuthCreds();
       state = { creds: freshCreds, keys: {} };
-      
-      // Delete all existing auth data and create fresh
+
+      if (authStatePool) {
+        try {
+          await clearAuthStateViaPg(toStorableJson(freshCreds));
+          return;
+        } catch (pgError) {
+          console.error('Failed to clear auth state via Postgres:', pgError);
+          if (!supabase) throw pgError;
+        }
+      }
+
+      if (!supabase) {
+        return;
+      }
+
       await supabase
         .from('auth_state')
         .delete()
         .eq('session_id', sessionId);
-      
+
       await supabase
         .from('auth_state')
-        .upsert({ 
-          session_id: sessionId, 
-          creds: toStorableJson(freshCreds), 
+        .upsert({
+          session_id: sessionId,
+          creds: toStorableJson(freshCreds),
           keys: toStorableJson({}),
           status: 'disconnected',
           qr_code: null
@@ -593,7 +1137,26 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
       // Only write qr_code when explicitly provided (allow null to clear).
       if (qrCode !== undefined) updates.qr_code = qrCode;
       if (status === 'connected') updates.last_connected_at = new Date().toISOString();
-      
+
+      if (authStatePool) {
+        try {
+          await upsertAuthStateViaPg({
+            status,
+            qrCode: qrCode ?? null,
+            includeQrCode: qrCode !== undefined,
+            lastConnectedAt: status === 'connected' ? String(updates.last_connected_at || '') : null
+          });
+          return;
+        } catch (pgError) {
+          console.warn('Failed to update auth_state status via Postgres:', pgError);
+          if (!supabase) return;
+        }
+      }
+
+      if (!supabase) {
+        return;
+      }
+
       const { error: statusError } = await supabase.from('auth_state').update(updates).eq('session_id', sessionId);
       if (statusError) {
         // Silently ignore constraint violations - they'll be fixed by migration 014

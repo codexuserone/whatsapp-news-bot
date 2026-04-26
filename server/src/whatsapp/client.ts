@@ -255,6 +255,9 @@ type CachedNewsletterChat = {
   updatedAtMs: number;
 };
 
+const isTransientLeaseFailureReason = (reason: unknown) =>
+  String(reason || '').trim().toLowerCase() === 'transient_error';
+
 const HARD_REFRESH_RECENT_CONNECTION_GRACE_MS = 2 * 60 * 1000;
 const CONTACTS_CACHE_MAX_SIZE = Math.max(Number(process.env.WHATSAPP_CONTACTS_CACHE_MAX_SIZE || 1000), 100);
 
@@ -1560,6 +1563,10 @@ class WhatsAppClient {
         this.leaseExpiresAt = lease.expiresAt;
 
         if (!lease.ok) {
+          if (isTransientLeaseFailureReason(lease.reason)) {
+            logger.warn('WhatsApp lease renewal check is temporarily unavailable; keeping current socket alive');
+            return;
+          }
           logger.warn({ leaseOwner: lease.ownerId, leaseExpiresAt: lease.expiresAt }, 'Lost WhatsApp lease');
           this.stopLeaseRenewal();
           if (this.isPaused) {
@@ -1638,6 +1645,11 @@ class WhatsAppClient {
     }
 
     if (!lease.ok) {
+      if (isTransientLeaseFailureReason(lease.reason)) {
+        this.status = 'connecting';
+        this.lastError = 'Lease check temporarily unavailable. Retry the takeover once connectivity stabilizes.';
+        return lease;
+      }
       this.status = 'conflict';
       const holder = lease.ownerId || 'unknown';
       const until = lease.expiresAt || 'unknown';
@@ -1765,6 +1777,15 @@ class WhatsAppClient {
           this.leaseExpiresAt = lease.expiresAt;
 
           if (lease.supported && !lease.ok) {
+            if (isTransientLeaseFailureReason(lease.reason)) {
+              logger.warn('WhatsApp lease check is temporarily unavailable; retrying without declaring a conflict');
+              this.status = 'connecting';
+              this.lastError = 'Lease check temporarily unavailable. Retrying...';
+              await authStore.updateStatus('connecting');
+              this.isConnecting = false;
+              this.scheduleReconnect(5000 + Math.random() * 2000);
+              return;
+            }
             const nowMs = Date.now();
             const expiryMs = lease.expiresAt ? Date.parse(lease.expiresAt) : Number.NaN;
             const leaseStillValid = Number.isFinite(expiryMs) && expiryMs > nowMs;
@@ -1801,6 +1822,14 @@ class WhatsAppClient {
                   this.leaseExpiresAt = takeover.expiresAt;
                   this.startLeaseRenewal(90_000);
                   // Continue with connection below.
+                } else if (isTransientLeaseFailureReason(takeover.reason)) {
+                  logger.warn('WhatsApp lease takeover check is temporarily unavailable; retrying shortly');
+                  this.status = 'connecting';
+                  this.lastError = 'Lease takeover temporarily unavailable. Retrying...';
+                  await authStore.updateStatus('connecting');
+                  this.isConnecting = false;
+                  this.scheduleReconnect(5000 + Math.random() * 2000);
+                  return;
                 } else {
                   logger.warn({ holder: takeover.ownerId }, 'Lease held by another instance; skipping connect');
                   this.status = 'conflict';

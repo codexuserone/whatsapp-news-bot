@@ -24,11 +24,12 @@ const STATUS_LID_MAPPING_LIMIT = Math.max(
   0,
   Math.min(Math.floor(Number(process.env.WHATSAPP_STATUS_LID_MAPPING_LIMIT || 2000)), 10000)
 );
-const ENABLE_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH =
-  String(process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH ?? 'true').trim().toLowerCase() !== 'false';
 const AUTO_CLEAR_CORRUPTED_AUTH =
   String(process.env.WHATSAPP_AUTH_AUTO_CLEAR_CORRUPTION ?? 'false').trim().toLowerCase() === 'true';
 const newsletterMediaPatchContext = new AsyncLocalStorage();
+
+const isNewsletterMediaDirectPathPatchEnabled = () =>
+  String(process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH || '').trim().toLowerCase() === 'true';
 
 const resolveBrowserTuple = (Browsers: Record<string, unknown> | null | undefined, browserName: string) => {
   const requestedPlatform = String(
@@ -81,8 +82,12 @@ const rewriteNewsletterMediaPath = (value: unknown) => {
   return raw;
 };
 
-const patchNewsletterMediaDirectPaths = <T extends Record<string, any>>(message: T): T => {
-  if (!ENABLE_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH || !message || typeof message !== 'object') return message;
+const patchNewsletterMediaDirectPaths = <T extends Record<string, any>>(
+  message: T,
+  options: { force?: boolean } = {}
+): T => {
+  if (!options.force && !isNewsletterMediaDirectPathPatchEnabled()) return message;
+  if (!message || typeof message !== 'object') return message;
 
   const containers = [
     (message as any).imageMessage,

@@ -417,7 +417,7 @@ const QueueInner = () => {
 
     switch (item.status) {
       case 'awaiting_approval':
-        return <Badge variant="warning">Held</Badge>;
+        return <Badge variant="warning">Needs review</Badge>;
       case 'pending':
         return <Badge variant="secondary">Queued</Badge>;
       case 'processing':
@@ -522,15 +522,17 @@ const QueueInner = () => {
         return { label: `Sent with ${mediaType}`, tone: 'success' as const };
       }
       if (mediaType && !mediaSent) {
-        return { label: 'Sent text-only', tone: 'warning' as const };
+        return item.media_error
+          ? { label: `Sent text/link; ${mediaType} not sent`, tone: 'warning' as const }
+          : { label: 'Sent text-only', tone: 'warning' as const };
       }
       return { label: 'Sent text-only', tone: 'secondary' as const };
     }
 
     if (item.status === 'awaiting_approval') {
       return hasRequestedMedia
-        ? { label: 'Held - media not sent', tone: 'warning' as const }
-        : { label: 'Held', tone: 'warning' as const };
+        ? { label: 'Needs review - not posted', tone: 'warning' as const }
+        : { label: 'Needs review', tone: 'warning' as const };
     }
 
     if (item.status === 'uncertain') {

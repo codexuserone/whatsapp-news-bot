@@ -76,7 +76,10 @@ describe('WhatsAppClient', () => {
         }
     });
 
-    it('should patch newsletter media direct paths from /o1/ to /m1/', () => {
+    it('should leave newsletter media direct paths unchanged unless explicitly enabled', () => {
+        const originalFlag = process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH;
+        delete process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH;
+
         const message: any = {
             imageMessage: {
                 directPath: '/o1/v/t24/example-image',
@@ -86,6 +89,28 @@ describe('WhatsAppClient', () => {
         };
 
         const patched = WhatsAppClient.patchNewsletterMediaDirectPaths(message);
+
+        expect(patched.imageMessage.directPath).toBe('/o1/v/t24/example-image');
+        expect(patched.imageMessage.thumbnailDirectPath).toBe('/o1/v/t24/example-thumb');
+        expect(patched.imageMessage.url).toBe('https://mmg.whatsapp.net/o1/v/t24/example-image');
+
+        if (originalFlag === undefined) {
+            delete process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH;
+        } else {
+            process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH = originalFlag;
+        }
+    });
+
+    it('can patch newsletter media direct paths from /o1/ to /m1/ when forced', () => {
+        const message: any = {
+            imageMessage: {
+                directPath: '/o1/v/t24/example-image',
+                thumbnailDirectPath: '/o1/v/t24/example-thumb',
+                url: 'https://mmg.whatsapp.net/o1/v/t24/example-image'
+            }
+        };
+
+        const patched = WhatsAppClient.patchNewsletterMediaDirectPaths(message, { force: true });
 
         expect(patched.imageMessage.directPath).toBe('/m1/v/t24/example-image');
         expect(patched.imageMessage.thumbnailDirectPath).toBe('/m1/v/t24/example-thumb');

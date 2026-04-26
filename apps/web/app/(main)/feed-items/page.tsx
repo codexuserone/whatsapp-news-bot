@@ -121,7 +121,7 @@ const FeedItemsPage = () => {
         label: joinStatusSummary([
           formatTargetSummary(sent, 'accepted by WhatsApp'),
           formatTargetSummary(queued, 'queued'),
-          formatTargetSummary(unresolved, 'held/failed/uncertain'),
+          formatTargetSummary(unresolved, 'needs review'),
           ...correctionParts
         ]),
         variant: 'warning' as const
@@ -141,7 +141,7 @@ const FeedItemsPage = () => {
       return {
         label: joinStatusSummary([
           formatTargetSummary(queued, 'queued'),
-          formatTargetSummary(unresolved, 'held/failed/uncertain'),
+          formatTargetSummary(unresolved, 'needs review'),
           ...correctionParts
         ]),
         variant: 'warning' as const
@@ -157,7 +157,7 @@ const FeedItemsPage = () => {
       return {
         label: joinStatusSummary([
           formatTargetSummary(sent, 'accepted by WhatsApp'),
-          formatTargetSummary(unresolved, 'held/failed/uncertain'),
+          formatTargetSummary(unresolved, 'needs review'),
           ...correctionParts
         ]),
         variant: 'warning' as const
@@ -165,7 +165,7 @@ const FeedItemsPage = () => {
     }
     if (unresolved > 0) {
       return {
-        label: joinStatusSummary([formatTargetSummary(unresolved, 'held/failed/uncertain'), ...correctionParts]),
+        label: joinStatusSummary([formatTargetSummary(unresolved, 'needs review'), ...correctionParts]),
         variant: 'destructive' as const
       };
     }

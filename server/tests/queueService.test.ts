@@ -120,9 +120,9 @@ describe('queueService __testUtils', () => {
     expect(testUtils.shouldRequireServerAckForSend('group', mediaResult)).toBe(false);
   });
 
-  it('blocks text fallback after media failure for status and channel targets', () => {
+  it('blocks text fallback after media failure only for status targets', () => {
     expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('status')).toBe(true);
-    expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('channel')).toBe(true);
+    expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('channel')).toBe(false);
     expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('group')).toBe(false);
     expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('individual')).toBe(false);
   });
@@ -148,7 +148,7 @@ describe('queueService __testUtils', () => {
     testUtils.rememberChannelMediaRejection(target, now);
     expect(testUtils.isChannelMediaTemporarilyBlocked(target, now + 1000)).toBe(true);
     expect(testUtils.buildChannelMediaHoldError('image', 'WhatsApp server rejected message ack 479')).toContain(
-      'held for review'
+      'not posted'
     );
     expect(testUtils.buildChannelMediaHoldError('image', 'WhatsApp server rejected message ack 479')).not.toContain(
       'sent text/link preview'

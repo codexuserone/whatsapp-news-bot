@@ -234,17 +234,6 @@ const TargetsPage = () => {
     }
     return usage;
   }, [runningSchedules]);
-  const activeTargetsNotReceivingFeeds = React.useMemo(
-    () =>
-      visibleTargets.filter(
-        (target) =>
-          target.active &&
-          target.type !== 'status' &&
-          !targetUsageById.has(target.id)
-      ),
-    [targetUsageById, visibleTargets]
-  );
-
   const filteredTargets = visibleTargets.filter((target) => {
     const matchesSearch =
       !search ||
@@ -428,18 +417,6 @@ const TargetsPage = () => {
           </div>
         </CardHeader>
         <CardContent>
-          {activeTargetsNotReceivingFeeds.length ? (
-            <div className="mb-4 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-warning-foreground">
-              <p className="font-medium">Some enabled destinations are not receiving feed posts.</p>
-              <p className="mt-1 text-xs">
-                They are saved targets, but no running automation includes them: {activeTargetsNotReceivingFeeds.slice(0, 5).map((target) => target.name).join(', ')}
-                {activeTargetsNotReceivingFeeds.length > 5 ? `, and ${activeTargetsNotReceivingFeeds.length - 5} more` : ''}.
-              </p>
-              <Button asChild size="sm" variant="outline" className="mt-3">
-                <Link href="/schedules">Add them to an automation</Link>
-              </Button>
-            </div>
-          ) : null}
           {targetsLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />

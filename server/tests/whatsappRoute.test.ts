@@ -60,6 +60,22 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
+  it('marks held test sends as awaiting approval instead of uncertain', () => {
+    const result = __testUtils.resolveTestSendLogResolution({
+      messageId: 'abc123',
+      confirmRequested: true,
+      confirmation: { ok: false, via: 'none', error: 'WhatsApp server rejected message ack 479' },
+      holdReason: 'Channel image was rejected by WhatsApp; held for review.',
+      confirmedAt: '2026-03-18T22:00:00.000Z'
+    });
+
+    expect(result).toEqual({
+      status: 'awaiting_approval',
+      errorMessage: 'Channel image was rejected by WhatsApp; held for review.',
+      sentAt: null
+    });
+  });
+
   it('marks test sends sent when local upsert was observed', () => {
     const result = __testUtils.resolveTestSendLogResolution({
       messageId: 'abc123',

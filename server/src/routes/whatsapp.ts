@@ -31,7 +31,7 @@ type TestSendConfirmation = {
 };
 
 type TestSendLogResolution = {
-  status: 'sent' | 'delivered' | 'read' | 'played' | 'uncertain';
+  status: 'sent' | 'delivered' | 'read' | 'played' | 'uncertain' | 'awaiting_approval';
   errorMessage: string | null;
   sentAt: string | null;
 };
@@ -121,12 +121,44 @@ const assertStatusMediaResponseMatches = (
   }
 };
 
+const isAck479Error = (value: unknown) =>
+  /(?:ack|server rejected|rejected).*479|479.*(?:ack|server rejected|rejected)/i.test(String(value || ''));
+
+const buildChannelMediaHoldMessage = (mediaType: string | null, errorMessage: unknown) => {
+  const kind = String(mediaType || 'media').trim() || 'media';
+  const reason = String(errorMessage || 'WhatsApp rejected the channel media send').trim();
+  return `Channel ${kind} was rejected by WhatsApp (${reason}); held for review. No text/link fallback was sent.`;
+};
+
+const shouldHoldRejectedChannelMediaTestSend = (options: {
+  jid?: string | null;
+  requestedMediaType?: string | null;
+  confirmation?: TestSendConfirmation | null;
+}) => {
+  const requestedMediaType = String(options.requestedMediaType || '').trim().toLowerCase();
+  return (
+    isNewsletterJid(String(options.jid || '')) &&
+    (requestedMediaType === 'image' || requestedMediaType === 'video') &&
+    isAck479Error(options.confirmation?.error)
+  );
+};
+
 const resolveTestSendLogResolution = (options: {
   messageId?: string | null;
   confirmRequested?: boolean;
   confirmation?: TestSendConfirmation | null;
   confirmedAt?: string;
+  holdReason?: string | null;
 }) => {
+  const holdReason = String(options.holdReason || '').trim();
+  if (holdReason) {
+    return {
+      status: 'awaiting_approval',
+      errorMessage: holdReason,
+      sentAt: null
+    } satisfies TestSendLogResolution;
+  }
+
   const messageId = String(options.messageId || '').trim();
   const confirmRequested = options.confirmRequested !== false;
   const confirmation = options.confirmation || null;
@@ -1432,6 +1464,8 @@ const whatsappRoutes = () => {
 	      messageId?: string | null;
           confirmed?: boolean;
 	      confirmation?: TestSendConfirmation | null;
+          held?: boolean;
+          holdReason?: string | null;
 	      warning?: string;
 	      error?: string;
 	    }> = [];
@@ -1545,12 +1579,22 @@ const whatsappRoutes = () => {
             : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck };
           confirmation = await whatsapp.confirmSend(messageId, timeouts);
         }
+        const held = shouldHoldRejectedChannelMediaTestSend({
+          jid: normalizedJid,
+          requestedMediaType,
+          confirmation
+        });
+        const holdReason = held
+          ? buildChannelMediaHoldMessage(requestedMediaType, confirmation?.error)
+          : null;
         results.push({
           jid: normalizedJid,
           ok: true,
           messageId,
           confirmation,
           confirmed: Boolean(confirmation?.ok),
+          held,
+          holdReason,
           ...(mediaWarning ? { warning: mediaWarning } : {})
         });
       } catch (error) {
@@ -1585,7 +1629,8 @@ const whatsappRoutes = () => {
             messageId: entry.messageId || null,
             confirmRequested: confirmationRequired,
             confirmation: confirmationRequired ? entry.confirmation || null : null,
-            confirmedAt
+            confirmedAt,
+            holdReason: entry.holdReason || null
           });
           return {
           schedule_id: null,
@@ -1607,7 +1652,7 @@ const whatsappRoutes = () => {
               resolution.status === 'read' ||
               resolution.status === 'played')
           ),
-            media_error: mediaWarning || (requestedMediaType ? String(entry.confirmation?.error || '').trim() || null : null)
+            media_error: entry.holdReason || mediaWarning || (requestedMediaType ? String(entry.confirmation?.error || '').trim() || null : null)
           };
         });
 
@@ -1620,14 +1665,16 @@ const whatsappRoutes = () => {
     }
 
     const confirmedCount = successful.filter((entry) => entry.confirmed === true).length;
-    const uncertainCount = successful.length - confirmedCount;
+    const heldCount = successful.filter((entry) => entry.held === true).length;
+    const uncertainCount = successful.length - confirmedCount - heldCount;
 
     if (normalizedJids.length === 1) {
       const first = successful[0];
       return res.json({
-        ok: results.every((entry) => entry.ok) && uncertainCount === 0,
+        ok: results.every((entry) => entry.ok) && uncertainCount === 0 && heldCount === 0,
         sent: successful.length,
         confirmed: confirmedCount,
+        held: heldCount,
         uncertain: uncertainCount,
         failed: results.length - successful.length,
         messageId: first?.messageId || null,
@@ -1637,9 +1684,10 @@ const whatsappRoutes = () => {
     }
 
     res.json({
-      ok: results.every((entry) => entry.ok) && uncertainCount === 0,
+      ok: results.every((entry) => entry.ok) && uncertainCount === 0 && heldCount === 0,
       sent: successful.length,
       confirmed: confirmedCount,
+      held: heldCount,
       uncertain: uncertainCount,
       failed: results.length - successful.length,
       results

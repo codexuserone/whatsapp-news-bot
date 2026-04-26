@@ -164,6 +164,17 @@ const cleanupAuthAttempts = (nowMs: number) => {
   }
 };
 
+const runStartupTask = (label: string, task: () => Promise<void> | void) => {
+  void Promise.resolve()
+    .then(async () => {
+      await task();
+    })
+    .catch((error: unknown) => {
+      logger.error({ error }, 'Startup task failed');
+      logger.warn({ task: label }, 'Startup task will be retried by background flows or next interval');
+    });
+};
+
 const start = async () => {
   const app: Express = express();
   app.disable('x-powered-by');
@@ -379,18 +390,13 @@ const start = async () => {
   if (!connected) {
     logger.warn('Failed to connect to Supabase database - some features may not work');
     logger.warn('Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables');
-  } else {
-    await settingsService.ensureDefaults();
   }
 
   const disableWhatsApp = process.env.DISABLE_WHATSAPP === 'true';
   const disableSchedulers = process.env.DISABLE_SCHEDULERS === 'true';
 
   const whatsappClient = disableWhatsApp ? null : createWhatsAppClient();
-  if (whatsappClient) {
-    await whatsappClient.init();
-    startTargetAutoSync(whatsappClient);
-  } else {
+  if (!whatsappClient) {
     logger.warn('WhatsApp is disabled via DISABLE_WHATSAPP');
   }
   whatsappClientRef = whatsappClient;
@@ -434,32 +440,48 @@ const start = async () => {
   });
 
   keepAlive();
-  // Reset any logs left in processing state by a crash/restart.
-  void resetStuckProcessingLogs();
+  runStartupTask('reset stuck processing logs', async () => {
+    await resetStuckProcessingLogs();
+  });
+
+  if (connected) {
+    runStartupTask('ensure default settings', async () => {
+      await settingsService.ensureDefaults();
+    });
+  }
+
+  if (whatsappClient) {
+    startTargetAutoSync(whatsappClient);
+    runStartupTask('initialize WhatsApp client', async () => {
+      await whatsappClient.init();
+    });
+  }
+
   if (disableSchedulers) {
     logger.warn('Schedulers are disabled via DISABLE_SCHEDULERS');
   } else {
     scheduleRetentionCleanup();
     scheduleProcessingWatchdog();
     scheduleStatusAudienceRefresh(whatsappClient);
-    // If WhatsApp leasing is supported, only the lease-holder should run polling/schedulers.
-    // This avoids duplicate feed polling + queue churn during rolling deploys.
-    const status = whatsappClient?.getStatus?.();
-    const lease = status?.lease;
-    const leaseSupported = Boolean(lease && typeof lease.supported === 'boolean' ? lease.supported : false);
-    const leaseHeld = Boolean(lease && typeof lease.held === 'boolean' ? lease.held : false);
-    if (whatsappClient && leaseSupported && !leaseHeld) {
-      logger.warn(
-        {
-          whatsappStatus: status?.status,
-          instanceId: status?.instanceId,
-          lease
-        },
-        'Skipping schedulers: WhatsApp lease not held (another instance is active)'
-      );
-    } else {
+    runStartupTask('initialize schedulers', async () => {
+      const status = whatsappClient?.getStatus?.();
+      const lease = status?.lease;
+      const leaseSupported = Boolean(lease && typeof lease.supported === 'boolean' ? lease.supported : false);
+      const leaseHeld = Boolean(lease && typeof lease.held === 'boolean' ? lease.held : false);
+      if (whatsappClient && leaseSupported && !leaseHeld) {
+        logger.warn(
+          {
+            whatsappStatus: status?.status,
+            instanceId: status?.instanceId,
+            lease
+          },
+          'Skipping schedulers: WhatsApp lease not held (another instance is active)'
+        );
+        return;
+      }
+
       await initSchedulers(whatsappClient);
-    }
+    });
   }
 };
 

@@ -1,5 +1,6 @@
 import type { AnyMessageContent, AnyRegularMessageContent, MiscMessageGenerationOptions, WASocket, proto } from '@whiskeysockets/baileys';
 import { randomUUID } from 'crypto';
+import { createReadStream } from 'fs';
 
 const { AsyncLocalStorage } = require('async_hooks');
 const { loadBaileys } = require('./baileys');
@@ -112,6 +113,15 @@ const patchNewsletterMediaDirectPaths = <T extends Record<string, any>>(
   }
 
   return message;
+};
+
+const normalizeNewsletterUploadToken = (value: string) => value.replace(/\+/g, '-').replace(/\//g, '_');
+
+const getNewsletterRelayMediaType = (content: AnyMessageContent): 'image' | 'video' | null => {
+  if (!content || typeof content !== 'object') return null;
+  if (Object.prototype.hasOwnProperty.call(content as Record<string, unknown>, 'image')) return 'image';
+  if (Object.prototype.hasOwnProperty.call(content as Record<string, unknown>, 'video')) return 'video';
+  return null;
 };
 
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict' | 'paused';
@@ -3214,6 +3224,177 @@ class WhatsAppClient {
     return { allowed: true, reason: null };
   }
 
+  private async uploadNewsletterMediaWithHandle(
+    filePath: string,
+    mediaType: 'image' | 'video',
+    fileHashB64: string,
+    timeoutMs?: number
+  ): Promise<{ mediaUrl: string; directPath: string; handle: string }> {
+    const socket = this.socket as any;
+    if (!socket?.refreshMediaConn) {
+      throw new Error('Baileys socket does not expose refreshMediaConn');
+    }
+
+    const { DEFAULT_ORIGIN } = await loadBaileys();
+    let mediaConn = await socket.refreshMediaConn(false);
+    const hosts = Array.isArray(mediaConn?.hosts) ? mediaConn.hosts : [];
+    const token = normalizeNewsletterUploadToken(String(fileHashB64 || '').trim());
+    const normalizedType = mediaType === 'video' ? 'video' : 'image';
+    let lastError = 'No newsletter upload hosts are available';
+
+    for (let index = 0; index < hosts.length; index += 1) {
+      const hostname = String(hosts[index]?.hostname || '').trim();
+      if (!hostname) continue;
+
+      try {
+        const url = new URL(`https://${hostname}/newsletter/newsletter-${normalizedType}/${token}`);
+        url.searchParams.set('auth', String(mediaConn?.auth || ''));
+        url.searchParams.set('token', token);
+
+        const requestOptions = {
+          method: 'POST',
+          body: createReadStream(filePath),
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            Origin: DEFAULT_ORIGIN,
+            Referer: `${DEFAULT_ORIGIN}/`
+          },
+          duplex: 'half',
+          signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined
+        } as unknown as RequestInit;
+
+        const response = await fetch(url.toString(), requestOptions);
+
+        const bodyText = await response.text();
+        let payload: Record<string, unknown> | null = null;
+        try {
+          payload = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {};
+        } catch {
+          payload = null;
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            `Newsletter media upload failed (${response.status})${bodyText ? `: ${bodyText.slice(0, 200)}` : ''}`
+          );
+        }
+
+        const mediaUrl = String(payload?.url || '').trim();
+        const directPath = String(payload?.direct_path || payload?.directPath || '').trim();
+        const handle = String(
+          payload?.handle || payload?.media_handle || payload?.mediaHandle || payload?.object_id || ''
+        ).trim();
+
+        if (!mediaUrl || !directPath) {
+          throw new Error('Newsletter media upload response is missing url or direct_path');
+        }
+        if (!handle) {
+          throw new Error('Newsletter media upload response is missing handle');
+        }
+
+        return { mediaUrl, directPath, handle };
+      } catch (error) {
+        lastError = getErrorMessage(error);
+        logger.warn({ error: lastError, hostname, mediaType }, 'Newsletter media upload attempt failed');
+        if (index < hosts.length - 1) {
+          try {
+            mediaConn = await socket.refreshMediaConn(true);
+          } catch {
+            // ignore refresh failures and continue to the next host
+          }
+        }
+      }
+    }
+
+    throw new Error(lastError || 'Newsletter media upload failed');
+  }
+
+  private async sendNewsletterMediaMessage(
+    jid: string,
+    content: AnyMessageContent,
+    options: MiscMessageGenerationOptions = {}
+  ) {
+    const socket = this.socket as any;
+    if (!socket?.sendNode) {
+      throw new Error('Baileys socket does not expose sendNode');
+    }
+
+    const mediaType = getNewsletterRelayMediaType(content);
+    if (!mediaType) {
+      throw new Error('Newsletter relay only supports image or video content');
+    }
+
+    const {
+      DEFAULT_ORIGIN,
+      encodeNewsletterMessage,
+      generateMessageIDV2,
+      prepareWAMessageMedia
+    } = await loadBaileys();
+
+    let mediaHandle = '';
+    const upload = async (
+      filePath: string,
+      uploadOptions: { fileEncSha256B64: string; mediaType: string; timeoutMs?: number }
+    ) => {
+      const result = await this.uploadNewsletterMediaWithHandle(
+        filePath,
+        mediaType,
+        uploadOptions.fileEncSha256B64,
+        uploadOptions.timeoutMs
+      );
+      mediaHandle = result.handle;
+      return {
+        mediaUrl: result.mediaUrl,
+        directPath: result.directPath
+      };
+    };
+
+    const message = patchNewsletterMediaDirectPaths(
+      await prepareWAMessageMedia(content as Record<string, unknown>, {
+        ...options,
+        jid,
+        upload,
+        logger,
+        mediaCache: socket.mediaCache,
+        options: socket.options || { headers: { Origin: DEFAULT_ORIGIN } }
+      }),
+      { force: Boolean(newsletterMediaPatchContext.getStore()) }
+    ) as proto.IMessage;
+
+    const messageId = generateMessageIDV2(socket.user?.id);
+    const plaintextNode = {
+      tag: 'plaintext',
+      attrs: { mediatype: mediaType },
+      content: encodeNewsletterMessage(message)
+    };
+    const stanzaAttrs: Record<string, string> = {
+      to: jid,
+      id: messageId,
+      type: 'media'
+    };
+
+    if (mediaHandle) {
+      stanzaAttrs.media_id = mediaHandle;
+    }
+
+    await socket.sendNode({
+      tag: 'message',
+      attrs: stanzaAttrs,
+      content: [plaintextNode]
+    });
+
+    return {
+      key: {
+        remoteJid: jid,
+        fromMe: true,
+        id: messageId
+      },
+      message,
+      status: 1,
+      messageTimestamp: Math.floor(Date.now() / 1000)
+    };
+  }
+
   async sendMessage(jid: string, content: AnyMessageContent, options: MiscMessageGenerationOptions = {}) {
     if (!this.socket) throw new Error('WhatsApp not connected');
     if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
@@ -3234,9 +3415,25 @@ class WhatsAppClient {
         );
       }
       const sendOperation = async () => this.socket!.sendMessage(jid, content, effectiveOptions);
-      const msg = isNewsletter
-        ? await newsletterMediaPatchContext.run(true, sendOperation)
-        : await sendOperation();
+      let msg;
+      if (isNewsletter && getNewsletterRelayMediaType(content)) {
+        try {
+          msg = await newsletterMediaPatchContext.run(
+            true,
+            async () => await this.sendNewsletterMediaMessage(jid, content, effectiveOptions)
+          );
+        } catch (newsletterError) {
+          logger.warn(
+            { error: getErrorMessage(newsletterError), jid: normalizedJid },
+            'Dedicated newsletter media relay failed; falling back to Baileys sendMessage'
+          );
+          msg = await newsletterMediaPatchContext.run(true, sendOperation);
+        }
+      } else {
+        msg = isNewsletter
+          ? await newsletterMediaPatchContext.run(true, sendOperation)
+          : await sendOperation();
+      }
       if (isGroup) {
         logger.info(
           {

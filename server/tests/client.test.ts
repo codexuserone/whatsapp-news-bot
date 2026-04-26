@@ -1,4 +1,9 @@
-import { describe, it, expect, jest, beforeEach } from '@jest/globals';
+import { describe, it, expect, jest, beforeEach, afterAll } from '@jest/globals';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
+const newsletterTempFiles = new Set<string>();
 
 // Mock dependencies
 jest.mock('../src/whatsapp/baileys', () => ({
@@ -10,7 +15,39 @@ jest.mock('../src/whatsapp/baileys', () => ({
         DisconnectReason: { loggedOut: 401, restartRequired: 415 },
         fetchLatestWaWebVersion: jest.fn(async () => ({ version: [2, 24, 1] })),
         fetchLatestBaileysVersion: jest.fn(async () => ({ version: [2, 24, 1] })),
-        Browsers: { windows: jest.fn() }
+        Browsers: { windows: jest.fn() },
+        DEFAULT_ORIGIN: 'https://web.whatsapp.com',
+        generateMessageIDV2: jest.fn(() => 'newsletter-msg-id'),
+        encodeNewsletterMessage: jest.fn((message: unknown) => Buffer.from(JSON.stringify(message))),
+        prepareWAMessageMedia: jest.fn(async (message: Record<string, unknown>, options: Record<string, unknown>) => {
+            if (typeof options?.upload === 'function') {
+                const tmpFile = path.join(os.tmpdir(), `newsletter-test-${Date.now()}-${Math.random().toString(16).slice(2)}.bin`);
+                fs.writeFileSync(tmpFile, Buffer.from('newsletter-media'));
+                newsletterTempFiles.add(tmpFile);
+                await options.upload(tmpFile, {
+                    fileEncSha256B64: 'ZmFrZWhhc2g=',
+                    mediaType: Object.prototype.hasOwnProperty.call(message, 'video') ? 'video' : 'image'
+                });
+            }
+
+            if (Object.prototype.hasOwnProperty.call(message, 'video')) {
+                return {
+                    videoMessage: {
+                        url: 'https://mmg.whatsapp.net/newsletter-video',
+                        directPath: '/newsletter/video',
+                        caption: String((message as { caption?: unknown }).caption || '')
+                    }
+                };
+            }
+
+            return {
+                imageMessage: {
+                    url: 'https://mmg.whatsapp.net/newsletter-image',
+                    directPath: '/newsletter/image',
+                    caption: String((message as { caption?: unknown }).caption || '')
+                }
+            };
+        })
     }))
 }));
 
@@ -33,6 +70,19 @@ describe('WhatsAppClient', () => {
     beforeEach(() => {
         jest.clearAllMocks();
         client = WhatsAppClient();
+    });
+
+    afterAll(() => {
+        for (const tmpFile of newsletterTempFiles) {
+            try {
+                if (fs.existsSync(tmpFile)) {
+                    fs.unlinkSync(tmpFile);
+                }
+            } catch {
+                // ignore temp cleanup failures in tests
+            }
+        }
+        newsletterTempFiles.clear();
     });
 
     it('should instantiate with default values', () => {
@@ -115,6 +165,74 @@ describe('WhatsAppClient', () => {
         expect(patched.imageMessage.directPath).toBe('/m1/v/t24/example-image');
         expect(patched.imageMessage.thumbnailDirectPath).toBe('/m1/v/t24/example-thumb');
         expect(patched.imageMessage.url).toBe('https://mmg.whatsapp.net/m1/v/t24/example-image');
+    });
+
+    it('should send newsletter image media with media_id and plaintext mediatype attrs', async () => {
+        const originalFetch = global.fetch;
+        const sendNode: any = jest.fn(async () => undefined);
+        const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'fallback-newsletter-msg-id' } }));
+        const refreshMediaConn: any = jest.fn(async () => ({
+            hosts: [{ hostname: 'upload.whatsapp.test' }],
+            auth: 'auth-token'
+        }));
+
+        global.fetch = jest.fn(async (_input: any, init?: any) => {
+            const body = init?.body;
+            if (body && typeof body.on === 'function') {
+                await new Promise<void>((resolve, reject) => {
+                    body.on('error', reject);
+                    body.on('data', () => undefined);
+                    body.on('end', resolve);
+                });
+            }
+
+            return {
+                ok: true,
+                status: 200,
+                text: async () => JSON.stringify({
+                    url: 'https://mmg.whatsapp.net/newsletter-image',
+                    direct_path: '/newsletter/image',
+                    handle: 'newsletter-media-handle-123'
+                })
+            };
+        }) as any;
+
+        client.socket = {
+            sendNode,
+            sendMessage,
+            refreshMediaConn,
+            user: { id: '16465527019:54@s.whatsapp.net' }
+        };
+
+        const result = await client.sendMessage('120363401649232180@newsletter', {
+            image: Buffer.from('fake-image'),
+            caption: 'newsletter caption',
+            mimetype: 'image/jpeg'
+        });
+
+        expect(refreshMediaConn).toHaveBeenCalled();
+        expect(sendMessage).not.toHaveBeenCalled();
+        expect(sendNode).toHaveBeenCalledWith(
+            expect.objectContaining({
+                tag: 'message',
+                attrs: expect.objectContaining({
+                    to: '120363401649232180@newsletter',
+                    id: 'newsletter-msg-id',
+                    type: 'media',
+                    media_id: 'newsletter-media-handle-123'
+                }),
+                content: [
+                    expect.objectContaining({
+                        tag: 'plaintext',
+                        attrs: { mediatype: 'image' },
+                        content: expect.any(Buffer)
+                    })
+                ]
+            })
+        );
+        expect(result?.key?.id).toBe('newsletter-msg-id');
+
+        global.fetch = originalFetch;
     });
 
     it('should have a clean initial state', () => {

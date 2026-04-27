@@ -18,7 +18,7 @@ const { persistReceiptUpdates } = require('../services/receiptService');
 const SEND_EPHEMERAL_EXPIRATION =
   String(process.env.WHATSAPP_SEND_EPHEMERAL_EXPIRATION ?? 'true').trim().toLowerCase() !== 'false';
 const INCLUDE_GROUP_METADATA_IN_STATUS_AUDIENCE =
-  String(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS ?? 'true').trim().toLowerCase() !== 'false';
+  String(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS || '').trim().toLowerCase() === 'true';
 const ALLOW_UNMAPPED_LID_STATUS_AUDIENCE =
   String(process.env.WHATSAPP_STATUS_ALLOW_UNMAPPED_LID_AUDIENCE || '').trim().toLowerCase() === 'true';
 const STATUS_LID_MAPPING_LIMIT = Math.max(

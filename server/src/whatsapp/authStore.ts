@@ -327,6 +327,17 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     return rows[0] || null;
   };
 
+  const getAuthLeaseRowViaPg = async (): Promise<AuthStateRow | null> => {
+    const rows = await runPgQuery<AuthStateRow>(
+      `select lease_owner, lease_expires_at
+         from auth_state
+        where session_id = $1
+        limit 1`,
+      [sessionId]
+    );
+    return rows[0] || null;
+  };
+
   const upsertAuthStateViaPg = async (payload: {
     creds?: unknown;
     keys?: unknown;
@@ -403,7 +414,7 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
   };
 
   const getCurrentLeaseRowViaPg = async (): Promise<{ ownerId: string | null; expiresAt: string | null }> => {
-    const row = await getAuthStateRowViaPg();
+    const row = await getAuthLeaseRowViaPg();
     return {
       ownerId: row?.lease_owner ? String(row.lease_owner) : null,
       expiresAt: normalizeLeaseTimestamp(row?.lease_expires_at)

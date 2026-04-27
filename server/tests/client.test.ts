@@ -303,10 +303,11 @@ describe('WhatsAppClient', () => {
         expect(audience.sample).toContain('972501234567@s.whatsapp.net');
         expect(audience.sample).not.toContain('972506666666@s.whatsapp.net');
         expect(audience.selfJid).toBe('972506666666@s.whatsapp.net');
-        expect(audience.sample).toContain('972509999999@s.whatsapp.net');
+        expect(audience.sample).not.toContain('972509999999@s.whatsapp.net');
+        expect(audience.warnings.some((warning: string) => warning.includes('Group participants are not used'))).toBe(true);
     });
 
-    it('should use phone aliases from group participants before falling back to LID mappings', async () => {
+    it('should ignore group participants for status audience unless explicitly enabled', async () => {
         client.groupMetadataCache.set('120363000000000000@g.us', {
             participants: [
                 { id: '103140015788103@lid', pn: '972501234567@s.whatsapp.net' },
@@ -319,13 +320,12 @@ describe('WhatsAppClient', () => {
 
         const audience = await client.getStatusAudience({ sampleSize: 20 });
 
-        expect(audience.sample).toContain('972501234567@s.whatsapp.net');
-        expect(audience.sample).toContain('16465550100@s.whatsapp.net');
-        expect(audience.sample).toContain('103140015788103@lid');
-        expect(audience.sources.groupMetadata).toBe(4);
+        expect(audience.sample).toEqual([]);
+        expect(audience.sources.groupMetadata).toBe(0);
+        expect(audience.warnings.some((warning: string) => warning.includes('Group participants are not used'))).toBe(true);
     });
 
-    it('should map implicit status audience LIDs to phone JIDs when Baileys has mappings', async () => {
+    it('should not use implicit group LIDs for status audience by default', async () => {
         const getPNForLID: any = jest.fn(async (lid: string) => (
             lid === '103140015788103@lid' ? '972501234567@s.whatsapp.net' : null
         ));
@@ -344,12 +344,10 @@ describe('WhatsAppClient', () => {
 
         const audience = await client.getStatusAudience({ sampleSize: 20 });
 
-        expect(getPNForLID).toHaveBeenCalledWith('103140015788103@lid');
-        expect(audience.sample).toContain('972501234567@s.whatsapp.net');
-        expect(audience.sample).not.toContain('103140015788103@lid');
-        expect(audience.sample).toContain('103140015788104@lid');
-        expect(audience.sources.lidMappings).toBe(1);
-        expect(audience.warnings.some((warning: string) => warning.includes('without phone-number mappings'))).toBe(true);
+        expect(getPNForLID).not.toHaveBeenCalled();
+        expect(audience.sample).toEqual([]);
+        expect(audience.sources.lidMappings).toBe(0);
+        expect(audience.warnings.some((warning: string) => warning.includes('Group participants are not used'))).toBe(true);
     });
 
     it('should reject implicit group-only LID status audience without phone mappings', async () => {
@@ -367,7 +365,7 @@ describe('WhatsAppClient', () => {
 
         await expect(client.sendStatusBroadcast({ text: 'hello' }))
             .rejects
-            .toThrow('Status audience only contains group-participant LID recipients');
+            .toThrow('No status recipients resolved');
         expect(sendMessage).not.toHaveBeenCalled();
     });
 

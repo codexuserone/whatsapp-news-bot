@@ -57,6 +57,8 @@ const MAX_COLD_START_PARTICIPANTS = 10;
 const STATUS_RECIPIENTS_UPSERT_CHUNK_SIZE = 200;
 const USE_RECENT_DIRECT_RECIPIENTS =
   String(process.env.WHATSAPP_STATUS_USE_RECENT_DIRECT_RECIPIENTS || '').trim().toLowerCase() === 'true';
+const INCLUDE_GROUP_METADATA_STATUS_AUDIENCE =
+  String(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS || '').trim().toLowerCase() === 'true';
 
 let refreshJob: { stop?: () => void } | null = null;
 
@@ -161,6 +163,13 @@ const shouldTrustStoredSnapshot = (snapshot: RefreshResult) => {
   if (snapshot.participantCount <= 0) return false;
   if (getTrustedAudienceSignalCount(snapshot.sources) <= 0) return false;
   if (snapshot.participantCount <= 1 && getExplicitAudienceSignalCount(snapshot.sources) <= 0) return false;
+  if (
+    !INCLUDE_GROUP_METADATA_STATUS_AUDIENCE &&
+    Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0))) > 0 &&
+    getExplicitAudienceSignalCount(snapshot.sources) <= 0
+  ) {
+    return false;
+  }
   if (isGroupMetadataOnlySnapshot(snapshot)) return false;
   if (isGroupMetadataDominatedSnapshot(snapshot) && isLidHeavySnapshot(snapshot)) return false;
   if (isLidHeavySnapshot(snapshot) && getTrustedAudienceSignalCount(snapshot.sources) === 0) return false;

@@ -5,7 +5,7 @@ const path = require('path');
 const { timingSafeEqual } = require('crypto');
 const env = require('./config/env');
 const logger = require('./utils/logger');
-const { testConnection } = require('./db/supabase');
+const { getSupabaseHealthState, testConnection } = require('./db/supabase');
 const createWhatsAppClient = require('./whatsapp/client');
 const { keepAlive, stopKeepAlive } = require('./services/keepAlive');
 const registerRoutes = require('./routes');
@@ -413,8 +413,10 @@ const start = async () => {
   // Test Supabase connection
   const connected = await testConnection();
   if (!connected) {
-    logger.warn('Failed to connect to Supabase database - some features may not work');
-    logger.warn('Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables');
+    logger.warn(
+      { supabase: getSupabaseHealthState?.() },
+      'Failed to connect to Supabase database; database-backed features are temporarily unavailable'
+    );
   }
 
   const disableWhatsApp = process.env.DISABLE_WHATSAPP === 'true';

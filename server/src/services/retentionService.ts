@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { getSupabaseClient } = require('../db/supabase');
+const { getSupabaseClient, isSupabaseCircuitOpen } = require('../db/supabase');
 const settingsService = require('./settingsService');
 const logger = require('../utils/logger');
 const { getErrorMessage } = require('../utils/errorUtils');
@@ -7,6 +7,10 @@ const { getErrorMessage } = require('../utils/errorUtils');
 let watchdogInFlight = false;
 
 const resetStuckProcessingLogs = async (): Promise<number> => {
+  if (isSupabaseCircuitOpen?.()) {
+    return 0;
+  }
+
   const supabase = getSupabaseClient();
   if (!supabase) {
     return 0;
@@ -89,6 +93,11 @@ const resetStuckProcessingLogs = async (): Promise<number> => {
 };
 
 const cleanup = async (): Promise<void> => {
+  if (isSupabaseCircuitOpen?.()) {
+    logger.warn('Supabase temporarily unavailable, skipping retention cleanup');
+    return;
+  }
+
   const supabase = getSupabaseClient();
   if (!supabase) {
     logger.warn('Supabase not available, skipping retention cleanup');

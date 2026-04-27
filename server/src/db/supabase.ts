@@ -9,6 +9,14 @@ const SUPABASE_FETCH_TIMEOUT_MS = Math.max(
   1000,
   Math.floor(Number(process.env.SUPABASE_FETCH_TIMEOUT_MS || 8000))
 );
+const SUPABASE_CIRCUIT_BREAKER_MS = Math.max(
+  5000,
+  Math.floor(Number(process.env.SUPABASE_CIRCUIT_BREAKER_MS || 45000))
+);
+
+let circuitOpenUntil = 0;
+let lastFailureAt = 0;
+let lastFailureMessage: string | null = null;
 
 const resolveSupabaseUrl = () => process.env.SUPABASE_URL || '';
 
@@ -28,7 +36,40 @@ const resolveSupabaseKey = () => {
   return '';
 };
 
+const now = () => Date.now();
+
+const getCircuitRetryAfterMs = () => Math.max(circuitOpenUntil - now(), 0);
+
+const isSupabaseCircuitOpen = () => getCircuitRetryAfterMs() > 0;
+
+const getSupabaseHealthState = () => ({
+  circuitOpen: isSupabaseCircuitOpen(),
+  retryAfterMs: getCircuitRetryAfterMs(),
+  lastFailureAt: lastFailureAt ? new Date(lastFailureAt).toISOString() : null,
+  lastFailureMessage
+});
+
+const markSupabaseSuccess = () => {
+  circuitOpenUntil = 0;
+  lastFailureAt = 0;
+  lastFailureMessage = null;
+};
+
+const markSupabaseFailure = (error: unknown) => {
+  lastFailureAt = now();
+  lastFailureMessage = getErrorMessage(error, 'Supabase request failed');
+  circuitOpenUntil = Math.max(circuitOpenUntil, lastFailureAt + SUPABASE_CIRCUIT_BREAKER_MS);
+};
+
 const fetchWithTimeout = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  if (isSupabaseCircuitOpen()) {
+    throw new Error(
+      `Supabase temporarily unavailable: ${lastFailureMessage || 'recent connection failure'}; retry in ${Math.ceil(
+        getCircuitRetryAfterMs() / 1000
+      )}s`
+    );
+  }
+
   const controller = new AbortController();
   const upstreamSignal = init?.signal;
   let timeoutTriggered = false;
@@ -45,11 +86,20 @@ const fetchWithTimeout = async (input: RequestInfo | URL, init?: RequestInit): P
   }
 
   try {
-    return await fetch(input, { ...init, signal: controller.signal });
+    const response = await fetch(input, { ...init, signal: controller.signal });
+    if (response.ok) {
+      markSupabaseSuccess();
+    } else if (response.status >= 500) {
+      markSupabaseFailure(new Error(`Supabase HTTP ${response.status}`));
+    }
+    return response;
   } catch (error) {
     if (timeoutTriggered) {
-      throw new Error(`Supabase request timed out after ${SUPABASE_FETCH_TIMEOUT_MS}ms`);
+      const timeoutError = new Error(`Supabase request timed out after ${SUPABASE_FETCH_TIMEOUT_MS}ms`);
+      markSupabaseFailure(timeoutError);
+      throw timeoutError;
     }
+    markSupabaseFailure(error);
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -92,6 +142,14 @@ function handleSupabaseError(error: { message?: string } | null, context = ''): 
 
 async function testConnection(): Promise<boolean> {
   try {
+    if (isSupabaseCircuitOpen()) {
+      console.error(
+        'Supabase connection skipped:',
+        `circuit open for ${Math.ceil(getCircuitRetryAfterMs() / 1000)}s`
+      );
+      return false;
+    }
+
     const client = getSupabaseClient();
     if (!client) {
       console.error('Supabase client not available - missing credentials');
@@ -111,5 +169,7 @@ async function testConnection(): Promise<boolean> {
 module.exports = {
   getSupabaseClient,
   handleSupabaseError,
+  getSupabaseHealthState,
+  isSupabaseCircuitOpen,
   testConnection
 };

@@ -2,7 +2,7 @@ import type { Express, Request, Response } from 'express';
 const express = require('express');
 const swaggerUi = require('swagger-ui-express');
 const openapi = require('../openapi');
-const { testConnection } = require('../db/supabase');
+const { getSupabaseHealthState, testConnection } = require('../db/supabase');
 const { apiRateLimit, feedRateLimit } = require('../middleware/rateLimiter');
 const whatsappRoutes = require('./whatsapp');
 const feedsRoutes = require('./feeds');
@@ -30,7 +30,12 @@ const registerRoutes = (app: Express) => {
     const dbOk = await testConnection();
     const whatsappStatus = req.app.locals.whatsapp?.getStatus?.();
     const whatsappOk = whatsappStatus?.status === 'connected';
-    res.json({ ok: dbOk && whatsappOk, db: dbOk, whatsapp: whatsappStatus?.status || 'unknown' });
+    res.json({
+      ok: dbOk && whatsappOk,
+      db: dbOk,
+      dbState: getSupabaseHealthState?.(),
+      whatsapp: whatsappStatus?.status || 'unknown'
+    });
   });
 
   router.get('/api/openapi.json', (_req: Request, res: Response) => res.json(openapi));

@@ -497,8 +497,7 @@ const refreshStatusRecipients = async (
         ...recentDirectRecipients
       ]
         .map((value) => normalizeRecipientJid(value))
-        .filter((value) => !selfJid || value !== selfJid)
-        .filter(Boolean)
+        .filter((value) => Boolean(value) && value !== selfJid)
     )
   ).sort();
 
@@ -508,9 +507,15 @@ const refreshStatusRecipients = async (
       ? audienceRaw.sources as Record<string, unknown>
       : {};
   const warnings = Array.isArray(audienceRaw?.warnings) ? audienceRaw!.warnings.map((value) => String(value || '').trim()).filter(Boolean) : [];
+  const activeIndividualTargetAudienceCount = activeIndividualTargetRecipients
+    .map((recipient) => normalizeRecipientJid(recipient))
+    .filter((recipient) => Boolean(recipient) && recipient !== selfJid).length;
+  const recentDirectAudienceCount = recentDirectRecipients
+    .map((recipient) => normalizeRecipientJid(recipient))
+    .filter((recipient) => Boolean(recipient) && recipient !== selfJid).length;
   const sources = mergeSources(baseSources as Partial<StatusAudienceSources>, {
-    activeIndividualTargets: activeIndividualTargetRecipients.filter((recipient) => !selfJid || recipient !== selfJid).length,
-    recentSuccessfulDirectRecipients: recentDirectRecipients.length
+    activeIndividualTargets: activeIndividualTargetAudienceCount,
+    recentSuccessfulDirectRecipients: recentDirectAudienceCount
   });
   if (activeIndividualTargetRecipients.length && !warnings.some((warning) => warning.includes('active private targets'))) {
     warnings.push('Status audience includes active private targets saved in this app.');
@@ -739,12 +744,20 @@ const stopStatusAudienceRefresh = () => {
   refreshJob = null;
 };
 
+const clearInMemoryStatusAudienceCache = () => {
+  lastGoodSnapshot = null;
+  lastGoodSnapshotAtMs = 0;
+};
+
 module.exports = {
   ensureFreshStatusRecipients,
   getStatusRecipientSnapshot,
   refreshStatusRecipients,
   scheduleStatusAudienceRefresh,
-  stopStatusAudienceRefresh
+  stopStatusAudienceRefresh,
+  __testUtils: {
+    clearInMemoryStatusAudienceCache
+  }
 };
 
 export {};

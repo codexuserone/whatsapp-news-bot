@@ -1,6 +1,6 @@
 import type { ScheduledTask } from 'node-cron';
 const cron = require('node-cron');
-const { getSupabaseClient } = require('../db/supabase');
+const { getSupabaseClient, getSupabaseHealthState, isSupabaseCircuitOpen } = require('../db/supabase');
 const { fetchAndProcessFeed } = require('./feedProcessor');
 const { sendQueuedForSchedule, reconcileUpdatedFeedItems, sendPendingForAllSchedules } = require('./queueService');
 const { computeNextRunAt } = require('../utils/cron');
@@ -48,8 +48,29 @@ const scheduleInFlight = new Map<string, boolean>();
 const SUCCESSFUL_SEND_STATUSES = ['sent', 'delivered', 'read', 'played'];
 const DEFAULT_CORRECTION_WINDOW_MINUTES = 15;
 const MAX_CORRECTION_WINDOW_MINUTES = 15;
+let lastDatabaseOutageLogAt = 0;
 
 const schedulersDisabled = () => process.env.DISABLE_SCHEDULERS === 'true';
+
+const shouldSkipForDatabaseOutage = (context: string) => {
+  if (!isSupabaseCircuitOpen?.()) {
+    return false;
+  }
+
+  const current = Date.now();
+  if (current - lastDatabaseOutageLogAt > 60_000) {
+    lastDatabaseOutageLogAt = current;
+    logger.warn(
+      {
+        context,
+        supabase: getSupabaseHealthState?.()
+      },
+      'Skipping background automation while Supabase is temporarily unavailable'
+    );
+  }
+
+  return true;
+};
 
 const canRunSchedulers = (whatsappClient?: WhatsAppClient) => {
   const status = whatsappClient?.getStatus?.();
@@ -193,6 +214,8 @@ const runScheduleOnce = async (
   whatsappClient?: WhatsAppClient,
   options?: RunScheduleOptions
 ) => {
+  if (shouldSkipForDatabaseOutage('schedule run')) return;
+
   if (await isAppPaused()) {
     logger.info({ scheduleId }, 'Skipping schedule run - app is paused');
     return;
@@ -342,6 +365,7 @@ const getOverdueBatchDispatchGraceMs = () => {
 
 const queueBatchSchedulesForFeed = async (feedId: string, whatsappClient?: WhatsAppClient) => {
   if (schedulersDisabled()) return;
+  if (shouldSkipForDatabaseOutage('batch schedule queue')) return;
   if (await isAppPaused()) return;
 
   const supabase = getSupabaseClient();
@@ -372,6 +396,9 @@ const queueBatchSchedulesForFeed = async (feedId: string, whatsappClient?: Whats
 
 const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsAppClient) => {
   if (schedulersDisabled()) {
+    return;
+  }
+  if (shouldSkipForDatabaseOutage('immediate schedule trigger')) {
     return;
   }
   if (await isAppPaused()) {
@@ -416,6 +443,10 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
 };
 
 const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
+  if (shouldSkipForDatabaseOutage('feed polling setup')) {
+    return;
+  }
+
   if (await isAppPaused()) {
     logger.info('Skipping feed polling setup - app is paused');
     return;
@@ -546,6 +577,7 @@ const processFeedResultForSchedules = async (
 
 const runRecentFeedCorrectionPass = async (whatsappClient?: WhatsAppClient) => {
   try {
+    if (shouldSkipForDatabaseOutage('recent feed correction')) return;
     if (await isAppPaused()) return;
     if (!canRunSchedulers(whatsappClient)) return;
     const supabase = getSupabaseClient();
@@ -597,6 +629,10 @@ const startRecentFeedCorrectionWatcher = (whatsappClient?: WhatsAppClient) => {
 };
 
 const scheduleSenders = async (whatsappClient?: WhatsAppClient) => {
+  if (shouldSkipForDatabaseOutage('schedule sender setup')) {
+    return;
+  }
+
   if (await isAppPaused()) {
     logger.info('Skipping schedule sender setup - app is paused');
     return;
@@ -740,6 +776,7 @@ const startPendingSendCatchup = (whatsappClient?: WhatsAppClient) => {
   const intervalMs = Math.max(Number(process.env.PENDING_SEND_CATCHUP_MS || 60000), 15000);
   const runCatchupPass = async () => {
     try {
+      if (shouldSkipForDatabaseOutage('pending send catch-up')) return;
       if (await isAppPaused()) return;
       if (!canRunSchedulers(whatsappClient)) return;
       await sendPendingForAllSchedules(whatsappClient);
@@ -756,6 +793,7 @@ const startPendingSendCatchup = (whatsappClient?: WhatsAppClient) => {
 };
 
 const runImmediateScheduleCatchupPass = async (whatsappClient?: WhatsAppClient) => {
+  if (shouldSkipForDatabaseOutage('immediate schedule catch-up')) return { schedules: 0, skipped: true };
   if (await isAppPaused()) return { schedules: 0 };
   if (!canRunSchedulers(whatsappClient)) return { schedules: 0, skipped: true };
 
@@ -831,6 +869,10 @@ const initSchedulers = async (whatsappClient?: WhatsAppClient) => {
   }
 
   if (!canRunSchedulers(whatsappClient)) {
+    return;
+  }
+
+  if (shouldSkipForDatabaseOutage('scheduler initialization')) {
     return;
   }
 

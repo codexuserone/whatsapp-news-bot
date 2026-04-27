@@ -179,6 +179,7 @@ jest.mock('node-cron', () => ({
 }));
 
 const {
+    __testUtils,
     ensureFreshStatusRecipients,
     refreshStatusRecipients
 } = require('../src/services/statusAudienceService');
@@ -186,6 +187,7 @@ const {
 describe('statusAudienceService', () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        __testUtils.clearInMemoryStatusAudienceCache();
     });
 
     it('does not preserve a group-metadata-only stored snapshot when a connected client resolves only self', async () => {

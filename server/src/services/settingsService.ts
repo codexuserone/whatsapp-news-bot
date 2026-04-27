@@ -1,6 +1,7 @@
 const { getSupabaseClient } = require('../db/supabase');
 const env = require('../config/env');
 const { serviceUnavailable } = require('../core/errors');
+const { getErrorMessage } = require('../utils/errorUtils');
 
 const WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES = 15;
 
@@ -33,6 +34,8 @@ const DEFAULTS = {
   // ISO timestamp for operator visibility. Null when not paused.
   whatsapp_paused_at: null
 };
+
+let cachedSettings: Record<string, unknown> | null = null;
 
 const clampNumber = (value: unknown, fallback: number, min: number, max: number) => {
   const parsed = Number(value);
@@ -240,7 +243,7 @@ const ensureDefaults = async () => {
       })
     );
   } catch (error) {
-    console.error('Error ensuring default settings:', error);
+    console.error('Error ensuring default settings:', getErrorMessage(error));
   }
 };
 
@@ -284,10 +287,11 @@ const getSettings = async () => {
 
     Object.assign(data, normalizeSettingsPatch({ ...data }));
 
+    cachedSettings = { ...data };
     return data;
   } catch (error) {
-    console.error('Error getting settings:', error);
-    return DEFAULTS;
+    console.error('Error getting settings:', getErrorMessage(error));
+    return cachedSettings ? { ...DEFAULTS, ...cachedSettings } : DEFAULTS;
   }
 };
 
@@ -314,7 +318,7 @@ const updateSettings = async (updates: Record<string, unknown>) => {
     );
     return getSettings();
   } catch (error) {
-    console.error('Error updating settings:', error);
+    console.error('Error updating settings:', getErrorMessage(error));
     throw error;
   }
 };

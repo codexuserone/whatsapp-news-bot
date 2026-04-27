@@ -9,6 +9,16 @@ import { Badge } from '@/components/ui/badge';
 import { AlertTriangle, PauseCircle, QrCode } from 'lucide-react';
 
 type SettingsLike = Record<string, unknown>;
+type ReadyStatus = {
+  ok?: boolean;
+  db?: boolean;
+  whatsapp?: string | null;
+  dbState?: {
+    circuitOpen?: boolean;
+    retryAfterMs?: number | null;
+    lastFailureMessage?: string | null;
+  } | null;
+};
 
 const formatPausedAt = (value: unknown) => {
   const iso = String(value || '').trim();
@@ -29,6 +39,12 @@ const formatPausedAt = (value: unknown) => {
 };
 
 const GlobalStatusBanner = () => {
+  const { data: ready } = useQuery<ReadyStatus>({
+    queryKey: ['ready-status'],
+    queryFn: () => api.get('/ready'),
+    refetchInterval: 15000
+  });
+
   const { data: whatsapp } = useQuery<WhatsAppStatus>({
     queryKey: ['whatsapp-status'],
     queryFn: () => api.get('/api/whatsapp/status'),
@@ -46,6 +62,19 @@ const GlobalStatusBanner = () => {
   const pausedAtLabel = formatPausedAt(settings?.whatsapp_paused_at);
 
   const banner = (() => {
+    if (ready?.db === false || ready?.dbState?.circuitOpen) {
+      const raw = String(ready?.dbState?.lastFailureMessage || '').trim();
+      const suffix = raw ? ` ${raw}` : '';
+      return {
+        tone: 'destructive' as const,
+        icon: AlertTriangle,
+        title: 'Database temporarily unavailable',
+        body: `Saved feeds, schedules, queue data, and history cannot load right now.${suffix}`,
+        href: '/queue',
+        hrefLabel: 'Open Queue'
+      };
+    }
+
     if (appPaused) {
       return {
         tone: 'destructive' as const,
@@ -132,4 +161,3 @@ const GlobalStatusBanner = () => {
 };
 
 export default GlobalStatusBanner;
-

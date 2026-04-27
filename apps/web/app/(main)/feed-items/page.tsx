@@ -10,7 +10,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/com
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ClipboardList, ExternalLink, Loader2, PauseCircle, PlayCircle, PenSquare } from 'lucide-react';
+import { AlertTriangle, ClipboardList, ExternalLink, Loader2, PauseCircle, PlayCircle, PenSquare } from 'lucide-react';
 
 const buildComposeHref = (item: FeedItem) => {
   const params = new URLSearchParams();
@@ -34,11 +34,12 @@ const joinStatusSummary = (parts: string[]) => parts.filter(Boolean).join(', ');
 const FeedItemsPage = () => {
   const queryClient = useQueryClient();
   const [scope, setScope] = React.useState<'automation' | 'all'>('automation');
-  const { data: items = [], isLoading } = useQuery<FeedItem[]>({
+  const { data: items = [], isLoading, error } = useQuery<FeedItem[]>({
     queryKey: ['feed-items', scope],
     queryFn: () => api.get(`/api/feed-items?scope=${scope}`),
     refetchInterval: 15000
   });
+  const feedItemsErrorMessage = error instanceof Error ? error.message : null;
 
   const pausePost = useMutation({
     mutationFn: (id: string) => api.post(`/api/feed-items/${id}/pause`),
@@ -250,7 +251,17 @@ const FeedItemsPage = () => {
           </div>
         </CardHeader>
         <CardContent>
-          {isLoading ? (
+          {feedItemsErrorMessage ? (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  <div className="font-medium">Feed history is temporarily unavailable</div>
+                  <div className="mt-1 text-xs text-amber-100/80">{feedItemsErrorMessage}</div>
+                </div>
+              </div>
+            </div>
+          ) : isLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>

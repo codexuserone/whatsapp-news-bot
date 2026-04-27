@@ -43,6 +43,9 @@ const scheduleJobs = new Map<string, ScheduledTask>();
 let pendingSendCatchupTimer: NodeJS.Timeout | null = null;
 let recentFeedCorrectionTimer: NodeJS.Timeout | null = null;
 let immediateScheduleCatchupTimer: NodeJS.Timeout | null = null;
+let pendingSendCatchupInFlight = false;
+let recentFeedCorrectionInFlight = false;
+let immediateScheduleCatchupInFlight = false;
 const feedInFlight = new Map<string, boolean>();
 const scheduleInFlight = new Map<string, boolean>();
 const SUCCESSFUL_SEND_STATUSES = ['sent', 'delivered', 'read', 'played'];
@@ -205,6 +208,9 @@ const clearAll = () => {
     clearInterval(immediateScheduleCatchupTimer);
     immediateScheduleCatchupTimer = null;
   }
+  pendingSendCatchupInFlight = false;
+  recentFeedCorrectionInFlight = false;
+  immediateScheduleCatchupInFlight = false;
   feedInFlight.clear();
   scheduleInFlight.clear();
 };
@@ -576,6 +582,12 @@ const processFeedResultForSchedules = async (
 };
 
 const runRecentFeedCorrectionPass = async (whatsappClient?: WhatsAppClient) => {
+  if (recentFeedCorrectionInFlight) {
+    logger.info('Skipping recent-feed correction watcher pass - previous pass still running');
+    return;
+  }
+
+  recentFeedCorrectionInFlight = true;
   try {
     if (shouldSkipForDatabaseOutage('recent feed correction')) return;
     if (await isAppPaused()) return;
@@ -612,6 +624,8 @@ const runRecentFeedCorrectionPass = async (whatsappClient?: WhatsAppClient) => {
     }
   } catch (error) {
     logger.error({ error }, 'Failed recent-feed correction watcher');
+  } finally {
+    recentFeedCorrectionInFlight = false;
   }
 };
 
@@ -775,6 +789,12 @@ const startPendingSendCatchup = (whatsappClient?: WhatsAppClient) => {
 
   const intervalMs = Math.max(Number(process.env.PENDING_SEND_CATCHUP_MS || 60000), 15000);
   const runCatchupPass = async () => {
+    if (pendingSendCatchupInFlight) {
+      logger.info('Skipping pending-send catch-up pass - previous pass still running');
+      return;
+    }
+
+    pendingSendCatchupInFlight = true;
     try {
       if (shouldSkipForDatabaseOutage('pending send catch-up')) return;
       if (await isAppPaused()) return;
@@ -782,6 +802,8 @@ const startPendingSendCatchup = (whatsappClient?: WhatsAppClient) => {
       await sendPendingForAllSchedules(whatsappClient);
     } catch (error) {
       logger.error({ error }, 'Failed pending-send catch-up pass');
+    } finally {
+      pendingSendCatchupInFlight = false;
     }
   };
 
@@ -793,50 +815,60 @@ const startPendingSendCatchup = (whatsappClient?: WhatsAppClient) => {
 };
 
 const runImmediateScheduleCatchupPass = async (whatsappClient?: WhatsAppClient) => {
-  if (shouldSkipForDatabaseOutage('immediate schedule catch-up')) return { schedules: 0, skipped: true };
-  if (await isAppPaused()) return { schedules: 0 };
-  if (!canRunSchedulers(whatsappClient)) return { schedules: 0, skipped: true };
-
-  const supabase = getSupabaseClient();
-  if (!supabase) return { schedules: 0 };
-
-  const status = whatsappClient?.getStatus?.();
-  const dispatchClient: WhatsAppClient | undefined = status?.status === 'connected' ? whatsappClient : undefined;
-  const maxQueueLookbackHours = normalizeImmediateCatchupLookbackHours(
-    process.env.IMMEDIATE_FEED_CATCHUP_LOOKBACK_HOURS
-  );
-
-  const { data: schedules, error } = await supabase
-    .from('schedules')
-    .select('id,feed_id,state,active,delivery_mode,cron_expression')
-    .not('feed_id', 'is', null);
-
-  if (error) throw error;
-
-  const immediateSchedules = (schedules || []).filter((schedule: ScheduleRow) => {
-    return isScheduleRunning(schedule) && getDeliveryMode(schedule) !== 'batched' && !schedule.cron_expression;
-  });
-
-  for (const schedule of immediateSchedules) {
-    await runScheduleOnce(schedule.id, dispatchClient, {
-      skipFeedRefresh: true,
-      maxQueueLookbackHours
-    });
+  if (immediateScheduleCatchupInFlight) {
+    logger.info('Skipping immediate feed catch-up pass - previous pass still running');
+    return { schedules: 0, skipped: true, reason: 'in_flight' };
   }
 
-  if (immediateSchedules.length) {
-    logger.info(
-      {
-        scheduleCount: immediateSchedules.length,
-        maxQueueLookbackHours,
-        dispatchMode: dispatchClient ? 'queue-and-send' : 'queue-only',
-        whatsappStatus: status?.status || 'unknown'
-      },
-      'Processed immediate feed catch-up schedules'
+  immediateScheduleCatchupInFlight = true;
+  try {
+    if (shouldSkipForDatabaseOutage('immediate schedule catch-up')) return { schedules: 0, skipped: true };
+    if (await isAppPaused()) return { schedules: 0 };
+    if (!canRunSchedulers(whatsappClient)) return { schedules: 0, skipped: true };
+
+    const supabase = getSupabaseClient();
+    if (!supabase) return { schedules: 0 };
+
+    const status = whatsappClient?.getStatus?.();
+    const dispatchClient: WhatsAppClient | undefined = status?.status === 'connected' ? whatsappClient : undefined;
+    const maxQueueLookbackHours = normalizeImmediateCatchupLookbackHours(
+      process.env.IMMEDIATE_FEED_CATCHUP_LOOKBACK_HOURS
     );
-  }
 
-  return { schedules: immediateSchedules.length };
+    const { data: schedules, error } = await supabase
+      .from('schedules')
+      .select('id,feed_id,state,active,delivery_mode,cron_expression')
+      .not('feed_id', 'is', null);
+
+    if (error) throw error;
+
+    const immediateSchedules = (schedules || []).filter((schedule: ScheduleRow) => {
+      return isScheduleRunning(schedule) && getDeliveryMode(schedule) !== 'batched' && !schedule.cron_expression;
+    });
+
+    for (const schedule of immediateSchedules) {
+      await runScheduleOnce(schedule.id, dispatchClient, {
+        skipFeedRefresh: true,
+        maxQueueLookbackHours
+      });
+    }
+
+    if (immediateSchedules.length) {
+      logger.info(
+        {
+          scheduleCount: immediateSchedules.length,
+          maxQueueLookbackHours,
+          dispatchMode: dispatchClient ? 'queue-and-send' : 'queue-only',
+          whatsappStatus: status?.status || 'unknown'
+        },
+        'Processed immediate feed catch-up schedules'
+      );
+    }
+
+    return { schedules: immediateSchedules.length };
+  } finally {
+    immediateScheduleCatchupInFlight = false;
+  }
 };
 
 const startImmediateScheduleCatchup = (whatsappClient?: WhatsAppClient) => {

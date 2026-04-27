@@ -15,7 +15,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
-import { Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { AlertTriangle, Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 
 const schema = z.object({
   name: z.string().min(1),
@@ -92,13 +92,22 @@ const buildCleaningPayload = (value: FeedFormValues['cleaning'] | undefined) => 
 
 const FeedsPage = () => {
   const queryClient = useQueryClient();
-  const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
-  const { data: schedules = [] } = useQuery<Schedule[]>({ queryKey: ['schedules'], queryFn: () => api.get('/api/schedules') });
+  const { data: feeds = [], error: feedsError } = useQuery<Feed[]>({
+    queryKey: ['feeds'],
+    queryFn: () => api.get('/api/feeds')
+  });
+  const { data: schedules = [], error: schedulesError } = useQuery<Schedule[]>({
+    queryKey: ['schedules'],
+    queryFn: () => api.get('/api/schedules')
+  });
   const [active, setActive] = useState<Feed | null>(null);
   const [testResult, setTestResult] = useState<FeedTestResult | null>(null);
   const [testLoading, setTestLoading] = useState(false);
 
   const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Unknown error');
+  const feedsErrorMessage = [feedsError, schedulesError]
+    .map((value) => getErrorMessage(value))
+    .find((value) => value && value !== 'Unknown error');
   const isRateLimitedError = (error: unknown) => {
     const status = (error as { status?: unknown })?.status;
     if (typeof status === 'number' && status === 429) return true;
@@ -570,6 +579,17 @@ const FeedsPage = () => {
             <CardDescription>{feeds.length} feed{feeds.length !== 1 ? 's' : ''} configured</CardDescription>
           </CardHeader>
           <CardContent>
+            {feedsErrorMessage ? (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div>
+                    <div className="font-medium">Feeds are temporarily unavailable</div>
+                    <div className="mt-1 text-xs text-amber-100/80">{feedsErrorMessage}</div>
+                  </div>
+                </div>
+              </div>
+            ) : (
             <div className="space-y-3">
               {feeds.map((feed) => (
                 <div key={feed.id} className="rounded-lg border p-3">
@@ -619,6 +639,7 @@ const FeedsPage = () => {
                 <p className="text-center text-muted-foreground py-8">No feeds yet. Add a feed URL to get started.</p>
               )}
             </div>
+            )}
           </CardContent>
         </Card>
       </div>

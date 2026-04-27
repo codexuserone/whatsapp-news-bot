@@ -8,7 +8,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '@/components/ui/table';
-import { Activity, Loader2 } from 'lucide-react';
+import { Activity, AlertTriangle, Loader2 } from 'lucide-react';
 
 const STATUS_COLORS: Record<string, 'success' | 'destructive' | 'warning' | 'secondary'> = {
   pending: 'warning',
@@ -44,11 +44,12 @@ const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | nu
 
 const LogsPage = () => {
   const [status, setStatus] = useState('sent');
-  const { data: logs = [], isLoading } = useQuery<LogEntry[]>({
+  const { data: logs = [], isLoading, error } = useQuery<LogEntry[]>({
     queryKey: ['logs', status],
     queryFn: () => api.get(status === 'all' ? '/api/logs' : `/api/logs?status=${status}`),
     refetchInterval: 10000
   });
+  const logsErrorMessage = error instanceof Error ? error.message : null;
 
   const { data: outbox } = useQuery<WhatsAppOutbox>({
     queryKey: ['whatsapp-outbox'],
@@ -123,7 +124,17 @@ const LogsPage = () => {
           </div>
         </CardHeader>
         <CardContent>
-          {isLoading ? (
+          {logsErrorMessage ? (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  <div className="font-medium">History is temporarily unavailable</div>
+                  <div className="mt-1 text-xs text-amber-100/80">{logsErrorMessage}</div>
+                </div>
+              </div>
+            </div>
+          ) : isLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>

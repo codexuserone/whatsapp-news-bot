@@ -152,7 +152,7 @@ const QueueInner = () => {
       ? 'Showing only recent result history.'
       : 'Showing live queue rows and recent history together. Use a status filter for a narrower view.';
 
-  const { data: queueItems = [], isLoading } = useQuery<QueueItem[]>({
+  const { data: queueItems = [], isLoading, error: queueError } = useQuery<QueueItem[]>({
     queryKey: ['queue', statusFilter, includeManual],
     queryFn: () =>
       api.get(
@@ -162,6 +162,7 @@ const QueueInner = () => {
       ),
     refetchInterval: 10000
   });
+  const queueErrorMessage = queueError instanceof Error ? queueError.message : null;
 
   const { data: shabbosStatus } = useQuery<ShabbosStatus>({
     queryKey: ['shabbos-status'],
@@ -681,7 +682,17 @@ const QueueInner = () => {
           <p className="text-sm text-muted-foreground">{queueCardDescription}</p>
         </CardHeader>
         <CardContent>
-          {isLoading ? (
+          {queueErrorMessage ? (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  <div className="font-medium">Queue data is temporarily unavailable</div>
+                  <div className="mt-1 text-xs text-amber-100/80">{queueErrorMessage}</div>
+                </div>
+              </div>
+            </div>
+          ) : isLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>

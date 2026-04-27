@@ -185,15 +185,8 @@ const buildStatusDeliveryRecipients = (recipients: string[], selfJid: unknown) =
   );
 
   const normalizedSelf = normalizeStatusAudienceJid(selfJid);
-  if (!normalizedSelf) {
-    return normalizedRecipients;
-  }
-
-  if (normalizedRecipients.includes(normalizedSelf)) {
-    return normalizedRecipients;
-  }
-
-  return [normalizedSelf, ...normalizedRecipients];
+  if (!normalizedSelf) return normalizedRecipients;
+  return normalizedRecipients.filter((recipient) => recipient !== normalizedSelf);
 };
 
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict' | 'paused';

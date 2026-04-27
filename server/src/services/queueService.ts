@@ -91,7 +91,7 @@ type WhatsAppClient = {
 };
 
 const shouldBlockTextFallbackAfterMediaFailure = (targetType: Target['type'] | null | undefined) =>
-  targetType === 'status';
+  targetType === 'status' || targetType === 'channel';
 
 const DEFAULT_SEND_TIMEOUT_MS = 45000;
 const DEFAULT_POST_SEND_EDIT_WINDOW_MINUTES = 15;
@@ -1767,26 +1767,6 @@ const buildChannelMediaHoldError = (mediaType: string | null | undefined, errorM
   return `Channel ${kind} was rejected by WhatsApp (${reason}); the item was not posted.`;
 };
 
-const buildChannelMediaTextFallbackError = (mediaType: string | null | undefined, errorMessage: unknown) => {
-  const kind = String(mediaType || 'media').trim() || 'media';
-  const reason = String(errorMessage || 'WhatsApp rejected the channel media send').trim();
-  return `Channel ${kind} was rejected by WhatsApp (${reason}); sent the text/link version instead.`;
-};
-
-const withChannelTextFallbackMediaResult = (
-  fallbackResult: SendWithMediaResult,
-  media: { url?: string | null; kind?: string | null } | null | undefined,
-  errorMessage: string
-): SendWithMediaResult => ({
-  ...fallbackResult,
-  media: {
-    type: media?.kind || fallbackResult.media?.type || null,
-    url: media?.url || fallbackResult.media?.url || null,
-    sent: false,
-    error: errorMessage
-  }
-});
-
 const buildChannelMediaHoldUpdate = (
   sendResult: SendWithMediaResult | null | undefined,
   fallbackMedia: { url?: string | null; kind?: string | null } | null | undefined,
@@ -2210,71 +2190,6 @@ const sendMessageWithTemplate = async (
     text: textWithPreview,
     media: { type: null, url: null, sent: false, error: null }
   };
-};
-
-const CHANNEL_TEXT_FALLBACK_ATTEMPTS = 2;
-const CHANNEL_TEXT_FALLBACK_RETRY_DELAY_MS = 1500;
-
-const sendChannelTextFallbackWithRetry = async (
-  whatsappClient: WhatsAppClient,
-  target: Target,
-  template: Template,
-  feedItem: FeedItem,
-  options: {
-    supabase: SupabaseClient;
-    sendTimeoutMs: number;
-    overrideText?: string | null;
-    logContext?: Record<string, unknown>;
-  }
-): Promise<SendWithMediaResult> => {
-  const fallbackTemplate = { ...template, send_mode: 'text_preview' } as Template;
-  let lastError = 'fallback send did not run';
-
-  for (let attempt = 1; attempt <= CHANNEL_TEXT_FALLBACK_ATTEMPTS; attempt += 1) {
-    if (attempt > 1) {
-      await sleep(CHANNEL_TEXT_FALLBACK_RETRY_DELAY_MS);
-    }
-
-    try {
-      const fallbackResult = await withTargetSendLock(target, async () => {
-        const result = await sendMessageWithTemplate(whatsappClient, target, fallbackTemplate, feedItem, {
-          supabase: options.supabase,
-          sendTimeoutMs: options.sendTimeoutMs,
-          overrideText: options.overrideText ?? null
-        });
-        const nowMs = Date.now();
-        globalLastSentAtMs = nowMs;
-        globalLastTargetId = String(target.id);
-        globalLastSentByTargetId.set(String(target.id), nowMs);
-        if (globalLastSentByTargetId.size > 1000) {
-          globalLastSentByTargetId.clear();
-        }
-        return result;
-      });
-      const fallbackConfirmation = await confirmSendResult(whatsappClient, target.type, fallbackResult, {
-        allowChannelTextUpsert: true
-      });
-      if (fallbackConfirmation?.ok) {
-        return fallbackResult;
-      }
-      lastError = fallbackConfirmation?.error || 'no upsert/ack';
-    } catch (error) {
-      lastError = getErrorMessage(error);
-    }
-
-    logger.warn(
-      {
-        ...(options.logContext || {}),
-        targetId: target.id,
-        attempt,
-        maxAttempts: CHANNEL_TEXT_FALLBACK_ATTEMPTS,
-        error: lastError
-      },
-      'Channel text fallback attempt failed'
-    );
-  }
-
-  throw new Error(`Channel media fallback not confirmed (${lastError})`);
 };
 
 const buildEditableMessageContent = async (options: {
@@ -4115,20 +4030,19 @@ const sendQueuedForSchedule = async (
             await waitForDelays(target as Target, settings);
             const channelMediaSuppressed = isChannelMediaTemporarilyBlocked(target as Target);
             if (channelMediaSuppressed && expectedMedia.url) {
-              const fallbackError = buildChannelMediaTextFallbackError(expectedMedia.kind, 'recent WhatsApp newsletter ack 479');
-              const fallbackResult = await sendChannelTextFallbackWithRetry(
-                whatsappClient,
-                target as Target,
-                template,
-                feedItem,
-                {
-                  supabase,
-                  sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
-                  overrideText: typeof log.message_content === 'string' ? log.message_content : null,
-                  logContext: { scheduleId, feedItemId: feedItem.id, logId: log.id }
-                }
-              );
-              return withChannelTextFallbackMediaResult(fallbackResult, expectedMedia, fallbackError);
+              await supabase
+                .from('message_logs')
+                .update(
+                  buildChannelMediaHoldUpdate(
+                    null,
+                    expectedMedia,
+                    'recent WhatsApp newsletter ack 479',
+                    expectedRender?.outboundText || (typeof log.message_content === 'string' ? log.message_content : null),
+                    null
+                  )
+                )
+                .eq('id', log.id);
+              return null;
             }
             const result = await sendMessageWithTemplate(whatsappClient, target, template, feedItem, {
               supabase,
@@ -4161,10 +4075,6 @@ const sendQueuedForSchedule = async (
               const confirmationError = confirmation?.error || 'no upsert/ack';
               if (isChannelMediaAckRejection(target.type, confirmedSendResult, confirmationError)) {
                 rememberChannelMediaRejection(target as Target);
-                const fallbackError = buildChannelMediaTextFallbackError(
-                  confirmedSendResult?.media?.type || expectedMedia.kind,
-                  confirmationError
-                );
                 logger.warn(
                   {
                     scheduleId,
@@ -4174,23 +4084,21 @@ const sendQueuedForSchedule = async (
                     mediaUrl: confirmedSendResult?.media?.url || null,
                     error: confirmationError
                   },
-                  'Channel media rejected; sending channel text fallback'
+                  'Channel media rejected; holding queue item without text fallback'
                 );
-                confirmedSendResult = withChannelTextFallbackMediaResult(
-                  await sendChannelTextFallbackWithRetry(whatsappClient, target as Target, template, feedItem, {
-                    supabase,
-                    sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
-                    overrideText: typeof log.message_content === 'string' ? log.message_content : null,
-                    logContext: { scheduleId, feedItemId: feedItem.id, logId: log.id }
-                  }),
-                  expectedMedia,
-                  fallbackError
-                );
-                response = confirmedSendResult?.response;
-                messageId = response?.key?.id;
-                if (!messageId) {
-                  throw new Error('Channel text fallback was not assigned a WhatsApp message id');
-                }
+                await supabase
+                  .from('message_logs')
+                  .update(
+                    buildChannelMediaHoldUpdate(
+                      confirmedSendResult,
+                      expectedMedia,
+                      confirmationError,
+                      confirmedSendResult?.text || expectedRender?.outboundText || null,
+                      messageId || null
+                    )
+                  )
+                  .eq('id', log.id);
+                continue;
               } else {
                 throw new Error(`Message send not confirmed (${confirmationError})`);
               }
@@ -4711,20 +4619,19 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           await waitForDelays(targetRow, settings);
           const channelMediaSuppressed = isChannelMediaTemporarilyBlocked(targetRow);
           if (channelMediaSuppressed && expectedMedia.url) {
-            const fallbackError = buildChannelMediaTextFallbackError(expectedMedia.kind, 'recent WhatsApp newsletter ack 479');
-            const fallbackResult = await sendChannelTextFallbackWithRetry(
-              activeWhatsappClient,
-              targetRow,
-              template as Template,
-              feedItemRes.data as FeedItem,
-              {
-                supabase,
-                sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
-                overrideText: typeof log.message_content === 'string' ? log.message_content : null,
-                logContext: { logId: log.id, targetId: targetRow.id }
-              }
-            );
-            return withChannelTextFallbackMediaResult(fallbackResult, expectedMedia, fallbackError);
+            await supabase
+              .from('message_logs')
+              .update(
+                buildChannelMediaHoldUpdate(
+                  null,
+                  expectedMedia,
+                  'recent WhatsApp newsletter ack 479',
+                  uncertainMessageContent || (typeof log.message_content === 'string' ? log.message_content : null),
+                  null
+                )
+              )
+              .eq('id', log.id);
+            return null;
           }
           const result = await sendMessageWithTemplate(
             activeWhatsappClient,
@@ -4760,10 +4667,6 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           const confirmationError = confirmation?.error || 'no upsert/ack';
           if (isChannelMediaAckRejection(targetRow.type, confirmedSendResult, confirmationError)) {
             rememberChannelMediaRejection(targetRow);
-            const fallbackError = buildChannelMediaTextFallbackError(
-              confirmedSendResult?.media?.type || expectedMedia.kind,
-              confirmationError
-            );
             logger.warn(
               {
                 logId: log.id,
@@ -4772,22 +4675,17 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
                 mediaUrl: confirmedSendResult?.media?.url || null,
                 error: confirmationError
               },
-              'Channel media rejected during send-now; sending channel text fallback'
+              'Channel media rejected during send-now; holding queue item without text fallback'
             );
-            confirmedSendResult = withChannelTextFallbackMediaResult(
-              await sendChannelTextFallbackWithRetry(activeWhatsappClient, targetRow, template as Template, feedItemRes.data as FeedItem, {
-                supabase,
-                sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
-                overrideText: typeof log.message_content === 'string' ? log.message_content : null,
-                logContext: { logId: log.id, targetId: targetRow.id }
-              }),
+            const holdUpdate = buildChannelMediaHoldUpdate(
+              confirmedSendResult,
               expectedMedia,
-              fallbackError
+              confirmationError,
+              confirmedSendResult?.text || uncertainMessageContent || null,
+              messageId || null
             );
-            messageId = confirmedSendResult?.response?.key?.id;
-            if (!messageId) {
-              throw new Error('Channel text fallback was not assigned a WhatsApp message id');
-            }
+            await supabase.from('message_logs').update(holdUpdate).eq('id', log.id);
+            return { ok: false, held: true, error: String(holdUpdate.error_message || 'Channel media held') };
           } else {
             throw new Error(`Message send not confirmed (${confirmationError})`);
           }

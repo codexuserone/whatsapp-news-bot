@@ -175,6 +175,27 @@ const preferDeliverableStatusRecipients = (
   };
 };
 
+const buildStatusDeliveryRecipients = (recipients: string[], selfJid: unknown) => {
+  const normalizedRecipients = Array.from(
+    new Set(
+      (Array.isArray(recipients) ? recipients : [])
+        .map((recipient) => normalizeStatusAudienceJid(recipient))
+        .filter(Boolean)
+    )
+  );
+
+  const normalizedSelf = normalizeStatusAudienceJid(selfJid);
+  if (!normalizedSelf) {
+    return normalizedRecipients;
+  }
+
+  if (normalizedRecipients.includes(normalizedSelf)) {
+    return normalizedRecipients;
+  }
+
+  return [normalizedSelf, ...normalizedRecipients];
+};
+
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict' | 'paused';
 
 type MessageStatusSnapshot = {
@@ -3569,24 +3590,34 @@ class WhatsAppClient {
       const preferredAudience = preferDeliverableStatusRecipients(
         dedupedExplicit.length ? dedupedExplicit : resolvedAudience.participants
       );
-      const statusJidList = preferredAudience.recipients;
+      const candidateStatusJidList = preferredAudience.recipients;
 
-      if (!statusJidList.length) {
+      if (!candidateStatusJidList.length) {
         throw new Error(
           'No status recipients resolved. Open WhatsApp contacts/chats first or set WHATSAPP_STATUS_AUDIENCE_JIDS.'
         );
       }
-      if (!dedupedExplicit.length && isUnsafeImplicitStatusAudience(statusJidList, resolvedAudience.sources)) {
+      if (!dedupedExplicit.length && isUnsafeImplicitStatusAudience(candidateStatusJidList, resolvedAudience.sources)) {
         throw new Error(
           'Status audience only contains group-participant LID recipients. Add explicit private Status recipients or wait for Baileys to resolve phone-number mappings before sending.'
         );
       }
+      const statusJidList = buildStatusDeliveryRecipients(
+        candidateStatusJidList,
+        this.meJid || this.socket?.user?.id || resolvedAudience.selfJid
+      );
 
       options = { ...sanitized.options, broadcast: true, statusJidList };
       logger.debug(
         {
           participantCount: statusJidList.length,
           explicitCount: dedupedExplicit.length,
+          includesSelf: Boolean(
+            normalizeStatusAudienceJid(this.meJid || this.socket?.user?.id || resolvedAudience.selfJid) &&
+            statusJidList.includes(
+              normalizeStatusAudienceJid(this.meJid || this.socket?.user?.id || resolvedAudience.selfJid)
+            )
+          ),
           sources: resolvedAudience.sources,
           warnings: resolvedAudience.warnings
         },
@@ -3965,5 +3996,6 @@ const createWhatsAppClient = () => new WhatsAppClient();
 
 module.exports = Object.assign(createWhatsAppClient, {
   resolveBrowserTuple,
-  patchNewsletterMediaDirectPaths
+  patchNewsletterMediaDirectPaths,
+  buildStatusDeliveryRecipients
 });

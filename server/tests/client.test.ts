@@ -892,4 +892,48 @@ describe('WhatsAppClient', () => {
         expect(client.lastKeyCacheResetAt).toBeNull();
         expect(client.connect).toHaveBeenCalled();
     });
+
+    it('should include self in the final status delivery audience', async () => {
+        const sendMessage = jest.fn(async () => ({
+            key: { id: 'status-msg-id', remoteJid: 'status@broadcast', fromMe: true },
+            message: { imageMessage: { mimetype: 'image/jpeg', caption: 'caption' } }
+        }));
+
+        client.socket = {
+            sendMessage,
+            user: { id: '16465527019:54@s.whatsapp.net' }
+        };
+        client.meJid = '16465527019:54@s.whatsapp.net';
+        client.resolveStatusAudienceWithLidMappings = jest.fn(async () => ({
+            participants: ['15551234567@s.whatsapp.net'],
+            selfJid: '16465527019@s.whatsapp.net',
+            sources: {
+                contactsCache: 1,
+                storeContacts: 0,
+                storeChats: 0,
+                groupMetadata: 0,
+                env: 0,
+                me: 1,
+                lidMappings: 0
+            },
+            warnings: []
+        }));
+
+        await client.sendStatusBroadcast(
+            { image: Buffer.from('status-image'), mimetype: 'image/jpeg', caption: 'caption' },
+            { statusJidList: ['15551234567@s.whatsapp.net'] }
+        );
+
+        expect(sendMessage as any).toHaveBeenCalledWith(
+            'status@broadcast',
+            expect.any(Object),
+            expect.objectContaining({
+                broadcast: true,
+                statusJidList: expect.arrayContaining([
+                    '16465527019@s.whatsapp.net',
+                    '15551234567@s.whatsapp.net'
+                ])
+            })
+        );
+    });
 });

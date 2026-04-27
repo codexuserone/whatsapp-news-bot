@@ -611,7 +611,11 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     error = response.error || error;
   }
 
-  // Create new auth state if not found
+  if (!doc && error && isTransientLeaseTransportError(error)) {
+    throw new Error(`Auth state temporarily unavailable: ${getErrorMessage(error)}`);
+  }
+
+  // Create new auth state only when storage is reachable and the session row is genuinely absent.
   if (error || !doc) {
     const newCreds = initAuthCreds();
     let created = false;

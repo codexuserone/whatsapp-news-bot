@@ -609,10 +609,10 @@ class WhatsAppClient {
   qrExpiresAtMs: number | null;
   qrGenerationCount: number;
   lastError: string | null;
-  lastSeenAt: Date | null;
-  instanceId: string;
-  sessionId: string;
-  authStore: {
+    lastSeenAt: Date | null;
+    instanceId: string;
+    sessionId: string;
+    authStore: {
     state: { creds: Record<string, unknown>; keys: { get: (type: string, ids: string[]) => Promise<Record<string, unknown>>; set: (data: Record<string, Record<string, unknown>>) => Promise<void> } };
     saveCreds: () => Promise<void>;
     clearState: () => Promise<void>;
@@ -632,10 +632,11 @@ class WhatsAppClient {
     forceAcquireLease?: (
       ownerId: string,
       ttlMs?: number
-    ) => Promise<{ ok: boolean; supported: boolean; ownerId: string | null; expiresAt: string | null; reason?: string }>;
-    getLeaseInfo?: () => Promise<{ supported: boolean; ownerId: string | null; expiresAt: string | null }>;
-  } | null;
-  leaseSupported: boolean;
+      ) => Promise<{ ok: boolean; supported: boolean; ownerId: string | null; expiresAt: string | null; reason?: string }>;
+      getLeaseInfo?: () => Promise<{ supported: boolean; ownerId: string | null; expiresAt: string | null }>;
+    } | null;
+    authStoreInitPromise: Promise<any> | null;
+    leaseSupported: boolean;
   leaseHeld: boolean;
   leaseOwnerId: string | null;
   leaseExpiresAt: string | null;
@@ -678,11 +679,12 @@ class WhatsAppClient {
     this.qrExpiresAtMs = null;
     this.qrGenerationCount = 0;
     this.lastError = null;
-    this.lastSeenAt = null;
-    this.instanceId = randomUUID();
-    this.sessionId = resolveSessionId();
-    this.authStore = null;
-    this.leaseSupported = false;
+      this.lastSeenAt = null;
+      this.instanceId = randomUUID();
+      this.sessionId = resolveSessionId();
+      this.authStore = null;
+      this.authStoreInitPromise = null;
+      this.leaseSupported = false;
     this.leaseHeld = false;
     this.leaseOwnerId = null;
     this.leaseExpiresAt = null;
@@ -852,12 +854,37 @@ class WhatsAppClient {
       if (oldest) {
         this.recentMessageFailures.delete(oldest);
       }
+      }
+    }
+
+  async ensureAuthStoreInitialized() {
+    if (this.authStore) {
+      return this.authStore;
+    }
+
+    if (!this.authStoreInitPromise) {
+      this.authStoreInitPromise = (async () => {
+        const store = await useSupabaseAuthState(this.sessionId);
+        this.authStore = store;
+        return store;
+      })();
+    }
+
+    try {
+      return await this.authStoreInitPromise;
+    } catch (error) {
+      this.authStoreInitPromise = null;
+      throw error;
+    } finally {
+      if (this.authStore) {
+        this.authStoreInitPromise = null;
+      }
     }
   }
 
   async init(): Promise<void> {
     try {
-      this.authStore = await useSupabaseAuthState(this.sessionId);
+      await this.ensureAuthStoreInitialized();
 
       // Respect a persisted pause flag so the bot doesn't immediately reconnect after a restart/deploy.
       try {
@@ -1779,10 +1806,7 @@ class WhatsAppClient {
         this.socket = null;
       }
 
-      const authStore = this.authStore;
-      if (!authStore) {
-        throw new Error('Auth store not initialized');
-      }
+      const authStore = await this.ensureAuthStoreInitialized();
 
       // Acquire a cross-instance lease so only one bot connects at a time.
       // This prevents WhatsApp "conflict/replaced" errors during rolling deploys.

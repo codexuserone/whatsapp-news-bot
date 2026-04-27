@@ -63,6 +63,7 @@ jest.mock('../src/whatsapp/authStore', () => {
 });
 
 const WhatsAppClient = require('../src/whatsapp/client');
+const useSupabaseAuthState = require('../src/whatsapp/authStore');
 
 describe('WhatsAppClient', () => {
     let client: any;
@@ -89,6 +90,13 @@ describe('WhatsAppClient', () => {
         expect(client).toBeDefined();
         expect(client.status).toBe('disconnected');
         expect(client.instanceId).toBeDefined();
+    });
+
+    it('should lazily initialize the auth store during connect', async () => {
+        await client.connect();
+
+        expect(useSupabaseAuthState).toHaveBeenCalled();
+        expect(client.authStore).toBeTruthy();
     });
 
     it('should default browser tuples to the configured device label', () => {

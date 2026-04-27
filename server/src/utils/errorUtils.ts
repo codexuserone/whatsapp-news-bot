@@ -11,13 +11,29 @@ const readNumericStatus = (value: unknown): number | null => {
   return Number(value);
 };
 
+const normalizeErrorText = (value: string, fallback: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+
+  const lower = trimmed.toLowerCase();
+  if (lower.includes('error code: 522') || lower.includes('522: connection timed out')) {
+    return 'Supabase project is temporarily unreachable (Cloudflare 522 connection timeout)';
+  }
+  if (lower.includes('ecircuitbreaker') || lower.includes('circuit breaker open')) {
+    return 'Supabase connection pooler is temporarily blocking new connections (circuit breaker open)';
+  }
+
+  const singleLine = trimmed.replace(/\s+/g, ' ');
+  return singleLine.length > 500 ? `${singleLine.slice(0, 500)}...` : singleLine;
+};
+
 const getErrorMessage = (error: unknown, fallback = 'Unknown error'): string => {
   if (error instanceof Error) {
-    return readStringValue(error.message) || fallback;
+    return normalizeErrorText(readStringValue(error.message) || fallback, fallback);
   }
 
   const direct = readStringValue(error);
-  if (direct) return direct;
+  if (direct) return normalizeErrorText(direct, fallback);
 
   if (typeof error === 'number' || typeof error === 'boolean' || typeof error === 'bigint') {
     return String(error);
@@ -35,7 +51,7 @@ const getErrorMessage = (error: unknown, fallback = 'Unknown error'): string => 
 
     for (const candidate of candidates) {
       const value = readStringValue(candidate);
-      if (value) return value;
+      if (value) return normalizeErrorText(value, fallback);
     }
 
     const cause = record.cause;

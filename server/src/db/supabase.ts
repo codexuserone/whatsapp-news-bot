@@ -5,6 +5,10 @@ const { getErrorMessage } = require('../utils/errorUtils');
 
 let supabaseClient: SupabaseClient | null = null;
 const isProd = process.env.NODE_ENV === 'production';
+const SUPABASE_FETCH_TIMEOUT_MS = Math.max(
+  1000,
+  Math.floor(Number(process.env.SUPABASE_FETCH_TIMEOUT_MS || 8000))
+);
 
 const resolveSupabaseUrl = () => process.env.SUPABASE_URL || '';
 
@@ -24,6 +28,35 @@ const resolveSupabaseKey = () => {
   return '';
 };
 
+const fetchWithTimeout = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const controller = new AbortController();
+  const upstreamSignal = init?.signal;
+  let timeoutTriggered = false;
+  const timeout = setTimeout(() => {
+    timeoutTriggered = true;
+    controller.abort();
+  }, SUPABASE_FETCH_TIMEOUT_MS);
+
+  const abortFromUpstream = () => controller.abort(upstreamSignal?.reason);
+  if (upstreamSignal?.aborted) {
+    abortFromUpstream();
+  } else {
+    upstreamSignal?.addEventListener('abort', abortFromUpstream, { once: true });
+  }
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (timeoutTriggered) {
+      throw new Error(`Supabase request timed out after ${SUPABASE_FETCH_TIMEOUT_MS}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    upstreamSignal?.removeEventListener('abort', abortFromUpstream);
+  }
+};
+
 function getSupabaseClient(): SupabaseClient | null {
   if (supabaseClient) return supabaseClient;
 
@@ -40,6 +73,9 @@ function getSupabaseClient(): SupabaseClient | null {
       autoRefreshToken: false,
       persistSession: false,
       detectSessionInUrl: false
+    },
+    global: {
+      fetch: fetchWithTimeout
     }
   });
 

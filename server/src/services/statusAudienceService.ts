@@ -62,6 +62,12 @@ const INCLUDE_GROUP_METADATA_STATUS_AUDIENCE =
 
 let refreshJob: { stop?: () => void } | null = null;
 
+// In-memory cache of the last successful audience snapshot.
+// Survives Supabase 522/timeout errors so status sends can continue.
+let lastGoodSnapshot: RefreshResult | null = null;
+let lastGoodSnapshotAtMs = 0;
+const MAX_IN_MEMORY_SNAPSHOT_AGE_MS = 60 * 60 * 1000; // 60 minutes
+
 const normalizeRecipientJid = (value: unknown) => {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw || raw === 'status@broadcast') return '';
@@ -414,6 +420,14 @@ const refreshStatusRecipients = async (
 ): Promise<RefreshResult> => {
   const supabase = getSupabaseClient();
   if (!supabase) {
+    // No database — fall back to in-memory snapshot if available
+    if (lastGoodSnapshot && lastGoodSnapshot.recipients.length) {
+      return {
+        ...lastGoodSnapshot,
+        warnings: [...lastGoodSnapshot.warnings, 'Database not available; using in-memory cached audience snapshot.'],
+        stale: true
+      };
+    }
     return {
       participantCount: 0,
       recipients: [],
@@ -424,13 +438,40 @@ const refreshStatusRecipients = async (
     };
   }
 
-  const stored = await getStoredRecipients(supabase, options?.sampleSize, { includeRecipients: true });
+  let stored: RefreshResult;
+  try {
+    stored = await getStoredRecipients(supabase, options?.sampleSize, { includeRecipients: true });
+  } catch (dbError) {
+    logger.warn(
+      { error: getErrorMessage(dbError) },
+      'Failed to read stored status recipients from database; using in-memory cache if available'
+    );
+    if (lastGoodSnapshot && lastGoodSnapshot.recipients.length) {
+      return {
+        ...lastGoodSnapshot,
+        warnings: [...lastGoodSnapshot.warnings, `Database read failed (${getErrorMessage(dbError)}); using in-memory cached audience snapshot.`],
+        stale: true
+      };
+    }
+    stored = {
+      participantCount: 0,
+      recipients: [],
+      sample: [],
+      refreshedAt: null,
+      sources: emptySources(),
+      warnings: [`Database read failed: ${getErrorMessage(dbError)}`]
+    };
+  }
 
   const connectionStatus = String(whatsappClient?.getStatus?.()?.status || '').trim().toLowerCase();
   if (!whatsappClient || connectionStatus !== 'connected') {
     const warnings = [...stored.warnings];
     warnings.push('WhatsApp is not connected, using the last stored status audience snapshot.');
-    return { ...stored, warnings };
+    const result = { ...stored, warnings };
+    if (result.recipients.length) {
+      cacheSnapshot(result);
+    }
+    return result;
   }
 
   const audienceOptions = Number.isFinite(options?.sampleSize)
@@ -439,8 +480,8 @@ const refreshStatusRecipients = async (
   const [participantsRaw, audienceRaw, recentDirectRecipients, activeIndividualTargetRecipients] = await Promise.all([
     Promise.resolve(whatsappClient.getStatusParticipants?.() || []),
     Promise.resolve(whatsappClient.getStatusAudience?.(audienceOptions) || null),
-    USE_RECENT_DIRECT_RECIPIENTS ? getRecentSuccessfulDirectRecipients(supabase) : Promise.resolve([]),
-    getActiveIndividualTargetRecipients(supabase)
+    USE_RECENT_DIRECT_RECIPIENTS ? getRecentSuccessfulDirectRecipients(supabase).catch(() => []) : Promise.resolve([]),
+    getActiveIndividualTargetRecipients(supabase).catch(() => [])
   ]);
   const selfJid = normalizeRecipientJid(
     audienceRaw && typeof audienceRaw === 'object'
@@ -497,15 +538,19 @@ const refreshStatusRecipients = async (
       `Preserved the previous status audience snapshot because the current WhatsApp audience is still warming up (${participants.length} resolved, ${stored.participantCount} stored).`
     ]);
 
-    await persistStatusRecipientsSnapshot(supabase, preservedRecipients, {
-      refreshedAt,
-      sources: preservedSources,
-      warnings: preservedWarnings,
-      recentDirectRecipients,
-      preservedFromStored: true
-    });
+    try {
+      await persistStatusRecipientsSnapshot(supabase, preservedRecipients, {
+        refreshedAt,
+        sources: preservedSources,
+        warnings: preservedWarnings,
+        recentDirectRecipients,
+        preservedFromStored: true
+      });
+    } catch (persistError) {
+      logger.warn({ error: getErrorMessage(persistError) }, 'Failed to persist preserved status recipients snapshot');
+    }
 
-    return {
+    const result: RefreshResult = {
       participantCount: preservedRecipients.length,
       recipients: preservedRecipients,
       sample: buildSample(preservedRecipients, options?.sampleSize),
@@ -513,22 +558,54 @@ const refreshStatusRecipients = async (
       sources: preservedSources,
       warnings: preservedWarnings
     };
+    cacheSnapshot(result);
+    return result;
   }
 
-  await persistStatusRecipientsSnapshot(supabase, participants, {
-    refreshedAt,
-    sources,
-    warnings,
-    recentDirectRecipients
-  });
+  try {
+    await persistStatusRecipientsSnapshot(supabase, participants, {
+      refreshedAt,
+      sources,
+      warnings,
+      recentDirectRecipients
+    });
+  } catch (persistError) {
+    logger.warn({ error: getErrorMessage(persistError) }, 'Failed to persist status recipients snapshot');
+  }
 
-  return {
+  const result: RefreshResult = {
     participantCount: participants.length,
     recipients: participants,
     sample: buildSample(participants, options?.sampleSize),
     refreshedAt,
     sources,
     warnings: participants.length ? warnings : [...warnings, 'No status recipients resolved from the current audience sources.']
+  };
+  if (result.recipients.length) {
+    cacheSnapshot(result);
+  }
+  return result;
+};
+
+const cacheSnapshot = (snapshot: RefreshResult) => {
+  lastGoodSnapshot = snapshot;
+  lastGoodSnapshotAtMs = Date.now();
+};
+
+const getInMemoryFallback = (reason: string): RefreshResult | null => {
+  if (!lastGoodSnapshot || !lastGoodSnapshot.recipients.length) return null;
+  const ageMs = Date.now() - lastGoodSnapshotAtMs;
+  if (ageMs > MAX_IN_MEMORY_SNAPSHOT_AGE_MS) {
+    logger.warn(
+      { snapshotAgeMs: ageMs, maxAgeMs: MAX_IN_MEMORY_SNAPSHOT_AGE_MS },
+      'In-memory audience snapshot is too old to use as fallback'
+    );
+    return null;
+  }
+  return {
+    ...lastGoodSnapshot,
+    warnings: [...lastGoodSnapshot.warnings, `${reason}; using in-memory cached audience snapshot (${Math.round(ageMs / 1000)}s old).`],
+    stale: true
   };
 };
 
@@ -541,16 +618,58 @@ const ensureFreshStatusRecipients = async (
     return refreshStatusRecipients(whatsappClient, options);
   }
 
-  const stored = await getStoredRecipients(supabase, options?.sampleSize, { includeRecipients: true });
+  let stored: RefreshResult;
+  try {
+    stored = await getStoredRecipients(supabase, options?.sampleSize, { includeRecipients: true });
+  } catch (dbError) {
+    logger.warn(
+      { error: getErrorMessage(dbError) },
+      'Failed to read stored status recipients; falling back to in-memory cache or live refresh'
+    );
+    const fallback = getInMemoryFallback(`Database read failed (${getErrorMessage(dbError)})`);
+    if (fallback) return fallback;
+    return refreshStatusRecipients(whatsappClient, options);
+  }
+
   const maxAgeMinutes = Math.max(1, Math.min(Math.floor(Number(options?.maxAgeMinutes || 10)), 120));
   const refreshedAtMs = stored.refreshedAt ? Date.parse(stored.refreshedAt) : Number.NaN;
   const isFresh = Number.isFinite(refreshedAtMs) && Date.now() - refreshedAtMs <= maxAgeMinutes * 60 * 1000;
 
   if (isFresh && shouldTrustStoredSnapshot(stored)) {
+    cacheSnapshot(stored);
     return stored;
   }
 
-  return refreshStatusRecipients(whatsappClient, options);
+  // If stored snapshot is stale but Supabase was reachable for the read,
+  // try a full refresh. If that fails, accept a broader staleness window.
+  try {
+    return await refreshStatusRecipients(whatsappClient, options);
+  } catch (refreshError) {
+    logger.warn(
+      { error: getErrorMessage(refreshError) },
+      'Status audience refresh failed; checking for usable fallback'
+    );
+
+    // Accept stale DB snapshot (up to 60 min) when refresh fails
+    const extendedMaxAgeMs = MAX_IN_MEMORY_SNAPSHOT_AGE_MS;
+    const isExtendedFresh = Number.isFinite(refreshedAtMs) && Date.now() - refreshedAtMs <= extendedMaxAgeMs;
+    if (isExtendedFresh && stored.recipients.length && shouldTrustStoredSnapshot(stored)) {
+      logger.info(
+        { snapshotAgeMinutes: Math.round((Date.now() - refreshedAtMs) / 60000), recipientCount: stored.recipients.length },
+        'Using stale database audience snapshot after refresh failure'
+      );
+      return {
+        ...stored,
+        warnings: [...stored.warnings, `Audience refresh failed (${getErrorMessage(refreshError)}); using stale database snapshot.`],
+        stale: true
+      };
+    }
+
+    const fallback = getInMemoryFallback(`Audience refresh failed (${getErrorMessage(refreshError)})`);
+    if (fallback) return fallback;
+
+    throw refreshError;
+  }
 };
 
 const getStatusRecipientSnapshot = async (options?: { sampleSize?: number }): Promise<StatusAudienceSnapshot> => {
@@ -565,14 +684,36 @@ const getStatusRecipientSnapshot = async (options?: { sampleSize?: number }): Pr
     };
   }
 
-  const stored = await getStoredRecipients(supabase, options?.sampleSize, { includeRecipients: false });
-  return {
-    participantCount: stored.participantCount,
-    sample: stored.sample,
-    refreshedAt: stored.refreshedAt,
-    sources: stored.sources,
-    warnings: stored.warnings
-  };
+  try {
+    const stored = await getStoredRecipients(supabase, options?.sampleSize, { includeRecipients: false });
+    return {
+      participantCount: stored.participantCount,
+      sample: stored.sample,
+      refreshedAt: stored.refreshedAt,
+      sources: stored.sources,
+      warnings: stored.warnings
+    };
+  } catch (error) {
+    const fallback = getInMemoryFallback(`Database read failed (${getErrorMessage(error)})`);
+    if (fallback) {
+      return {
+        participantCount: fallback.participantCount,
+        sample: fallback.sample,
+        refreshedAt: fallback.refreshedAt,
+        sources: fallback.sources,
+        warnings: fallback.warnings,
+        stale: true
+      };
+    }
+    return {
+      participantCount: 0,
+      sample: [],
+      refreshedAt: null,
+      sources: emptySources(),
+      warnings: [`Database read failed: ${getErrorMessage(error)}`],
+      stale: true
+    };
+  }
 };
 
 const scheduleStatusAudienceRefresh = (whatsappClient?: StatusAudienceClient | null) => {

@@ -16,6 +16,12 @@ const normalizeErrorText = (value: string, fallback: string): string => {
   if (!trimmed) return fallback;
 
   const lower = trimmed.toLowerCase();
+  if (lower.includes('supabase request timed out')) {
+    return 'Supabase database is temporarily unreachable';
+  }
+  if (lower.includes('supabase temporarily unavailable')) {
+    return 'Supabase database is temporarily unreachable';
+  }
   if (lower.includes('error code: 522') || lower.includes('522: connection timed out')) {
     return 'Supabase project is temporarily unreachable (Cloudflare 522 connection timeout)';
   }
@@ -64,7 +70,24 @@ const getErrorMessage = (error: unknown, fallback = 'Unknown error'): string => 
   return fallback;
 };
 
+const isServiceUnavailableErrorText = (value: string) => {
+  const lower = value.toLowerCase();
+  return (
+    lower.includes('supabase database is temporarily unreachable') ||
+    lower.includes('supabase request timed out') ||
+    lower.includes('supabase temporarily unavailable') ||
+    lower.includes('cloudflare 522') ||
+    lower.includes('522: connection timed out') ||
+    lower.includes('circuit breaker open')
+  );
+};
+
 const getErrorStatus = (error: unknown, fallback = 500): number => {
+  const message = getErrorMessage(error, '');
+  if (message && isServiceUnavailableErrorText(message)) {
+    return 503;
+  }
+
   if (!error || typeof error !== 'object') return fallback;
 
   const record = error as {

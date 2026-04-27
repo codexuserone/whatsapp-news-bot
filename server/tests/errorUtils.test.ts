@@ -18,6 +18,12 @@ describe('getErrorMessage', () => {
     it('returns fallback when message cannot be derived', () => {
         expect(getErrorMessage({ foo: 'bar' }, 'fallback text')).toBe('fallback text');
     });
+
+    it('normalizes Supabase timeout errors', () => {
+        expect(getErrorMessage(new Error('Supabase request timed out after 8000ms'))).toBe(
+            'Supabase database is temporarily unreachable'
+        );
+    });
 });
 
 describe('getErrorStatus', () => {
@@ -33,5 +39,10 @@ describe('getErrorStatus', () => {
     it('falls back when status is missing or invalid', () => {
         expect(getErrorStatus({ status: 'abc' }, 418)).toBe(418);
         expect(getErrorStatus(null, 418)).toBe(418);
+    });
+
+    it('maps Supabase availability failures to service unavailable', () => {
+        expect(getErrorStatus(new Error('Supabase request timed out after 8000ms'))).toBe(503);
+        expect(getErrorStatus(new Error('Supabase temporarily unavailable: recent connection failure'))).toBe(503);
     });
 });

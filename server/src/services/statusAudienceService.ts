@@ -54,6 +54,7 @@ const SUCCESSFUL_SEND_STATUSES = ['sent', 'delivered', 'read', 'played'];
 const MAX_PRESERVED_SNAPSHOT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MIN_PRESERVED_SNAPSHOT_PARTICIPANTS = 25;
 const MAX_COLD_START_PARTICIPANTS = 10;
+const STATUS_RECIPIENTS_UPSERT_CHUNK_SIZE = 200;
 const USE_RECENT_DIRECT_RECIPIENTS =
   String(process.env.WHATSAPP_STATUS_USE_RECENT_DIRECT_RECIPIENTS || '').trim().toLowerCase() === 'true';
 
@@ -296,13 +297,32 @@ const persistStatusRecipientsSnapshot = async (
     refreshed_at: options.refreshedAt
   }));
 
+  let persistedAllChunks = true;
+
   if (upsertRows.length) {
-    const { error: upsertError } = await supabase
-      .from('status_recipients')
-      .upsert(upsertRows, { onConflict: 'session_id,recipient_jid' });
-    if (upsertError) {
-      logger.warn({ error: upsertError }, 'Failed to upsert status recipients snapshot');
+    for (let index = 0; index < upsertRows.length; index += STATUS_RECIPIENTS_UPSERT_CHUNK_SIZE) {
+      const batch = upsertRows.slice(index, index + STATUS_RECIPIENTS_UPSERT_CHUNK_SIZE);
+      const { error: upsertError } = await supabase
+        .from('status_recipients')
+        .upsert(batch, { onConflict: 'session_id,recipient_jid' });
+      if (upsertError) {
+        persistedAllChunks = false;
+        logger.warn(
+          {
+            error: upsertError,
+            batchStart: index,
+            batchSize: batch.length,
+            totalRecipients: upsertRows.length
+          },
+          'Failed to upsert status recipients snapshot batch'
+        );
+        break;
+      }
     }
+  }
+
+  if (!persistedAllChunks) {
+    return;
   }
 
   if (normalizedRecipients.length) {

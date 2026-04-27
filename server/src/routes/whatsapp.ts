@@ -19,6 +19,9 @@ const { WHATSAPP_STATUS_ENABLED, WHATSAPP_STATUS_DISABLED_REASON } = require('..
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const GROUP_SEND_TIMEOUT_MS = 60000;
 const GROUP_MEDIA_SEND_TIMEOUT_MS = 90000;
+const STATUS_AUDIENCE_REFRESH_TIMEOUT_MS = 15000;
+const STATUS_SEND_TIMEOUT_MS = 90000;
+const STATUS_CONFIRM_TIMEOUT_MS = 95000;
 const DEFAULT_USER_AGENT = buildDefaultUserAgent();
 const SUPPORTED_WHATSAPP_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -1550,7 +1553,11 @@ const whatsappRoutes = () => {
             });
             statusOptions = { statusJidList: explicitStatusJidList };
           } else {
-            const snapshot = await ensureFreshStatusRecipients(whatsapp, { maxAgeMinutes: 10, sampleSize: 25 });
+            const snapshot = await withTimeout(
+              ensureFreshStatusRecipients(whatsapp, { maxAgeMinutes: 10, sampleSize: 25 }),
+              STATUS_AUDIENCE_REFRESH_TIMEOUT_MS,
+              'Timed out refreshing status audience'
+            );
             assertUsableStatusAudience(snapshot);
             statusOptions = { statusJidList: snapshot.recipients };
           }
@@ -1878,7 +1885,11 @@ const whatsappRoutes = () => {
     }
     const statusSnapshot = explicitStatusJids.length
       ? { recipients: explicitStatusJids, sources: { env: explicitStatusJids.length } }
-      : await ensureFreshStatusRecipients(whatsapp, { maxAgeMinutes: 10, sampleSize: 25 });
+      : await withTimeout(
+          ensureFreshStatusRecipients(whatsapp, { maxAgeMinutes: 10, sampleSize: 25 }),
+          STATUS_AUDIENCE_REFRESH_TIMEOUT_MS,
+          'Timed out refreshing status audience'
+        );
     assertUsableStatusAudience(statusSnapshot);
     const sendOptions: Record<string, unknown> = {};
     const strippedStatusStyleOptions: string[] = [];
@@ -1897,15 +1908,23 @@ const whatsappRoutes = () => {
     }
     if (Number.isFinite(Number(mediaUploadTimeoutMs))) sendOptions.mediaUploadTimeoutMs = Number(mediaUploadTimeoutMs);
 
-    const result = await whatsapp.sendStatusBroadcast(content, sendOptions);
+    const result = await withTimeout(
+      whatsapp.sendStatusBroadcast(content, sendOptions),
+      STATUS_SEND_TIMEOUT_MS,
+      'Timed out sending status broadcast'
+    );
     assertStatusMediaResponseMatches(requestedStatusMediaType, result);
     const messageId = String(result?.key?.id || '').trim() || null;
     const confirmation = messageId && whatsapp?.confirmSend
-      ? await whatsapp.confirmSend(
-          messageId,
-          normalizedImageUrl || normalizedImageDataUrl || normalizedVideoUrl || normalizedVideoDataUrl
-            ? { upsertTimeoutMs: 30000, ackTimeoutMs: 90000, failureGraceMs: 5000 }
-            : { upsertTimeoutMs: 5000, ackTimeoutMs: 60000, failureGraceMs: 5000 }
+      ? await withTimeout(
+          whatsapp.confirmSend(
+            messageId,
+            normalizedImageUrl || normalizedImageDataUrl || normalizedVideoUrl || normalizedVideoDataUrl
+              ? { upsertTimeoutMs: 30000, ackTimeoutMs: 90000, failureGraceMs: 5000 }
+              : { upsertTimeoutMs: 5000, ackTimeoutMs: 60000, failureGraceMs: 5000 }
+          ),
+          STATUS_CONFIRM_TIMEOUT_MS,
+          'Timed out confirming status broadcast'
         )
       : null;
     res.json({

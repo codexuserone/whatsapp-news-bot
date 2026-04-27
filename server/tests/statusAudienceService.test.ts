@@ -580,4 +580,72 @@ describe('statusAudienceService', () => {
         expect(result.participantCount).toBe(1);
         expect(result.recipients).toEqual(['16465527019@s.whatsapp.net']);
     });
+
+    it('does not prune the stored snapshot when status recipient upsert fails', async () => {
+        const refreshedAt = new Date(Date.now() - 60_000).toISOString();
+        const storedRecipients = ['16465527019@s.whatsapp.net', '16465527020@s.whatsapp.net'];
+        const { supabase, tables } = buildSupabaseMock({
+            status_recipients: storedRecipients.map((recipient) => ({
+                session_id: 'primary',
+                recipient_jid: recipient,
+                refreshed_at: refreshedAt,
+                sources: {
+                    contactsCache: 2,
+                    storeContacts: 0,
+                    storeChats: 0,
+                    groupMetadata: 0,
+                    env: 0,
+                    me: 1,
+                    activeIndividualTargets: 0,
+                    recentSuccessfulDirectRecipients: 0
+                },
+                warnings: []
+            }))
+        });
+        const originalFrom = supabase.from.bind(supabase);
+        let failedOnce = false;
+        (supabase as any).from = (table: TableName) => {
+            const query = originalFrom(table);
+            if (table !== 'status_recipients') {
+                return query;
+            }
+            return {
+                ...query,
+                upsert: async (rows: Row[], options?: { onConflict?: string }) => {
+                    if (!failedOnce) {
+                        failedOnce = true;
+                        return { data: null, error: { message: 'statement timeout' } };
+                    }
+                    return query.upsert(rows, options);
+                }
+            };
+        };
+        getSupabaseClientMock.mockReturnValue(supabase);
+
+        const result = await refreshStatusRecipients(
+            {
+                getStatus: () => ({ status: 'connected' }),
+                getStatusParticipants: () => ['16465527021@s.whatsapp.net'],
+                getStatusAudience: () => ({
+                    participantCount: 1,
+                    sample: ['16465527021@s.whatsapp.net'],
+                    selfJid: '16465527018@s.whatsapp.net',
+                    sources: {
+                        contactsCache: 1,
+                        storeContacts: 0,
+                        storeChats: 0,
+                        groupMetadata: 0,
+                        env: 0,
+                        me: 1
+                    },
+                    warnings: []
+                })
+            },
+            { sampleSize: 10 }
+        );
+
+        expect(result.recipients).toEqual(['16465527021@s.whatsapp.net']);
+        expect(tables.status_recipients.map((row) => row.recipient_jid).sort()).toEqual(storedRecipients);
+        expect(loggerWarnMock).toHaveBeenCalled();
+    });
 });

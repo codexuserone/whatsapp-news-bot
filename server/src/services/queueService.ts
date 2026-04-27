@@ -2993,12 +2993,26 @@ const normalizeQueueLookbackHours = (value: unknown, fallback = DEFAULT_MAX_AUTO
   return Math.min(Math.max(Math.floor(parsed), 1), DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS);
 };
 
+const normalizeQueueCursorIso = (value: unknown): string | null => {
+  if (value instanceof Date) {
+    const timestampMs = value.getTime();
+    return Number.isFinite(timestampMs) ? new Date(timestampMs).toISOString() : null;
+  }
+
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  const timestampMs = Date.parse(raw);
+  return Number.isFinite(timestampMs) ? new Date(timestampMs).toISOString() : null;
+};
+
 const clampQueueCursorToLookback = (
-  cursorIso: string,
+  cursorIso: unknown,
   maxLookbackHours = DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS,
   nowMs = Date.now()
 ) => {
-  const cursorMs = Date.parse(String(cursorIso || ''));
+  const normalizedCursorIso = normalizeQueueCursorIso(cursorIso);
+  const cursorMs = normalizedCursorIso ? Date.parse(normalizedCursorIso) : Number.NaN;
   const lookbackHours = normalizeQueueLookbackHours(maxLookbackHours);
   const lookbackMs = nowMs - lookbackHours * 60 * 60 * 1000;
   const sinceMs = Number.isFinite(cursorMs) ? Math.max(cursorMs, lookbackMs) : lookbackMs;
@@ -3133,7 +3147,7 @@ const queueSinceLastRunForSchedule = async (
     const pagePlan = planFeedDispatchPage((page || []) as Array<{ id?: string; created_at?: string; pub_date?: string }>);
     const items = pagePlan.dispatchItems.filter((item) => isFeedItemFreshEnoughForAutoQueue(item, maxLookbackHours));
     if (!items.length) {
-      cursorAt = pagePlan.cursorAt || cursorAt;
+      cursorAt = normalizeQueueCursorIso(pagePlan.cursorAt) || cursorAt;
       cursorId = pagePlan.cursorId || cursorId;
       if (!pagePlan.dispatchItems.length) {
         break;
@@ -3167,7 +3181,7 @@ const queueSinceLastRunForSchedule = async (
       totalQueued += await flushBatch(batch);
     }
 
-    cursorAt = pagePlan.cursorAt || cursorAt;
+    cursorAt = normalizeQueueCursorIso(pagePlan.cursorAt) || cursorAt;
     cursorId = pagePlan.cursorId || cursorId;
   }
 
@@ -3447,7 +3461,7 @@ const queueLatestForSchedule = async (
     skipped,
     feedItemId: latestFeedItem.id,
     feedItemTitle: latestFeedItem.title || null,
-    cursorAt: latestFeedItem.created_at ? String(latestFeedItem.created_at) : null
+    cursorAt: normalizeQueueCursorIso(latestFeedItem.created_at)
   };
 };
 
@@ -3611,11 +3625,12 @@ const sendQueuedForSchedule = async (
     }
 
     let queuedCount = 0;
-    let queueCursorAt: string | null =
+    let queueCursorAt: string | null = normalizeQueueCursorIso(
       schedule.last_queued_at ||
       schedule.last_run_at ||
       schedule.created_at ||
-      null;
+      null
+    );
 
     if (!options?.skipQueueGeneration) {
       const maxQueueLookbackHours = normalizeQueueLookbackHours(
@@ -3625,7 +3640,7 @@ const sendQueuedForSchedule = async (
         maxLookbackHours: maxQueueLookbackHours
       });
       queuedCount += sinceResult.queued;
-      queueCursorAt = sinceResult.cursorAt || queueCursorAt;
+      queueCursorAt = normalizeQueueCursorIso(sinceResult.cursorAt) || queueCursorAt;
 
       const missingQueued = await queueRecentMissingForSchedule(
         supabase,
@@ -3638,6 +3653,7 @@ const sendQueuedForSchedule = async (
 
     // Persist the queue cursor even if we skip sending (e.g. WhatsApp disconnected or Shabbos).
     // This avoids re-scanning the same feed items on every retry.
+    queueCursorAt = normalizeQueueCursorIso(queueCursorAt);
     if (queueCursorAt) {
       const { error: queueCursorError } = await supabase
         .from('schedules')
@@ -5278,6 +5294,7 @@ module.exports = {
     isFeedItemFreshEnoughForAutoQueue,
     isAutoQueueReplayTooOld,
     normalizeQueueLookbackHours,
+    normalizeQueueCursorIso,
     clampQueueCursorToLookback,
     isUsableFeedImageUrl,
     isAuthStateError,

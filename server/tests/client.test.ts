@@ -20,11 +20,12 @@ jest.mock('../src/whatsapp/baileys', () => ({
         generateMessageIDV2: jest.fn(() => 'newsletter-msg-id'),
         encodeNewsletterMessage: jest.fn((message: unknown) => Buffer.from(JSON.stringify(message))),
         prepareWAMessageMedia: jest.fn(async (message: Record<string, unknown>, options: Record<string, unknown>) => {
+            let uploadResult: any = null;
             if (typeof options?.upload === 'function') {
                 const tmpFile = path.join(os.tmpdir(), `newsletter-test-${Date.now()}-${Math.random().toString(16).slice(2)}.bin`);
                 fs.writeFileSync(tmpFile, Buffer.from('newsletter-media'));
                 newsletterTempFiles.add(tmpFile);
-                await options.upload(tmpFile, {
+                uploadResult = await options.upload(tmpFile, {
                     fileEncSha256B64: 'ZmFrZWhhc2g=',
                     mediaType: Object.prototype.hasOwnProperty.call(message, 'video') ? 'video' : 'image'
                 });
@@ -33,18 +34,20 @@ jest.mock('../src/whatsapp/baileys', () => ({
             if (Object.prototype.hasOwnProperty.call(message, 'video')) {
                 return {
                     videoMessage: {
-                        url: 'https://mmg.whatsapp.net/newsletter-video',
-                        directPath: '/newsletter/video',
-                        caption: String((message as { caption?: unknown }).caption || '')
+                        url: uploadResult?.mediaUrl || 'https://mmg.whatsapp.net/newsletter-video',
+                        directPath: uploadResult?.directPath || '/o1/v/t24/newsletter-video',
+                        caption: String((message as { caption?: unknown }).caption || ''),
+                        fileSha256: Buffer.from('video-sha')
                     }
                 };
             }
 
             return {
                 imageMessage: {
-                    url: 'https://mmg.whatsapp.net/newsletter-image',
-                    directPath: '/newsletter/image',
-                    caption: String((message as { caption?: unknown }).caption || '')
+                    url: uploadResult?.mediaUrl || 'https://mmg.whatsapp.net/newsletter-image',
+                    directPath: uploadResult?.directPath || '/o1/v/t24/newsletter-image',
+                    caption: String((message as { caption?: unknown }).caption || ''),
+                    fileSha256: Buffer.from('image-sha')
                 }
             };
         })
@@ -136,7 +139,9 @@ describe('WhatsAppClient', () => {
 
     it('should leave newsletter media direct paths unchanged unless explicitly enabled', () => {
         const originalFlag = process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH;
+        const originalAliasFlag = process.env.BAILEYS_NEWSLETTER_MEDIA_PATCH;
         delete process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH;
+        delete process.env.BAILEYS_NEWSLETTER_MEDIA_PATCH;
 
         const message: any = {
             imageMessage: {
@@ -157,6 +162,11 @@ describe('WhatsAppClient', () => {
         } else {
             process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH = originalFlag;
         }
+        if (originalAliasFlag === undefined) {
+            delete process.env.BAILEYS_NEWSLETTER_MEDIA_PATCH;
+        } else {
+            process.env.BAILEYS_NEWSLETTER_MEDIA_PATCH = originalAliasFlag;
+        }
     });
 
     it('can patch newsletter media direct paths from /o1/ to /m1/ when forced', () => {
@@ -175,6 +185,33 @@ describe('WhatsAppClient', () => {
         expect(patched.imageMessage.url).toBe('https://mmg.whatsapp.net/m1/v/t24/example-image');
     });
 
+    it('can enable newsletter media direct path patch with the Baileys alias flag', () => {
+        const originalFlag = process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH;
+        const originalAliasFlag = process.env.BAILEYS_NEWSLETTER_MEDIA_PATCH;
+        delete process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH;
+        process.env.BAILEYS_NEWSLETTER_MEDIA_PATCH = '1';
+
+        const message: any = {
+            imageMessage: {
+                directPath: '/o1/v/t24/example-image'
+            }
+        };
+
+        const patched = WhatsAppClient.patchNewsletterMediaDirectPaths(message);
+        expect(patched.imageMessage.directPath).toBe('/m1/v/t24/example-image');
+
+        if (originalFlag === undefined) {
+            delete process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH;
+        } else {
+            process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH = originalFlag;
+        }
+        if (originalAliasFlag === undefined) {
+            delete process.env.BAILEYS_NEWSLETTER_MEDIA_PATCH;
+        } else {
+            process.env.BAILEYS_NEWSLETTER_MEDIA_PATCH = originalAliasFlag;
+        }
+    });
+
     it('should send newsletter image media with media_id and plaintext mediatype attrs', async () => {
         const originalFetch = global.fetch;
         const sendNode: any = jest.fn(async () => undefined);
@@ -185,6 +222,10 @@ describe('WhatsAppClient', () => {
         }));
 
         global.fetch = jest.fn(async (_input: any, init?: any) => {
+            const requestUrl = String(_input);
+            expect(requestUrl).toContain('/newsletter/newsletter-image/');
+            expect(requestUrl).toContain('server_thumb_gen=1');
+            expect(requestUrl).not.toContain('server_transcode=1');
             const body = init?.body;
             if (body && typeof body.on === 'function') {
                 await new Promise<void>((resolve, reject) => {
@@ -199,8 +240,12 @@ describe('WhatsAppClient', () => {
                 status: 200,
                 text: async () => JSON.stringify({
                     url: 'https://mmg.whatsapp.net/newsletter-image',
-                    direct_path: '/newsletter/image',
-                    handle: 'newsletter-media-handle-123'
+                    direct_path: '/o1/v/t24/newsletter-image',
+                    handle: 'newsletter-media-handle-123',
+                    thumbnail_info: {
+                        thumbnail_direct_path: '/o1/v/t24/newsletter-thumb',
+                        thumbnail_sha256: Buffer.from('thumbnail-sha').toString('base64')
+                    }
                 })
             };
         }) as any;
@@ -238,7 +283,60 @@ describe('WhatsAppClient', () => {
                 ]
             })
         );
+        const sentPayload = JSON.parse(String(sendNode.mock.calls[0][0].content[0].content));
+        expect(sentPayload.imageMessage.directPath).toBe('/m1/v/t24/newsletter-image');
+        expect(sentPayload.imageMessage.thumbnailDirectPath).toBe('/m1/v/t24/newsletter-thumb');
+        expect(sentPayload.imageMessage.thumbnailSha256).toBeDefined();
+        expect(sentPayload.imageMessage.fileEncSha256).toBeDefined();
+        expect(sentPayload.imageMessage.url).toBeUndefined();
         expect(result?.key?.id).toBe('newsletter-msg-id');
+
+        global.fetch = originalFetch;
+    });
+
+    it('should request newsletter video uploads with transcode enabled', async () => {
+        const originalFetch = global.fetch;
+        const sendNode: any = jest.fn(async () => undefined);
+
+        global.fetch = jest.fn(async (_input: any, init?: any) => {
+            const requestUrl = String(_input);
+            expect(requestUrl).toContain('/newsletter/newsletter-video/');
+            expect(requestUrl).toContain('server_thumb_gen=1');
+            expect(requestUrl).toContain('server_transcode=1');
+            const body = init?.body;
+            if (body && typeof body.on === 'function') {
+                await new Promise<void>((resolve, reject) => {
+                    body.on('error', reject);
+                    body.on('data', () => undefined);
+                    body.on('end', resolve);
+                });
+            }
+            return {
+                ok: true,
+                status: 200,
+                text: async () => JSON.stringify({
+                    url: 'https://mmg.whatsapp.net/newsletter-video',
+                    direct_path: '/o1/v/t24/newsletter-video',
+                    handle: 'newsletter-video-handle-123'
+                })
+            };
+        }) as any;
+
+        client.socket = {
+            sendNode,
+            sendMessage: jest.fn(async () => ({ key: { id: 'fallback-newsletter-msg-id' } })),
+            refreshMediaConn: jest.fn(async () => ({
+                hosts: [{ hostname: 'upload.whatsapp.test' }],
+                auth: 'auth-token'
+            })),
+            user: { id: '16465527019:54@s.whatsapp.net' }
+        };
+
+        await client.sendMessage('120363401649232180@newsletter', {
+            video: Buffer.from('fake-video'),
+            caption: 'newsletter video caption',
+            mimetype: 'video/mp4'
+        });
 
         global.fetch = originalFetch;
     });

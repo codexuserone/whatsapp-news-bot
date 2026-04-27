@@ -249,6 +249,12 @@ const normalizeDbError = (error: any) => ({
 
 const isIsoNullComparison = (value: unknown) => value === null || String(value || '').trim().toLowerCase() === 'null';
 
+const renumberSqlPlaceholders = (sql: string, offset: number) =>
+  String(sql || '').replace(/\$(\d+)(?!\d)/g, (_match, indexRaw: string) => {
+    const index = Number(indexRaw);
+    return Number.isFinite(index) && index > 0 ? `$${offset + index}` : _match;
+  });
+
 class PostgresQueryBuilder {
   private readonly pool: PgPool;
   private readonly table: string;
@@ -428,12 +434,7 @@ class PostgresQueryBuilder {
   private buildWhereClause(startIndex = 1) {
     const params: unknown[] = [];
     const clauses = this.filters.map((filter) => {
-      let sql = filter.sql;
-      for (let index = 0; index < filter.params.length; index += 1) {
-        const localPlaceholder = `$${index + 1}`;
-        const globalPlaceholder = `$${startIndex + params.length + index}`;
-        sql = sql.replace(new RegExp(`\\${localPlaceholder}(?!\\d)`, 'g'), globalPlaceholder);
-      }
+      const sql = renumberSqlPlaceholders(filter.sql, startIndex + params.length - 1);
       params.push(...filter.params);
       return sql;
     });
@@ -767,12 +768,7 @@ class PostgresQueryBuilder {
       .map((token) => this.parseOrToken(token))
       .filter((part) => Boolean(part.sql))
       .map((part) => {
-        let sql = part.sql;
-        for (let index = 0; index < part.params.length; index += 1) {
-          const localPlaceholder = `$${index + 1}`;
-          const globalPlaceholder = `$${params.length + index + 1}`;
-          sql = sql.replace(new RegExp(`\\${localPlaceholder}(?!\\d)`, 'g'), globalPlaceholder);
-        }
+        const sql = renumberSqlPlaceholders(part.sql, params.length);
         params.push(...part.params);
         return sql;
       });
@@ -794,12 +790,7 @@ class PostgresQueryBuilder {
       const params: unknown[] = [];
       const sql = parts
         .map((part) => {
-          let partSql = part.sql;
-          for (let index = 0; index < part.params.length; index += 1) {
-            const localPlaceholder = `$${index + 1}`;
-            const globalPlaceholder = `$${params.length + index + 1}`;
-            partSql = partSql.replace(new RegExp(`\\${localPlaceholder}(?!\\d)`, 'g'), globalPlaceholder);
-          }
+          const partSql = renumberSqlPlaceholders(part.sql, params.length);
           params.push(...part.params);
           return partSql;
         })

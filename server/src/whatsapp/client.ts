@@ -29,8 +29,11 @@ const AUTO_CLEAR_CORRUPTED_AUTH =
   String(process.env.WHATSAPP_AUTH_AUTO_CLEAR_CORRUPTION ?? 'false').trim().toLowerCase() === 'true';
 const newsletterMediaPatchContext = new AsyncLocalStorage();
 
+const isTruthyEnvFlag = (value: unknown) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+
 const isNewsletterMediaDirectPathPatchEnabled = () =>
-  String(process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH || '').trim().toLowerCase() === 'true';
+  isTruthyEnvFlag(process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH) ||
+  isTruthyEnvFlag(process.env.BAILEYS_NEWSLETTER_MEDIA_PATCH);
 
 const resolveBrowserTuple = (Browsers: Record<string, unknown> | null | undefined, browserName: string) => {
   const requestedPlatform = String(
@@ -122,6 +125,82 @@ const getNewsletterRelayMediaType = (content: AnyMessageContent): 'image' | 'vid
   if (Object.prototype.hasOwnProperty.call(content as Record<string, unknown>, 'image')) return 'image';
   if (Object.prototype.hasOwnProperty.call(content as Record<string, unknown>, 'video')) return 'video';
   return null;
+};
+
+type NewsletterUploadMetadata = {
+  mediaUrl: string;
+  directPath: string;
+  handle: string;
+  thumbnailDirectPath: string | null;
+  thumbnailSha256: Buffer | null;
+};
+
+const toBase64Buffer = (value: unknown) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  try {
+    return Buffer.from(raw, 'base64');
+  } catch {
+    return null;
+  }
+};
+
+const getNewsletterUploadThumbnailInfo = (payload: Record<string, unknown> | null) => {
+  const thumbnailInfo =
+    payload && typeof payload.thumbnail_info === 'object' && payload.thumbnail_info
+      ? (payload.thumbnail_info as Record<string, unknown>)
+      : payload;
+
+  const thumbnailDirectPath = rewriteNewsletterMediaPath(
+    thumbnailInfo?.thumbnail_direct_path || thumbnailInfo?.thumbnailDirectPath || payload?.thumbnail_direct_path
+  );
+  const thumbnailSha256 = toBase64Buffer(
+    thumbnailInfo?.thumbnail_sha256 || thumbnailInfo?.thumbnailSha256 || payload?.thumbnail_sha256
+  );
+
+  return {
+    thumbnailDirectPath: thumbnailDirectPath || null,
+    thumbnailSha256
+  };
+};
+
+const applyNewsletterUploadMetadata = (
+  message: proto.IMessage,
+  metadata: Pick<NewsletterUploadMetadata, 'directPath' | 'thumbnailDirectPath' | 'thumbnailSha256'>
+) => {
+  if (!message || typeof message !== 'object') return message;
+
+  const container =
+    (message as any).imageMessage ||
+    (message as any).videoMessage ||
+    (message as any).documentMessage;
+
+  if (!container || typeof container !== 'object') {
+    return message;
+  }
+
+  const rewrittenDirectPath = rewriteNewsletterMediaPath(metadata.directPath);
+  if (rewrittenDirectPath) {
+    container.directPath = rewrittenDirectPath;
+  }
+
+  if (metadata.thumbnailDirectPath) {
+    container.thumbnailDirectPath = rewriteNewsletterMediaPath(metadata.thumbnailDirectPath);
+  }
+
+  if (metadata.thumbnailSha256) {
+    container.thumbnailSha256 = metadata.thumbnailSha256;
+  }
+
+  if (container.fileSha256 && !container.fileEncSha256) {
+    container.fileEncSha256 = container.fileSha256;
+  }
+
+  if ('url' in container) {
+    delete container.url;
+  }
+
+  return message;
 };
 
 const STATUS_MEDIA_CONTENT_KEYS = ['image', 'video', 'audio', 'document', 'sticker'] as const;
@@ -635,6 +714,7 @@ class WhatsAppClient {
   leaseExpiresAt: string | null;
   leaseRenewTimer: NodeJS.Timeout | null;
   reconnectAttempts: number;
+  preAuthRegistrationFailures: number;
   conflictAttempts: number;
   maxReconnectAttempts: number;
   isConnecting: boolean;
@@ -683,6 +763,7 @@ class WhatsAppClient {
     this.leaseExpiresAt = null;
     this.leaseRenewTimer = null;
     this.reconnectAttempts = 0;
+    this.preAuthRegistrationFailures = 0;
     this.conflictAttempts = 0;
     this.maxReconnectAttempts = 5;
     this.isConnecting = false;
@@ -1936,7 +2017,7 @@ class WhatsAppClient {
       const now = Date.now();
       const versionTtlMs = 6 * 60 * 60 * 1000;
       const resolveLatestWaVersion =
-        String(process.env.WHATSAPP_RESOLVE_LATEST_VERSION || '').trim().toLowerCase() === 'true';
+        String(process.env.WHATSAPP_RESOLVE_LATEST_VERSION ?? 'true').trim().toLowerCase() !== 'false';
       const shouldRefreshVersion =
         resolveLatestWaVersion &&
         (!this.waVersion || !this.waVersionFetchedAtMs || now - this.waVersionFetchedAtMs > versionTtlMs);
@@ -2063,6 +2144,7 @@ class WhatsAppClient {
             this.qrGeneratedAtMs = Date.now();
             this.qrExpiresAtMs = this.qrGeneratedAtMs + qrTtlMs;
             this.qrGenerationCount += 1;
+            this.preAuthRegistrationFailures = 0;
             this.status = 'qr';
             this.lastError = null;
             this.reconnectAttempts = 0;
@@ -2086,6 +2168,7 @@ class WhatsAppClient {
           this.lastError = null;
           this.lastSeenAt = new Date();
           this.reconnectAttempts = 0;
+          this.preAuthRegistrationFailures = 0;
           this.conflictAttempts = 0; // Reset conflict counter on successful connection
           this.isAuthCorrupted = false;
           this.hasConnectedOnce = true;
@@ -2137,6 +2220,39 @@ class WhatsAppClient {
             this.lastError = 'QR expired. Click Hard Refresh to generate a new QR code.';
           } else {
             this.lastError = reason || 'Connection closed';
+          }
+
+          const hasAuthenticatedIdentity = Boolean(
+            this.hasConnectedOnce ||
+            this.lastSeenAt ||
+            this.meJid ||
+            ((socket as any)?.user?.id ? String((socket as any).user.id) : null)
+          );
+
+          if (statusCode === 405 && !hasAuthenticatedIdentity) {
+            this.preAuthRegistrationFailures += 1;
+            logger.warn(
+              {
+                attempt: this.preAuthRegistrationFailures,
+                statusCode,
+                reason
+              },
+              'WhatsApp pairing bootstrap failed before authentication completed'
+            );
+            await authStore.clearState();
+            await authStore.updateStatus('disconnected', null);
+
+            if (this.preAuthRegistrationFailures >= 3) {
+              this.status = 'error';
+              this.lastError =
+                'Fresh pairing required. Automatic recovery could not open a WhatsApp login code. Use Advanced recovery to request a new QR and pair this device again.';
+              await authStore.updateStatus('error', null);
+              return;
+            }
+
+            this.lastError = 'Preparing a fresh WhatsApp pairing session...';
+            this.scheduleReconnect(2000 * this.preAuthRegistrationFailures);
+            return;
           }
 
           logger.warn({ statusCode, reason }, 'WhatsApp connection closed');
@@ -3347,7 +3463,7 @@ class WhatsAppClient {
     mediaType: 'image' | 'video',
     fileHashB64: string,
     timeoutMs?: number
-  ): Promise<{ mediaUrl: string; directPath: string; handle: string }> {
+  ): Promise<NewsletterUploadMetadata> {
     const socket = this.socket as any;
     if (!socket?.refreshMediaConn) {
       throw new Error('Baileys socket does not expose refreshMediaConn');
@@ -3368,6 +3484,10 @@ class WhatsAppClient {
         const url = new URL(`https://${hostname}/newsletter/newsletter-${normalizedType}/${token}`);
         url.searchParams.set('auth', String(mediaConn?.auth || ''));
         url.searchParams.set('token', token);
+        url.searchParams.set('server_thumb_gen', '1');
+        if (normalizedType === 'video') {
+          url.searchParams.set('server_transcode', '1');
+        }
 
         const requestOptions = {
           method: 'POST',
@@ -3398,10 +3518,11 @@ class WhatsAppClient {
         }
 
         const mediaUrl = String(payload?.url || '').trim();
-        const directPath = String(payload?.direct_path || payload?.directPath || '').trim();
+        const directPath = rewriteNewsletterMediaPath(String(payload?.direct_path || payload?.directPath || '').trim());
         const handle = String(
           payload?.handle || payload?.media_handle || payload?.mediaHandle || payload?.object_id || ''
         ).trim();
+        const thumbnailInfo = getNewsletterUploadThumbnailInfo(payload);
 
         if (!mediaUrl || !directPath) {
           throw new Error('Newsletter media upload response is missing url or direct_path');
@@ -3410,7 +3531,13 @@ class WhatsAppClient {
           throw new Error('Newsletter media upload response is missing handle');
         }
 
-        return { mediaUrl, directPath, handle };
+        return {
+          mediaUrl,
+          directPath,
+          handle,
+          thumbnailDirectPath: thumbnailInfo.thumbnailDirectPath,
+          thumbnailSha256: thumbnailInfo.thumbnailSha256
+        };
       } catch (error) {
         lastError = getErrorMessage(error);
         logger.warn({ error: lastError, hostname, mediaType }, 'Newsletter media upload attempt failed');
@@ -3450,6 +3577,7 @@ class WhatsAppClient {
     } = await loadBaileys();
 
     let mediaHandle = '';
+    let uploadMetadata: NewsletterUploadMetadata | null = null;
     const upload = async (
       filePath: string,
       uploadOptions: { fileEncSha256B64: string; mediaType: string; timeoutMs?: number }
@@ -3460,6 +3588,7 @@ class WhatsAppClient {
         uploadOptions.fileEncSha256B64,
         uploadOptions.timeoutMs
       );
+      uploadMetadata = result;
       mediaHandle = result.handle;
       return {
         mediaUrl: result.mediaUrl,
@@ -3467,15 +3596,32 @@ class WhatsAppClient {
       };
     };
 
+    const preparedMessage = await prepareWAMessageMedia(content as Record<string, unknown>, {
+      ...options,
+      jid,
+      upload,
+      logger,
+      mediaCache: socket.mediaCache,
+      options: socket.options || { headers: { Origin: DEFAULT_ORIGIN } }
+    });
+    const uploadState = uploadMetadata as NewsletterUploadMetadata | null;
+    const appliedUploadMetadata: Pick<
+      NewsletterUploadMetadata,
+      'directPath' | 'thumbnailDirectPath' | 'thumbnailSha256'
+    > = uploadState
+      ? {
+        directPath: uploadState.directPath,
+        thumbnailDirectPath: uploadState.thumbnailDirectPath,
+        thumbnailSha256: uploadState.thumbnailSha256
+      }
+      : {
+        directPath: '',
+        thumbnailDirectPath: null,
+        thumbnailSha256: null
+      };
+
     const message = patchNewsletterMediaDirectPaths(
-      await prepareWAMessageMedia(content as Record<string, unknown>, {
-        ...options,
-        jid,
-        upload,
-        logger,
-        mediaCache: socket.mediaCache,
-        options: socket.options || { headers: { Origin: DEFAULT_ORIGIN } }
-      }),
+      applyNewsletterUploadMetadata(preparedMessage as proto.IMessage, appliedUploadMetadata),
       { force: Boolean(newsletterMediaPatchContext.getStore()) }
     ) as proto.IMessage;
 
@@ -3541,11 +3687,11 @@ class WhatsAppClient {
             async () => await this.sendNewsletterMediaMessage(jid, content, effectiveOptions)
           );
         } catch (newsletterError) {
-          logger.warn(
+          logger.error(
             { error: getErrorMessage(newsletterError), jid: normalizedJid },
-            'Dedicated newsletter media relay failed; falling back to Baileys sendMessage'
+            'Dedicated newsletter media relay failed'
           );
-          msg = await newsletterMediaPatchContext.run(true, sendOperation);
+          throw newsletterError;
         }
       } else {
         msg = isNewsletter
@@ -3917,6 +4063,7 @@ class WhatsAppClient {
     this.meJid = null;
     this.meName = null;
 
+    this.preAuthRegistrationFailures = 0;
     this.status = 'disconnected';
     this.resetQrLifecycle();
     this.lastError = null;
@@ -3973,6 +4120,7 @@ class WhatsAppClient {
     // Reset state
     this.isConnecting = false;
     this.reconnectAttempts = 0;
+    this.preAuthRegistrationFailures = 0;
     this.status = 'disconnected';
     this.resetQrLifecycle();
     this.lastError = null;

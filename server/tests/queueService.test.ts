@@ -444,6 +444,12 @@ describe('queueService __testUtils', () => {
     expect(testUtils.normalizeQueueLookbackHours(undefined)).toBe(24);
     expect(testUtils.normalizeQueueLookbackHours(999)).toBe(24);
     expect(testUtils.normalizeQueueLookbackHours(0)).toBe(1);
+    expect(testUtils.normalizeQueueCursorIso(new Date('2026-04-24T17:00:00.000Z'))).toBe(
+      '2026-04-24T17:00:00.000Z'
+    );
+    expect(testUtils.normalizeQueueCursorIso('Mon Apr 27 2026 09:06:00 GMT-0400')).toBe(
+      '2026-04-27T13:06:00.000Z'
+    );
     expect(testUtils.clampQueueCursorToLookback('2026-04-20T12:00:00.000Z', 1, nowMs)).toBe(
       '2026-04-24T16:30:00.000Z'
     );

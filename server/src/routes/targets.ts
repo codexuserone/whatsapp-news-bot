@@ -228,6 +228,21 @@ const sanitizeStoredTargets = async (supabase: ReturnType<typeof getSupabaseClie
   }
 };
 
+const resolveSyncTargetsOptions = (
+  body: { includeStatus?: unknown; strict?: unknown } | null | undefined,
+  query: { includeStatus?: unknown; strict?: unknown } | null | undefined
+) => {
+  const includeStatus =
+    WHATSAPP_STATUS_ENABLED &&
+    String(body?.includeStatus ?? query?.includeStatus ?? 'true').toLowerCase() !== 'false';
+  const strict = String(body?.strict ?? query?.strict ?? 'false').toLowerCase() === 'true';
+  return {
+    includeStatus,
+    strict,
+    skipIfDisconnected: true
+  };
+};
+
 const targetRoutes = () => {
   const router = express.Router();
   
@@ -317,14 +332,10 @@ const targetRoutes = () => {
       const whatsapp = req.app.locals.whatsapp as {
         getStatus?: () => { status?: string };
       } | null;
-      const includeStatus =
-        WHATSAPP_STATUS_ENABLED &&
-        String((req.body as { includeStatus?: unknown })?.includeStatus ?? req.query.includeStatus ?? 'true').toLowerCase() !==
-        'false';
-      const strict =
-        String((req.body as { strict?: unknown })?.strict ?? req.query.strict ?? 'false').toLowerCase() === 'true';
-
-      const result = await syncTargetsFromWhatsApp(whatsapp, { includeStatus, strict });
+      const result = await syncTargetsFromWhatsApp(
+        whatsapp,
+        resolveSyncTargetsOptions(req.body as { includeStatus?: unknown; strict?: unknown }, req.query as { includeStatus?: unknown; strict?: unknown })
+      );
       if (!result.ok) {
         return res.status(400).json({ error: result.reason || 'WhatsApp is not connected' });
       }
@@ -396,4 +407,7 @@ const targetRoutes = () => {
   return router;
 };
 
+targetRoutes.__testUtils = {
+  resolveSyncTargetsOptions
+};
 module.exports = targetRoutes;

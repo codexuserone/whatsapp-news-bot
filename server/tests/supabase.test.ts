@@ -35,19 +35,23 @@ describe('server Supabase client configuration', () => {
     expect(createClientMock.mock.calls[0]).toEqual([
       'https://example.supabase.co',
       'service-role-key',
-      {
+      expect.objectContaining({
         auth: {
           autoRefreshToken: false,
           persistSession: false,
           detectSessionInUrl: false
-        }
-      }
+        },
+        global: expect.objectContaining({
+          fetch: expect.any(Function)
+        })
+      })
     ]);
   });
 
   it('does not fall back to NEXT_PUBLIC keys in production', () => {
     process.env.NODE_ENV = 'production';
     process.env.SUPABASE_URL = 'https://example.supabase.co';
+    process.env.DB_PROVIDER = 'supabase';
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'public-anon-key';
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://public.supabase.co';
 
@@ -69,13 +73,16 @@ describe('server Supabase client configuration', () => {
     expect(createClientMock.mock.calls[0]).toEqual([
       'https://example.supabase.co',
       'anon-key',
-      {
+      expect.objectContaining({
         auth: {
           autoRefreshToken: false,
           persistSession: false,
           detectSessionInUrl: false
-        }
-      }
+        },
+        global: expect.objectContaining({
+          fetch: expect.any(Function)
+        })
+      })
     ]);
   });
 });

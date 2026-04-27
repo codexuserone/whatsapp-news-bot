@@ -12,6 +12,10 @@ services:
         value: 10000
       - key: NODE_VERSION
         value: "22"
+      - key: DB_PROVIDER
+        value: postgres
+      - key: DATABASE_URL
+        sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
@@ -77,7 +81,7 @@ services:
       - key: FEED_AUTOMATION_ALLOW_NON_IMAGE_MEDIA
         value: "false"
       - key: MAX_AUTO_QUEUE_ITEM_AGE_HOURS
-        value: "72"
+        value: "24"
       - key: WHATSAPP_STATUS_AUDIENCE_JIDS
         sync: false
       - key: WHATSAPP_ALLOW_EMPTY_STATUS_AUDIENCE

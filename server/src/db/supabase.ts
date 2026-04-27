@@ -1,9 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 const { createClient } = require('@supabase/supabase-js');
+const {
+  createPostgresCompatClient,
+  resolvePostgresConnectionString,
+  testPostgresConnection
+} = require('./postgresCompat');
 const { getErrorMessage } = require('../utils/errorUtils');
 
 let supabaseClient: SupabaseClient | null = null;
+let postgresCompatClient: any = null;
 const isProd = process.env.NODE_ENV === 'production';
 const SUPABASE_FETCH_TIMEOUT_MS = Math.max(
   1000,
@@ -19,6 +25,14 @@ let lastFailureAt = 0;
 let lastFailureMessage: string | null = null;
 
 const resolveSupabaseUrl = () => process.env.SUPABASE_URL || '';
+const resolveDbProvider = () => {
+  const explicit = String(process.env.DB_PROVIDER || '').trim().toLowerCase();
+  if (explicit === 'postgres' || explicit === 'pg' || explicit === 'neon') return 'postgres';
+  if (explicit === 'supabase') return 'supabase';
+
+  if (resolvePostgresConnectionString()) return 'postgres';
+  return 'supabase';
+};
 
 const resolveSupabaseKey = () => {
   const serviceRoleKey =
@@ -43,6 +57,7 @@ const getCircuitRetryAfterMs = () => Math.max(circuitOpenUntil - now(), 0);
 const isSupabaseCircuitOpen = () => getCircuitRetryAfterMs() > 0;
 
 const getSupabaseHealthState = () => ({
+  provider: resolveDbProvider(),
   circuitOpen: isSupabaseCircuitOpen(),
   retryAfterMs: getCircuitRetryAfterMs(),
   lastFailureAt: lastFailureAt ? new Date(lastFailureAt).toISOString() : null,
@@ -108,6 +123,17 @@ const fetchWithTimeout = async (input: RequestInfo | URL, init?: RequestInit): P
 };
 
 function getSupabaseClient(): SupabaseClient | null {
+  if (resolveDbProvider() === 'postgres') {
+    if (postgresCompatClient) return postgresCompatClient;
+
+    postgresCompatClient = createPostgresCompatClient();
+    if (!postgresCompatClient) {
+      console.error('Missing Postgres credentials. Please set DATABASE_URL or DB_PROVIDER-compatible connection settings.');
+      return null;
+    }
+    return postgresCompatClient;
+  }
+
   if (supabaseClient) return supabaseClient;
 
   const supabaseUrl = resolveSupabaseUrl();
@@ -142,6 +168,16 @@ function handleSupabaseError(error: { message?: string } | null, context = ''): 
 
 async function testConnection(): Promise<boolean> {
   try {
+    if (resolveDbProvider() === 'postgres') {
+      const connected = await testPostgresConnection();
+      if (connected) {
+        markSupabaseSuccess();
+      } else {
+        markSupabaseFailure(new Error('Postgres connection failed'));
+      }
+      return connected;
+    }
+
     if (isSupabaseCircuitOpen()) {
       console.error(
         'Supabase connection skipped:',

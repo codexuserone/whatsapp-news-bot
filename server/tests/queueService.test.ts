@@ -441,8 +441,8 @@ describe('queueService __testUtils', () => {
   it('clamps queue cursors to a bounded lookback so old backlog is not replayed', () => {
     const nowMs = Date.parse('2026-04-24T17:30:00.000Z');
 
-    expect(testUtils.normalizeQueueLookbackHours(undefined)).toBe(72);
-    expect(testUtils.normalizeQueueLookbackHours(999)).toBe(72);
+    expect(testUtils.normalizeQueueLookbackHours(undefined)).toBe(24);
+    expect(testUtils.normalizeQueueLookbackHours(999)).toBe(24);
     expect(testUtils.normalizeQueueLookbackHours(0)).toBe(1);
     expect(testUtils.clampQueueCursorToLookback('2026-04-20T12:00:00.000Z', 1, nowMs)).toBe(
       '2026-04-24T16:30:00.000Z'

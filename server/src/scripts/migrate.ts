@@ -104,15 +104,23 @@ const resolveClientConfig = async (databaseUrl: string) => {
   const parsed = new URL(databaseUrl);
   const host = parsed.hostname;
   let resolvedHost = host;
+  const shouldPreserveHostForSni =
+    /\.neon\.tech$/i.test(host) ||
+    /\.aws\.neon\.tech$/i.test(host) ||
+    host.includes('-pooler.');
 
-  try {
-    const lookup = await dns.promises.lookup(host, { family: 4 });
-    if (lookup?.address) {
-      resolvedHost = lookup.address;
-      process.stdout.write(`Resolved ${host} -> ${resolvedHost} (IPv4)\n`);
+  if (!shouldPreserveHostForSni) {
+    try {
+      const lookup = await dns.promises.lookup(host, { family: 4 });
+      if (lookup?.address) {
+        resolvedHost = lookup.address;
+        process.stdout.write(`Resolved ${host} -> ${resolvedHost} (IPv4)\n`);
+      }
+    } catch {
+      // Fall back to original host. NODE_OPTIONS/ipv4first still applies globally.
     }
-  } catch {
-    // Fall back to original host. NODE_OPTIONS/ipv4first still applies globally.
+  } else {
+    process.stdout.write(`Preserving ${host} hostname for TLS/SNI\n`);
   }
 
   const database = parsed.pathname.replace(/^\//, '') || 'postgres';

@@ -11,9 +11,26 @@ const isProd = process.env.NODE_ENV === 'production';
 const defaultPort = process.env.PORT || 10000;
 const baseUrl =
   process.env.BASE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${defaultPort}`;
+const dbProvider = String(process.env.DB_PROVIDER || '').trim().toLowerCase();
+const hasPostgresUrl = Boolean(
+  String(
+    process.env.DATABASE_URL ||
+    process.env.NEON_DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.SUPABASE_POOLER_URL ||
+    process.env.SUPABASE_DB_URL ||
+    ''
+  ).trim()
+);
+const hasSupabaseCredentials = Boolean(
+  String(process.env.SUPABASE_URL || '').trim() &&
+  String(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || '').trim()
+);
 
 const env = {
   PORT: process.env.PORT || 10000,
+  DB_PROVIDER: dbProvider || (hasPostgresUrl ? 'postgres' : 'supabase'),
+  DATABASE_URL: process.env.DATABASE_URL || process.env.NEON_DATABASE_URL || process.env.POSTGRES_URL || process.env.SUPABASE_DB_URL,
   // Supabase configuration
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
@@ -27,9 +44,9 @@ const env = {
   DEFAULT_INTRA_TARGET_DELAY_SEC: Number(process.env.DEFAULT_INTRA_TARGET_DELAY_SEC || 3)
 };
 
-// In production, we require Supabase credentials
-if (isProd && (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY)) {
-  throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required in production');
+// In production, require either direct Postgres credentials or Supabase REST credentials.
+if (isProd && !hasPostgresUrl && !hasSupabaseCredentials) {
+  throw new Error('Either DATABASE_URL or SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required in production');
 }
 
 module.exports = env;

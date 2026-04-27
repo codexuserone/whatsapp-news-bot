@@ -41,7 +41,7 @@ type FeedItemInput = {
 
 type FeedItemRecord = { id: string } & Record<string, unknown>;
 
-const DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS = Math.max(Number(process.env.MAX_AUTO_QUEUE_ITEM_AGE_HOURS || 72), 1);
+const DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS = Math.max(Number(process.env.MAX_AUTO_QUEUE_ITEM_AGE_HOURS || 24), 1);
 
 const isFeedItemFreshEnoughForAutoQueue = (
   item: Record<string, unknown>,

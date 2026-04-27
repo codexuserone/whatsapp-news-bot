@@ -98,7 +98,7 @@ const DEFAULT_POST_SEND_EDIT_WINDOW_MINUTES = 15;
 const DEFAULT_POST_SEND_CORRECTION_WINDOW_MINUTES = 15;
 const MAX_POST_SEND_EDIT_WINDOW_MINUTES = 15;
 const MAX_POST_SEND_CORRECTION_WINDOW_MINUTES = 15;
-const DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS = Math.max(Number(process.env.MAX_AUTO_QUEUE_ITEM_AGE_HOURS || 72), 1);
+const DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS = Math.max(Number(process.env.MAX_AUTO_QUEUE_ITEM_AGE_HOURS || 24), 1);
 const DEFAULT_UNCERTAIN_RETRY_DELAY_MS = 120000;
 const UNCERTAIN_MATCH_LOOKBACK_MS = 30000;
 const UNCERTAIN_MATCH_GRACE_MS = 30000;
@@ -3184,7 +3184,7 @@ const queueRecentMissingForSchedule = async (
   if (!Array.isArray(targets) || !targets.length) return 0;
   if (!schedule.last_run_at && !schedule.last_queued_at) return 0;
 
-  const lookback = Math.min(Math.max(Number(lookbackHours) || 0, 1), 72);
+  const lookback = Math.min(Math.max(Number(lookbackHours) || 0, 1), DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS);
   const lookbackCutoffMs = Date.now() - lookback * 60 * 60 * 1000;
   const cursorCutoffMs = Date.parse(String(schedule.last_queued_at || schedule.last_run_at || ''));
   const sinceMs = Number.isFinite(cursorCutoffMs)

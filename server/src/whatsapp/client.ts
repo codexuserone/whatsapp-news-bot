@@ -186,7 +186,7 @@ const buildStatusDeliveryRecipients = (recipients: string[], selfJid: unknown) =
 
   const normalizedSelf = normalizeStatusAudienceJid(selfJid);
   if (!normalizedSelf) return normalizedRecipients;
-  return normalizedRecipients.filter((recipient) => recipient !== normalizedSelf);
+  return Array.from(new Set([normalizedSelf, ...normalizedRecipients]));
 };
 
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict' | 'paused';
@@ -3625,7 +3625,7 @@ class WhatsAppClient {
       );
 
       options = { ...sanitized.options, broadcast: true, statusJidList };
-      logger.debug(
+      logger.info(
         {
           participantCount: statusJidList.length,
           explicitCount: dedupedExplicit.length,

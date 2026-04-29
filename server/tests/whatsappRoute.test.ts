@@ -15,6 +15,30 @@ describe('whatsapp route test-send logging', () => {
     expect(__testUtils.resolveSendTestTimeoutMs('120363406955649221@newsletter', 'video')).toBe(15000);
   });
 
+  it('does not require server ACKs for channel test-send confirmation', () => {
+    expect(__testUtils.resolveTestSendConfirmationOptions('120363406955649221@newsletter', null)).toEqual({
+      upsertTimeoutMs: 5000,
+      ackTimeoutMs: 15000,
+      requireServerAck: false,
+      failureGraceMs: 3000
+    });
+    expect(__testUtils.resolveTestSendConfirmationOptions('120363406955649221@newsletter', 'image')).toEqual({
+      upsertTimeoutMs: 30000,
+      ackTimeoutMs: 60000,
+      requireServerAck: false,
+      failureGraceMs: 3000
+    });
+  });
+
+  it('allows a status failure grace without requiring server ACKs', () => {
+    expect(__testUtils.resolveTestSendConfirmationOptions('status@broadcast', 'video')).toEqual({
+      upsertTimeoutMs: 30000,
+      ackTimeoutMs: 60000,
+      requireServerAck: false,
+      failureGraceMs: 5000
+    });
+  });
+
   it('marks test sends uncertain when no message id is present', () => {
     const result = __testUtils.resolveTestSendLogResolution({
       messageId: null,

@@ -256,6 +256,15 @@ const resolveSendTestTimeoutMs = (jid: string, mediaType: string | null) => {
   return mediaType ? GROUP_MEDIA_SEND_TIMEOUT_MS : GROUP_SEND_TIMEOUT_MS;
 };
 
+const resolveTestSendConfirmationOptions = (jid: string, mediaType: string | null) => {
+  const hasMedia = Boolean(String(mediaType || '').trim());
+  const isStatus = String(jid || '').trim() === 'status@broadcast';
+  const failureGraceMs = isStatus ? 5000 : isNewsletterJid(jid) ? 3000 : 0;
+  return hasMedia
+    ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck: false, failureGraceMs }
+    : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck: false, failureGraceMs };
+};
+
 const toOriginOrUndefined = (value?: string | null) => {
   if (!value) return undefined;
   try {
@@ -1580,12 +1589,10 @@ const whatsappRoutes = () => {
           throw new Error('Test message was not assigned a WhatsApp message id');
         }
         if (confirmationRequired && messageId && whatsapp?.confirmSend) {
-          const requireServerAck = isNewsletterJid(normalizedJid);
-          const failureGraceMs = isStatusBroadcast(normalizedJid) ? 5000 : 0;
-          const timeouts = (imageUrl || videoUrl || imageDataUrl || videoDataUrl)
-            ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck, failureGraceMs }
-            : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck, failureGraceMs };
-          confirmation = await whatsapp.confirmSend(messageId, timeouts);
+          confirmation = await whatsapp.confirmSend(
+            messageId,
+            resolveTestSendConfirmationOptions(normalizedJid, requestedMediaType)
+          );
         }
         const held = shouldHoldRejectedChannelMediaTestSend({
           jid: normalizedJid,
@@ -1982,6 +1989,7 @@ module.exports.__testUtils = {
   assertUsableStatusAudience,
   buildUncertainSendMessage,
   isGroupJid,
+  resolveTestSendConfirmationOptions,
   resolveSendTestTimeoutMs,
   resolveTestSendLogResolution
 };

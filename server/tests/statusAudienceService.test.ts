@@ -546,6 +546,57 @@ describe('statusAudienceService', () => {
         expect(tables.status_recipients.map((row) => row.recipient_jid).sort()).toEqual(result.recipients);
     });
 
+    it('does not reuse an old env-limited snapshot when status audience mode is auto', async () => {
+        process.env.WHATSAPP_STATUS_AUDIENCE_JIDS = '19144477725@s.whatsapp.net';
+        const { supabase, tables } = buildSupabaseMock({
+            status_recipients: [
+                {
+                    session_id: 'primary',
+                    recipient_jid: '19144477725@s.whatsapp.net',
+                    refreshed_at: new Date().toISOString(),
+                    sources: {
+                        contactsCache: 0,
+                        storeContacts: 0,
+                        storeChats: 0,
+                        groupMetadata: 0,
+                        env: 1,
+                        me: 1,
+                        activeIndividualTargets: 0,
+                        recentSuccessfulDirectRecipients: 0
+                    },
+                    warnings: ['Status audience is limited to WHATSAPP_STATUS_AUDIENCE_JIDS.']
+                }
+            ]
+        });
+        getSupabaseClientMock.mockReturnValue(supabase);
+
+        const result = await ensureFreshStatusRecipients(
+            {
+                getStatus: () => ({ status: 'connected' }),
+                getStatusParticipants: () => ['16465527019@s.whatsapp.net'],
+                getStatusAudience: () => ({
+                    participantCount: 1,
+                    sample: ['16465527019@s.whatsapp.net'],
+                    selfJid: '16465527019@s.whatsapp.net',
+                    sources: {
+                        contactsCache: 0,
+                        storeContacts: 0,
+                        storeChats: 0,
+                        groupMetadata: 0,
+                        env: 0,
+                        me: 1
+                    },
+                    warnings: []
+                })
+            },
+            { maxAgeMinutes: 10, sampleSize: 10 }
+        );
+
+        expect(result.recipients).toEqual([]);
+        expect(result.warnings.some((warning: string) => warning.includes('limited to WHATSAPP_STATUS_AUDIENCE_JIDS'))).toBe(false);
+        expect(tables.status_recipients).toHaveLength(0);
+    });
+
     it('drops implicit group LID recipients when no phone mappings or explicit recipients exist', async () => {
         const { supabase, tables } = buildSupabaseMock();
         getSupabaseClientMock.mockReturnValue(supabase);

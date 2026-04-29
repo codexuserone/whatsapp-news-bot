@@ -193,6 +193,13 @@ const getExplicitAudienceSignalCount = (sources: Partial<StatusAudienceSources> 
   Math.max(0, Math.floor(Number(sources?.activeIndividualTargets || 0))) +
   Math.max(0, Math.floor(Number(sources?.recentSuccessfulDirectRecipients || 0)));
 
+const getNonEnvTrustedAudienceSignalCount = (sources: Partial<StatusAudienceSources> | null | undefined) =>
+  Math.max(0, getTrustedAudienceSignalCount(sources) - Math.max(0, Math.floor(Number(sources?.env || 0))));
+
+const isEnvLimitedSnapshot = (snapshot: RefreshResult) =>
+  Math.max(0, Math.floor(Number(snapshot.sources?.env || 0))) > 0 &&
+  getNonEnvTrustedAudienceSignalCount(snapshot.sources) <= 0;
+
 const ALLOW_UNMAPPED_LID_STATUS_AUDIENCE =
   String(process.env.WHATSAPP_STATUS_ALLOW_UNMAPPED_LID_AUDIENCE || '').trim().toLowerCase() === 'true';
 
@@ -219,8 +226,12 @@ const isLidHeavySnapshot = (snapshot: RefreshResult) => {
   return lidCount / snapshot.recipients.length >= 0.9;
 };
 
-const shouldTrustStoredSnapshot = (snapshot: RefreshResult) => {
+const shouldTrustStoredSnapshot = (
+  snapshot: RefreshResult,
+  options?: { allowEnvLimited?: boolean }
+) => {
   if (snapshot.participantCount <= 0) return false;
+  if (options?.allowEnvLimited === false && isEnvLimitedSnapshot(snapshot)) return false;
   if (getTrustedAudienceSignalCount(snapshot.sources) <= 0) return false;
   if (snapshot.participantCount <= 1 && getExplicitAudienceSignalCount(snapshot.sources) <= 0) return false;
   if (
@@ -307,10 +318,11 @@ const getActiveIndividualTargetRecipients = async (supabase: SupabaseClient): Pr
 const shouldPreserveStoredSnapshot = (
   stored: RefreshResult,
   freshParticipantCount: number,
-  freshSources: Partial<StatusAudienceSources> | null | undefined
+  freshSources: Partial<StatusAudienceSources> | null | undefined,
+  options?: { allowEnvLimited?: boolean }
 ) => {
   if (!stored.recipients.length) return false;
-  if (!shouldTrustStoredSnapshot(stored)) return false;
+  if (!shouldTrustStoredSnapshot(stored, options)) return false;
   if (
     stored.participantCount < MIN_PRESERVED_SNAPSHOT_PARTICIPANTS &&
     getTrustedAudienceSignalCount(stored.sources) <= 0
@@ -635,7 +647,7 @@ const refreshStatusRecipients = async (
     }
   }
 
-  if (shouldPreserveStoredSnapshot(stored, participants.length, sources)) {
+  if (shouldPreserveStoredSnapshot(stored, participants.length, sources, { allowEnvLimited: explicitAudience.source !== 'auto' })) {
     const preservedRecipients = Array.from(new Set([...stored.recipients, ...participants])).sort();
     const preservedSources = mergeSources(stored.sources, sources);
     const preservedWarnings = uniqueStrings([
@@ -719,7 +731,8 @@ const ensureFreshStatusRecipients = async (
   whatsappClient?: StatusAudienceClient | null,
   options?: { maxAgeMinutes?: number; sampleSize?: number }
 ): Promise<RefreshResult> => {
-  if ((await getConfiguredExplicitAudienceRecipients()).recipients.length) {
+  const explicitAudience = await getConfiguredExplicitAudienceRecipients();
+  if (explicitAudience.recipients.length) {
     return refreshStatusRecipients(whatsappClient, options);
   }
 
@@ -745,7 +758,7 @@ const ensureFreshStatusRecipients = async (
   const refreshedAtMs = stored.refreshedAt ? Date.parse(stored.refreshedAt) : Number.NaN;
   const isFresh = Number.isFinite(refreshedAtMs) && Date.now() - refreshedAtMs <= maxAgeMinutes * 60 * 1000;
 
-  if (isFresh && shouldTrustStoredSnapshot(stored)) {
+  if (isFresh && shouldTrustStoredSnapshot(stored, { allowEnvLimited: explicitAudience.source !== 'auto' })) {
     cacheSnapshot(stored);
     return stored;
   }

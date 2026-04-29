@@ -74,6 +74,8 @@ services:
         value: "300000"
       - key: WHATSAPP_STATUS_ENABLED
         value: "true"
+      - key: WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS
+        value: "true"
       - key: WHATSAPP_ALLOW_POST_SEND_MEDIA_EDITS
         value: "false"
       - key: WHATSAPP_ALLOW_AUTO_REPLACE_CORRECTIONS

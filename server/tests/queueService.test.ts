@@ -458,6 +458,22 @@ describe('queueService __testUtils', () => {
     );
   });
 
+  it('detects stuck queue pagination cursors after timestamp precision is rounded', () => {
+    const cursorAt = '2026-04-29T00:31:42.498Z';
+
+    expect(testUtils.hasQueueCursorAdvanced(cursorAt, 'b', cursorAt, 'b')).toBe(false);
+    expect(testUtils.hasQueueCursorAdvanced(cursorAt, 'b', cursorAt, 'c')).toBe(true);
+    expect(
+      testUtils.hasQueueCursorAdvanced(
+        cursorAt,
+        'b',
+        new Date('2026-04-29T00:31:42.498Z'),
+        'b'
+      )
+    ).toBe(false);
+    expect(testUtils.hasQueueCursorAdvanced(cursorAt, 'b', '2026-04-29T00:31:42.499Z', 'a')).toBe(true);
+  });
+
   it('accepts only real image candidates for feed automation images', () => {
     expect(testUtils.isUsableFeedImageUrl('https://example.com/photo.jpg')).toBe(true);
     expect(testUtils.isUsableFeedImageUrl('https://example.com/video.mp4')).toBe(false);

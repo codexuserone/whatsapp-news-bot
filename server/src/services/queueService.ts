@@ -3019,6 +3019,30 @@ const clampQueueCursorToLookback = (
   return new Date(sinceMs).toISOString();
 };
 
+const hasQueueCursorAdvanced = (
+  previousAt: unknown,
+  previousId: unknown,
+  nextAt: unknown,
+  nextId: unknown
+) => {
+  const normalizedPreviousAt = normalizeQueueCursorIso(previousAt);
+  const normalizedNextAt = normalizeQueueCursorIso(nextAt);
+  if (!normalizedNextAt) return false;
+  if (!normalizedPreviousAt) return true;
+
+  const previousMs = Date.parse(normalizedPreviousAt);
+  const nextMs = Date.parse(normalizedNextAt);
+  if (Number.isFinite(previousMs) && Number.isFinite(nextMs)) {
+    if (nextMs > previousMs) return true;
+    if (nextMs < previousMs) return false;
+  }
+
+  const previousIdValue = String(previousId || '').trim();
+  const nextIdValue = String(nextId || '').trim();
+  if (!previousIdValue) return Boolean(nextIdValue);
+  return Boolean(nextIdValue && nextIdValue > previousIdValue);
+};
+
 const isAutoQueueReplayTooOld = (
   log: { created_at?: string | null },
   item: { pub_date?: string | null; created_at?: string | null } | null | undefined,
@@ -3063,6 +3087,8 @@ const queueSinceLastRunForSchedule = async (
   let cursorId: string | null = null;
   let totalQueued = 0;
   let totalFeedItems = 0;
+  let pageCount = 0;
+  const MAX_FEED_QUEUE_PAGES = 1000;
 
   // Pre-fetch existing combinations to avoid duplicates in batch
   const existingCombos = new Set<string>();
@@ -3123,7 +3149,8 @@ const queueSinceLastRunForSchedule = async (
     return inserted;
   };
 
-  while (true) {
+  while (pageCount < MAX_FEED_QUEUE_PAGES) {
+    pageCount += 1;
     let query = supabase
       .from('feed_items')
       .select('id, created_at, pub_date')
@@ -3147,11 +3174,20 @@ const queueSinceLastRunForSchedule = async (
     const pagePlan = planFeedDispatchPage((page || []) as Array<{ id?: string; created_at?: string; pub_date?: string }>);
     const items = pagePlan.dispatchItems.filter((item) => isFeedItemFreshEnoughForAutoQueue(item, maxLookbackHours));
     if (!items.length) {
-      cursorAt = normalizeQueueCursorIso(pagePlan.cursorAt) || cursorAt;
-      cursorId = pagePlan.cursorId || cursorId;
       if (!pagePlan.dispatchItems.length) {
         break;
       }
+      const nextCursorAt: string | null = normalizeQueueCursorIso(pagePlan.cursorAt) || cursorAt;
+      const nextCursorId: string | null = pagePlan.cursorId ? String(pagePlan.cursorId) : cursorId;
+      if (!hasQueueCursorAdvanced(cursorAt, cursorId, nextCursorAt, nextCursorId)) {
+        logger.warn(
+          { scheduleId: schedule.id, cursorAt, cursorId, nextCursorAt, nextCursorId },
+          'Stopping feed queue pagination because the cursor did not advance'
+        );
+        break;
+      }
+      cursorAt = nextCursorAt;
+      cursorId = nextCursorId;
       continue;
     }
 
@@ -3181,8 +3217,21 @@ const queueSinceLastRunForSchedule = async (
       totalQueued += await flushBatch(batch);
     }
 
-    cursorAt = normalizeQueueCursorIso(pagePlan.cursorAt) || cursorAt;
-    cursorId = pagePlan.cursorId || cursorId;
+    const nextCursorAt: string | null = normalizeQueueCursorIso(pagePlan.cursorAt) || cursorAt;
+    const nextCursorId: string | null = pagePlan.cursorId ? String(pagePlan.cursorId) : cursorId;
+    if (!hasQueueCursorAdvanced(cursorAt, cursorId, nextCursorAt, nextCursorId)) {
+      logger.warn(
+        { scheduleId: schedule.id, cursorAt, cursorId, nextCursorAt, nextCursorId },
+        'Stopping feed queue pagination because the cursor did not advance'
+      );
+      break;
+    }
+    cursorAt = nextCursorAt;
+    cursorId = nextCursorId;
+  }
+
+  if (pageCount >= MAX_FEED_QUEUE_PAGES) {
+    logger.warn({ scheduleId: schedule.id, pageCount }, 'Stopped feed queue pagination after page limit');
   }
 
   return { queued: totalQueued, feedItemCount: totalFeedItems, cursorAt: cursorAt || null };
@@ -5296,6 +5345,7 @@ module.exports = {
     normalizeQueueLookbackHours,
     normalizeQueueCursorIso,
     clampQueueCursorToLookback,
+    hasQueueCursorAdvanced,
     isUsableFeedImageUrl,
     isAuthStateError,
     isConnectionStateError,

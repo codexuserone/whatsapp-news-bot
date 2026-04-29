@@ -33,6 +33,13 @@ export type Template = {
   active: boolean;
   send_images?: boolean | null;
   send_mode?: 'auto_media' | 'media_only' | 'text_preview' | 'text_only' | null;
+  sequence_steps?: Array<{
+    label?: string | null;
+    content: string;
+    send_mode: 'auto_media' | 'media_only' | 'text_preview' | 'text_only';
+    delay_seconds?: number | null;
+    active?: boolean | null;
+  }> | null;
 };
 
 export type Target = {
@@ -76,6 +83,8 @@ export type LogEntry = {
   media_type?: string | null;
   media_sent?: boolean | null;
   media_error?: string | null;
+  sequence_step_index?: number | null;
+  sequence_step_label?: string | null;
   sent_at?: string | null;
   delivered_at?: string | null;
   read_at?: string | null;
@@ -140,6 +149,8 @@ export type QueueItem = {
   schedule_name?: string | null;
   target_name?: string | null;
   target_type?: 'individual' | 'group' | 'channel' | 'status' | null;
+  sequence_step_index?: number | null;
+  sequence_step_label?: string | null;
   delivery_mode?: 'immediate' | 'batch' | 'batched' | null;
   batch_times?: string[] | null;
   title?: string | null;
@@ -287,6 +298,32 @@ export type WhatsAppStatusAudience = {
   };
   warnings?: string[];
   stale?: boolean;
+};
+
+export type BackendSettings = {
+  app_name?: string;
+  app_paused?: boolean;
+  default_timezone?: string;
+  log_retention_days?: number;
+  message_delay_ms?: number;
+  max_retries?: number;
+  defaultInterTargetDelaySec?: number;
+  defaultIntraTargetDelaySec?: number;
+  post_send_edit_window_minutes?: number;
+  post_send_correction_window_minutes?: number;
+  processingTimeoutMinutes?: number;
+  dedupeThreshold?: number;
+  authRetentionDays?: number;
+  initial_fetch_limit?: number;
+  max_pending_age_hours?: number;
+  send_timeout_ms?: number;
+  reconcile_queue_lookback_hours?: number;
+  retentionDays?: number;
+  whatsapp_paused?: boolean;
+  whatsapp_paused_at?: string | null;
+  status_audience_mode?: 'auto' | 'explicit' | string;
+  status_audience_jids?: string;
+  status_test_audience_jids?: string;
 };
 
 export type WhatsAppChannel = {

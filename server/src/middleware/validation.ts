@@ -156,7 +156,23 @@ const schemas = {
     send_mode: z
       .enum(['auto_media', 'media_only', 'text_preview', 'text_only', 'image', 'image_only', 'link_preview'])
       .optional()
-      .default('auto_media')
+      .default('auto_media'),
+    sequence_steps: z
+      .array(
+        z.object({
+          label: z.string().max(120).optional().nullable().transform(normalizeOptional),
+          content: z.string().min(1).max(5000),
+          send_mode: z
+            .enum(['auto_media', 'media_only', 'text_preview', 'text_only', 'image', 'image_only', 'link_preview'])
+            .optional()
+            .default('auto_media'),
+          delay_seconds: z.coerce.number().int().min(0).max(3600).optional().default(0),
+          active: z.boolean().optional().default(true)
+        })
+      )
+      .max(12)
+      .optional()
+      .default([])
   }),
 
   testMessage: z

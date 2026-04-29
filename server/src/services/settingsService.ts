@@ -27,6 +27,9 @@ const DEFAULTS = {
     WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES
   ),
   reconcile_queue_lookback_hours: Number(process.env.RECONCILE_QUEUE_LOOKBACK_HOURS || 12),
+  status_audience_mode: 'auto',
+  status_audience_jids: '',
+  status_test_audience_jids: String(process.env.WHATSAPP_STATUS_TEST_AUDIENCE_JIDS || '').trim(),
   dedupeThreshold: 0.88,
   processingTimeoutMinutes: Number(process.env.PROCESSING_TIMEOUT_MINUTES || 30),
   app_paused: false,
@@ -68,6 +71,16 @@ const normalizeTimezone = (value: unknown, fallback: string) => {
     return fallback;
   }
 };
+
+const normalizeJidListText = (value: unknown) =>
+  Array.from(
+    new Set(
+      String(value || '')
+        .split(/[\n,]+/)
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    )
+  ).join(', ');
 
 const normalizeSettingsPatch = (updates: Record<string, unknown>) => {
   const next = { ...updates };
@@ -177,6 +190,19 @@ const normalizeSettingsPatch = (updates: Record<string, unknown>) => {
       1,
       168
     );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'status_audience_mode')) {
+    const mode = String(next.status_audience_mode || '').trim().toLowerCase();
+    next.status_audience_mode = mode === 'explicit' ? 'explicit' : 'auto';
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'status_audience_jids')) {
+    next.status_audience_jids = normalizeJidListText(next.status_audience_jids);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'status_test_audience_jids')) {
+    next.status_test_audience_jids = normalizeJidListText(next.status_test_audience_jids);
   }
 
   if (Object.prototype.hasOwnProperty.call(next, 'dedupeThreshold')) {

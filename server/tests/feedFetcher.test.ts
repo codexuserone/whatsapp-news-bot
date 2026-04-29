@@ -133,13 +133,13 @@ describe('fetchFeedItemsWithMeta', () => {
             guid: '1050755',
             description: 'Real status text with details.',
             content: 'Real status text with details.',
-            imageUrl: 'https://files.anash.org/uploads/2026/04/medium-large.jpeg',
-            mediaUrl: 'https://files.anash.org/uploads/2026/04/medium-large.jpeg',
+            imageUrl: 'https://files.anash.org/uploads/2026/04/full.jpeg',
+            mediaUrl: 'https://files.anash.org/uploads/2026/04/full.jpeg',
             mediaKind: 'image'
         });
     });
 
-    it('uses WordPress generated image sizes for video attachments instead of the video URL or site default', async () => {
+    it('uses WordPress video featured media as video instead of a generated poster image', async () => {
         mockSafeAxiosRequest.mockResolvedValueOnce({
             status: 200,
             headers: { 'content-type': 'application/json' },
@@ -175,10 +175,11 @@ describe('fetchFeedItemsWithMeta', () => {
         });
 
         expect(result.items[0]).toMatchObject({
-            imageUrl: 'https://files.anash.org/uploads/2026/04/status-video-poster-768x432.jpg',
-            mediaUrl: 'https://files.anash.org/uploads/2026/04/status-video-poster-768x432.jpg',
-            mediaKind: 'image'
+            mediaUrl: 'https://files.anash.org/uploads/2026/04/status-video.mp4',
+            mediaKind: 'video',
+            mediaMime: 'video/mp4'
         });
+        expect(result.items[0]?.imageUrl).toBeUndefined();
     });
 
     it('discovers feed endpoints from HTML sources before parsing items', async () => {

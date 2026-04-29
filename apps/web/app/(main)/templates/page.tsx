@@ -24,10 +24,18 @@ const schema = z.object({
   content: z.string().min(1),
   description: z.string().optional(),
   active: z.boolean().default(true),
-  send_mode: z.enum(['auto_media', 'media_only', 'text_preview', 'text_only']).default('auto_media')
+  send_mode: z.enum(['auto_media', 'media_only', 'text_preview', 'text_only']).default('auto_media'),
+  sequence_steps: z.array(z.object({
+    label: z.string().optional(),
+    content: z.string().min(1),
+    send_mode: z.enum(['auto_media', 'media_only', 'text_preview', 'text_only']).default('auto_media'),
+    delay_seconds: z.coerce.number().int().min(0).max(3600).default(0),
+    active: z.boolean().default(true)
+  })).max(12).default([])
 });
 
 type TemplateFormValues = z.infer<typeof schema>;
+type TemplateSendMode = TemplateFormValues['send_mode'];
 
 const WORD_JOINER = '\u2060';
 
@@ -131,6 +139,26 @@ const getTemplateModeDescription = (mode?: Template['send_mode'] | null) => {
   }
 };
 
+const resolveTemplateSendMode = (mode: unknown): TemplateSendMode => {
+  if (mode === 'media_only' || mode === 'text_preview' || mode === 'text_only' || mode === 'auto_media') {
+    return mode;
+  }
+  return 'auto_media';
+};
+
+const getTemplateSequenceSteps = (template?: Template | null): TemplateFormValues['sequence_steps'] =>
+  Array.isArray(template?.sequence_steps)
+    ? template.sequence_steps
+        .map((step, index) => ({
+          label: String(step.label || `Step ${index + 1}`),
+          content: String(step.content || ''),
+          send_mode: resolveTemplateSendMode(step.send_mode),
+          delay_seconds: Number(step.delay_seconds || 0),
+          active: step.active !== false
+        }))
+        .filter((step) => step.content.trim())
+    : [];
+
 const TemplatesPage = () => {
   const queryClient = useQueryClient();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -192,7 +220,7 @@ const TemplatesPage = () => {
 
   const selectedPreviewTarget = previewTargetByKey.get(previewTargetKey) || null;
 
-  const resolveSendMode = (template?: Template | null): 'auto_media' | 'media_only' | 'text_preview' | 'text_only' => {
+  const resolveSendMode = (template?: Template | null): TemplateSendMode => {
     if (template?.send_mode === 'media_only') return 'media_only';
     if (template?.send_mode === 'auto_media' && template?.send_images === false) return 'text_preview';
     if (template?.send_mode === 'text_preview') return 'text_preview';
@@ -311,11 +339,12 @@ const TemplatesPage = () => {
 
   const form = useForm<TemplateFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', content: '', description: '', active: true, send_mode: 'auto_media' }
+    defaultValues: { name: '', content: '', description: '', active: true, send_mode: 'auto_media', sequence_steps: [] }
   });
 
   const watchedContent = useWatch({ control: form.control, name: 'content' });
   const watchedSendMode = useWatch({ control: form.control, name: 'send_mode' });
+  const watchedSequenceSteps = useWatch({ control: form.control, name: 'sequence_steps' }) || [];
 
   const renderedPreviewText = previewWithData
     ? (() => {
@@ -336,7 +365,8 @@ const TemplatesPage = () => {
         content: active.content,
         description: active.description || '',
         active: active.active ?? true,
-        send_mode: resolveSendMode(active)
+        send_mode: resolveSendMode(active),
+        sequence_steps: getTemplateSequenceSteps(active)
       });
     }
   }, [active, form]);
@@ -356,7 +386,8 @@ const TemplatesPage = () => {
         content: savedTemplate.content || '',
         description: savedTemplate.description || '',
         active: savedTemplate.active ?? true,
-        send_mode: resolveSendMode(savedTemplate)
+        send_mode: resolveSendMode(savedTemplate),
+        sequence_steps: getTemplateSequenceSteps(savedTemplate)
       });
     },
     onError: (error: unknown) => alert(`Failed to save template: ${getErrorMessage(error)}`)
@@ -369,7 +400,7 @@ const TemplatesPage = () => {
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
       if (active?.id === id) {
         setActive(null);
-        form.reset({ name: '', content: '', description: '', active: true, send_mode: 'auto_media' });
+        form.reset({ name: '', content: '', description: '', active: true, send_mode: 'auto_media', sequence_steps: [] });
       }
     },
     onError: (error: unknown) => alert(`Failed to delete template: ${getErrorMessage(error)}`)
@@ -420,7 +451,16 @@ const TemplatesPage = () => {
         content: values.content,
         description: values.description,
         active: true,
-        send_mode: values.send_mode
+        send_mode: values.send_mode,
+        sequence_steps: values.sequence_steps
+          .filter((step) => step.active !== false && String(step.content || '').trim())
+          .map((step, index) => ({
+            label: String(step.label || `Step ${index + 1}`).trim(),
+            content: String(step.content || '').trim(),
+            send_mode: step.send_mode,
+            delay_seconds: Math.max(0, Math.min(3600, Number(step.delay_seconds || 0))),
+            active: true
+          }))
       }
     });
   };
@@ -545,6 +585,44 @@ const TemplatesPage = () => {
       const cursorEnd = cursorStart + selected.length;
       textarea.setSelectionRange(cursorStart, cursorEnd);
     }, 0);
+  };
+
+  const updateSequenceStep = (
+    index: number,
+    patch: Partial<TemplateFormValues['sequence_steps'][number]>
+  ) => {
+    const next = [...(form.getValues('sequence_steps') || [])];
+    if (!next[index]) return;
+    next[index] = { ...next[index], ...patch };
+    form.setValue('sequence_steps', next, { shouldDirty: true, shouldValidate: true });
+  };
+
+  const addSequenceStep = () => {
+    const current = form.getValues('sequence_steps') || [];
+    const content = String(watchedContent || '').trim() || '{{description}}\n{{link}}';
+    form.setValue(
+      'sequence_steps',
+      [
+        ...current,
+        {
+          label: `Step ${current.length + 1}`,
+          content,
+          send_mode: current.length === 0 ? resolveTemplateSendMode(watchedSendMode) : 'auto_media',
+          delay_seconds: current.length === 0 ? 0 : 8,
+          active: true
+        }
+      ],
+      { shouldDirty: true, shouldValidate: true }
+    );
+  };
+
+  const removeSequenceStep = (index: number) => {
+    const current = form.getValues('sequence_steps') || [];
+    form.setValue(
+      'sequence_steps',
+      current.filter((_, stepIndex) => stepIndex !== index),
+      { shouldDirty: true, shouldValidate: true }
+    );
   };
 
   return (
@@ -695,6 +773,72 @@ const TemplatesPage = () => {
                   </p>
                 </div>
 
+                <div className="space-y-3 rounded-lg border p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <Label>Status / Message Sequence</Label>
+                      <p className="text-xs text-muted-foreground">
+                        When steps are added, automations send each step in order for every story.
+                      </p>
+                    </div>
+                    <Button type="button" variant="outline" size="sm" onClick={addSequenceStep}>
+                      Add step
+                    </Button>
+                  </div>
+                  {watchedSequenceSteps.length ? (
+                    <div className="space-y-3">
+                      {watchedSequenceSteps.map((step, index) => (
+                        <div key={index} className="space-y-3 rounded-md border bg-muted/20 p-3">
+                          <div className="grid gap-2 sm:grid-cols-[1fr_170px_130px_auto]">
+                            <Input
+                              value={step.label || ''}
+                              onChange={(event) => updateSequenceStep(index, { label: event.target.value })}
+                              placeholder={`Step ${index + 1}`}
+                            />
+                            <Select
+                              value={step.send_mode}
+                              onValueChange={(value) =>
+                                updateSequenceStep(index, { send_mode: value as TemplateFormValues['send_mode'] })
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="text_only">Text only</SelectItem>
+                                <SelectItem value="text_preview">Text + preview</SelectItem>
+                                <SelectItem value="auto_media">Media + text</SelectItem>
+                                <SelectItem value="media_only">Media only</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <Input
+                              type="number"
+                              min={0}
+                              max={3600}
+                              value={Number(step.delay_seconds || 0)}
+                              onChange={(event) => updateSequenceStep(index, { delay_seconds: Number(event.target.value || 0) })}
+                              aria-label="Delay seconds"
+                            />
+                            <Button type="button" variant="ghost" size="icon" onClick={() => removeSequenceStep(index)}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          <Textarea
+                            value={step.content || ''}
+                            onChange={(event) => updateSequenceStep(index, { content: event.target.value })}
+                            rows={3}
+                            placeholder="Message for this step"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      No sequence steps. This template sends once using the message format above.
+                    </p>
+                  )}
+                </div>
+
                 <div className="flex gap-2">
                   <Button type="submit" disabled={saveTemplate.isPending}>
                     {saveTemplate.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -706,7 +850,7 @@ const TemplatesPage = () => {
                       variant="outline"
                       onClick={() => {
                         setActive(null);
-                        form.reset({ name: '', content: '', description: '', active: true, send_mode: 'auto_media' });
+                        form.reset({ name: '', content: '', description: '', active: true, send_mode: 'auto_media', sequence_steps: [] });
                       }}
                     >
                       Cancel
@@ -878,7 +1022,9 @@ const TemplatesPage = () => {
                       )}
                     </div>
                     <Badge variant="secondary" className="capitalize">
-                      {getTemplateModeLabel(template.send_mode)}
+                      {getTemplateSequenceSteps(template).length
+                        ? `${getTemplateSequenceSteps(template).length} steps`
+                        : getTemplateModeLabel(template.send_mode)}
                     </Badge>
                   </div>
                   <div className="flex gap-2">

@@ -76,6 +76,14 @@ const deriveDefaultMessage = (item: QueueItem) => {
   return chunks.join('\n\n');
 };
 
+const getSequenceStepLabel = (item: QueueItem) => {
+  const explicit = String(item.sequence_step_label || '').trim();
+  if (explicit) return explicit;
+  const index = Number(item.sequence_step_index);
+  if (Number.isFinite(index) && index > 0) return `Step ${index + 1}`;
+  return '';
+};
+
 const canEditSentInPlace = (item: QueueItem, editWindowMinutes: number, nowMs?: number) => {
   if (!isSuccessfulSendStatus(item.status)) return false;
   if (item.target_type === 'status') return false;
@@ -730,6 +738,7 @@ const QueueInner = () => {
                   ).padStart(2, '0')}`
                   : null;
                 const correctionBadge = getCorrectionBadge(item);
+                const sequenceStepLabel = getSequenceStepLabel(item);
 
                 return (
                   <div key={item.id} className="space-y-3 rounded-lg border p-4">
@@ -741,6 +750,7 @@ const QueueInner = () => {
                           {item.delivery_mode === 'batch' || item.delivery_mode === 'batched' ? (
                             <Badge variant="outline">Scheduled time</Badge>
                           ) : null}
+                          {sequenceStepLabel ? <Badge variant="outline">{sequenceStepLabel}</Badge> : null}
                           {(statusFilter === 'pending' || statusFilter === 'processing') ? (
                             <Badge variant="outline">#{index + 1} in queue view</Badge>
                           ) : null}
@@ -945,6 +955,7 @@ const QueueInner = () => {
                   Boolean(mediaCandidate) &&
                   isSafeImageSrc(mediaCandidate) &&
                   (!isSuccessfulSendStatus(item.status) || sentWithImage);
+                const sequenceStepLabel = getSequenceStepLabel(item);
                 return (
                   <div key={item.id} className="relative flex flex-col rounded-lg border bg-card text-card-foreground shadow-sm overflow-hidden h-full">
                     <div className="relative aspect-video bg-muted/30">
@@ -981,6 +992,7 @@ const QueueInner = () => {
                         {item.rendered_content || deriveDefaultMessage(item) || 'No content'}
                       </p>
                       <p className="text-[11px] text-muted-foreground">{deliveryPath.label}</p>
+                      {sequenceStepLabel ? <Badge variant="outline" className="w-fit">{sequenceStepLabel}</Badge> : null}
                       {correctionBadge ? <div className="flex flex-wrap gap-1">{correctionBadge}</div> : null}
                       {item.pub_date ? <p className="text-[11px] text-muted-foreground">Published: {formatPublishedDate(item.pub_date, item.pub_precision)}</p> : null}
                       {item.sent_at ? <p className="text-[11px] text-muted-foreground">Sent: {formatDate(item.sent_at)}</p> : null}

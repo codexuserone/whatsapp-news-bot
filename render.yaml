@@ -84,8 +84,14 @@ services:
         value: "24"
       - key: WHATSAPP_STATUS_AUDIENCE_JIDS
         sync: false
+      - key: WHATSAPP_STATUS_AUDIENCE_MODE
+        value: auto
+      - key: WHATSAPP_STATUS_TEST_AUDIENCE_JIDS
+        sync: false
       - key: WHATSAPP_ALLOW_EMPTY_STATUS_AUDIENCE
         value: "false"
+      - key: WHATSAPP_MAX_IMAGE_BYTES
+        value: "16777216"
       - key: WHATSAPP_MAX_VIDEO_BYTES
         value: "33554432"
     healthCheckPath: /health

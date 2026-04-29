@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { ShabbosSettings, ShabbosStatus } from '@/lib/types';
+import type { BackendSettings, ShabbosSettings, ShabbosStatus } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -44,7 +44,10 @@ const schema = z.object({
   initial_fetch_limit: z.coerce.number().min(1).max(50),
   max_pending_age_hours: z.coerce.number().min(1).max(336),
   send_timeout_ms: z.coerce.number().min(10000).max(180000),
-  reconcile_queue_lookback_hours: z.coerce.number().min(1).max(168)
+  reconcile_queue_lookback_hours: z.coerce.number().min(1).max(168),
+  status_audience_mode: z.enum(['auto', 'explicit']).default('auto'),
+  status_audience_jids: z.string().max(12000).default(''),
+  status_test_audience_jids: z.string().max(12000).default('')
 }).superRefine((value, ctx) => {
   if (value.post_send_correction_window_minutes < value.post_send_edit_window_minutes) {
     ctx.addIssue({
@@ -56,11 +59,6 @@ const schema = z.object({
 });
 
 type SettingsFormValues = z.infer<typeof schema>;
-type BackendSettings = SettingsFormValues & {
-  retentionDays?: number;
-  whatsapp_paused?: boolean;
-  whatsapp_paused_at?: string | null;
-};
 
 type SaveNotice =
   | { kind: 'success'; message: string }
@@ -111,7 +109,10 @@ const toSettingsFormValues = (settings?: Partial<BackendSettings> | null): Setti
   initial_fetch_limit: Number(settings?.initial_fetch_limit ?? 1),
   max_pending_age_hours: Number(settings?.max_pending_age_hours ?? 48),
   send_timeout_ms: Number(settings?.send_timeout_ms ?? 45000),
-  reconcile_queue_lookback_hours: Number(settings?.reconcile_queue_lookback_hours ?? 12)
+  reconcile_queue_lookback_hours: Number(settings?.reconcile_queue_lookback_hours ?? 12),
+  status_audience_mode: settings?.status_audience_mode === 'explicit' ? 'explicit' : 'auto',
+  status_audience_jids: String(settings?.status_audience_jids || ''),
+  status_test_audience_jids: String(settings?.status_test_audience_jids || '')
 });
 
 const SettingsPage = () => {
@@ -140,6 +141,7 @@ const SettingsPage = () => {
     defaultValues: defaultFormValues
   });
   const appPaused = useWatch({ control: form.control, name: 'app_paused' });
+  const statusAudienceMode = useWatch({ control: form.control, name: 'status_audience_mode' });
 
   useEffect(() => {
     if (settings) {
@@ -469,6 +471,57 @@ const SettingsPage = () => {
             <CardDescription>Additional backend queue and retention controls.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
+              <div>
+                <Label>Status Audience</Label>
+                <p className="text-xs text-muted-foreground">
+                  Auto is production mode. Specific recipients is for controlled Status tests.
+                </p>
+              </div>
+              <Controller
+                control={form.control}
+                name="status_audience_mode"
+                render={({ field }) => (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Button
+                      type="button"
+                      variant={field.value === 'auto' ? 'default' : 'outline'}
+                      onClick={() => field.onChange('auto')}
+                    >
+                      Auto audience
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={field.value === 'explicit' ? 'default' : 'outline'}
+                      onClick={() => field.onChange('explicit')}
+                    >
+                      Specific recipients
+                    </Button>
+                  </div>
+                )}
+              />
+              {statusAudienceMode === 'explicit' ? (
+                <div className="space-y-2">
+                  <Label htmlFor="status_audience_jids">Production Status Recipients</Label>
+                  <Input
+                    id="status_audience_jids"
+                    placeholder="19144477725@s.whatsapp.net"
+                    {...form.register('status_audience_jids')}
+                  />
+                </div>
+              ) : null}
+              <div className="space-y-2">
+                <Label htmlFor="status_test_audience_jids">Manual Status Test Recipients</Label>
+                <Input
+                  id="status_test_audience_jids"
+                  placeholder="19144477725@s.whatsapp.net"
+                  {...form.register('status_test_audience_jids')}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Used only when you manually send a Status from the WhatsApp page.
+                </p>
+              </div>
+            </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="send_timeout_ms">Send Timeout (ms)</Label>

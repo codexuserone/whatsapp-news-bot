@@ -56,4 +56,24 @@ describe('template route normalization', () => {
       send_images: false
     });
   });
+
+  it('normalizes sequence steps without changing the legacy template mode', () => {
+    expect(
+      testUtils.normalizeTemplatePayload({
+        name: 'Status sequence',
+        content: '{{title}}',
+        send_mode: 'text_preview',
+        sequence_steps: [
+          { label: 'Text', content: '{{description}}\n{{link}}', send_mode: 'text_preview' },
+          { label: 'Image', content: '{{title}}', send_mode: 'media_only', delay_seconds: 10 }
+        ]
+      })
+    ).toMatchObject({
+      send_mode: 'link_preview',
+      sequence_steps: [
+        { label: 'Text', content: '{{description}}\n{{link}}', send_mode: 'text_preview', delay_seconds: 0, active: true },
+        { label: 'Image', content: '{{title}}', send_mode: 'media_only', delay_seconds: 10, active: true }
+      ]
+    });
+  });
 });

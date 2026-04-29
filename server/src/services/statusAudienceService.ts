@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 const cron = require('node-cron');
 const { getSupabaseClient } = require('../db/supabase');
+const settingsService = require('./settingsService');
 const logger = require('../utils/logger');
 const { getErrorMessage } = require('../utils/errorUtils');
 
@@ -121,6 +122,49 @@ const getExplicitEnvAudienceRecipients = () =>
         .filter(Boolean)
     )
   ).sort();
+
+const getExplicitEnvAudienceMode = () =>
+  String(process.env.WHATSAPP_STATUS_AUDIENCE_MODE || '')
+    .trim()
+    .toLowerCase();
+
+const getConfiguredExplicitAudienceRecipients = async () => {
+  const envRecipients = getExplicitEnvAudienceRecipients();
+  const envMode = getExplicitEnvAudienceMode();
+  if (envMode === 'explicit' && envRecipients.length) {
+    return {
+      recipients: envRecipients,
+      source: 'env' as const
+    };
+  }
+
+  try {
+    const settings = await settingsService.getSettings();
+    const mode = String(settings?.status_audience_mode || 'auto').trim().toLowerCase();
+    if (mode !== 'explicit') {
+      return { recipients: [], source: 'auto' as const };
+    }
+
+    const configuredRecipients = Array.from(
+      new Set(
+        String(settings?.status_audience_jids || '')
+          .split(/[\n,]+/)
+          .map((value) => normalizeRecipientJid(value))
+          .filter(Boolean)
+      )
+    ).sort();
+
+    return {
+      recipients: configuredRecipients.length ? configuredRecipients : envRecipients,
+      source: configuredRecipients.length ? ('settings' as const) : ('env' as const)
+    };
+  } catch (error) {
+    logger.warn({ error: getErrorMessage(error) }, 'Failed to read Status audience settings');
+    return envMode === 'explicit'
+      ? { recipients: envRecipients, source: 'env' as const }
+      : { recipients: [], source: 'auto' as const };
+  }
+};
 
 const mergeSources = (...sourceSets: Array<Partial<StatusAudienceSources> | null | undefined>): StatusAudienceSources => {
   const merged = emptySources();
@@ -429,19 +473,20 @@ const refreshStatusRecipients = async (
   options?: { sampleSize?: number }
 ): Promise<RefreshResult> => {
   const supabase = getSupabaseClient();
-  const explicitEnvAudienceRecipients = getExplicitEnvAudienceRecipients();
+  const explicitAudience = await getConfiguredExplicitAudienceRecipients();
+  const explicitAudienceRecipients = explicitAudience.recipients;
   if (!supabase) {
-    if (explicitEnvAudienceRecipients.length) {
+    if (explicitAudienceRecipients.length) {
       const result = {
-        participantCount: explicitEnvAudienceRecipients.length,
-        recipients: explicitEnvAudienceRecipients,
-        sample: buildSample(explicitEnvAudienceRecipients, options?.sampleSize),
+        participantCount: explicitAudienceRecipients.length,
+        recipients: explicitAudienceRecipients,
+        sample: buildSample(explicitAudienceRecipients, options?.sampleSize),
         refreshedAt: new Date().toISOString(),
         sources: {
           ...emptySources(),
-          env: explicitEnvAudienceRecipients.length
+          env: explicitAudienceRecipients.length
         },
-        warnings: ['Status audience is limited to WHATSAPP_STATUS_AUDIENCE_JIDS.']
+        warnings: [`Status audience is limited by ${explicitAudience.source}.`]
       };
       cacheSnapshot(result);
       return result;
@@ -464,16 +509,16 @@ const refreshStatusRecipients = async (
     };
   }
 
-  if (explicitEnvAudienceRecipients.length) {
+  if (explicitAudienceRecipients.length) {
     const refreshedAt = new Date().toISOString();
     const sources = {
       ...emptySources(),
-      env: explicitEnvAudienceRecipients.length
+      env: explicitAudienceRecipients.length
     };
-    const warnings = ['Status audience is limited to WHATSAPP_STATUS_AUDIENCE_JIDS.'];
+    const warnings = [`Status audience is limited by ${explicitAudience.source}.`];
 
     try {
-      await persistStatusRecipientsSnapshot(supabase, explicitEnvAudienceRecipients, {
+      await persistStatusRecipientsSnapshot(supabase, explicitAudienceRecipients, {
         refreshedAt,
         sources,
         warnings
@@ -483,9 +528,9 @@ const refreshStatusRecipients = async (
     }
 
     const result: RefreshResult = {
-      participantCount: explicitEnvAudienceRecipients.length,
-      recipients: explicitEnvAudienceRecipients,
-      sample: buildSample(explicitEnvAudienceRecipients, options?.sampleSize),
+      participantCount: explicitAudienceRecipients.length,
+      recipients: explicitAudienceRecipients,
+      sample: buildSample(explicitAudienceRecipients, options?.sampleSize),
       refreshedAt,
       sources,
       warnings
@@ -674,7 +719,7 @@ const ensureFreshStatusRecipients = async (
   whatsappClient?: StatusAudienceClient | null,
   options?: { maxAgeMinutes?: number; sampleSize?: number }
 ): Promise<RefreshResult> => {
-  if (getExplicitEnvAudienceRecipients().length) {
+  if ((await getConfiguredExplicitAudienceRecipients()).recipients.length) {
     return refreshStatusRecipients(whatsappClient, options);
   }
 
@@ -816,7 +861,8 @@ module.exports = {
   scheduleStatusAudienceRefresh,
   stopStatusAudienceRefresh,
   __testUtils: {
-    clearInMemoryStatusAudienceCache
+    clearInMemoryStatusAudienceCache,
+    getConfiguredExplicitAudienceRecipients
   }
 };
 

@@ -275,7 +275,7 @@ const toOriginOrUndefined = (value?: string | null) => {
 };
 
 const downloadImageBuffer = async (url: string, refererUrl?: string | null) => {
-  const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+  const MAX_IMAGE_BYTES = Math.max(1, Math.floor(Number(process.env.WHATSAPP_MAX_IMAGE_BYTES || 16 * 1024 * 1024)));
   const refererOrigin = toOriginOrUndefined(refererUrl);
   const response = await safeAxiosRequest(url, {
     timeout: DEFAULT_SEND_TIMEOUT_MS,
@@ -299,18 +299,7 @@ const downloadImageBuffer = async (url: string, refererUrl?: string | null) => {
     throw new Error(`Image too large (${buffer.length} bytes)`);
   }
 
-  let preparedMime: string | null = null;
-  try {
-    const prepared = await prepareNewsletterImage(buffer, { maxBytes: MAX_IMAGE_BYTES });
-    if (Buffer.isBuffer(prepared?.buffer) && prepared.buffer.length) {
-      buffer = prepared.buffer;
-    }
-    preparedMime = String(prepared?.mimetype || '').trim().toLowerCase() || null;
-  } catch {
-    // Fall through to the raw detection checks below.
-  }
-
-  let detectedMime = preparedMime || detectImageMimeTypeFromBuffer(buffer);
+  let detectedMime = detectImageMimeTypeFromBuffer(buffer);
 
   // Some sites return formats like AVIF/SVG/GIF even when we prefer jpeg/png/webp.
   // If sharp is available, transcode to JPEG so WhatsApp uploads work reliably.
@@ -323,7 +312,7 @@ const downloadImageBuffer = async (url: string, refererUrl?: string | null) => {
     }
 
     try {
-      const prepared = await prepareNewsletterImage(buffer, { maxBytes: MAX_IMAGE_BYTES });
+      const prepared = await prepareNewsletterImage(buffer, { maxBytes: MAX_IMAGE_BYTES, jpegQuality: 92 });
       buffer = prepared.buffer;
       detectedMime = prepared.mimetype;
     } catch {

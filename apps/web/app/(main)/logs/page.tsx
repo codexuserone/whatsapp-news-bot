@@ -22,6 +22,14 @@ const STATUS_COLORS: Record<string, 'success' | 'destructive' | 'warning' | 'sec
   uncertain: 'warning'
 };
 
+const getSequenceStepLabel = (log: LogEntry) => {
+  const explicit = String(log.sequence_step_label || '').trim();
+  if (explicit) return explicit;
+  const index = Number(log.sequence_step_index);
+  if (Number.isFinite(index) && index > 0) return `Step ${index + 1}`;
+  return '';
+};
+
 const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | null) => {
   if (statusLabel) return statusLabel;
   switch (status) {
@@ -167,6 +175,11 @@ const LogsPage = () => {
                            log.status}
                         </Badge>
                         {getReceiptBadge(log)}
+                        {getSequenceStepLabel(log) ? (
+                          <Badge variant="outline" className="ml-1">
+                            {getSequenceStepLabel(log)}
+                          </Badge>
+                        ) : null}
                       </TableCell>
                       <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>
                       <TableCell

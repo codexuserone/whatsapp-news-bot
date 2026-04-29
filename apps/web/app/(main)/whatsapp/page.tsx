@@ -4,7 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Target, WhatsAppQrState, WhatsAppStatus, WhatsAppStatusAudience } from '@/lib/types';
+import type { BackendSettings, Target, WhatsAppQrState, WhatsAppStatus, WhatsAppStatusAudience } from '@/lib/types';
 import { dedupeTargets, formatTargetLabel } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -128,6 +128,10 @@ const WhatsAppPage = () => {
     queryKey: ['whatsapp-status-audience'],
     queryFn: () => api.get('/api/whatsapp/status-audience'),
     refetchInterval: status?.status === 'connected' ? 30000 : 60000
+  });
+  const { data: settings } = useQuery<BackendSettings>({
+    queryKey: ['settings'],
+    queryFn: () => api.get('/api/settings')
   });
 
   const existingTargets = React.useMemo<Target[]>(() => {
@@ -372,6 +376,11 @@ const WhatsAppPage = () => {
 
   const submitTestMessage = () => {
     if (!canSendTest) return;
+    const selectedIncludesStatus = selectedTargets.some((target) => target === 'status@broadcast');
+    const statusTestAudience = String(settings?.status_test_audience_jids || '')
+      .split(/[\n,]+/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
 
     const payload: SendTestPayload = {
       jids: selectedTargets,
@@ -379,6 +388,9 @@ const WhatsAppPage = () => {
       disableLinkPreview: attachMedia ? false : disableLinkPreview,
       confirm: true
     };
+    if (selectedIncludesStatus && statusTestAudience.length) {
+      payload.statusJidList = statusTestAudience;
+    }
 
     const normalizedMessage = testMessage.trim();
     if (normalizedMessage && (!attachMedia || includeTextWithMedia)) {

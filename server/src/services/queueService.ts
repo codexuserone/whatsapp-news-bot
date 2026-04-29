@@ -47,6 +47,22 @@ type Template = {
     | 'image_only'
     | 'link_preview'
     | null;
+  sequence_steps?: TemplateSequenceStep[] | null;
+};
+
+type TemplateSequenceStep = {
+  label?: string | null;
+  content?: string | null;
+  send_mode?: Template['send_mode'];
+  delay_seconds?: number | null;
+  active?: boolean | null;
+};
+
+type TemplateQueueStep = {
+  index: number;
+  label: string | null;
+  delaySeconds: number;
+  template: Template;
 };
 
 type FeedItem = {
@@ -364,6 +380,7 @@ const isDuplicateDispatchConflict = (error: unknown) => {
   const details = String((error as { details?: unknown })?.details || '').toLowerCase();
   if (code !== '23505') return false;
   if (message.includes('idx_message_logs_unique_dispatch')) return true;
+  if (message.includes('idx_message_logs_unique_dispatch_step')) return true;
   if (message.includes('duplicate key value')) return true;
   if (details.includes('schedule_id,feed_item_id,target_id')) return true;
   if (details.includes('schedule_id, feed_item_id, target_id')) return true;
@@ -380,7 +397,7 @@ const upsertPendingDispatchRows = async (
 
   const { data: insertedRows, error: upsertError } = await supabase
     .from('message_logs')
-    .upsert(rows, { onConflict: 'schedule_id,feed_item_id,target_id', ignoreDuplicates: true })
+    .upsert(rows, { onConflict: 'schedule_id,feed_item_id,target_id,sequence_step_index', ignoreDuplicates: true })
     .select('id');
 
   if (!upsertError) {
@@ -420,12 +437,14 @@ type ProcessingRecoveryRow = {
   schedule_id?: string | null;
   target_id?: string | null;
   feed_item_id?: string | null;
+  sequence_step_index?: number | null;
 };
 
 const buildDispatchIdentityKey = (
   scheduleId?: string | null,
   targetId?: string | null,
-  feedItemId?: string | null
+  feedItemId?: string | null,
+  sequenceStepIndex?: unknown
 ) => {
   const normalizedScheduleId = String(scheduleId || '').trim();
   const normalizedTargetId = String(targetId || '').trim();
@@ -433,7 +452,8 @@ const buildDispatchIdentityKey = (
   if (!normalizedScheduleId || !normalizedTargetId || !normalizedFeedItemId) {
     return null;
   }
-  return `${normalizedScheduleId}:${normalizedTargetId}:${normalizedFeedItemId}`;
+  const normalizedStepIndex = Math.max(0, Math.floor(Number(sequenceStepIndex || 0)));
+  return `${normalizedScheduleId}:${normalizedTargetId}:${normalizedFeedItemId}:${normalizedStepIndex}`;
 };
 
 const loadExistingDispatchKeys = async (
@@ -451,7 +471,7 @@ const loadExistingDispatchKeys = async (
 
   const { data, error } = await supabase
     .from('message_logs')
-    .select('schedule_id,feed_item_id,target_id,status')
+    .select('schedule_id,feed_item_id,target_id,status,sequence_step_index')
     .eq('schedule_id', scheduleId)
     .in('feed_item_id', normalizedFeedItemIds)
     .in('target_id', normalizedTargetIds);
@@ -462,7 +482,7 @@ const loadExistingDispatchKeys = async (
   }
 
   for (const row of (data || []) as ProcessingRecoveryRow[]) {
-    const key = buildDispatchIdentityKey(row.schedule_id, row.target_id, row.feed_item_id);
+    const key = buildDispatchIdentityKey(row.schedule_id, row.target_id, row.feed_item_id, (row as { sequence_step_index?: unknown }).sequence_step_index);
     if (key) keys.add(key);
   }
 
@@ -1234,7 +1254,7 @@ const toOriginOrUndefined = (value?: string | null) => {
 };
 
 const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null) => {
-  const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+  const MAX_IMAGE_BYTES = Math.max(1, Math.floor(Number(process.env.WHATSAPP_MAX_IMAGE_BYTES || 16 * 1024 * 1024)));
   const SUPPORTED_WHATSAPP_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
   const validUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
   const response = await safeAxiosRequest(imageUrl, {
@@ -1284,18 +1304,7 @@ const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null)
     return null;
   };
 
-  let preparedMimeType: string | null = null;
-  try {
-    const prepared = await prepareNewsletterImage(buffer, { maxBytes: MAX_IMAGE_BYTES });
-    if (Buffer.isBuffer(prepared?.buffer) && prepared.buffer.length) {
-      buffer = prepared.buffer;
-    }
-    preparedMimeType = String(prepared?.mimetype || '').trim().toLowerCase() || null;
-  } catch {
-    // Fall through to the raw detection checks below.
-  }
-
-  let detectedMimeType = preparedMimeType || detectMimeTypeFromBuffer(buffer);
+  let detectedMimeType = detectMimeTypeFromBuffer(buffer);
 
   // Some sites return formats like AVIF/SVG/GIF even when we prefer jpeg/png/webp.
   // If sharp is available, transcode to JPEG so WhatsApp uploads work reliably.
@@ -1308,7 +1317,7 @@ const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null)
     }
 
     try {
-      const prepared = await prepareNewsletterImage(buffer, { maxBytes: MAX_IMAGE_BYTES });
+      const prepared = await prepareNewsletterImage(buffer, { maxBytes: MAX_IMAGE_BYTES, jpegQuality: 92 });
       buffer = prepared.buffer;
       detectedMimeType = prepared.mimetype;
     } catch {
@@ -1665,6 +1674,17 @@ const ensurePreviewLink = (value: string, link?: string | null) => {
 
 type TemplateSendMode = 'auto_media' | 'media_only' | 'text_preview' | 'text_only';
 
+const normalizeTemplateStepMode = (value: unknown): TemplateSendMode => {
+  const mode = String(value || '').trim();
+  if (mode === 'image') return 'auto_media';
+  if (mode === 'image_only') return 'media_only';
+  if (mode === 'link_preview') return 'text_preview';
+  if (mode === 'auto_media' || mode === 'media_only' || mode === 'text_preview' || mode === 'text_only') {
+    return mode;
+  }
+  return 'auto_media';
+};
+
 const getTemplateSendMode = (template: Template): TemplateSendMode => {
   if ((template?.send_mode === 'image' || template?.send_mode === 'auto_media') && template?.send_images === false) {
     return 'text_preview';
@@ -1681,6 +1701,113 @@ const getTemplateSendMode = (template: Template): TemplateSendMode => {
   if (template?.send_mode === 'image_only') return 'media_only';
   if (template?.send_mode === 'link_preview') return 'text_preview';
   return template?.send_images === false ? 'text_preview' : 'auto_media';
+};
+
+const getTemplateQueueSteps = (template: Template): TemplateQueueStep[] => {
+  const rawSteps = Array.isArray(template.sequence_steps) ? template.sequence_steps : [];
+  const steps: TemplateQueueStep[] = [];
+
+  rawSteps.forEach((step, index) => {
+    const content = normalizeMessageText(String(step?.content || '')).trim();
+    if (!content || step?.active === false) return;
+    const label = String(step?.label || `Step ${index + 1}`).replace(/\s+/g, ' ').trim();
+    const delaySeconds = Number(step?.delay_seconds);
+    const sendMode = normalizeTemplateStepMode(step?.send_mode);
+    const stepTemplate: Template = {
+      ...template,
+      content,
+      send_mode: sendMode,
+      send_images: sendMode === 'auto_media' || sendMode === 'media_only'
+    };
+    steps.push({
+      index,
+      label: label || `Step ${index + 1}`,
+      delaySeconds: Number.isFinite(delaySeconds) ? Math.min(Math.max(Math.floor(delaySeconds), 0), 3600) : 0,
+      template: stepTemplate
+    });
+  });
+
+  if (steps.length) return steps;
+
+  return [
+    {
+      index: 0,
+      label: null,
+      delaySeconds: 0,
+      template
+    }
+  ];
+};
+
+const getLogSequenceStepIndex = (log: unknown): number => {
+  if (!log || typeof log !== 'object' || !('sequence_step_index' in log)) return 0;
+  return Math.max(0, Math.floor(Number((log as { sequence_step_index?: unknown }).sequence_step_index || 0)));
+};
+
+const getTemplateStepForLog = (template: Template, log: unknown): Template => {
+  const stepIndex = getLogSequenceStepIndex(log);
+  return getTemplateQueueSteps(template).find((step) => step.index === stepIndex)?.template || template;
+};
+
+const getTemplateStepLabelForLog = (template: Template, log: unknown) => {
+  const explicitLabel =
+    log && typeof log === 'object' && 'sequence_step_label' in log
+      ? String((log as { sequence_step_label?: unknown }).sequence_step_label || '').trim()
+      : '';
+  if (explicitLabel) return explicitLabel;
+  const stepIndex = getLogSequenceStepIndex(log);
+  return getTemplateQueueSteps(template).find((step) => step.index === stepIndex)?.label || null;
+};
+
+const loadTemplateQueueSteps = async (supabase: SupabaseClient, templateId?: string | null) => {
+  const normalizedTemplateId = String(templateId || '').trim();
+  if (!normalizedTemplateId) return getTemplateQueueSteps({ content: '', send_mode: 'auto_media', send_images: true });
+
+  const { data: template, error } = await supabase
+    .from('templates')
+    .select('*')
+    .eq('id', normalizedTemplateId)
+    .maybeSingle();
+
+  if (error || !template) {
+    if (error) logger.warn({ templateId: normalizedTemplateId, error }, 'Failed to load template sequence steps');
+    return getTemplateQueueSteps({ content: '', send_mode: 'auto_media', send_images: true });
+  }
+
+  return getTemplateQueueSteps(template as Template);
+};
+
+const buildDispatchRowsForSteps = (options: {
+  feedItemId: string;
+  targetId: string;
+  schedule: Schedule;
+  steps: TemplateQueueStep[];
+  status: string;
+  baseTimeMs?: number;
+}) => {
+  const baseTimeMs = Number.isFinite(options.baseTimeMs) ? Number(options.baseTimeMs) : Date.now();
+  let cumulativeDelaySeconds = 0;
+
+  return options.steps.map((step, position) => {
+    if (position > 0) {
+      cumulativeDelaySeconds += step.delaySeconds;
+    }
+    const scheduledFor = cumulativeDelaySeconds > 0
+      ? new Date(baseTimeMs + cumulativeDelaySeconds * 1000).toISOString()
+      : null;
+    return {
+      feed_item_id: options.feedItemId,
+      target_id: options.targetId,
+      schedule_id: options.schedule.id,
+      template_id: options.schedule.template_id,
+      sequence_step_index: step.index,
+      sequence_step_label: step.label,
+      scheduled_for: scheduledFor,
+      status: options.status,
+      approved_at: null,
+      approved_by: null
+    };
+  });
 };
 
 const renderTemplateMessage = (
@@ -2421,6 +2548,8 @@ const reconcileUpdatedFeedItems = async (
     message_content?: string | null;
     media_url?: string | null;
     media_type?: string | null;
+    sequence_step_index?: number | null;
+    sequence_step_label?: string | null;
     corrected_at?: string | null;
     correction_kind?: string | null;
     correction_error?: string | null;
@@ -2429,14 +2558,14 @@ const reconcileUpdatedFeedItems = async (
   const [sentLogsRes, queuedLogsRes] = await Promise.all([
     supabase
       .from('message_logs')
-      .select('id,feed_item_id,target_id,template_id,status,sent_at,whatsapp_message_id,message_content,media_url,media_type,corrected_at,correction_kind,correction_error')
+      .select('id,feed_item_id,target_id,template_id,status,sent_at,whatsapp_message_id,message_content,media_url,media_type,sequence_step_index,sequence_step_label,corrected_at,correction_kind,correction_error')
       .in('feed_item_id', feedItemIds)
       .in('status', Array.from(SUCCESSFUL_SEND_STATUSES))
       .gte('sent_at', correctionCutoffIso)
       .not('target_id', 'is', null),
     supabase
       .from('message_logs')
-      .select('id,feed_item_id,target_id,template_id,status,sent_at,whatsapp_message_id,message_content,media_url,media_type,corrected_at,correction_kind,correction_error')
+      .select('id,feed_item_id,target_id,template_id,status,sent_at,whatsapp_message_id,message_content,media_url,media_type,sequence_step_index,sequence_step_label,corrected_at,correction_kind,correction_error')
       .in('feed_item_id', feedItemIds)
       .in('status', Array.from(QUEUED_CORRECTION_STATUSES))
       .not('target_id', 'is', null)
@@ -2538,7 +2667,7 @@ const reconcileUpdatedFeedItems = async (
     let rendered: ReturnType<typeof renderTemplateMessage>;
     let expectedMedia: Awaited<ReturnType<typeof resolveMediaUrlForFeedItem>>;
     try {
-      rendered = renderTemplateMessage(template, feedItem);
+      rendered = renderTemplateMessage(getTemplateStepForLog(template, log), feedItem);
       expectedMedia =
         rendered.sendMode === 'auto_media' || rendered.sendMode === 'media_only'
           ? await resolveMediaUrlForFeedItem(supabase, feedItem, true)
@@ -2611,7 +2740,7 @@ const reconcileUpdatedFeedItems = async (
     let rendered: ReturnType<typeof renderTemplateMessage>;
     let expectedMedia: Awaited<ReturnType<typeof resolveMediaUrlForFeedItem>>;
     try {
-      rendered = renderTemplateMessage(template, feedItem);
+      rendered = renderTemplateMessage(getTemplateStepForLog(template, log), feedItem);
       expectedMedia =
         rendered.sendMode === 'auto_media' || rendered.sendMode === 'media_only'
           ? await resolveMediaUrlForFeedItem(supabase, feedItem, true)
@@ -2749,7 +2878,7 @@ const reconcileUpdatedFeedItems = async (
           return sendMessageWithTemplate(
             whatsappClient,
             target,
-            template,
+            getTemplateStepForLog(template, log),
             feedItem,
             {
               supabase,
@@ -3081,6 +3210,7 @@ const queueSinceLastRunForSchedule = async (
   if (!targetIds.length) return { queued: 0, feedItemCount: 0, cursorAt: null };
 
   const queuedStatus = schedule.approval_required === true ? 'awaiting_approval' : 'pending';
+  const templateSteps = await loadTemplateQueueSteps(supabase, schedule.template_id);
 
   const FEED_PAGE_SIZE = 200;
   const LOG_BATCH_SIZE = 1000;
@@ -3098,14 +3228,14 @@ const queueSinceLastRunForSchedule = async (
     const since = new Date(Date.now() - maxLookbackHours * 60 * 60 * 1000).toISOString();
     const { data: existing } = await supabase
       .from('message_logs')
-      .select('schedule_id,feed_item_id,target_id')
+      .select('schedule_id,feed_item_id,target_id,sequence_step_index')
       .eq('schedule_id', schedule.id)
       .gte('created_at', since);
 
     existingCombos.clear();
     for (const row of (existing || [])) {
-      const key = `${row.schedule_id}:${row.feed_item_id}:${row.target_id}`;
-      existingCombos.add(key);
+      const key = buildDispatchIdentityKey(row.schedule_id, row.target_id, row.feed_item_id, row.sequence_step_index);
+      if (key) existingCombos.add(key);
     }
   };
 
@@ -3116,8 +3246,13 @@ const queueSinceLastRunForSchedule = async (
 
     // Filter out any that we know already exist
     const filtered = batch.filter(item => {
-      const key = `${item.schedule_id}:${item.feed_item_id}:${item.target_id}`;
-      return !existingCombos.has(key);
+      const key = buildDispatchIdentityKey(
+        String(item.schedule_id || ''),
+        String(item.target_id || ''),
+        String(item.feed_item_id || ''),
+        item.sequence_step_index
+      );
+      return Boolean(key && !existingCombos.has(key));
     });
 
     if (!filtered.length) return 0;
@@ -3129,8 +3264,13 @@ const queueSinceLastRunForSchedule = async (
       filtered.map((item) => String(item.target_id || '').trim()).filter(Boolean)
     );
     const insertable = filtered.filter((item) => {
-      const key = `${item.schedule_id}:${item.feed_item_id}:${item.target_id}`;
-      return !existingDbKeys.has(key);
+      const key = buildDispatchIdentityKey(
+        String(item.schedule_id || ''),
+        String(item.target_id || ''),
+        String(item.feed_item_id || ''),
+        item.sequence_step_index
+      );
+      return Boolean(key && !existingDbKeys.has(key));
     });
 
     if (!insertable.length) return 0;
@@ -3144,8 +3284,13 @@ const queueSinceLastRunForSchedule = async (
 
     // Add newly inserted to our tracking set
     for (const item of insertable) {
-      const key = `${item.schedule_id}:${item.feed_item_id}:${item.target_id}`;
-      existingCombos.add(key);
+      const key = buildDispatchIdentityKey(
+        String(item.schedule_id || ''),
+        String(item.target_id || ''),
+        String(item.feed_item_id || ''),
+        item.sequence_step_index
+      );
+      if (key) existingCombos.add(key);
     }
 
     return inserted;
@@ -3200,15 +3345,13 @@ const queueSinceLastRunForSchedule = async (
       const feedItemId = item?.id ? String(item.id) : null;
       if (!feedItemId) continue;
       for (const targetId of targetIds) {
-        batch.push({
-          feed_item_id: feedItemId,
-          target_id: targetId,
-          schedule_id: schedule.id,
-          template_id: schedule.template_id,
-          status: queuedStatus,
-          approved_at: null,
-          approved_by: null
-        });
+        batch.push(...buildDispatchRowsForSteps({
+          feedItemId,
+          targetId,
+          schedule,
+          steps: templateSteps,
+          status: queuedStatus
+        }));
         if (batch.length >= LOG_BATCH_SIZE) {
           totalQueued += await flushBatch(batch);
           batch = [];
@@ -3284,23 +3427,25 @@ const queueRecentMissingForSchedule = async (
   const queuedStatus = schedule.approval_required === true ? 'awaiting_approval' : 'pending';
   const feedItemIds = freshRecentItems.map((item) => String(item?.id || '').trim()).filter(Boolean);
   const existingDispatchKeys = await loadExistingDispatchKeys(supabase, schedule.id, feedItemIds, targetIds);
+  const templateSteps = await loadTemplateQueueSteps(supabase, schedule.template_id);
 
   const pendingRows: Array<Record<string, unknown>> = [];
   for (const item of freshRecentItems) {
     const feedItemId = item?.id ? String(item.id) : null;
     if (!feedItemId) continue;
     for (const targetId of targetIds) {
-      const key = buildDispatchIdentityKey(schedule.id, targetId, feedItemId);
-      if (key && existingDispatchKeys.has(key)) continue;
-      pendingRows.push({
-        feed_item_id: feedItemId,
-        target_id: targetId,
-        schedule_id: schedule.id,
-        template_id: schedule.template_id,
-        status: queuedStatus,
-        approved_at: null,
-        approved_by: null
+      const stepRows = buildDispatchRowsForSteps({
+        feedItemId,
+        targetId,
+        schedule,
+        steps: templateSteps,
+        status: queuedStatus
       });
+      for (const row of stepRows) {
+        const key = buildDispatchIdentityKey(schedule.id, targetId, feedItemId, row.sequence_step_index);
+        if (key && existingDispatchKeys.has(key)) continue;
+        pendingRows.push(row);
+      }
     }
   }
 
@@ -3398,7 +3543,7 @@ const queueLatestForSchedule = async (
   const targetIds = targets.map((target) => target.id).filter(Boolean) as string[];
   const { data: existingLogs, error: existingLogsError } = await supabase
     .from('message_logs')
-    .select('id, target_id, status, error_message, media_error, approved_at')
+    .select('id, target_id, status, error_message, media_error, approved_at, sequence_step_index')
     .eq('schedule_id', schedule.id)
     .eq('feed_item_id', latestFeedItem.id)
     .in('target_id', targetIds);
@@ -3414,22 +3559,27 @@ const queueLatestForSchedule = async (
     error_message?: string | null;
     media_error?: string | null;
     approved_at?: string | null;
+    sequence_step_index?: number | null;
   };
-  const existingByTarget = new Map<string, ExistingLogRow>();
+  const existingByDispatch = new Map<string, ExistingLogRow>();
   for (const row of (existingLogs || []) as Array<Partial<ExistingLogRow>>) {
     if (!row?.id || !row?.target_id || !row?.status) continue;
-    existingByTarget.set(String(row.target_id), {
+    const key = buildDispatchIdentityKey(schedule.id, String(row.target_id), latestFeedItem.id, row.sequence_step_index);
+    if (!key) continue;
+    existingByDispatch.set(key, {
       id: String(row.id),
       target_id: String(row.target_id),
       status: String(row.status),
       error_message: row.error_message ? String(row.error_message) : null,
       media_error: row.media_error ? String(row.media_error) : null,
-      approved_at: row.approved_at ? String(row.approved_at) : null
+      approved_at: row.approved_at ? String(row.approved_at) : null,
+      sequence_step_index: Number(row.sequence_step_index || 0)
     });
   }
 
   const requiresApproval = schedule.approval_required === true;
   const queuedStatus = requiresApproval ? 'awaiting_approval' : 'pending';
+  const templateSteps = await loadTemplateQueueSteps(supabase, schedule.template_id);
 
   const toInsert: Array<Record<string, unknown>> = [];
   const toRevivePending: string[] = [];
@@ -3437,42 +3587,44 @@ const queueLatestForSchedule = async (
   let skipped = 0;
 
   for (const targetId of targetIds) {
-    const existing = existingByTarget.get(targetId);
-    if (!existing) {
-      toInsert.push({
-        feed_item_id: latestFeedItem.id,
-        target_id: targetId,
-        schedule_id: schedule.id,
-        template_id: schedule.template_id,
-        status: queuedStatus,
-        approved_at: null,
-        approved_by: null
-      });
-      continue;
-    }
-
-    if (isSuccessfulSendStatus(existing.status) || existing.status === 'processing') {
-      skipped += 1;
-      continue;
-    }
-
-    if (existing.status === 'skipped' && NON_REVIVABLE_SKIP_ERRORS.has(String(existing.error_message || ''))) {
-      skipped += 1;
-      continue;
-    }
-
-    if (existing.status === 'failed' && isNonRevivableFailureMessage(existing.error_message, existing.media_error)) {
-      skipped += 1;
-      continue;
-    }
-
-    if (existing.status === 'failed' || existing.status === 'skipped') {
-      if (requiresApproval && !String(existing.approved_at || '').trim()) {
-        toReviveAwaitingApproval.push(existing.id);
-      } else {
-        toRevivePending.push(existing.id);
+    const rows = buildDispatchRowsForSteps({
+      feedItemId: latestFeedItem.id,
+      targetId,
+      schedule,
+      steps: templateSteps,
+      status: queuedStatus
+    });
+    for (const row of rows) {
+      const key = buildDispatchIdentityKey(schedule.id, targetId, latestFeedItem.id, row.sequence_step_index);
+      const existing = key ? existingByDispatch.get(key) : null;
+      if (!existing) {
+        toInsert.push(row);
+        continue;
       }
-      continue;
+
+      if (isSuccessfulSendStatus(existing.status) || existing.status === 'processing') {
+        skipped += 1;
+        continue;
+      }
+
+      if (existing.status === 'skipped' && NON_REVIVABLE_SKIP_ERRORS.has(String(existing.error_message || ''))) {
+        skipped += 1;
+        continue;
+      }
+
+      if (existing.status === 'failed' && isNonRevivableFailureMessage(existing.error_message, existing.media_error)) {
+        skipped += 1;
+        continue;
+      }
+
+      if (existing.status === 'failed' || existing.status === 'skipped') {
+        if (requiresApproval && !String(existing.approved_at || '').trim()) {
+          toReviveAwaitingApproval.push(existing.id);
+        } else {
+          toRevivePending.push(existing.id);
+        }
+        continue;
+      }
     }
   }
 
@@ -3881,7 +4033,10 @@ const sendQueuedForSchedule = async (
         .eq('schedule_id', scheduleId)
         .eq('target_id', target.id)
         .eq('status', 'pending')
+        .or(`scheduled_for.is.null,scheduled_for.lte.${new Date().toISOString()}`)
+        .order('scheduled_for', { ascending: true, nullsFirst: true })
         .order('created_at', { ascending: true })
+        .order('sequence_step_index', { ascending: true })
         .order('id', { ascending: true });
 
       if (logsError) continue;
@@ -3997,6 +4152,12 @@ const sendQueuedForSchedule = async (
           return aPrimary - bPrimary;
         }
 
+        const aStep = Math.max(0, Math.floor(Number(a?.sequence_step_index || 0)));
+        const bStep = Math.max(0, Math.floor(Number(b?.sequence_step_index || 0)));
+        if (aFeedId && bFeedId && aFeedId === bFeedId && aStep !== bStep) {
+          return aStep - bStep;
+        }
+
         const aCreated = toTs(a?.created_at);
         const bCreated = toTs(b?.created_at);
         if (Number.isFinite(aCreated) && Number.isFinite(bCreated) && aCreated !== bCreated) {
@@ -4067,7 +4228,8 @@ const sendQueuedForSchedule = async (
           kind: null
         };
         try {
-          expectedRender = renderTemplateMessage(template, feedItem, typeof log.message_content === 'string' ? log.message_content : null);
+          const stepTemplate = getTemplateStepForLog(template, log);
+          expectedRender = renderTemplateMessage(stepTemplate, feedItem, typeof log.message_content === 'string' ? log.message_content : null);
           expectedMedia =
             expectedRender.sendMode === 'auto_media' || expectedRender.sendMode === 'media_only'
               ? await resolveMediaUrlForFeedItem(supabase, feedItem, true)
@@ -4111,7 +4273,7 @@ const sendQueuedForSchedule = async (
                 .eq('id', log.id);
               return null;
             }
-            const result = await sendMessageWithTemplate(whatsappClient, target, template, feedItem, {
+            const result = await sendMessageWithTemplate(whatsappClient, target, stepTemplate, feedItem, {
               supabase,
               sendTimeoutMs: Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
               overrideText: typeof log.message_content === 'string' ? log.message_content : null
@@ -4669,8 +4831,9 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           return { ok: false, error: 'Template not found' };
         }
 
+        const stepTemplate = getTemplateStepForLog(template as Template, log);
         const expectedRender = renderTemplateMessage(
-          template as Template,
+          stepTemplate,
           feedItemRes.data as FeedItem,
           typeof log.message_content === 'string' ? log.message_content : null
         );
@@ -4703,7 +4866,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           const result = await sendMessageWithTemplate(
             activeWhatsappClient,
             targetRow,
-            template as Template,
+            stepTemplate,
             feedItemRes.data as FeedItem,
             {
               supabase,
@@ -5329,6 +5492,7 @@ module.exports = {
   hasEditableQueuePayload,
   __testUtils: {
     buildDispatchIdentityKey,
+    getTemplateQueueSteps,
     computeStaleProcessingThresholdMs,
     partitionStaleProcessingRows,
     computeUncertainRetryDelayMs,

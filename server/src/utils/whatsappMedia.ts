@@ -33,7 +33,7 @@ const prepareNewsletterImage = async (
 ): Promise<PreparedNewsletterImage> => {
   const buffer = Buffer.isBuffer(input) ? input : Buffer.from(input);
   const maxBytes = Math.max(Number(options?.maxBytes ?? 8 * 1024 * 1024), 1);
-  const jpegQuality = Math.min(Math.max(Number(options?.jpegQuality ?? 82), 30), 95);
+  const jpegQuality = Math.min(Math.max(Number(options?.jpegQuality ?? 92), 30), 95);
   const thumbWidth = Math.min(Math.max(Number(options?.thumbWidth ?? 32), 16), 96);
 
   if (!buffer.length) {

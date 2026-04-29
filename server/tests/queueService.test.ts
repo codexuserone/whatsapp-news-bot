@@ -80,7 +80,8 @@ describe('queueService __testUtils', () => {
   const testUtils = queueService.__testUtils;
 
   it('builds a stable dispatch identity key', () => {
-    expect(testUtils.buildDispatchIdentityKey('schedule-1', 'target-1', 'feed-1')).toBe('schedule-1:target-1:feed-1');
+    expect(testUtils.buildDispatchIdentityKey('schedule-1', 'target-1', 'feed-1')).toBe('schedule-1:target-1:feed-1:0');
+    expect(testUtils.buildDispatchIdentityKey('schedule-1', 'target-1', 'feed-1', 2)).toBe('schedule-1:target-1:feed-1:2');
     expect(testUtils.buildDispatchIdentityKey('schedule-1', null, 'feed-1')).toBeNull();
   });
 
@@ -206,7 +207,7 @@ describe('queueService __testUtils', () => {
       { id: 'log-2', schedule_id: 'schedule-1', target_id: 'target-1', feed_item_id: 'feed-2' },
       { id: 'log-3', schedule_id: 'schedule-2', target_id: 'target-2', feed_item_id: 'feed-3' }
     ];
-    const successfulDispatchKeys = new Set<string>(['schedule-1:target-1:feed-2']);
+    const successfulDispatchKeys = new Set<string>(['schedule-1:target-1:feed-2:0']);
 
     expect(testUtils.partitionStaleProcessingRows(rows, successfulDispatchKeys)).toEqual({
       toPending: ['log-1', 'log-3'],

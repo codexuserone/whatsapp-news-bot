@@ -399,12 +399,19 @@ const enrichWordPressRssPublishedAt = async (feedUrl: string, items: FeedItemRes
         const publishedValue = toTextValue(post.date_gmt) || toTextValue(post.date);
         const published = parsePublishedAt(publishedValue);
         if (!published.value) continue;
-        const featuredMediaUrl = pickFirstUrl(
-          toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].source_url')),
-          toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].media_details.sizes.full.source_url')),
-          toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].guid.rendered'))
-        );
         const featuredMediaMime = toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].mime_type'));
+        const featuredMediaType = String(getPath(post, '_embedded.wp:featuredmedia[0].media_type') || '').trim().toLowerCase();
+        const featuredMediaIsImage = featuredMediaType === 'image' || String(featuredMediaMime || '').toLowerCase().startsWith('image/');
+        const featuredImageUrl = featuredMediaIsImage ? pickFirstUrl(
+          toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].media_details.sizes.full.source_url')),
+          toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].source_url')),
+          toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].media_details.sizes.large.source_url')),
+          toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].media_details.sizes.medium_large.source_url')),
+          toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].guid.rendered'))
+        ) : undefined;
+        const featuredMediaUrl = featuredMediaIsImage
+          ? featuredImageUrl
+          : toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].source_url'));
         const featuredMediaFilename =
           toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].slug')) ||
           toTextValue(getPath(post, '_embedded.wp:featuredmedia[0].title.rendered'));
@@ -417,7 +424,7 @@ const enrichWordPressRssPublishedAt = async (feedUrl: string, items: FeedItemRes
               mediaUrl: featuredMediaUrl,
               mediaMime: featuredMediaMime,
               mediaFilename: featuredMediaFilename,
-              imageUrl: featuredMediaUrl
+              imageUrl: featuredImageUrl
             });
             item.imageUrl = normalizedMedia.imageUrl || item.imageUrl;
             item.mediaUrl = normalizedMedia.mediaUrl || item.mediaUrl;
@@ -434,7 +441,7 @@ const enrichWordPressRssPublishedAt = async (feedUrl: string, items: FeedItemRes
           if (item.mediaKind) itemRaw.media_kind = item.mediaKind;
           if (item.mediaMime) itemRaw.media_mime = item.mediaMime;
           if (item.mediaFilename) itemRaw.media_filename = item.mediaFilename;
-          if (featuredMediaUrl) itemRaw.wp_featured_image = featuredMediaUrl;
+          if (featuredImageUrl) itemRaw.wp_featured_image = featuredImageUrl;
           item.raw = itemRaw;
         }
       }
@@ -475,16 +482,30 @@ const firstTextLike = (...values: unknown[]) => {
   return undefined;
 };
 
-const pickWordPressFeaturedImageUrl = (item: Record<string, unknown>) =>
-  pickFirstUrl(
-    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.medium_large.source_url')),
-    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.large.source_url')),
-    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.medium.source_url')),
+const getWordPressFeaturedMedia = (item: Record<string, unknown>) => {
+  const media = getPath(item, '_embedded.wp:featuredmedia[0]');
+  return media && typeof media === 'object' ? (media as Record<string, unknown>) : null;
+};
+
+const isWordPressFeaturedMediaImage = (media: Record<string, unknown> | null) => {
+  const mediaType = String(media?.media_type || '').trim().toLowerCase();
+  const mimeType = String(media?.mime_type || '').trim().toLowerCase();
+  return mediaType === 'image' || mimeType.startsWith('image/');
+};
+
+const pickWordPressFeaturedImageUrl = (item: Record<string, unknown>) => {
+  const media = getWordPressFeaturedMedia(item);
+  if (!isWordPressFeaturedMediaImage(media)) return undefined;
+  return pickFirstUrl(
     toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.full.source_url')),
-    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.thumbnail.source_url')),
     toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].source_url')),
+    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.large.source_url')),
+    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.medium_large.source_url')),
+    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.medium.source_url')),
+    toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].media_details.sizes.thumbnail.source_url')),
     toTextLike(getPath(item, '_embedded.wp:featuredmedia[0].guid.rendered'))
   );
+};
 
 const extractJsonRawFields = (
   item: Record<string, unknown>,
@@ -620,6 +641,10 @@ const mapJsonFeedItem = (feed: FeedConfig, item: Record<string, unknown>): FeedI
     toTextLike(getPath(item, 'yoast_head_json.og_image[0].url')),
     pickWordPressFeaturedImageUrl(item)
   );
+  const wordpressFeaturedMedia = getWordPressFeaturedMedia(item);
+  const wordpressFeaturedMediaSourceUrl = isWordPressFeaturedMediaImage(wordpressFeaturedMedia)
+    ? undefined
+    : toTextLike(wordpressFeaturedMedia?.source_url);
   const mediaCandidate = pickFirstUrl(
     toTextLike(getPath(item, 'video_url')),
     toTextLike(getPath(item, 'videoUrl')),
@@ -629,7 +654,8 @@ const mapJsonFeedItem = (feed: FeedConfig, item: Record<string, unknown>): FeedI
     toTextLike(getPath(item, 'documentUrl')),
     toTextLike(getPath(item, 'media_url')),
     toTextLike(getPath(item, 'mediaUrl')),
-    toTextLike(getPath(item, 'enclosure.url'))
+    toTextLike(getPath(item, 'enclosure.url')),
+    wordpressFeaturedMediaSourceUrl
   );
   const mediaMimeCandidate =
     toTextLike(getPath(item, 'mime_type')) ||
@@ -808,11 +834,11 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
       toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet)
     );
     const explicitImageCandidate = pickFirstUrl(
+      htmlImage,
       toStringValue(rssItem['media:thumbnail']?.$?.url || rssItem['media:thumbnail']?.url),
       toStringValue(rssItem['itunes:image']?.href || rssItem['itunes:image']?.url),
       toStringValue((rssItem.image as { url?: string })?.url || (rssItem.image as { href?: string })?.href),
-      toStringValue(typeof rssItem.image === 'string' ? rssItem.image : undefined),
-      htmlImage
+      toStringValue(typeof rssItem.image === 'string' ? rssItem.image : undefined)
     );
     const mediaCandidate = pickFirstUrl(
       toStringValue(rssItem.enclosure?.url),

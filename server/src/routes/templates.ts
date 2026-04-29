@@ -25,6 +25,48 @@ function extractVariables(content: string) {
   return Array.from(variables);
 }
 
+const normalizeModernSendMode = (value: unknown) => {
+  const mode = String(value || '').trim();
+  if (mode === 'image' || mode === 'auto_media') return 'auto_media';
+  if (mode === 'image_only' || mode === 'media_only') return 'media_only';
+  if (mode === 'link_preview' || mode === 'text_preview') return 'text_preview';
+  if (mode === 'text_only') return 'text_only';
+  return 'auto_media';
+};
+
+const normalizeTemplateSequenceSteps = (value: unknown) => {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((rawStep, index) => {
+      const step = rawStep && typeof rawStep === 'object' ? rawStep as Record<string, unknown> : {};
+      const content = String(step.content || '').trim();
+      if (!content) return null;
+      const label = String(step.label || '').replace(/\s+/g, ' ').trim();
+      const delaySeconds = Number(step.delay_seconds);
+      return {
+        label: label || `Step ${index + 1}`,
+        content,
+        send_mode: normalizeModernSendMode(step.send_mode),
+        delay_seconds: Number.isFinite(delaySeconds)
+          ? Math.min(Math.max(Math.floor(delaySeconds), 0), 3600)
+          : 0,
+        active: step.active !== false
+      };
+    })
+    .filter(Boolean);
+};
+
+const extractVariablesFromTemplate = (payload: Record<string, unknown>) => {
+  const variables = new Set<string>(extractVariables(String(payload.content || '')));
+  for (const step of normalizeTemplateSequenceSteps(payload.sequence_steps)) {
+    for (const variable of extractVariables(String((step as { content?: string }).content || ''))) {
+      variables.add(variable);
+    }
+  }
+  return Array.from(variables);
+};
+
 const normalizeTemplatePayload = (payload: Record<string, unknown>) => {
   const next = { ...payload } as Record<string, unknown> & {
     send_mode?:
@@ -36,7 +78,9 @@ const normalizeTemplatePayload = (payload: Record<string, unknown>) => {
       | 'image_only'
       | 'link_preview';
     send_images?: boolean;
+    sequence_steps?: unknown;
   };
+  next.sequence_steps = normalizeTemplateSequenceSteps(payload.sequence_steps);
 
   const explicitMode = next.send_mode;
 
@@ -74,6 +118,7 @@ const normalizeTemplateResponse = <T extends Record<string, unknown>>(template: 
   const next = { ...template } as T & {
     send_mode?: 'auto_media' | 'text_preview' | 'text_only' | 'media_only' | 'image' | 'image_only' | 'link_preview' | null;
     send_images?: boolean | null;
+    sequence_steps?: unknown;
   };
 
   if (next.send_mode === 'image' && next.send_images === false) {
@@ -89,6 +134,8 @@ const normalizeTemplateResponse = <T extends Record<string, unknown>>(template: 
   } else if (next.send_mode === 'text_preview' || next.send_mode === 'text_only') {
     next.send_images = false;
   }
+
+  next.sequence_steps = normalizeTemplateSequenceSteps(next.sequence_steps);
 
   return next;
 };
@@ -115,7 +162,7 @@ const templateRoutes = () => {
     try {
       // Extract variables from template content
       const payload = normalizeTemplatePayload(req.body);
-      const variables = extractVariables(String(payload.content || ''));
+      const variables = extractVariablesFromTemplate(payload);
       
       const { data: template, error } = await getDb()
         .from('templates')
@@ -135,7 +182,7 @@ const templateRoutes = () => {
     try {
       // Extract variables from template content
       const payload = normalizeTemplatePayload(req.body);
-      const variables = extractVariables(String(payload.content || ''));
+      const variables = extractVariablesFromTemplate(payload);
       
       const { data: template, error } = await getDb()
         .from('templates')
@@ -256,6 +303,7 @@ const templateRoutes = () => {
 module.exports = templateRoutes;
 module.exports.__testUtils = {
   extractVariables,
+  normalizeTemplateSequenceSteps,
   normalizeTemplatePayload,
   normalizeTemplateResponse
 };

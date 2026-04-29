@@ -162,6 +162,7 @@ const buildSupabaseMock = (seed?: Partial<Record<TableName, Row[]>>) => {
 
 const getSupabaseClientMock: any = jest.fn();
 const loggerWarnMock: any = jest.fn();
+const getSettingsMock: any = jest.fn();
 
 jest.mock('../src/db/supabase', () => ({
     getSupabaseClient: (...args: any[]) => getSupabaseClientMock(...args)
@@ -172,6 +173,10 @@ jest.mock('../src/utils/logger', () => ({
     info: jest.fn(),
     error: jest.fn(),
     debug: jest.fn()
+}));
+
+jest.mock('../src/services/settingsService', () => ({
+    getSettings: (...args: any[]) => getSettingsMock(...args)
 }));
 
 jest.mock('node-cron', () => ({
@@ -188,8 +193,13 @@ describe('statusAudienceService', () => {
     beforeEach(() => {
         jest.clearAllMocks();
         __testUtils.clearInMemoryStatusAudienceCache();
+        getSettingsMock.mockResolvedValue({
+            status_audience_mode: 'auto',
+            status_audience_jids: ''
+        });
         delete process.env.WHATSAPP_STATUS_AUDIENCE_JIDS;
         delete process.env.WHATSAPP_STATUS_JID_LIST;
+        delete process.env.WHATSAPP_STATUS_AUDIENCE_MODE;
     });
 
     it('does not preserve a group-metadata-only stored snapshot when a connected client resolves only self', async () => {
@@ -486,6 +496,7 @@ describe('statusAudienceService', () => {
 
     it('limits the stored and returned audience to explicit env recipients', async () => {
         process.env.WHATSAPP_STATUS_AUDIENCE_JIDS = '19144477725, 15551234567@s.whatsapp.net';
+        process.env.WHATSAPP_STATUS_AUDIENCE_MODE = 'explicit';
         const { supabase, tables } = buildSupabaseMock({
             status_recipients: [
                 {

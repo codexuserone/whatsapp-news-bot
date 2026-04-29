@@ -304,6 +304,9 @@ const queueRoutes = () => {
           media_type,
           media_sent,
           media_error,
+          sequence_step_index,
+          sequence_step_label,
+          scheduled_for,
           approved_at,
           approved_by,
           processing_started_at,
@@ -423,6 +426,8 @@ const queueRoutes = () => {
           batch_times: schedule?.batch_times || null,
           target_name: target?.name || null,
           target_type: target?.type || null,
+          sequence_step_index: row.sequence_step_index ?? 0,
+          sequence_step_label: row.sequence_step_label || null,
           title,
           url: feedItems?.link || null,
           image_url: normalizedMedia.imageUrl || null,
@@ -448,7 +453,7 @@ const queueRoutes = () => {
           correction_error: row.correction_error || null,
           created_at: row.created_at,
           is_manual: isManual,
-          scheduled_for: null
+          scheduled_for: row.scheduled_for || null
         };
       });
 

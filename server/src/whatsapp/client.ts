@@ -1269,14 +1269,17 @@ class WhatsAppClient {
         warnings.push('Group participants are not used as Status recipients unless WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS=true.');
       }
 
-      const envAudience = String(
-        process.env.WHATSAPP_STATUS_AUDIENCE_JIDS || process.env.WHATSAPP_STATUS_JID_LIST || ''
-      )
-        .split(',')
-        .map((value) => String(value || '').trim())
-        .filter(Boolean);
-      for (const candidate of envAudience) {
-        addCandidate(candidate, 'env');
+      const envAudienceMode = String(process.env.WHATSAPP_STATUS_AUDIENCE_MODE || '').trim().toLowerCase();
+      if (envAudienceMode === 'explicit') {
+        const envAudience = String(
+          process.env.WHATSAPP_STATUS_AUDIENCE_JIDS || process.env.WHATSAPP_STATUS_JID_LIST || ''
+        )
+          .split(',')
+          .map((value) => String(value || '').trim())
+          .filter(Boolean);
+        for (const candidate of envAudience) {
+          addCandidate(candidate, 'env');
+        }
       }
 
       const selfJid = normalizeStatusAudienceJid(this.meJid || socket?.user?.id);

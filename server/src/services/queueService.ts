@@ -1750,7 +1750,13 @@ const isMediaSendResult = (sendResult: SendWithMediaResult | null | undefined) =
 const shouldRequireServerAckForSend = (
   targetType: Target['type'] | null | undefined,
   sendResult: SendWithMediaResult | null | undefined
-) => targetType === 'channel' && isMediaSendResult(sendResult);
+) => {
+  // Newsletter media sends use a custom Baileys sendNode path that does not reliably emit
+  // messages.update server ACKs; sendNode rejection and immediate ACK errors are the failure signals.
+  void targetType;
+  void sendResult;
+  return false;
+};
 
 const isChannelMediaAckRejection = (
   targetType: Target['type'] | null | undefined,
@@ -1834,11 +1840,7 @@ const confirmSendResult = async (
     const media = isMediaSendResult(sendResult);
     const requireServerAck = shouldRequireServerAckForSend(targetType, sendResult);
     const isStatus = Boolean(options?.isStatus);
-    const failureGraceMs = isStatus
-      ? 5000
-      : targetType === 'channel' && !requireServerAck && options?.allowChannelTextUpsert
-        ? 3000
-        : 0;
+    const failureGraceMs = isStatus ? 5000 : targetType === 'channel' ? 3000 : 0;
     return whatsappClient.confirmSend(
       messageId,
       isStatus
@@ -4588,10 +4590,10 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
     const ensureSendConfirmed = async (messageId: string | null | undefined, isMedia: boolean, isStatus = false) => {
       if (!messageId) return;
       if (activeWhatsappClient.confirmSend) {
-        const requireServerAck = targetRow.type === 'channel' && isMedia;
+        const requireServerAck = false;
         const failureGraceMs = isStatus
           ? 5000
-          : targetRow.type === 'channel' && !requireServerAck
+          : targetRow.type === 'channel'
             ? 3000
             : 0;
         const confirmation = await activeWhatsappClient.confirmSend(

@@ -107,7 +107,7 @@ describe('queueService __testUtils', () => {
     expect(testUtils.buildConnectionWaitErrorMessage('')).toBe('Waiting for WhatsApp connection');
   });
 
-  it('requires server ack only for channel media sends', () => {
+  it('does not require event ack for channel media sends', () => {
     const mediaResult = {
       media: { type: 'image', url: 'https://example.com/a.jpg', sent: true, error: null }
     };
@@ -115,7 +115,7 @@ describe('queueService __testUtils', () => {
       media: { type: null, url: null, sent: false, error: null }
     };
 
-    expect(testUtils.shouldRequireServerAckForSend('channel', mediaResult)).toBe(true);
+    expect(testUtils.shouldRequireServerAckForSend('channel', mediaResult)).toBe(false);
     expect(testUtils.shouldRequireServerAckForSend('channel', textResult)).toBe(false);
     expect(testUtils.shouldRequireServerAckForSend('group', mediaResult)).toBe(false);
   });

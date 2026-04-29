@@ -188,6 +188,8 @@ describe('statusAudienceService', () => {
     beforeEach(() => {
         jest.clearAllMocks();
         __testUtils.clearInMemoryStatusAudienceCache();
+        delete process.env.WHATSAPP_STATUS_AUDIENCE_JIDS;
+        delete process.env.WHATSAPP_STATUS_JID_LIST;
     });
 
     it('does not preserve a group-metadata-only stored snapshot when a connected client resolves only self', async () => {
@@ -480,6 +482,57 @@ describe('statusAudienceService', () => {
 
         expect(result.recipients).toEqual(['16465527019@s.whatsapp.net']);
         expect(result.sources.activeIndividualTargets).toBe(1);
+    });
+
+    it('limits the stored and returned audience to explicit env recipients', async () => {
+        process.env.WHATSAPP_STATUS_AUDIENCE_JIDS = '19144477725, 15551234567@s.whatsapp.net';
+        const { supabase, tables } = buildSupabaseMock({
+            status_recipients: [
+                {
+                    session_id: 'primary',
+                    recipient_jid: '16465527019@s.whatsapp.net',
+                    refreshed_at: new Date(Date.now() - 60_000).toISOString(),
+                    sources: {
+                        contactsCache: 1,
+                        storeContacts: 0,
+                        storeChats: 0,
+                        groupMetadata: 0,
+                        env: 0,
+                        me: 1,
+                        activeIndividualTargets: 0,
+                        recentSuccessfulDirectRecipients: 0
+                    },
+                    warnings: []
+                }
+            ]
+        });
+        getSupabaseClientMock.mockReturnValue(supabase);
+
+        const result = await refreshStatusRecipients(
+            {
+                getStatus: () => ({ status: 'connected' }),
+                getStatusParticipants: () => ['16465527019@s.whatsapp.net', '15559876543@s.whatsapp.net'],
+                getStatusAudience: () => ({
+                    participantCount: 2,
+                    sample: ['16465527019@s.whatsapp.net', '15559876543@s.whatsapp.net'],
+                    sources: {
+                        contactsCache: 2,
+                        storeContacts: 0,
+                        storeChats: 0,
+                        groupMetadata: 0,
+                        env: 0,
+                        me: 0
+                    },
+                    warnings: []
+                })
+            },
+            { sampleSize: 10 }
+        );
+
+        expect(result.recipients).toEqual(['15551234567@s.whatsapp.net', '19144477725@s.whatsapp.net']);
+        expect(result.sources.env).toBe(2);
+        expect(result.sources.contactsCache).toBe(0);
+        expect(tables.status_recipients.map((row) => row.recipient_jid).sort()).toEqual(result.recipients);
     });
 
     it('drops implicit group LID recipients when no phone mappings or explicit recipients exist', async () => {

@@ -112,6 +112,16 @@ const uniqueStrings = (values: unknown[]) =>
     )
   );
 
+const getExplicitEnvAudienceRecipients = () =>
+  Array.from(
+    new Set(
+      String(process.env.WHATSAPP_STATUS_AUDIENCE_JIDS || process.env.WHATSAPP_STATUS_JID_LIST || '')
+        .split(',')
+        .map((value) => normalizeRecipientJid(value))
+        .filter(Boolean)
+    )
+  ).sort();
+
 const mergeSources = (...sourceSets: Array<Partial<StatusAudienceSources> | null | undefined>): StatusAudienceSources => {
   const merged = emptySources();
   for (const sourceSet of sourceSets) {
@@ -419,7 +429,23 @@ const refreshStatusRecipients = async (
   options?: { sampleSize?: number }
 ): Promise<RefreshResult> => {
   const supabase = getSupabaseClient();
+  const explicitEnvAudienceRecipients = getExplicitEnvAudienceRecipients();
   if (!supabase) {
+    if (explicitEnvAudienceRecipients.length) {
+      const result = {
+        participantCount: explicitEnvAudienceRecipients.length,
+        recipients: explicitEnvAudienceRecipients,
+        sample: buildSample(explicitEnvAudienceRecipients, options?.sampleSize),
+        refreshedAt: new Date().toISOString(),
+        sources: {
+          ...emptySources(),
+          env: explicitEnvAudienceRecipients.length
+        },
+        warnings: ['Status audience is limited to WHATSAPP_STATUS_AUDIENCE_JIDS.']
+      };
+      cacheSnapshot(result);
+      return result;
+    }
     // No database — fall back to in-memory snapshot if available
     if (lastGoodSnapshot && lastGoodSnapshot.recipients.length) {
       return {
@@ -436,6 +462,36 @@ const refreshStatusRecipients = async (
       sources: emptySources(),
       warnings: ['Database not available']
     };
+  }
+
+  if (explicitEnvAudienceRecipients.length) {
+    const refreshedAt = new Date().toISOString();
+    const sources = {
+      ...emptySources(),
+      env: explicitEnvAudienceRecipients.length
+    };
+    const warnings = ['Status audience is limited to WHATSAPP_STATUS_AUDIENCE_JIDS.'];
+
+    try {
+      await persistStatusRecipientsSnapshot(supabase, explicitEnvAudienceRecipients, {
+        refreshedAt,
+        sources,
+        warnings
+      });
+    } catch (persistError) {
+      logger.warn({ error: getErrorMessage(persistError) }, 'Failed to persist explicit status recipients snapshot');
+    }
+
+    const result: RefreshResult = {
+      participantCount: explicitEnvAudienceRecipients.length,
+      recipients: explicitEnvAudienceRecipients,
+      sample: buildSample(explicitEnvAudienceRecipients, options?.sampleSize),
+      refreshedAt,
+      sources,
+      warnings
+    };
+    cacheSnapshot(result);
+    return result;
   }
 
   let stored: RefreshResult;
@@ -618,6 +674,10 @@ const ensureFreshStatusRecipients = async (
   whatsappClient?: StatusAudienceClient | null,
   options?: { maxAgeMinutes?: number; sampleSize?: number }
 ): Promise<RefreshResult> => {
+  if (getExplicitEnvAudienceRecipients().length) {
+    return refreshStatusRecipients(whatsappClient, options);
+  }
+
   const supabase = getSupabaseClient();
   if (!supabase) {
     return refreshStatusRecipients(whatsappClient, options);

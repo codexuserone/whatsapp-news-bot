@@ -20,6 +20,7 @@ const { withScheduleLock } = require('./scheduleLockService');
 const { buildDefaultUserAgent } = require('../utils/httpClientIdentity');
 const { normalizeTargetJidForSend } = require('../utils/targetJid');
 const { normalizeFeedMedia } = require('../utils/feedMedia');
+const { isMediaDataUrl, parseMediaDataUrl } = require('../utils/mediaDataUrl');
 const { WHATSAPP_STATUS_ENABLED, WHATSAPP_STATUS_DISABLED_REASON } = require('../config/features');
 const { ensureFreshStatusRecipients } = require('./statusAudienceService');
 
@@ -108,6 +109,7 @@ type WhatsAppClient = {
 
 const shouldBlockTextFallbackAfterMediaFailure = (targetType: Target['type'] | null | undefined) =>
   targetType === 'status' || targetType === 'channel';
+const shouldBlockManualTextFallbackAfterMediaFailure = () => true;
 
 const DEFAULT_SEND_TIMEOUT_MS = 45000;
 const DEFAULT_POST_SEND_EDIT_WINDOW_MINUTES = 15;
@@ -4951,10 +4953,10 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       const manualMediaUrlRaw = String(log.media_url || '').trim();
       const manualMediaType = String(log.media_type || '').trim().toLowerCase();
       const manualHasMedia = Boolean(manualMediaUrlRaw);
-      const blockManualTextFallbackAfterMediaFailure = shouldBlockTextFallbackAfterMediaFailure(targetRow.type);
+      const blockManualTextFallbackAfterMediaFailure = shouldBlockManualTextFallbackAfterMediaFailure();
 
       if (!manualHasMedia && !manualText) {
-        throw new Error('Manual message must include message text or a media URL');
+        throw new Error('Manual message must include message text or an attachment');
       }
 
       const sendResult = await withTargetSendLock(targetRow, async () => {
@@ -4972,41 +4974,64 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           return { response, media: null as null };
         }
 
+        const mediaIsDataUrl = isMediaDataUrl(manualMediaUrlRaw);
         let safeUrl = manualMediaUrlRaw;
-        try {
-          safeUrl = (await assertSafeOutboundUrl(manualMediaUrlRaw)).toString();
-        } catch (error) {
-          throw new Error(`Blocked unsafe media URL: ${getErrorMessage(error)}`);
+        let parsedDataMedia: {
+          buffer: Buffer;
+          mimetype: string;
+          kind: 'image' | 'video' | 'audio' | 'document';
+          filename?: string | null;
+        } | null = null;
+        const explicitManualKind =
+          manualMediaType === 'video' ||
+          manualMediaType === 'image' ||
+          manualMediaType === 'audio' ||
+          manualMediaType === 'document'
+            ? manualMediaType
+            : null;
+        if (mediaIsDataUrl) {
+          try {
+            const parsed = parseMediaDataUrl(manualMediaUrlRaw, {
+              expectedKind: explicitManualKind,
+              filename: parsedManual.meta.documentFilename || null
+            });
+            parsedDataMedia = parsed;
+            safeUrl = `uploaded:${parsed.kind}${parsed.filename ? `:${parsed.filename}` : ''}`;
+          } catch (error) {
+            throw new Error(`Invalid attachment: ${getErrorMessage(error)}`);
+          }
+        } else {
+          try {
+            safeUrl = (await assertSafeOutboundUrl(manualMediaUrlRaw)).toString();
+          } catch (error) {
+            throw new Error(`Blocked unsafe media URL: ${getErrorMessage(error)}`);
+          }
         }
 
         const inferredKind =
-          manualMediaType === 'video'
+          explicitManualKind ||
+          parsedDataMedia?.kind ||
+          (isVideoUrl(safeUrl)
             ? 'video'
-            : manualMediaType === 'image'
-              ? 'image'
-              : manualMediaType === 'audio'
-                ? 'audio'
-                : manualMediaType === 'document'
-                  ? 'document'
-                : isVideoUrl(safeUrl)
-                  ? 'video'
-                  : isAudioUrl(safeUrl)
-                    ? 'audio'
-                    : isDocumentUrl(safeUrl)
-                      ? 'document'
-                  : isImageUrl(safeUrl)
+            : isAudioUrl(safeUrl)
+              ? 'audio'
+              : isDocumentUrl(safeUrl)
+                ? 'document'
+                : isImageUrl(safeUrl)
                   ? 'image'
-                : null;
+                  : null);
         uncertainMediaType = inferredKind;
-        uncertainMediaUrl = safeUrl;
+        uncertainMediaUrl = mediaIsDataUrl ? manualMediaUrlRaw : safeUrl;
 
         if (!inferredKind) {
-          throw new Error('Unsupported media URL (expected image, video, audio, or document)');
+          throw new Error('Unsupported attachment (expected image, video, audio, or document)');
         }
 
         if (inferredKind === 'video') {
           try {
-            const { buffer, mimetype } = await downloadVideoBuffer(safeUrl, null);
+            const { buffer, mimetype } = parsedDataMedia
+              ? { buffer: parsedDataMedia.buffer, mimetype: parsedDataMedia.mimetype }
+              : await downloadVideoBuffer(safeUrl, null);
             let sendBuffer = buffer;
             let sendMime = mimetype;
             let newsletterExtras: Record<string, unknown> | null = null;
@@ -5067,7 +5092,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           } catch (error) {
             const message = getErrorMessage(error);
             if (!manualText || blockManualTextFallbackAfterMediaFailure) {
-              throw error;
+              throw new Error(`Manual video send failed: ${message}`);
             }
             logger.warn({ error, jid, videoUrl: safeUrl }, 'Manual video send failed; using text fallback');
             const response = await sendTextManual(manualText);
@@ -5080,7 +5105,9 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             throw new Error('Status only supports text, image, and video');
           }
           try {
-            const { buffer, mimetype } = await downloadAudioBuffer(safeUrl, null);
+            const { buffer, mimetype } = parsedDataMedia
+              ? { buffer: parsedDataMedia.buffer, mimetype: parsedDataMedia.mimetype }
+              : await downloadAudioBuffer(safeUrl, null);
             const content: Record<string, unknown> = { audio: buffer, mimetype, ptt: false };
             const response = await withTimeout(
               activeWhatsappClient.sendMessage(jid, content),
@@ -5100,7 +5127,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           } catch (error) {
             const message = getErrorMessage(error);
             if (!manualText || blockManualTextFallbackAfterMediaFailure) {
-              throw error;
+              throw new Error(`Manual audio send failed: ${message}`);
             }
             logger.warn({ error, jid, audioUrl: safeUrl }, 'Manual audio send failed; using text fallback');
             const response = await sendTextManual(manualText);
@@ -5113,7 +5140,13 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             throw new Error('Status only supports text, image, and video');
           }
           try {
-            const { buffer, mimetype, filename } = await downloadDocumentBuffer(safeUrl, null);
+            const { buffer, mimetype, filename } = parsedDataMedia
+              ? {
+                buffer: parsedDataMedia.buffer,
+                mimetype: parsedDataMedia.mimetype,
+                filename: parsedDataMedia.filename || null
+              }
+              : await downloadDocumentBuffer(safeUrl, null);
             const content: Record<string, unknown> = {
               document: buffer,
               mimetype: parsedManual.meta.documentMime || mimetype || 'application/octet-stream',
@@ -5140,7 +5173,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           } catch (error) {
             const message = getErrorMessage(error);
             if (!manualText || blockManualTextFallbackAfterMediaFailure) {
-              throw error;
+              throw new Error(`Manual document send failed: ${message}`);
             }
             logger.warn({ error, jid, documentUrl: safeUrl }, 'Manual document send failed; using text fallback');
             const response = await sendTextManual(manualText);
@@ -5149,7 +5182,9 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
         }
 
         try {
-          const { buffer, mimetype } = await downloadImageBuffer(safeUrl, null);
+          const { buffer, mimetype } = parsedDataMedia
+            ? { buffer: parsedDataMedia.buffer, mimetype: parsedDataMedia.mimetype }
+            : await downloadImageBuffer(safeUrl, null);
           let sendBuffer = buffer;
           let sendMime = mimetype;
           let newsletterExtras: Record<string, unknown> | null = null;
@@ -5209,7 +5244,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
         } catch (error) {
           const message = getErrorMessage(error);
           if (!manualText || blockManualTextFallbackAfterMediaFailure) {
-            throw error;
+            throw new Error(`Manual image send failed: ${message}`);
           }
           logger.warn({ error, jid, imageUrl: safeUrl }, 'Manual image send failed; using text fallback');
           const response = await sendTextManual(manualText);
@@ -5517,6 +5552,7 @@ module.exports = {
     isConnectionStateError,
     buildConnectionWaitErrorMessage,
     shouldBlockTextFallbackAfterMediaFailure,
+    shouldBlockManualTextFallbackAfterMediaFailure,
     assertUsableStatusAudience,
     shouldRequireServerAckForSend,
     isChannelMediaAckRejection,

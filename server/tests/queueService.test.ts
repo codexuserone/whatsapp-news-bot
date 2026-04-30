@@ -128,6 +128,13 @@ describe('queueService __testUtils', () => {
     expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('individual')).toBe(false);
   });
 
+  it('blocks manual text fallback after any requested media failure', () => {
+    expect(testUtils.shouldBlockManualTextFallbackAfterMediaFailure('status')).toBe(true);
+    expect(testUtils.shouldBlockManualTextFallbackAfterMediaFailure('channel')).toBe(true);
+    expect(testUtils.shouldBlockManualTextFallbackAfterMediaFailure('group')).toBe(true);
+    expect(testUtils.shouldBlockManualTextFallbackAfterMediaFailure('individual')).toBe(true);
+  });
+
   it('detects newsletter media ack 479 as a channel media rejection', () => {
     const mediaResult = {
       media: { type: 'image', url: 'https://example.com/a.jpg', sent: true, error: null }

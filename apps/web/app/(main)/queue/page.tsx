@@ -69,6 +69,16 @@ const isSafeImageSrc = (value: unknown) => {
   return src.startsWith('http://') || src.startsWith('https://');
 };
 
+const getMediaDisplayLabel = (item: QueueItem) => {
+  const kind = String(item.media_type || item.media_kind || '').trim().toLowerCase();
+  const hasMedia = Boolean(kind || item.media_url || item.image_url);
+  if (!hasMedia) return 'Text only';
+  if (item.media_sent && kind) return `${kind} sent`;
+  if (item.media_error && kind) return `${kind} failed`;
+  if (kind) return `${kind} attached`;
+  return 'media attached';
+};
+
 const deriveDefaultMessage = (item: QueueItem) => {
   const title = String(item.title || '').trim();
   const url = String(item.url || '').trim();
@@ -773,6 +783,7 @@ const QueueInner = () => {
                           >
                             {deliveryPath.label}
                           </Badge>
+                          <Badge variant="outline">{getMediaDisplayLabel(item)}</Badge>
                           {correctionBadge}
                         </div>
                         {item.url ? (
@@ -969,7 +980,7 @@ const QueueInner = () => {
                         />
                       ) : (
                         <div className="flex h-full items-center justify-center text-muted-foreground">
-                          <span className="text-xs">No media</span>
+                          <span className="px-3 text-center text-xs">{getMediaDisplayLabel(item)}</span>
                         </div>
                       )}
                       <div className="absolute top-2 right-2 flex gap-1">

@@ -291,6 +291,10 @@ const schemas = {
       videoUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       audioUrl: z.string().url().optional().nullable().transform(normalizeOptional),
       documentUrl: z.string().url().optional().nullable().transform(normalizeOptional),
+      imageDataUrl: z.string().max(12_000_000).optional().nullable().transform(normalizeOptional),
+      videoDataUrl: z.string().max(35_000_000).optional().nullable().transform(normalizeOptional),
+      audioDataUrl: z.string().max(25_000_000).optional().nullable().transform(normalizeOptional),
+      documentDataUrl: z.string().max(35_000_000).optional().nullable().transform(normalizeOptional),
       disableLinkPreview: z.boolean().optional().default(false),
       includeCaption: z.boolean().optional().default(true),
       documentFilename: z.string().max(255).optional().nullable().transform(normalizeOptional),
@@ -310,9 +314,24 @@ const schemas = {
         videoUrl?: string | null;
         audioUrl?: string | null;
         documentUrl?: string | null;
-      }) => Boolean(value.message || value.imageUrl || value.videoUrl || value.audioUrl || value.documentUrl),
+        imageDataUrl?: string | null;
+        videoDataUrl?: string | null;
+        audioDataUrl?: string | null;
+        documentDataUrl?: string | null;
+      }) =>
+        Boolean(
+          value.message ||
+          value.imageUrl ||
+          value.videoUrl ||
+          value.audioUrl ||
+          value.documentUrl ||
+          value.imageDataUrl ||
+          value.videoDataUrl ||
+          value.audioDataUrl ||
+          value.documentDataUrl
+        ),
       {
-        message: 'message, imageUrl, videoUrl, audioUrl, or documentUrl is required'
+        message: 'message or attachment is required'
       }
     )
     .refine(
@@ -321,7 +340,21 @@ const schemas = {
         videoUrl?: string | null;
         audioUrl?: string | null;
         documentUrl?: string | null;
-      }) => [value.imageUrl, value.videoUrl, value.audioUrl, value.documentUrl].filter(Boolean).length <= 1,
+        imageDataUrl?: string | null;
+        videoDataUrl?: string | null;
+        audioDataUrl?: string | null;
+        documentDataUrl?: string | null;
+      }) =>
+        [
+          value.imageUrl,
+          value.videoUrl,
+          value.audioUrl,
+          value.documentUrl,
+          value.imageDataUrl,
+          value.videoDataUrl,
+          value.audioDataUrl,
+          value.documentDataUrl
+        ].filter(Boolean).length <= 1,
       {
         message: 'Provide at most one media source'
       }

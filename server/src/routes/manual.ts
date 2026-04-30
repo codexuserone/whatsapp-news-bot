@@ -15,6 +15,10 @@ type ManualPostBody = {
   videoUrl?: string | null;
   audioUrl?: string | null;
   documentUrl?: string | null;
+  imageDataUrl?: string | null;
+  videoDataUrl?: string | null;
+  audioDataUrl?: string | null;
+  documentDataUrl?: string | null;
   disableLinkPreview?: boolean;
   includeCaption?: boolean;
   documentFilename?: string | null;
@@ -44,6 +48,22 @@ const manualRoutes = () => {
     const videoUrl = String(body.videoUrl || '').trim();
     const audioUrl = String(body.audioUrl || '').trim();
     const documentUrl = String(body.documentUrl || '').trim();
+    const imageDataUrl = String(body.imageDataUrl || '').trim();
+    const videoDataUrl = String(body.videoDataUrl || '').trim();
+    const audioDataUrl = String(body.audioDataUrl || '').trim();
+    const documentDataUrl = String(body.documentDataUrl || '').trim();
+    if (documentDataUrl) {
+      return { media_url: documentDataUrl, media_type: 'document' as const };
+    }
+    if (audioDataUrl) {
+      return { media_url: audioDataUrl, media_type: 'audio' as const };
+    }
+    if (videoDataUrl) {
+      return { media_url: videoDataUrl, media_type: 'video' as const };
+    }
+    if (imageDataUrl) {
+      return { media_url: imageDataUrl, media_type: 'image' as const };
+    }
     if (documentUrl) {
       return { media_url: documentUrl, media_type: 'document' as const };
     }

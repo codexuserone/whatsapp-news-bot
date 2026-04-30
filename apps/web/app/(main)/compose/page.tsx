@@ -15,7 +15,37 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
-import { Send, Save, Trash2, ClipboardPaste, CheckCircle2, XCircle } from 'lucide-react';
+import {
+  CheckCircle2,
+  ClipboardPaste,
+  FileText,
+  Image as ImageIcon,
+  Save,
+  Send,
+  Trash2,
+  Upload,
+  Video,
+  Volume2,
+  X,
+  XCircle
+} from 'lucide-react';
+
+type AttachmentKind = 'image' | 'video' | 'audio' | 'document';
+
+type ComposerAttachment = {
+  kind: AttachmentKind;
+  name: string;
+  mime: string;
+  size: number;
+  dataUrl: string;
+};
+
+type SavedAttachmentSummary = {
+  kind: AttachmentKind;
+  name: string;
+  mime: string;
+  size: number;
+};
 
 type ManualDraft = {
   id: string;
@@ -23,11 +53,10 @@ type ManualDraft = {
   updated_at: string;
   data: {
     message: string;
-    imageUrl: string;
-    videoUrl: string;
     disableLinkPreview: boolean;
     includeCaption: boolean;
     target_ids: string[];
+    attachment?: SavedAttachmentSummary | null;
   };
 };
 
@@ -43,7 +72,39 @@ type SettingsShape = {
   manual_blocks?: ManualBlock[] | null;
 };
 
-const normalizeUrlInput = (value: unknown) => String(value ?? '').trim();
+type ManualSendPayload = {
+  target_ids: string[];
+  message: string | null;
+  disableLinkPreview: boolean;
+  includeCaption: boolean;
+  imageDataUrl?: string | null;
+  videoDataUrl?: string | null;
+  audioDataUrl?: string | null;
+  documentDataUrl?: string | null;
+  documentFilename?: string | null;
+  documentMime?: string | null;
+};
+
+const MAX_ATTACHMENT_BYTES: Record<AttachmentKind, number> = {
+  image: 8 * 1024 * 1024,
+  video: 32 * 1024 * 1024,
+  audio: 20 * 1024 * 1024,
+  document: 25 * 1024 * 1024
+};
+
+const ACCEPTED_ATTACHMENTS = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'video/mp4',
+  'audio/*',
+  'application/pdf',
+  'text/plain',
+  'text/csv',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+].join(',');
+
 const makeId = () => {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -53,6 +114,77 @@ const makeId = () => {
     // ignore
   }
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+const formatBytes = (bytes: number) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** index;
+  return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+};
+
+const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Could not read attachment'));
+    reader.readAsDataURL(file);
+  });
+
+const getAttachmentKind = (file: File): AttachmentKind | null => {
+  const mime = file.type.toLowerCase();
+  const name = file.name.toLowerCase();
+  if (mime.startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(name)) return 'image';
+  if (mime.startsWith('video/') || /\.(mp4|mov|m4v)$/i.test(name)) return 'video';
+  if (mime.startsWith('audio/') || /\.(mp3|m4a|aac|ogg|wav)$/i.test(name)) return 'audio';
+  if (mime || /\.(pdf|txt|csv|doc|docx)$/i.test(name)) return 'document';
+  return null;
+};
+
+const validateAttachmentFile = (file: File, kind: AttachmentKind) => {
+  if (file.size > MAX_ATTACHMENT_BYTES[kind]) {
+    return `${kind[0]!.toUpperCase()}${kind.slice(1)} is too large. Limit: ${formatBytes(MAX_ATTACHMENT_BYTES[kind])}.`;
+  }
+  const mime = file.type.toLowerCase();
+  const name = file.name.toLowerCase();
+  if (kind === 'image' && !['image/jpeg', 'image/png', 'image/webp'].includes(mime)) {
+    return 'Images must be jpeg, png, or webp.';
+  }
+  if (kind === 'video' && mime !== 'video/mp4' && !name.endsWith('.mp4')) {
+    return 'Videos must be MP4 for WhatsApp.';
+  }
+  return null;
+};
+
+const targetTypeLabel = (type: Target['type']) => {
+  switch (type) {
+    case 'individual':
+      return 'Person';
+    case 'group':
+      return 'Group';
+    case 'channel':
+      return 'Channel';
+    case 'status':
+      return 'Status';
+    default:
+      return 'Destination';
+  }
+};
+
+const attachmentIcon = (kind: AttachmentKind) => {
+  switch (kind) {
+    case 'image':
+      return <ImageIcon className="h-4 w-4" />;
+    case 'video':
+      return <Video className="h-4 w-4" />;
+    case 'audio':
+      return <Volume2 className="h-4 w-4" />;
+    case 'document':
+      return <FileText className="h-4 w-4" />;
+    default:
+      return <FileText className="h-4 w-4" />;
+  }
 };
 
 const ComposeInner = () => {
@@ -69,21 +201,14 @@ const ComposeInner = () => {
   const prefill = useMemo(() => {
     const title = String(searchParams?.get('title') || '').trim();
     const url = String(searchParams?.get('url') || '').trim();
-    const prefillImageUrl = String(searchParams?.get('imageUrl') || '').trim();
     const header = title ? `*${title}*` : '';
-    const nextMessage = [header, url].filter(Boolean).join('\n\n');
-    return {
-      message: nextMessage,
-      imageUrl: prefillImageUrl
-    };
+    return [header, url].filter(Boolean).join('\n\n');
   }, [searchParams]);
 
-  const [message, setMessage] = useState(() => prefill.message);
-  const [imageUrl, setImageUrl] = useState(() => prefill.imageUrl);
-  const [videoUrl, setVideoUrl] = useState('');
+  const [message, setMessage] = useState(() => prefill);
+  const [attachment, setAttachment] = useState<ComposerAttachment | null>(null);
   const [disableLinkPreview, setDisableLinkPreview] = useState(false);
   const [includeCaption, setIncludeCaption] = useState(true);
-
   const [blockName, setBlockName] = useState('');
   const [blockContent, setBlockContent] = useState('');
 
@@ -114,17 +239,22 @@ const ComposeInner = () => {
       .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
   }, [settings?.manual_blocks]);
 
+  const selectableTargets = useMemo(() => targets.filter((target) => target.active !== false), [targets]);
   const filteredTargets = useMemo(() => {
     const term = targetSearch.trim().toLowerCase();
-    if (!term) return targets;
-    return targets.filter((t) => {
-      const name = String(t.name || '').toLowerCase();
-      const addr = String(t.phone_number || '').toLowerCase();
-      return name.includes(term) || addr.includes(term);
+    if (!term) return selectableTargets;
+    return selectableTargets.filter((target) => {
+      const name = String(target.name || '').toLowerCase();
+      const type = String(target.type || '').toLowerCase();
+      const address = String(target.phone_number || '').toLowerCase();
+      return name.includes(term) || type.includes(term) || address.includes(term);
     });
-  }, [targets, targetSearch]);
+  }, [selectableTargets, targetSearch]);
 
-  const selectedCount = selectedTargetIds.length;
+  const selectedTargets = useMemo(
+    () => selectableTargets.filter((target) => selectedTargetIds.includes(target.id)),
+    [selectableTargets, selectedTargetIds]
+  );
 
   const updateDrafts = useMutation({
     mutationFn: (next: ManualDraft[]) => api.put('/api/settings', { manual_drafts: next }),
@@ -140,72 +270,102 @@ const ComposeInner = () => {
     }
   });
 
+  const buildManualPayload = (): ManualSendPayload => {
+    const payload: ManualSendPayload = {
+      target_ids: selectedTargetIds,
+      message: message.trim() || null,
+      disableLinkPreview,
+      includeCaption
+    };
+
+    if (!attachment) return payload;
+    if (attachment.kind === 'image') payload.imageDataUrl = attachment.dataUrl;
+    if (attachment.kind === 'video') payload.videoDataUrl = attachment.dataUrl;
+    if (attachment.kind === 'audio') payload.audioDataUrl = attachment.dataUrl;
+    if (attachment.kind === 'document') {
+      payload.documentDataUrl = attachment.dataUrl;
+      payload.documentFilename = attachment.name;
+      payload.documentMime = attachment.mime || null;
+    }
+    return payload;
+  };
+
   const queueManual = useMutation({
-    mutationFn: () =>
-      api.post<{ queued?: number }>('/api/manual/queue', {
-        target_ids: selectedTargetIds,
-        message: message.trim() || null,
-        imageUrl: normalizeUrlInput(imageUrl) || null,
-        videoUrl: normalizeUrlInput(videoUrl) || null,
-        disableLinkPreview,
-        includeCaption
-      }),
+    mutationFn: () => api.post<{ queued?: number }>('/api/manual/queue', buildManualPayload()),
     onSuccess: (result: { queued?: number }) => {
-      setNotice({ type: 'success', message: `Queued ${Number(result?.queued || 0)} manual message(s).` });
+      setNotice({ type: 'success', message: `Queued ${Number(result?.queued || 0)} message(s).` });
       queryClient.invalidateQueries({ queryKey: ['queue'] });
       queryClient.invalidateQueries({ queryKey: ['queue-stats'] });
       router.push('/queue?include_manual=true');
     },
     onError: (error: unknown) => {
-      const msg = error instanceof Error ? error.message : 'Queue failed';
-      setNotice({ type: 'error', message: msg });
+      setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Queue failed' });
     }
   });
 
   const sendManualNow = useMutation({
-    mutationFn: () =>
-      api.post<{ sent?: number; failed?: number; ok?: boolean }>('/api/manual/send', {
-        target_ids: selectedTargetIds,
-        message: message.trim() || null,
-        imageUrl: normalizeUrlInput(imageUrl) || null,
-        videoUrl: normalizeUrlInput(videoUrl) || null,
-        disableLinkPreview,
-        includeCaption
-      }),
+    mutationFn: () => api.post<{ sent?: number; failed?: number; ok?: boolean }>('/api/manual/send', buildManualPayload()),
     onSuccess: (result: { sent?: number; failed?: number; ok?: boolean }) => {
       const sent = Number(result?.sent || 0);
       const failed = Number(result?.failed || 0);
       if (failed > 0 || result?.ok === false) {
-        setNotice({ type: 'error', message: `Recorded locally ${sent}, failed ${failed}. Check Queue/History for details.` });
+        setNotice({ type: 'error', message: `Sent ${sent}, failed ${failed}. Open Queue/History for exact records.` });
       } else {
-        setNotice({ type: 'success', message: `Recorded locally ${sent} message(s).` });
+        setNotice({ type: 'success', message: `Sent ${sent} message(s).` });
       }
       queryClient.invalidateQueries({ queryKey: ['queue'] });
       queryClient.invalidateQueries({ queryKey: ['queue-stats'] });
       queryClient.invalidateQueries({ queryKey: ['logs'] });
     },
     onError: (error: unknown) => {
-      const msg = error instanceof Error ? error.message : 'Send failed';
-      setNotice({ type: 'error', message: msg });
+      setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Send failed' });
     }
   });
 
-  const validateBeforeDispatch = () => {
-    if (!selectedTargetIds.length) {
-      setNotice({ type: 'error', message: 'Select at least one target.' });
-      return false;
+  const handleAttachmentChange = async (file: File | null) => {
+    if (!file) return;
+    const kind = getAttachmentKind(file);
+    if (!kind) {
+      setNotice({ type: 'error', message: 'Choose an image, MP4 video, audio file, or document.' });
+      return;
     }
 
-    const hasText = Boolean(message.trim());
-    const hasImage = Boolean(normalizeUrlInput(imageUrl));
-    const hasVideo = Boolean(normalizeUrlInput(videoUrl));
-    if (!hasText && !hasImage && !hasVideo) {
-      setNotice({ type: 'error', message: 'Add a message or a media URL.' });
+    const validationError = validateAttachmentFile(file, kind);
+    if (validationError) {
+      setNotice({ type: 'error', message: validationError });
+      return;
+    }
+
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      setAttachment({
+        kind,
+        name: file.name || `${kind}-attachment`,
+        mime: file.type || (kind === 'video' ? 'video/mp4' : 'application/octet-stream'),
+        size: file.size,
+        dataUrl
+      });
+      setNotice(null);
+    } catch (error: unknown) {
+      setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Could not read attachment' });
+    }
+  };
+
+  const validateBeforeDispatch = () => {
+    if (!selectedTargetIds.length) {
+      setNotice({ type: 'error', message: 'Select at least one destination.' });
       return false;
     }
-    if (hasImage && hasVideo) {
-      setNotice({ type: 'error', message: 'Use either image URL or video URL, not both.' });
+    if (!message.trim() && !attachment) {
+      setNotice({ type: 'error', message: 'Add message text or choose an attachment.' });
       return false;
+    }
+    if (attachment && attachment.kind !== 'image' && attachment.kind !== 'video') {
+      const hasStatusTarget = selectedTargets.some((target) => target.type === 'status');
+      if (hasStatusTarget) {
+        setNotice({ type: 'error', message: 'Status supports text, images, and videos only.' });
+        return false;
+      }
     }
     return true;
   };
@@ -224,11 +384,17 @@ const ComposeInner = () => {
       updated_at: nowIso,
       data: {
         message,
-        imageUrl,
-        videoUrl,
         disableLinkPreview,
         includeCaption,
-        target_ids: selectedTargetIds
+        target_ids: selectedTargetIds,
+        attachment: attachment
+          ? {
+            kind: attachment.kind,
+            name: attachment.name,
+            mime: attachment.mime,
+            size: attachment.size
+          }
+          : null
       }
     };
     return draft;
@@ -238,9 +404,9 @@ const ComposeInner = () => {
     const draft = buildDraftPayload();
     const next = (() => {
       const existing = drafts.slice();
-      const idx = existing.findIndex((d) => d.id === draft.id);
-      if (idx >= 0) {
-        existing[idx] = draft;
+      const index = existing.findIndex((entry) => entry.id === draft.id);
+      if (index >= 0) {
+        existing[index] = draft;
         return existing;
       }
       return [draft, ...existing].slice(0, 60);
@@ -249,10 +415,12 @@ const ComposeInner = () => {
     setDraftName(draft.name);
     try {
       await updateDrafts.mutateAsync(next);
-      setNotice({ type: 'success', message: 'Draft saved.' });
+      setNotice({
+        type: 'success',
+        message: attachment ? 'Draft saved. Re-select the attachment before sending this draft later.' : 'Draft saved.'
+      });
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : 'Draft save failed';
-      setNotice({ type: 'error', message: msg });
+      setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Draft save failed' });
     }
   };
 
@@ -260,20 +428,22 @@ const ComposeInner = () => {
     setActiveDraftId(draft.id);
     setDraftName(draft.name);
     setMessage(String(draft.data?.message || ''));
-    setImageUrl(String(draft.data?.imageUrl || ''));
-    setVideoUrl(String(draft.data?.videoUrl || ''));
     setDisableLinkPreview(Boolean(draft.data?.disableLinkPreview));
     setIncludeCaption(draft.data?.includeCaption !== false);
     setSelectedTargetIds(Array.isArray(draft.data?.target_ids) ? draft.data.target_ids : []);
-    setNotice(null);
+    setAttachment(null);
+    setNotice(
+      draft.data?.attachment
+        ? { type: 'error', message: `Draft loaded. Choose "${draft.data.attachment.name}" again before sending.` }
+        : null
+    );
   };
 
   const clearComposer = () => {
     setActiveDraftId(null);
     setDraftName('');
     setMessage('');
-    setImageUrl('');
-    setVideoUrl('');
+    setAttachment(null);
     setDisableLinkPreview(false);
     setIncludeCaption(true);
     setSelectedTargetIds([]);
@@ -281,16 +451,12 @@ const ComposeInner = () => {
   };
 
   const deleteDraft = async (id: string) => {
-    const next = drafts.filter((d) => d.id !== id);
     try {
-      await updateDrafts.mutateAsync(next);
-      if (activeDraftId === id) {
-        clearComposer();
-      }
+      await updateDrafts.mutateAsync(drafts.filter((draft) => draft.id !== id));
+      if (activeDraftId === id) clearComposer();
       setNotice({ type: 'success', message: 'Draft deleted.' });
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : 'Draft delete failed';
-      setNotice({ type: 'error', message: msg });
+      setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Draft delete failed' });
     }
   };
 
@@ -301,28 +467,24 @@ const ComposeInner = () => {
       setNotice({ type: 'error', message: 'Block name and content are required.' });
       return;
     }
-    const nowIso = new Date().toISOString();
-    const block: ManualBlock = { id: makeId(), name, content, updated_at: nowIso };
-    const next = [block, ...blocks].slice(0, 80);
+
+    const block: ManualBlock = { id: makeId(), name, content, updated_at: new Date().toISOString() };
     try {
-      await updateBlocks.mutateAsync(next);
+      await updateBlocks.mutateAsync([block, ...blocks].slice(0, 80));
       setBlockName('');
       setBlockContent('');
       setNotice({ type: 'success', message: 'Block saved.' });
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : 'Block save failed';
-      setNotice({ type: 'error', message: msg });
+      setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Block save failed' });
     }
   };
 
   const deleteBlock = async (id: string) => {
-    const next = blocks.filter((b) => b.id !== id);
     try {
-      await updateBlocks.mutateAsync(next);
+      await updateBlocks.mutateAsync(blocks.filter((block) => block.id !== id));
       setNotice({ type: 'success', message: 'Block deleted.' });
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : 'Block delete failed';
-      setNotice({ type: 'error', message: msg });
+      setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Block delete failed' });
     }
   };
 
@@ -334,31 +496,31 @@ const ComposeInner = () => {
 
   const toggleTarget = (id: string, checked: boolean) => {
     setSelectedTargetIds((current) => {
-      const set = new Set(current);
-      if (checked) set.add(id);
-      else set.delete(id);
-      return Array.from(set);
+      const next = new Set(current);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return Array.from(next);
     });
   };
 
   const toggleAllFilteredTargets = (checked: boolean) => {
-    const ids = filteredTargets.map((t) => t.id).filter(Boolean);
+    const ids = filteredTargets.map((target) => target.id).filter(Boolean);
     setSelectedTargetIds((current) => {
-      const set = new Set(current);
+      const next = new Set(current);
       for (const id of ids) {
-        if (checked) set.add(id);
-        else set.delete(id);
+        if (checked) next.add(id);
+        else next.delete(id);
       }
-      return Array.from(set);
+      return Array.from(next);
     });
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Compose</h1>
-          <p className="text-muted-foreground">Write a manual post and send it now or queue it for later.</p>
+          <p className="text-muted-foreground">Send or queue a normal WhatsApp message with optional attachment.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" onClick={saveDraft} disabled={updateDrafts.isPending}>
@@ -375,8 +537,8 @@ const ComposeInner = () => {
       {notice ? (
         <div
           className={`rounded-md border px-3 py-2 text-sm ${notice.type === 'success'
-              ? 'border-emerald-300/70 bg-emerald-50 text-emerald-900'
-              : 'border-red-300/70 bg-red-50 text-red-900'
+            ? 'border-emerald-300/70 bg-emerald-50 text-emerald-900'
+            : 'border-red-300/70 bg-red-50 text-red-900'
             }`}
         >
           <div className="flex items-start gap-2">
@@ -386,21 +548,21 @@ const ComposeInner = () => {
         </div>
       ) : null}
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_420px]">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-6">
           <Card>
             <CardHeader>
               <CardTitle>Message</CardTitle>
-              <CardDescription>WhatsApp formatting is supported. Paste links, add media URL, and pick targets.</CardDescription>
+              <CardDescription>Text-only, image with caption, video with caption, audio, and document sends use the same queue records.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="draftName">Draft name (optional)</Label>
+                <Label htmlFor="draftName">Draft name</Label>
                 <Input
                   id="draftName"
                   value={draftName}
-                  onChange={(e) => setDraftName(e.target.value)}
-                  placeholder="e.g. Morning update"
+                  onChange={(event) => setDraftName(event.target.value)}
+                  placeholder="Morning update"
                 />
                 {activeDraftId ? (
                   <p className="text-xs text-muted-foreground">
@@ -410,57 +572,98 @@ const ComposeInner = () => {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="message">Message text</Label>
+                <Label htmlFor="message">Text or caption</Label>
                 <Textarea
                   id="message"
                   value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                  placeholder="Type your update..."
+                  onChange={(event) => setMessage(event.target.value)}
+                  placeholder="Type the message exactly as it should appear..."
                   className="min-h-[170px]"
                 />
-                <p className="text-xs text-muted-foreground">
-                  {message.length}/4096 characters
-                </p>
+                <p className="text-xs text-muted-foreground">{message.length}/4096 characters</p>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="imageUrl">Image URL (optional)</Label>
-                  <Input
-                    id="imageUrl"
-                    value={imageUrl}
-                    onChange={(e) => setImageUrl(e.target.value)}
-                    placeholder="https://..."
-                    inputMode="url"
-                  />
+              <div className="space-y-3 rounded-md border bg-background p-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Attachment</p>
+                    <p className="text-xs text-muted-foreground">Choose a file from this computer. No URL paste is needed.</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Input
+                      id="attachmentFile"
+                      type="file"
+                      accept={ACCEPTED_ATTACHMENTS}
+                      className="hidden"
+                      onChange={(event) => {
+                        void handleAttachmentChange(event.currentTarget.files?.[0] || null);
+                        event.currentTarget.value = '';
+                      }}
+                    />
+                    <Button type="button" variant="outline" asChild>
+                      <Label htmlFor="attachmentFile" className="cursor-pointer">
+                        <Upload className="mr-2 h-4 w-4" />
+                        Choose file
+                      </Label>
+                    </Button>
+                    {attachment ? (
+                      <Button type="button" variant="ghost" onClick={() => setAttachment(null)}>
+                        <X className="mr-2 h-4 w-4" />
+                        Remove
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="videoUrl">Video URL (MP4, optional)</Label>
-                  <Input
-                    id="videoUrl"
-                    value={videoUrl}
-                    onChange={(e) => setVideoUrl(e.target.value)}
-                    placeholder="https://..."
-                    inputMode="url"
-                  />
-                </div>
+
+                {attachment ? (
+                  <div className="grid gap-3 rounded-md border bg-muted/20 p-3 sm:grid-cols-[96px_1fr]">
+                    <div className="flex aspect-square items-center justify-center overflow-hidden rounded-md bg-background">
+                      {attachment.kind === 'image' ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={attachment.dataUrl} alt="" className="h-full w-full object-cover" />
+                      ) : attachment.kind === 'video' ? (
+                        <video src={attachment.dataUrl} className="h-full w-full object-cover" muted />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+                          {attachmentIcon(attachment.kind)}
+                        </div>
+                      )}
+                    </div>
+                    <div className="min-w-0 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="outline" className="gap-1">
+                          {attachmentIcon(attachment.kind)}
+                          {attachment.kind}
+                        </Badge>
+                        <span className="truncate text-sm font-medium">{attachment.name}</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {attachment.mime || 'application/octet-stream'} · {formatBytes(attachment.size)}
+                      </p>
+                      <div className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">Use text as caption</p>
+                          <p className="text-xs text-muted-foreground">
+                            Off means the attachment is sent without the text attached to it.
+                          </p>
+                        </div>
+                        <Switch checked={includeCaption} onCheckedChange={setIncludeCaption} />
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground">
+                    No attachment selected. This will send as a text-only message when text is present.
+                  </div>
+                )}
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">Disable link preview</p>
-                    <p className="text-xs text-muted-foreground">Sends text with no preview card.</p>
-                  </div>
-                  <Switch checked={disableLinkPreview} onCheckedChange={setDisableLinkPreview} />
+              <div className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">Link preview</p>
+                  <p className="text-xs text-muted-foreground">Turn off if the text contains a link but should not show a preview card.</p>
                 </div>
-                <div className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">Include caption</p>
-                    <p className="text-xs text-muted-foreground">Use message text as media caption.</p>
-                  </div>
-                  <Switch checked={includeCaption} onCheckedChange={setIncludeCaption} />
-                </div>
+                <Switch checked={!disableLinkPreview} onCheckedChange={(checked) => setDisableLinkPreview(!checked)} />
               </div>
 
               <Separator />
@@ -498,17 +701,17 @@ const ComposeInner = () => {
 
           <Card>
             <CardHeader>
-              <CardTitle>Targets</CardTitle>
+              <CardTitle>Destinations</CardTitle>
               <CardDescription>
-                Selected: <span className="font-medium">{selectedCount}</span>
+                Selected: <span className="font-medium">{selectedTargetIds.length}</span>
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <Input
                   value={targetSearch}
-                  onChange={(e) => setTargetSearch(e.target.value)}
-                  placeholder="Search targets..."
+                  onChange={(event) => setTargetSearch(event.target.value)}
+                  placeholder="Search people, groups, channels, or status..."
                   className="sm:max-w-xs"
                 />
                 <Button
@@ -523,9 +726,9 @@ const ComposeInner = () => {
               </div>
 
               {targetsLoading ? (
-                <p className="text-sm text-muted-foreground">Loading targets...</p>
+                <p className="text-sm text-muted-foreground">Loading destinations...</p>
               ) : filteredTargets.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No targets found.</p>
+                <p className="text-sm text-muted-foreground">No active destinations found.</p>
               ) : (
                 <div className="grid gap-2 sm:grid-cols-2">
                   {filteredTargets.map((target) => {
@@ -533,13 +736,13 @@ const ComposeInner = () => {
                     return (
                       <label
                         key={target.id}
-                        className="flex cursor-pointer items-start gap-3 rounded-md border bg-background px-3 py-2 hover:bg-muted/20"
+                        className="flex min-h-16 cursor-pointer items-start gap-3 rounded-md border bg-background px-3 py-2 hover:bg-muted/20"
                       >
-                        <Checkbox checked={checked} onCheckedChange={(val) => toggleTarget(target.id, val === true)} />
+                        <Checkbox checked={checked} onCheckedChange={(value) => toggleTarget(target.id, value === true)} />
                         <span className="min-w-0">
                           <span className="block truncate text-sm font-medium">{target.name}</span>
-                          <span className="block truncate text-xs text-muted-foreground">
-                            {target.type} - {target.phone_number}
+                          <span className="mt-1 inline-flex">
+                            <Badge variant="outline">{targetTypeLabel(target.type)}</Badge>
                           </span>
                         </span>
                       </label>
@@ -554,12 +757,50 @@ const ComposeInner = () => {
         <div className="space-y-6">
           <Card>
             <CardHeader>
+              <CardTitle>Preview</CardTitle>
+              <CardDescription>What will be queued for each selected destination.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="rounded-md border bg-muted/20 p-3">
+                {attachment ? (
+                  <div className="mb-3 overflow-hidden rounded-md bg-background">
+                    {attachment.kind === 'image' ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={attachment.dataUrl} alt="" className="max-h-64 w-full object-contain" />
+                    ) : attachment.kind === 'video' ? (
+                      <video src={attachment.dataUrl} controls className="max-h-64 w-full bg-black" />
+                    ) : attachment.kind === 'audio' ? (
+                      <audio src={attachment.dataUrl} controls className="w-full" />
+                    ) : (
+                      <div className="flex items-center gap-2 p-3 text-sm">
+                        <FileText className="h-4 w-4" />
+                        <span className="truncate">{attachment.name}</span>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+                {message.trim() ? (
+                  <p className="whitespace-pre-wrap text-sm leading-6">{message}</p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">{attachment ? 'No caption text.' : 'No text yet.'}</p>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {attachment ? <Badge variant="secondary">{attachment.kind} attached</Badge> : <Badge variant="outline">Text-only</Badge>}
+                {attachment && includeCaption ? <Badge variant="secondary">Text used as caption</Badge> : null}
+                {disableLinkPreview ? <Badge variant="outline">No link preview</Badge> : <Badge variant="outline">Link preview allowed</Badge>}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <CardTitle>Drafts</CardTitle>
               <CardDescription>{drafts.length} saved draft{drafts.length !== 1 ? 's' : ''}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
               {drafts.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No drafts yet. Use the Save draft button to store one.</p>
+                <p className="text-sm text-muted-foreground">No drafts yet.</p>
               ) : (
                 drafts.map((draft) => (
                   <div key={draft.id} className="rounded-md border p-3">
@@ -569,6 +810,11 @@ const ComposeInner = () => {
                         <p className="text-xs text-muted-foreground">
                           Updated {draft.updated_at ? new Date(draft.updated_at).toLocaleString() : '-'}
                         </p>
+                        {draft.data?.attachment ? (
+                          <Badge variant="outline" className="mt-2">
+                            {draft.data.attachment.kind}: {draft.data.attachment.name}
+                          </Badge>
+                        ) : null}
                       </div>
                       <div className="flex shrink-0 gap-1">
                         <Button size="sm" variant="outline" onClick={() => loadDraft(draft)}>
@@ -585,17 +831,7 @@ const ComposeInner = () => {
                       </div>
                     </div>
                     {draft.data?.message ? (
-                      <p
-                        className="mt-2 text-xs text-muted-foreground"
-                        style={{
-                          display: '-webkit-box',
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: 'vertical',
-                          overflow: 'hidden'
-                        }}
-                      >
-                        {draft.data.message}
-                      </p>
+                      <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{draft.data.message}</p>
                     ) : null}
                   </div>
                 ))
@@ -606,20 +842,20 @@ const ComposeInner = () => {
           <Card>
             <CardHeader>
               <CardTitle>Reusable Blocks</CardTitle>
-              <CardDescription>Save snippets and insert them into your message.</CardDescription>
+              <CardDescription>Save snippets and insert them into the text box.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="space-y-2 rounded-md border bg-muted/20 p-3">
                 <div className="space-y-1.5">
                   <Label htmlFor="blockName">Block name</Label>
-                  <Input id="blockName" value={blockName} onChange={(e) => setBlockName(e.target.value)} placeholder="e.g. Subscribe line" />
+                  <Input id="blockName" value={blockName} onChange={(event) => setBlockName(event.target.value)} placeholder="Subscribe line" />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="blockContent">Block text</Label>
                   <Textarea
                     id="blockContent"
                     value={blockContent}
-                    onChange={(e) => setBlockContent(e.target.value)}
+                    onChange={(event) => setBlockContent(event.target.value)}
                     placeholder="Text to insert..."
                     className="min-h-[96px]"
                   />
@@ -657,17 +893,7 @@ const ComposeInner = () => {
                           </Button>
                         </div>
                       </div>
-                      <p
-                        className="mt-2 text-xs text-muted-foreground"
-                        style={{
-                          display: '-webkit-box',
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: 'vertical',
-                          overflow: 'hidden'
-                        }}
-                      >
-                        {block.content}
-                      </p>
+                      <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{block.content}</p>
                     </div>
                   ))}
                 </div>

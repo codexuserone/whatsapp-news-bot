@@ -13,13 +13,15 @@ import { Activity, AlertTriangle, Loader2 } from 'lucide-react';
 const STATUS_COLORS: Record<string, 'success' | 'destructive' | 'warning' | 'secondary'> = {
   pending: 'warning',
   processing: 'secondary',
+  awaiting_approval: 'warning',
   sent: 'success',
   delivered: 'success',
   read: 'success',
   played: 'success',
   skipped: 'warning',
   failed: 'destructive',
-  uncertain: 'warning'
+  uncertain: 'warning',
+  superseded: 'secondary'
 };
 
 const getSequenceStepLabel = (log: LogEntry) => {
@@ -48,6 +50,19 @@ const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | nu
     default:
       return null;
   }
+};
+
+const getMediaSummary = (log: LogEntry) => {
+  const mediaType = String(log.media_type || '').trim().toLowerCase();
+  const hasMedia = Boolean(mediaType || String(log.media_url || '').trim());
+  if (!hasMedia) return { label: 'Text only', variant: 'outline' as const };
+  const label = mediaType || 'media';
+  if (log.media_sent) return { label: `${label} sent`, variant: 'success' as const };
+  if (log.media_error) return { label: `${label} failed`, variant: 'destructive' as const };
+  if (log.status === 'pending' || log.status === 'processing' || log.status === 'awaiting_approval') {
+    return { label: `${label} queued`, variant: 'secondary' as const };
+  }
+  return { label: `${label} requested`, variant: 'warning' as const };
 };
 
 const LogsPage = () => {
@@ -153,49 +168,60 @@ const LogsPage = () => {
                   <TableRow>
                     <TableHeaderCell>Status</TableHeaderCell>
                     <TableHeaderCell>To</TableHeaderCell>
+                    <TableHeaderCell>Media</TableHeaderCell>
                     <TableHeaderCell className="hidden lg:table-cell">Content</TableHeaderCell>
                     <TableHeaderCell>When</TableHeaderCell>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {logs.map((log) => (
-                    <TableRow key={log.id}>
-                      <TableCell>
-                        <Badge
-                          variant={STATUS_COLORS[log.status] || 'secondary'}
-                          title={log.error_message || undefined}
-                        >
-                          {log.status === 'sent' ? 'Recorded locally' :
-                           log.status === 'failed' ? 'Failed' :
-                           log.status === 'pending' ? 'Sending' :
-                           log.status === 'uncertain' ? 'Send uncertain' :
-                           log.status === 'delivered' ? 'Delivered' :
-                           log.status === 'read' ? 'Read' :
-                           log.status === 'played' ? 'Played' :
-                           log.status}
-                        </Badge>
-                        {getReceiptBadge(log)}
-                        {getSequenceStepLabel(log) ? (
-                          <Badge variant="outline" className="ml-1">
-                            {getSequenceStepLabel(log)}
+                  {logs.map((log) => {
+                    const mediaSummary = getMediaSummary(log);
+                    return (
+                      <TableRow key={log.id}>
+                        <TableCell>
+                          <Badge
+                            variant={STATUS_COLORS[log.status] || 'secondary'}
+                            title={log.error_message || undefined}
+                          >
+                            {log.status === 'sent' ? 'Accepted' :
+                              log.status === 'failed' ? 'Failed' :
+                                log.status === 'pending' ? 'Queued' :
+                                  log.status === 'processing' ? 'Sending' :
+                                    log.status === 'awaiting_approval' ? 'Needs review' :
+                                      log.status === 'uncertain' ? 'Check send' :
+                                        log.status === 'delivered' ? 'Delivered' :
+                                          log.status === 'read' ? 'Read' :
+                                            log.status === 'played' ? 'Played' :
+                                              log.status}
                           </Badge>
-                        ) : null}
-                      </TableCell>
-                      <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>
-                      <TableCell
-                        className="hidden max-w-xs truncate text-muted-foreground lg:table-cell"
-                        title={log.message_content || undefined}
-                      >
-                        {log.message_content?.substring(0, 50) || '-'}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {new Date(log.sent_at || log.created_at).toLocaleString()}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                          {getReceiptBadge(log)}
+                          {getSequenceStepLabel(log) ? (
+                            <Badge variant="outline" className="ml-1">
+                              {getSequenceStepLabel(log)}
+                            </Badge>
+                          ) : null}
+                        </TableCell>
+                        <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>
+                        <TableCell>
+                          <Badge variant={mediaSummary.variant} title={log.media_error || undefined}>
+                            {mediaSummary.label}
+                          </Badge>
+                        </TableCell>
+                        <TableCell
+                          className="hidden max-w-xs truncate text-muted-foreground lg:table-cell"
+                          title={log.message_content || undefined}
+                        >
+                          {log.message_content?.substring(0, 50) || '-'}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {new Date(log.sent_at || log.created_at).toLocaleString()}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                   {logs.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                      <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
                         No messages sent yet.
                       </TableCell>
                     </TableRow>

@@ -380,7 +380,11 @@ const start = async () => {
       path === '/api/whatsapp/send-test' ||
       path === '/api/whatsapp/send-test/' ||
       path === '/api/whatsapp/send-status' ||
-      path === '/api/whatsapp/send-status/';
+      path === '/api/whatsapp/send-status/' ||
+      path === '/api/manual/queue' ||
+      path === '/api/manual/queue/' ||
+      path === '/api/manual/send' ||
+      path === '/api/manual/send/';
     return (wantsLargeJson ? largeJson : defaultJson)(req, res, next);
   });
 

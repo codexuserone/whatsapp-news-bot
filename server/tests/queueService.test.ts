@@ -135,6 +135,22 @@ describe('queueService __testUtils', () => {
     expect(testUtils.shouldBlockManualTextFallbackAfterMediaFailure('individual')).toBe(true);
   });
 
+  it('builds status text styling options only from valid template values', () => {
+    expect(
+      testUtils.buildTemplateStatusTextOptions({
+        status_background_color: '#166534',
+        status_font: 5
+      })
+    ).toEqual({ backgroundColor: '#166534', font: 5 });
+
+    expect(
+      testUtils.buildTemplateStatusTextOptions({
+        status_background_color: 'bad',
+        status_font: 99
+      })
+    ).toEqual({});
+  });
+
   it('detects newsletter media ack 479 as a channel media rejection', () => {
     const mediaResult = {
       media: { type: 'image', url: 'https://example.com/a.jpg', sent: true, error: null }

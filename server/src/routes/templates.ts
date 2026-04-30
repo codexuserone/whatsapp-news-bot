@@ -34,6 +34,20 @@ const normalizeModernSendMode = (value: unknown) => {
   return 'auto_media';
 };
 
+const normalizeStatusBackgroundColor = (value: unknown) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const withHash = raw.startsWith('#') ? raw : `#${raw}`;
+  return /^#[0-9a-f]{6}$/i.test(withHash) ? withHash.toLowerCase() : null;
+};
+
+const normalizeStatusFont = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.min(Math.max(Math.floor(parsed), 0), 8);
+};
+
 const normalizeTemplateSequenceSteps = (value: unknown) => {
   if (!Array.isArray(value)) return [];
 
@@ -48,6 +62,8 @@ const normalizeTemplateSequenceSteps = (value: unknown) => {
         label: label || `Step ${index + 1}`,
         content,
         send_mode: normalizeModernSendMode(step.send_mode),
+        status_background_color: normalizeStatusBackgroundColor(step.status_background_color),
+        status_font: normalizeStatusFont(step.status_font),
         delay_seconds: Number.isFinite(delaySeconds)
           ? Math.min(Math.max(Math.floor(delaySeconds), 0), 3600)
           : 0,
@@ -81,6 +97,8 @@ const normalizeTemplatePayload = (payload: Record<string, unknown>) => {
     sequence_steps?: unknown;
   };
   next.sequence_steps = normalizeTemplateSequenceSteps(payload.sequence_steps);
+  next.status_background_color = normalizeStatusBackgroundColor(payload.status_background_color);
+  next.status_font = normalizeStatusFont(payload.status_font);
 
   const explicitMode = next.send_mode;
 
@@ -119,6 +137,8 @@ const normalizeTemplateResponse = <T extends Record<string, unknown>>(template: 
     send_mode?: 'auto_media' | 'text_preview' | 'text_only' | 'media_only' | 'image' | 'image_only' | 'link_preview' | null;
     send_images?: boolean | null;
     sequence_steps?: unknown;
+    status_background_color?: unknown;
+    status_font?: unknown;
   };
 
   if (next.send_mode === 'image' && next.send_images === false) {
@@ -136,6 +156,8 @@ const normalizeTemplateResponse = <T extends Record<string, unknown>>(template: 
   }
 
   next.sequence_steps = normalizeTemplateSequenceSteps(next.sequence_steps);
+  next.status_background_color = normalizeStatusBackgroundColor(next.status_background_color);
+  next.status_font = normalizeStatusFont(next.status_font);
 
   return next;
 };
@@ -304,6 +326,8 @@ module.exports = templateRoutes;
 module.exports.__testUtils = {
   extractVariables,
   normalizeTemplateSequenceSteps,
+  normalizeStatusBackgroundColor,
+  normalizeStatusFont,
   normalizeTemplatePayload,
   normalizeTemplateResponse
 };

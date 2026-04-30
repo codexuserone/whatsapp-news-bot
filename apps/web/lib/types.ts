@@ -33,10 +33,14 @@ export type Template = {
   active: boolean;
   send_images?: boolean | null;
   send_mode?: 'auto_media' | 'media_only' | 'text_preview' | 'text_only' | null;
+  status_background_color?: string | null;
+  status_font?: number | null;
   sequence_steps?: Array<{
     label?: string | null;
     content: string;
     send_mode: 'auto_media' | 'media_only' | 'text_preview' | 'text_only';
+    status_background_color?: string | null;
+    status_font?: number | null;
     delay_seconds?: number | null;
     active?: boolean | null;
   }> | null;

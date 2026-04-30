@@ -166,13 +166,27 @@ const schemas = {
             .enum(['auto_media', 'media_only', 'text_preview', 'text_only', 'image', 'image_only', 'link_preview'])
             .optional()
             .default('auto_media'),
+          status_background_color: z
+            .string()
+            .regex(HEX_COLOR_PATTERN, 'status_background_color must be a hex color like #0f172a')
+            .optional()
+            .nullable()
+            .transform(normalizeOptional),
+          status_font: optionalInt(0, 8),
           delay_seconds: z.coerce.number().int().min(0).max(3600).optional().default(0),
           active: z.boolean().optional().default(true)
         })
       )
       .max(12)
       .optional()
-      .default([])
+      .default([]),
+    status_background_color: z
+      .string()
+      .regex(HEX_COLOR_PATTERN, 'status_background_color must be a hex color like #0f172a')
+      .optional()
+      .nullable()
+      .transform(normalizeOptional),
+    status_font: optionalInt(0, 8)
   }),
 
   testMessage: z

@@ -39,6 +39,8 @@ type Template = {
   id?: string;
   content: string;
   send_images?: boolean | null;
+  status_background_color?: string | null;
+  status_font?: number | null;
   send_mode?:
     | 'auto_media'
     | 'media_only'
@@ -55,6 +57,8 @@ type TemplateSequenceStep = {
   label?: string | null;
   content?: string | null;
   send_mode?: Template['send_mode'];
+  status_background_color?: string | null;
+  status_font?: number | null;
   delay_seconds?: number | null;
   active?: boolean | null;
 };
@@ -1719,7 +1723,9 @@ const getTemplateQueueSteps = (template: Template): TemplateQueueStep[] => {
       ...template,
       content,
       send_mode: sendMode,
-      send_images: sendMode === 'auto_media' || sendMode === 'media_only'
+      send_images: sendMode === 'auto_media' || sendMode === 'media_only',
+      status_background_color: step.status_background_color || template.status_background_color || null,
+      status_font: step.status_font ?? template.status_font ?? null
     };
     steps.push({
       index,
@@ -1995,6 +2001,18 @@ const confirmSendResult = async (
   return { ok: true, via: 'upsert', status: 1, statusLabel: 'pending' };
 };
 
+const buildTemplateStatusTextOptions = (template: Template) => {
+  const backgroundColor = String(template.status_background_color || '').trim();
+  const font =
+    template.status_font === null || template.status_font === undefined
+      ? Number.NaN
+      : Number(template.status_font);
+  return {
+    ...(backgroundColor && /^#[0-9a-f]{6}$/i.test(backgroundColor) ? { backgroundColor } : {}),
+    ...(Number.isInteger(font) && font >= 0 && font <= 8 ? { font } : {})
+  };
+};
+
 const sendMessageWithTemplate = async (
   whatsappClient: WhatsAppClient,
   target: Target,
@@ -2035,6 +2053,7 @@ const sendMessageWithTemplate = async (
       ? { text, linkPreview: null }
       : { text };
     if (target.type === 'status') {
+      Object.assign(content, buildTemplateStatusTextOptions(template));
       const statusOptions = await buildStatusOptions();
       return withTimeout(
         whatsappClient.sendStatusBroadcast(content, statusOptions),
@@ -5553,6 +5572,7 @@ module.exports = {
     buildConnectionWaitErrorMessage,
     shouldBlockTextFallbackAfterMediaFailure,
     shouldBlockManualTextFallbackAfterMediaFailure,
+    buildTemplateStatusTextOptions,
     assertUsableStatusAudience,
     shouldRequireServerAckForSend,
     isChannelMediaAckRejection,

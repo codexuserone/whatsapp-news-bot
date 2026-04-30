@@ -62,17 +62,60 @@ describe('template route normalization', () => {
       testUtils.normalizeTemplatePayload({
         name: 'Status sequence',
         content: '{{title}}',
+        status_background_color: '166534',
+        status_font: 5,
         send_mode: 'text_preview',
         sequence_steps: [
-          { label: 'Text', content: '{{description}}\n{{link}}', send_mode: 'text_preview' },
+          { label: 'Text', content: '{{description}}\n{{link}}', send_mode: 'text_preview', status_background_color: '#7e22ce', status_font: 2 },
           { label: 'Image', content: '{{title}}', send_mode: 'media_only', delay_seconds: 10 }
         ]
       })
     ).toMatchObject({
       send_mode: 'link_preview',
+      status_background_color: '#166534',
+      status_font: 5,
       sequence_steps: [
-        { label: 'Text', content: '{{description}}\n{{link}}', send_mode: 'text_preview', delay_seconds: 0, active: true },
-        { label: 'Image', content: '{{title}}', send_mode: 'media_only', delay_seconds: 10, active: true }
+        {
+          label: 'Text',
+          content: '{{description}}\n{{link}}',
+          send_mode: 'text_preview',
+          status_background_color: '#7e22ce',
+          status_font: 2,
+          delay_seconds: 0,
+          active: true
+        },
+        {
+          label: 'Image',
+          content: '{{title}}',
+          send_mode: 'media_only',
+          status_background_color: null,
+          status_font: null,
+          delay_seconds: 10,
+          active: true
+        }
+      ]
+    });
+  });
+
+  it('normalizes status style values for template responses', () => {
+    expect(
+      testUtils.normalizeTemplateResponse({
+        id: 'template-3',
+        send_mode: 'text_only',
+        status_background_color: 'not-a-color',
+        status_font: 99,
+        sequence_steps: [
+          { label: 'Text', content: 'hello', send_mode: 'text_only', status_background_color: 'be123c', status_font: 4 }
+        ]
+      })
+    ).toMatchObject({
+      status_background_color: null,
+      status_font: 8,
+      sequence_steps: [
+        {
+          status_background_color: '#be123c',
+          status_font: 4
+        }
       ]
     });
   });

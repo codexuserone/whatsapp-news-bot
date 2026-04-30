@@ -25,10 +25,14 @@ const schema = z.object({
   description: z.string().optional(),
   active: z.boolean().default(true),
   send_mode: z.enum(['auto_media', 'media_only', 'text_preview', 'text_only']).default('auto_media'),
+  status_background_color: z.string().regex(/^#[0-9a-f]{6}$/i).nullable().optional(),
+  status_font: z.coerce.number().int().min(0).max(8).nullable().optional(),
   sequence_steps: z.array(z.object({
     label: z.string().optional(),
     content: z.string().min(1),
     send_mode: z.enum(['auto_media', 'media_only', 'text_preview', 'text_only']).default('auto_media'),
+    status_background_color: z.string().regex(/^#[0-9a-f]{6}$/i).nullable().optional(),
+    status_font: z.coerce.number().int().min(0).max(8).nullable().optional(),
     delay_seconds: z.coerce.number().int().min(0).max(3600).default(0),
     active: z.boolean().default(true)
   })).max(12).default([])
@@ -38,6 +42,19 @@ type TemplateFormValues = z.infer<typeof schema>;
 type TemplateSendMode = TemplateFormValues['send_mode'];
 
 const WORD_JOINER = '\u2060';
+const DEFAULT_STATUS_BACKGROUND = '#0f172a';
+const STATUS_BACKGROUND_SWATCHES = ['#0f172a', '#166534', '#7c2d12', '#7e22ce', '#be123c', '#0369a1'];
+const STATUS_FONT_OPTIONS = [
+  { value: 0, label: 'Default' },
+  { value: 1, label: 'Serif' },
+  { value: 2, label: 'Norican' },
+  { value: 3, label: 'Bryndan Write' },
+  { value: 4, label: 'Bebas Neue' },
+  { value: 5, label: 'Oswald' },
+  { value: 6, label: 'Merriweather' },
+  { value: 7, label: 'Roboto' },
+  { value: 8, label: 'System' }
+];
 
 const escapeWhatsAppFormatting = (value: unknown) => {
   const text = String(value ?? '');
@@ -146,6 +163,40 @@ const resolveTemplateSendMode = (mode: unknown): TemplateSendMode => {
   return 'auto_media';
 };
 
+const resolveStatusBackgroundColor = (value: unknown) => {
+  const raw = String(value || '').trim();
+  if (!raw) return DEFAULT_STATUS_BACKGROUND;
+  const withHash = raw.startsWith('#') ? raw : `#${raw}`;
+  return /^#[0-9a-f]{6}$/i.test(withHash) ? withHash.toLowerCase() : DEFAULT_STATUS_BACKGROUND;
+};
+
+const resolveStatusFont = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return 0;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 8 ? parsed : 0;
+};
+
+const getStatusPreviewFontFamily = (value: unknown) => {
+  switch (resolveStatusFont(value)) {
+    case 1:
+      return 'Georgia, serif';
+    case 2:
+    case 3:
+      return '"Brush Script MT", cursive';
+    case 4:
+    case 5:
+      return '"Arial Narrow", Arial, sans-serif';
+    case 6:
+      return 'Merriweather, Georgia, serif';
+    case 7:
+    case 8:
+      return 'Roboto, Arial, sans-serif';
+    case 0:
+    default:
+      return 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  }
+};
+
 const getTemplateSequenceSteps = (template?: Template | null): TemplateFormValues['sequence_steps'] =>
   Array.isArray(template?.sequence_steps)
     ? template.sequence_steps
@@ -153,6 +204,8 @@ const getTemplateSequenceSteps = (template?: Template | null): TemplateFormValue
           label: String(step.label || `Step ${index + 1}`),
           content: String(step.content || ''),
           send_mode: resolveTemplateSendMode(step.send_mode),
+          status_background_color: resolveStatusBackgroundColor(step.status_background_color || template.status_background_color),
+          status_font: resolveStatusFont(step.status_font ?? template.status_font),
           delay_seconds: Number(step.delay_seconds || 0),
           active: step.active !== false
         }))
@@ -339,11 +392,22 @@ const TemplatesPage = () => {
 
   const form = useForm<TemplateFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', content: '', description: '', active: true, send_mode: 'auto_media', sequence_steps: [] }
+    defaultValues: {
+      name: '',
+      content: '',
+      description: '',
+      active: true,
+      send_mode: 'auto_media',
+      status_background_color: DEFAULT_STATUS_BACKGROUND,
+      status_font: 0,
+      sequence_steps: []
+    }
   });
 
   const watchedContent = useWatch({ control: form.control, name: 'content' });
   const watchedSendMode = useWatch({ control: form.control, name: 'send_mode' });
+  const watchedStatusBackgroundColor = useWatch({ control: form.control, name: 'status_background_color' });
+  const watchedStatusFont = useWatch({ control: form.control, name: 'status_font' });
   const watchedSequenceSteps = useWatch({ control: form.control, name: 'sequence_steps' }) || [];
 
   const renderedPreviewText = previewWithData
@@ -366,6 +430,8 @@ const TemplatesPage = () => {
         description: active.description || '',
         active: active.active ?? true,
         send_mode: resolveSendMode(active),
+        status_background_color: resolveStatusBackgroundColor(active.status_background_color),
+        status_font: resolveStatusFont(active.status_font),
         sequence_steps: getTemplateSequenceSteps(active)
       });
     }
@@ -387,6 +453,8 @@ const TemplatesPage = () => {
         description: savedTemplate.description || '',
         active: savedTemplate.active ?? true,
         send_mode: resolveSendMode(savedTemplate),
+        status_background_color: resolveStatusBackgroundColor(savedTemplate.status_background_color),
+        status_font: resolveStatusFont(savedTemplate.status_font),
         sequence_steps: getTemplateSequenceSteps(savedTemplate)
       });
     },
@@ -400,7 +468,16 @@ const TemplatesPage = () => {
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
       if (active?.id === id) {
         setActive(null);
-        form.reset({ name: '', content: '', description: '', active: true, send_mode: 'auto_media', sequence_steps: [] });
+        form.reset({
+          name: '',
+          content: '',
+          description: '',
+          active: true,
+          send_mode: 'auto_media',
+          status_background_color: DEFAULT_STATUS_BACKGROUND,
+          status_font: 0,
+          sequence_steps: []
+        });
       }
     },
     onError: (error: unknown) => alert(`Failed to delete template: ${getErrorMessage(error)}`)
@@ -452,12 +529,16 @@ const TemplatesPage = () => {
         description: values.description,
         active: true,
         send_mode: values.send_mode,
+        status_background_color: resolveStatusBackgroundColor(values.status_background_color),
+        status_font: resolveStatusFont(values.status_font),
         sequence_steps: values.sequence_steps
           .filter((step) => step.active !== false && String(step.content || '').trim())
           .map((step, index) => ({
             label: String(step.label || `Step ${index + 1}`).trim(),
             content: String(step.content || '').trim(),
             send_mode: step.send_mode,
+            status_background_color: resolveStatusBackgroundColor(step.status_background_color || values.status_background_color),
+            status_font: resolveStatusFont(step.status_font ?? values.status_font),
             delay_seconds: Math.max(0, Math.min(3600, Number(step.delay_seconds || 0))),
             active: true
           }))
@@ -608,6 +689,8 @@ const TemplatesPage = () => {
           label: `Step ${current.length + 1}`,
           content,
           send_mode: current.length === 0 ? resolveTemplateSendMode(watchedSendMode) : 'auto_media',
+          status_background_color: resolveStatusBackgroundColor(watchedStatusBackgroundColor),
+          status_font: resolveStatusFont(watchedStatusFont),
           delay_seconds: current.length === 0 ? 0 : 8,
           active: true
         }
@@ -773,6 +856,61 @@ const TemplatesPage = () => {
                   </p>
                 </div>
 
+                <div className="space-y-4 rounded-lg border p-4">
+                  <div>
+                    <Label>Status text appearance</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Used only when this template sends a text Status. Image and video statuses keep WhatsApp media styling.
+                    </p>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-[1fr_170px]">
+                    <div className="space-y-2">
+                      <Label htmlFor="statusBackground">Background color</Label>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {STATUS_BACKGROUND_SWATCHES.map((color) => (
+                          <button
+                            key={color}
+                            type="button"
+                            aria-label={`Use ${color}`}
+                            className={`h-8 w-8 rounded-md border ${resolveStatusBackgroundColor(watchedStatusBackgroundColor) === color ? 'ring-2 ring-primary ring-offset-2' : ''}`}
+                            style={{ backgroundColor: color }}
+                            onClick={() => form.setValue('status_background_color', color, { shouldDirty: true, shouldValidate: true })}
+                          />
+                        ))}
+                        <Input
+                          id="statusBackground"
+                          type="color"
+                          className="h-9 w-14 p-1"
+                          value={resolveStatusBackgroundColor(watchedStatusBackgroundColor)}
+                          onChange={(event) =>
+                            form.setValue('status_background_color', event.target.value, { shouldDirty: true, shouldValidate: true })
+                          }
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Status font</Label>
+                      <Select
+                        value={String(resolveStatusFont(watchedStatusFont))}
+                        onValueChange={(value) =>
+                          form.setValue('status_font', Number(value), { shouldDirty: true, shouldValidate: true })
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {STATUS_FONT_OPTIONS.map((font) => (
+                            <SelectItem key={font.value} value={String(font.value)}>
+                              {font.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="space-y-3 rounded-lg border p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -829,6 +967,47 @@ const TemplatesPage = () => {
                             rows={3}
                             placeholder="Message for this step"
                           />
+                          <div className="grid gap-3 sm:grid-cols-[1fr_170px]">
+                            <div className="space-y-1.5">
+                              <Label>Status color for this step</Label>
+                              <div className="flex flex-wrap items-center gap-2">
+                                {STATUS_BACKGROUND_SWATCHES.map((color) => (
+                                  <button
+                                    key={color}
+                                    type="button"
+                                    aria-label={`Use ${color}`}
+                                    className={`h-7 w-7 rounded-md border ${resolveStatusBackgroundColor(step.status_background_color) === color ? 'ring-2 ring-primary ring-offset-2' : ''}`}
+                                    style={{ backgroundColor: color }}
+                                    onClick={() => updateSequenceStep(index, { status_background_color: color })}
+                                  />
+                                ))}
+                                <Input
+                                  type="color"
+                                  className="h-8 w-12 p-1"
+                                  value={resolveStatusBackgroundColor(step.status_background_color)}
+                                  onChange={(event) => updateSequenceStep(index, { status_background_color: event.target.value })}
+                                />
+                              </div>
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label>Status font</Label>
+                              <Select
+                                value={String(resolveStatusFont(step.status_font))}
+                                onValueChange={(value) => updateSequenceStep(index, { status_font: Number(value) })}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {STATUS_FONT_OPTIONS.map((font) => (
+                                    <SelectItem key={font.value} value={String(font.value)}>
+                                      {font.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -850,7 +1029,16 @@ const TemplatesPage = () => {
                       variant="outline"
                       onClick={() => {
                         setActive(null);
-                        form.reset({ name: '', content: '', description: '', active: true, send_mode: 'auto_media', sequence_steps: [] });
+                        form.reset({
+                          name: '',
+                          content: '',
+                          description: '',
+                          active: true,
+                          send_mode: 'auto_media',
+                          status_background_color: DEFAULT_STATUS_BACKGROUND,
+                          status_font: 0,
+                          sequence_steps: []
+                        });
                       }}
                     >
                       Cancel
@@ -988,6 +1176,18 @@ const TemplatesPage = () => {
                   <div className="text-right mt-1">
                     <span className="text-[10px] text-muted-foreground">12:00 PM</span>
                   </div>
+                </div>
+              </div>
+
+              <div
+                className="mt-4 flex min-h-[220px] items-center justify-center rounded-lg p-5 text-center text-white"
+                style={{
+                  backgroundColor: resolveStatusBackgroundColor(watchedStatusBackgroundColor),
+                  fontFamily: getStatusPreviewFontFamily(watchedStatusFont)
+                }}
+              >
+                <div className="max-w-[28rem] whitespace-pre-wrap text-2xl leading-snug">
+                  {renderedPreviewText || 'Status text preview'}
                 </div>
               </div>
 

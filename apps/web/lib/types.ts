@@ -93,12 +93,18 @@ export type LogEntry = {
   delivered_at?: string | null;
   read_at?: string | null;
   played_at?: string | null;
+  scheduled_for?: string | null;
   approved_at?: string | null;
   approved_by?: string | null;
   processing_started_at?: string | null;
+  corrected_at?: string | null;
+  correction_kind?: string | null;
+  correction_error?: string | null;
   created_at: string;
-  target?: { name?: string | null } | null;
+  target?: { name?: string | null; type?: string | null; phone_number?: string | null } | null;
   schedule?: { name?: string | null } | null;
+  feed_item?: { title?: string | null; link?: string | null } | null;
+  template?: { name?: string | null } | null;
 };
 
 export type FeedItem = {

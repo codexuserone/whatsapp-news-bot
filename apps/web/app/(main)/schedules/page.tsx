@@ -118,6 +118,17 @@ const SchedulesPage = () => {
     () => dedupeTargets(targets, { activeOnly: true }),
     [targets]
   );
+  const templateById = React.useMemo(() => {
+    const map = new Map<string, Template>();
+    for (const template of templates) {
+      map.set(template.id, template);
+    }
+    return map;
+  }, [templates]);
+  const selectableTemplates = React.useMemo(() => {
+    const currentTemplateId = String(active?.template_id || '').trim();
+    return templates.filter((template) => template.active !== false || template.id === currentTemplateId);
+  }, [active?.template_id, templates]);
   const targetById = React.useMemo(() => {
     const map = new Map<string, Target>();
     for (const target of targets) {
@@ -1054,9 +1065,9 @@ const SchedulesPage = () => {
                           <SelectItem value="__none" className="text-muted-foreground">
                             Select template
                           </SelectItem>
-                          {templates.map((template) => (
+                          {selectableTemplates.map((template) => (
                             <SelectItem key={template.id} value={template.id}>
-                              {template.name}
+                              {template.active === false ? `${template.name} (disabled)` : template.name}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -1106,6 +1117,8 @@ const SchedulesPage = () => {
               {schedules.map((schedule) => {
                 const feedRow = feeds.find((feed) => feed.id === schedule.feed_id);
                 const feedDisabled = feedRow?.active === false;
+                const templateRow = schedule.template_id ? templateById.get(String(schedule.template_id)) : null;
+                const templateDisabled = templateRow?.active === false;
                 const scheduleTargetIds = Array.isArray(schedule.target_ids) ? schedule.target_ids : [];
                 const scheduleTargets = scheduleTargetIds
                   .map((targetId) => targetById.get(String(targetId || '').trim()))
@@ -1114,13 +1127,15 @@ const SchedulesPage = () => {
                 const missingTargetCount = Math.max(scheduleTargetIds.length - scheduleTargets.length, 0);
                 const hasTargets = scheduleTargetIds.length > 0;
                 const hasUsableTargets = hasTargets && missingTargetCount === 0 && inactiveTargets.length === 0;
-                const canActivate = Boolean(schedule.feed_id && schedule.template_id && hasUsableTargets && !feedDisabled);
+                const canActivate = Boolean(schedule.feed_id && schedule.template_id && hasUsableTargets && !feedDisabled && !templateDisabled);
                 const activateBlockedReason = !canActivate
                   ? feedDisabled
                     ? 'Enable this feed first to run this automation.'
-                    : !hasUsableTargets
-                      ? 'Automation has no active destinations.'
-                      : 'Automation is missing feed or template.'
+                    : templateDisabled
+                      ? 'Enable this template first to run this automation.'
+                      : !hasUsableTargets
+                        ? 'Automation has no active destinations.'
+                        : 'Automation is missing feed or template.'
                   : null;
 
                 return (
@@ -1138,6 +1153,9 @@ const SchedulesPage = () => {
                         <span>Last: {formatDateTime(schedule.last_run_at)}</span>
                         {feedDisabled ? (
                           <span className="text-warning-foreground">Feed disabled</span>
+                        ) : null}
+                        {templateDisabled ? (
+                          <span className="text-warning-foreground">Template disabled</span>
                         ) : null}
                         {schedule.approval_required ? (
                           <span className="text-warning-foreground">Manual review on</span>

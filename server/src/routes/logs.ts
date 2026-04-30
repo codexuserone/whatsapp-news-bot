@@ -23,7 +23,7 @@ const logRoutes = () => {
           *,
           schedule:schedules(id, name),
           feed_item:feed_items(id, title, link),
-          target:targets(id, name, phone_number),
+          target:targets(id, name, phone_number, type),
           template:templates(id, name)
         `)
         .order('created_at', { ascending: false })

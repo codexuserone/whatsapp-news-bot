@@ -18,6 +18,7 @@ type ExistingLogRow = {
 type TemplateRow = {
     id: string;
     content?: string;
+    active?: boolean | null;
     sequence_steps?: Array<{
         label?: string | null;
         content?: string | null;
@@ -68,7 +69,7 @@ const createQueueSupabase = (scenario: {
                 return {
                     select: jest.fn(() => ({
                         in: jest.fn(async (_field: string, ids: string[]) => ({
-                            data: (scenario.templates || []).filter((template) => ids.includes(template.id)),
+                            data: (scenario.templates ?? ids.map((id) => ({ id, content: '{{title}}' }))).filter((template) => ids.includes(template.id)),
                             error: null
                         }))
                     }))
@@ -237,6 +238,58 @@ describe('queueFeedItemsForSchedules', () => {
             queued,
             { onConflict: 'schedule_id,feed_item_id,target_id,sequence_step_index', ignoreDuplicates: true }
         );
+    });
+
+    it('does not queue rows for disabled templates', async () => {
+        const supabase = createQueueSupabase({
+            schedules: [
+                {
+                    id: 'schedule-disabled-template',
+                    target_ids: ['target-a'],
+                    template_id: 'template-disabled',
+                    state: 'active',
+                    active: true
+                }
+            ],
+            templates: [
+                {
+                    id: 'template-disabled',
+                    content: '{{title}}',
+                    active: false
+                }
+            ],
+            existingLogsBySchedule: {}
+        });
+
+        mockGetSupabaseClient.mockReturnValue(supabase);
+
+        const queued = await queueFeedItemsForSchedules('feed-1', [{ id: 'item-1' }]);
+
+        expect(queued).toEqual([]);
+        expect(supabase.upsertMock).not.toHaveBeenCalled();
+    });
+
+    it('does not queue rows when the selected template is missing', async () => {
+        const supabase = createQueueSupabase({
+            schedules: [
+                {
+                    id: 'schedule-missing-template',
+                    target_ids: ['target-a'],
+                    template_id: 'template-missing',
+                    state: 'active',
+                    active: true
+                }
+            ],
+            templates: [],
+            existingLogsBySchedule: {}
+        });
+
+        mockGetSupabaseClient.mockReturnValue(supabase);
+
+        const queued = await queueFeedItemsForSchedules('feed-1', [{ id: 'item-1' }]);
+
+        expect(queued).toEqual([]);
+        expect(supabase.upsertMock).not.toHaveBeenCalled();
     });
 
     it('does not queue newly discovered feed items whose publish time is outside the auto-queue age limit', async () => {

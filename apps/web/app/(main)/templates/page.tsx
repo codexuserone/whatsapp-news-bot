@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Feed, FeedItem, Target, Template } from '@/lib/types';
+import type { BackendSettings, Feed, FeedItem, Target, Template } from '@/lib/types';
 import { dedupeTargets, formatTargetLabel, normalizeTargetName } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -222,6 +222,7 @@ const TemplatesPage = () => {
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
+  const { data: settings } = useQuery<BackendSettings>({ queryKey: ['settings'], queryFn: () => api.get('/api/settings') });
   const { data: availableVariables = [] } = useQuery<Array<{ name: string }>>({
     queryKey: ['available-variables', sampleFeedId],
     queryFn: () =>
@@ -239,7 +240,7 @@ const TemplatesPage = () => {
   const [active, setActive] = useState<Template | null>(null);
   const [previewWithData, setPreviewWithData] = useState(true);
   const activeTargets = React.useMemo(() => {
-    return dedupeTargets(targets, { activeOnly: true }).filter((target) => target.type !== 'status');
+    return dedupeTargets(targets, { activeOnly: true });
   }, [targets]);
   const previewTargets = React.useMemo(() => {
     const byKey = new Map<string, Target>();
@@ -272,6 +273,14 @@ const TemplatesPage = () => {
   }, [previewTargetByKey, previewTargetKey]);
 
   const selectedPreviewTarget = previewTargetByKey.get(previewTargetKey) || null;
+  const statusPreviewAudience = React.useMemo(
+    () =>
+      String(settings?.status_test_audience_jids || '')
+        .split(/[\n,]+/)
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    [settings?.status_test_audience_jids]
+  );
 
   const resolveSendMode = (template?: Template | null): TemplateSendMode => {
     if (template?.send_mode === 'media_only') return 'media_only';
@@ -405,6 +414,7 @@ const TemplatesPage = () => {
   });
 
   const watchedContent = useWatch({ control: form.control, name: 'content' });
+  const watchedActive = useWatch({ control: form.control, name: 'active' });
   const watchedSendMode = useWatch({ control: form.control, name: 'send_mode' });
   const watchedStatusBackgroundColor = useWatch({ control: form.control, name: 'status_background_color' });
   const watchedStatusFont = useWatch({ control: form.control, name: 'status_font' });
@@ -491,6 +501,7 @@ const TemplatesPage = () => {
       videoUrl?: string;
       audioUrl?: string;
       documentUrl?: string;
+      statusJidList?: string[];
       includeCaption?: boolean;
       disableLinkPreview?: boolean;
       confirm?: boolean;
@@ -527,7 +538,7 @@ const TemplatesPage = () => {
         name: values.name,
         content: values.content,
         description: values.description,
-        active: true,
+        active: values.active === true,
         send_mode: values.send_mode,
         status_background_color: resolveStatusBackgroundColor(values.status_background_color),
         status_font: resolveStatusFont(values.status_font),
@@ -558,6 +569,18 @@ const TemplatesPage = () => {
     const message = String(renderedPreviewText || '').trim();
     const mediaUrl = String(sampleData.media_url || sampleData.mediaUrl || sampleData.image_url || sampleData.imageUrl || '').trim();
     const mediaKind = String(sampleData.media_kind || sampleData.mediaKind || '').trim().toLowerCase();
+    const isStatusPreview = selectedPreviewTarget?.type === 'status';
+    const statusAudiencePatch = isStatusPreview ? { statusJidList: statusPreviewAudience } : {};
+
+    if (isStatusPreview && statusPreviewAudience.length === 0) {
+      setPreviewSendNotice('Add a Manual Status Test Recipient in Settings before sending a Status preview.');
+      return;
+    }
+
+    if (isStatusPreview && (mediaKind === 'audio' || mediaKind === 'document')) {
+      setPreviewSendNotice('Status previews support text, image, and video only.');
+      return;
+    }
 
     if (watchedSendMode === 'media_only') {
       if (!mediaUrl) {
@@ -575,7 +598,8 @@ const TemplatesPage = () => {
               ? { documentUrl: mediaUrl }
               : { imageUrl: mediaUrl }),
         includeCaption: false,
-        confirm: true
+        confirm: true,
+        ...statusAudiencePatch
       });
       return;
     }
@@ -587,7 +611,8 @@ const TemplatesPage = () => {
           jid,
           message,
           disableLinkPreview: false,
-          confirm: true
+          confirm: true,
+          ...statusAudiencePatch
         });
         return;
       }
@@ -602,7 +627,8 @@ const TemplatesPage = () => {
               ? { documentUrl: mediaUrl }
               : { imageUrl: mediaUrl }),
         includeCaption: true,
-        confirm: true
+        confirm: true,
+        ...statusAudiencePatch
       });
       return;
     }
@@ -612,7 +638,8 @@ const TemplatesPage = () => {
         jid,
         message,
         disableLinkPreview: false,
-        confirm: true
+        confirm: true,
+        ...statusAudiencePatch
       });
       return;
     }
@@ -621,7 +648,8 @@ const TemplatesPage = () => {
       jid,
       message,
       disableLinkPreview: true,
-      confirm: true
+      confirm: true,
+      ...statusAudiencePatch
     });
   };
 
@@ -824,6 +852,19 @@ const TemplatesPage = () => {
                 <div className="space-y-2">
                   <Label htmlFor="description">Description (optional)</Label>
                   <Input id="description" {...form.register('description')} placeholder="Template for daily news updates" />
+                </div>
+
+                <div className="space-y-4 rounded-lg border p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <Label>Template enabled</Label>
+                      <p className="text-xs text-muted-foreground">Disabled templates stay saved but are hidden from new automation choices.</p>
+                    </div>
+                    <Switch
+                      checked={watchedActive === true}
+                      onCheckedChange={(checked) => form.setValue('active', checked === true, { shouldDirty: true })}
+                    />
+                  </div>
                 </div>
 
                 <div className="space-y-4 rounded-lg border p-4">
@@ -1089,6 +1130,12 @@ const TemplatesPage = () => {
               <div className="rounded-md border p-3 text-xs text-muted-foreground">
                 Format: <span className="font-medium text-foreground">{getTemplateModeLabel(watchedSendMode)}</span>
                 {watchedSendMode === 'media_only' ? ' (requires sample media)' : ''}
+                {selectedPreviewTarget?.type === 'status' ? (
+                  <>
+                    <br />
+                    Status preview audience: <span className="font-medium text-foreground">{statusPreviewAudience.length || 'not set'}</span>
+                  </>
+                ) : null}
               </div>
 
               <div className="flex items-center gap-2">
@@ -1245,6 +1292,11 @@ const TemplatesPage = () => {
                     >
                       <Trash2 className="h-3 w-3" />
                     </Button>
+                  </div>
+                  <div className="mt-2">
+                    <Badge variant={template.active === false ? 'secondary' : 'success'}>
+                      {template.active === false ? 'Disabled' : 'Enabled'}
+                    </Badge>
                   </div>
                 </div>
               ))}

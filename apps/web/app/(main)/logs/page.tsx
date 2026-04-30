@@ -24,6 +24,56 @@ const STATUS_COLORS: Record<string, 'success' | 'destructive' | 'warning' | 'sec
   superseded: 'secondary'
 };
 
+const LOG_FILTERS = [
+  { value: 'all', label: 'All activity' },
+  { value: 'awaiting_approval', label: 'Needs review' },
+  { value: 'pending', label: 'Queued' },
+  { value: 'processing', label: 'Sending' },
+  { value: 'sent', label: 'Accepted / delivered' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'skipped', label: 'Skipped' },
+  { value: 'uncertain', label: 'Needs verification' },
+  { value: 'superseded', label: 'Superseded' }
+];
+
+const getStatusLabel = (status: string) => {
+  switch (status) {
+    case 'sent':
+      return 'Accepted';
+    case 'failed':
+      return 'Failed';
+    case 'pending':
+      return 'Queued';
+    case 'processing':
+      return 'Sending';
+    case 'awaiting_approval':
+      return 'Needs review';
+    case 'uncertain':
+      return 'Check send';
+    case 'delivered':
+      return 'Delivered';
+    case 'read':
+      return 'Read';
+    case 'played':
+      return 'Played';
+    case 'skipped':
+      return 'Skipped';
+    case 'superseded':
+      return 'Superseded';
+    default:
+      return status || 'Unknown';
+  }
+};
+
+const getWhenDate = (log: LogEntry) =>
+  log.sent_at ||
+  log.delivered_at ||
+  log.read_at ||
+  log.played_at ||
+  log.scheduled_for ||
+  log.processing_started_at ||
+  log.created_at;
+
 const getSequenceStepLabel = (log: LogEntry) => {
   const explicit = String(log.sequence_step_label || '').trim();
   if (explicit) return explicit;
@@ -69,7 +119,7 @@ const LogsPage = () => {
   const [status, setStatus] = useState('sent');
   const { data: logs = [], isLoading, error } = useQuery<LogEntry[]>({
     queryKey: ['logs', status],
-    queryFn: () => api.get(status === 'all' ? '/api/logs' : `/api/logs?status=${status}`),
+    queryFn: () => api.get(status === 'all' ? '/api/logs?include_queue=true' : `/api/logs?status=${status}`),
     refetchInterval: 10000
   });
   const logsErrorMessage = error instanceof Error ? error.message : null;
@@ -120,7 +170,7 @@ const LogsPage = () => {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">History</h1>
         <p className="text-muted-foreground">
-          Delivery history only. Use Queue for items that are still waiting or sending.
+          Truthful dispatch records for queued, sending, sent, failed, and corrected messages.
         </p>
       </div>
 
@@ -130,18 +180,20 @@ const LogsPage = () => {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <Activity className="h-5 w-5" />
-                Sent Messages
+                Dispatch Records
               </CardTitle>
               <CardDescription>{logs.length} message{logs.length !== 1 ? 's' : ''}</CardDescription>
             </div>
             <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger className="w-40">
+              <SelectTrigger className="w-52">
                 <SelectValue placeholder="All" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                <SelectItem value="sent">Recorded / delivered</SelectItem>
-                <SelectItem value="failed">Failed</SelectItem>
+                {LOG_FILTERS.map((filter) => (
+                  <SelectItem key={filter.value} value={filter.value}>
+                    {filter.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -183,16 +235,7 @@ const LogsPage = () => {
                             variant={STATUS_COLORS[log.status] || 'secondary'}
                             title={log.error_message || undefined}
                           >
-                            {log.status === 'sent' ? 'Accepted' :
-                              log.status === 'failed' ? 'Failed' :
-                                log.status === 'pending' ? 'Queued' :
-                                  log.status === 'processing' ? 'Sending' :
-                                    log.status === 'awaiting_approval' ? 'Needs review' :
-                                      log.status === 'uncertain' ? 'Check send' :
-                                        log.status === 'delivered' ? 'Delivered' :
-                                          log.status === 'read' ? 'Read' :
-                                            log.status === 'played' ? 'Played' :
-                                              log.status}
+                            {getStatusLabel(log.status)}
                           </Badge>
                           {getReceiptBadge(log)}
                           {getSequenceStepLabel(log) ? (
@@ -207,14 +250,30 @@ const LogsPage = () => {
                             {mediaSummary.label}
                           </Badge>
                         </TableCell>
-                        <TableCell
-                          className="hidden max-w-xs truncate text-muted-foreground lg:table-cell"
-                          title={log.message_content || undefined}
-                        >
-                          {log.message_content?.substring(0, 50) || '-'}
+                        <TableCell className="hidden max-w-xs text-muted-foreground lg:table-cell">
+                          <div className="space-y-1">
+                            <p className="truncate" title={log.message_content || undefined}>
+                              {log.message_content?.substring(0, 80) || '-'}
+                            </p>
+                            {log.error_message ? (
+                              <p className="truncate text-xs text-destructive" title={log.error_message}>
+                                {log.error_message}
+                              </p>
+                            ) : null}
+                            {log.media_error ? (
+                              <p className="truncate text-xs text-destructive" title={log.media_error}>
+                                Media: {log.media_error}
+                              </p>
+                            ) : null}
+                            {log.correction_error ? (
+                              <p className="truncate text-xs text-warning-foreground" title={log.correction_error}>
+                                Correction: {log.correction_error}
+                              </p>
+                            ) : null}
+                          </div>
                         </TableCell>
                         <TableCell className="text-muted-foreground">
-                          {new Date(log.sent_at || log.created_at).toLocaleString()}
+                          {new Date(getWhenDate(log)).toLocaleString()}
                         </TableCell>
                       </TableRow>
                     );
@@ -222,7 +281,7 @@ const LogsPage = () => {
                   {logs.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
-                        No messages sent yet.
+                        No records match this filter.
                       </TableCell>
                     </TableRow>
                   )}

@@ -663,7 +663,7 @@ const queueRoutes = () => {
         return res.status(400).json({ error: `Cannot edit queue item with status "${currentStatus}"` });
       }
 
-      const body = req.body as { message_content?: unknown; status?: unknown };
+      const body = req.body as { message_content?: unknown; status?: unknown; scheduled_for?: unknown };
       const patch: Record<string, unknown> = {};
       let normalizedMessageContent: string | null = null;
 
@@ -691,6 +691,25 @@ const queueRoutes = () => {
           // Treat status patch as an implicit approval so the audit columns remain consistent.
           patch.approved_at = new Date().toISOString();
           patch.approved_by = readBasicAuthUser(req) || process.env.BASIC_AUTH_USER || 'unknown';
+        }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(body, 'scheduled_for')) {
+        if (isSuccessfulSendStatus(currentStatus)) {
+          return res.status(400).json({ error: 'Cannot reschedule a sent message' });
+        }
+        if (!['awaiting_approval', 'pending', 'failed', 'uncertain', 'skipped'].includes(currentStatus)) {
+          return res.status(400).json({ error: `Cannot reschedule queue item with status "${currentStatus}"` });
+        }
+        const rawScheduledFor = body.scheduled_for;
+        if (rawScheduledFor == null || String(rawScheduledFor).trim() === '') {
+          patch.scheduled_for = null;
+        } else {
+          const parsedMs = Date.parse(String(rawScheduledFor));
+          if (!Number.isFinite(parsedMs)) {
+            return res.status(400).json({ error: 'scheduled_for must be a valid ISO date or null' });
+          }
+          patch.scheduled_for = new Date(parsedMs).toISOString();
         }
       }
 

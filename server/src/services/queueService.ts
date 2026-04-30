@@ -38,6 +38,7 @@ type Target = {
 type Template = {
   id?: string;
   content: string;
+  active?: boolean | null;
   send_images?: boolean | null;
   status_background_color?: string | null;
   status_font?: number | null;
@@ -1710,6 +1711,8 @@ const getTemplateSendMode = (template: Template): TemplateSendMode => {
 };
 
 const getTemplateQueueSteps = (template: Template): TemplateQueueStep[] => {
+  if (template.active === false) return [];
+
   const rawSteps = Array.isArray(template.sequence_steps) ? template.sequence_steps : [];
   const steps: TemplateQueueStep[] = [];
 
@@ -1769,7 +1772,7 @@ const getTemplateStepLabelForLog = (template: Template, log: unknown) => {
 
 const loadTemplateQueueSteps = async (supabase: SupabaseClient, templateId?: string | null) => {
   const normalizedTemplateId = String(templateId || '').trim();
-  if (!normalizedTemplateId) return getTemplateQueueSteps({ content: '', send_mode: 'auto_media', send_images: true });
+  if (!normalizedTemplateId) return [];
 
   const { data: template, error } = await supabase
     .from('templates')
@@ -1779,8 +1782,10 @@ const loadTemplateQueueSteps = async (supabase: SupabaseClient, templateId?: str
 
   if (error || !template) {
     if (error) logger.warn({ templateId: normalizedTemplateId, error }, 'Failed to load template sequence steps');
-    return getTemplateQueueSteps({ content: '', send_mode: 'auto_media', send_images: true });
+    return [];
   }
+
+  if ((template as Template).active === false) return [];
 
   return getTemplateQueueSteps(template as Template);
 };
@@ -4042,6 +4047,25 @@ const sendQueuedForSchedule = async (
         'Template not found for schedule');
       throw new Error('Template not found for schedule');
     }
+    if ((template as Template).active === false) {
+      const { error: skipTemplateError } = await supabase
+        .from('message_logs')
+        .update({
+          status: 'skipped',
+          processing_started_at: null,
+          error_message: 'Template disabled',
+          media_url: null,
+          media_type: null,
+          media_sent: false,
+          media_error: null
+        })
+        .eq('schedule_id', scheduleId)
+        .in('status', ['awaiting_approval', 'pending']);
+      if (skipTemplateError) {
+        logger.warn({ scheduleId, templateId: schedule.template_id, error: skipTemplateError }, 'Failed to mark queued rows skipped for disabled template');
+      }
+      return { sent: 0, queued: queuedCount, skipped: true, reason: 'Template disabled' };
+    }
     logger.info({ scheduleId, templateId: template.id }, 'Found template for schedule');
 
     let sentCount = 0;
@@ -4850,6 +4874,21 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             })
             .eq('id', log.id);
           return { ok: false, error: 'Template not found' };
+        }
+        if ((template as Template).active === false) {
+          await supabase
+            .from('message_logs')
+            .update({
+              status: 'skipped',
+              processing_started_at: null,
+              error_message: 'Template disabled',
+              media_url: null,
+              media_type: null,
+              media_sent: false,
+              media_error: null
+            })
+            .eq('id', log.id);
+          return { ok: false, error: 'Template disabled' };
         }
 
         const stepTemplate = getTemplateStepForLog(template as Template, log);

@@ -25,7 +25,8 @@ import {
   Save,
   X,
   Send,
-  LayoutGrid
+  LayoutGrid,
+  Clock
 } from 'lucide-react';
 
 const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | null) => {
@@ -253,11 +254,26 @@ const QueueInner = () => {
     onSuccess: () => {
       setEditingId(null);
       setDraftMessage('');
-      setActionNotice({ type: 'success', message: 'Message text updated.' });
+      setActionNotice({ type: 'success', message: 'Queue item updated.' });
       refreshQueueViews();
     },
     onError: (error: unknown) => {
       setActionNotice({ type: 'error', message: `Save failed: ${getMutationErrorMessage(error)}` });
+    }
+  });
+
+  const rescheduleItem = useMutation({
+    mutationFn: ({ id, scheduledFor }: { id: string; scheduledFor: string | null }) =>
+      api.patch(`/api/queue/${id}`, { scheduled_for: scheduledFor }),
+    onSuccess: (_result, variables) => {
+      setActionNotice({
+        type: 'success',
+        message: variables.scheduledFor ? 'Queue item delayed.' : 'Queue item moved back to the active queue.'
+      });
+      refreshQueueViews();
+    },
+    onError: (error: unknown) => {
+      setActionNotice({ type: 'error', message: `Reschedule failed: ${getMutationErrorMessage(error)}` });
     }
   });
 
@@ -424,6 +440,20 @@ const QueueInner = () => {
     item.status !== 'skipped' &&
     !isPaused(item) &&
     !isPostPaused(item);
+
+  const canReschedule = (item: QueueItem) =>
+    ['awaiting_approval', 'pending', 'failed', 'uncertain'].includes(String(item.status || '').toLowerCase()) &&
+    !isPaused(item) &&
+    !isPostPaused(item);
+
+  const delayItem = (item: QueueItem, minutes: number) => {
+    const scheduledFor = new Date(nowMs + Math.max(1, minutes) * 60 * 1000).toISOString();
+    rescheduleItem.mutate({ id: item.id, scheduledFor });
+  };
+
+  const clearDelay = (item: QueueItem) => {
+    rescheduleItem.mutate({ id: item.id, scheduledFor: null });
+  };
 
   const getStatusBadge = (item: QueueItem) => {
     if (isPostPaused(item)) {
@@ -918,6 +948,28 @@ const QueueInner = () => {
                         {sendNowItem.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Send className="mr-1 h-3 w-3" />}
                         Send now
                       </Button>
+
+                      {canReschedule(item) ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => delayItem(item, 10)}
+                          disabled={rescheduleItem.isPending}
+                        >
+                          <Clock className="mr-1 h-3 w-3" /> Delay 10m
+                        </Button>
+                      ) : null}
+
+                      {canReschedule(item) && item.scheduled_for ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => clearDelay(item)}
+                          disabled={rescheduleItem.isPending}
+                        >
+                          <Clock className="mr-1 h-3 w-3" /> Clear delay
+                        </Button>
+                      ) : null}
                     </div>
                     {(canToggleItemPause(item) || canTogglePostPause(item)) ? (
                       <p className="text-[11px] text-muted-foreground">
@@ -1097,6 +1149,17 @@ const QueueInner = () => {
                         <Button size="sm" variant="outline" className="h-7 text-xs px-2 ml-auto" onClick={() => sendNowItem.mutate(item.id)} disabled={!canSendNow(item)}>
                           <Send className="h-3 w-3" />
                         </Button>
+                        {canReschedule(item) ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs px-2"
+                            onClick={() => item.scheduled_for ? clearDelay(item) : delayItem(item, 10)}
+                            disabled={rescheduleItem.isPending}
+                          >
+                            <Clock className="h-3 w-3" />
+                          </Button>
+                        ) : null}
                       </div>
                     </div>
                   </div>

@@ -151,6 +151,17 @@ describe('queueService __testUtils', () => {
     ).toEqual({});
   });
 
+  it('does not build queue steps for disabled templates', () => {
+    expect(
+      testUtils.getTemplateQueueSteps({
+        active: false,
+        content: '{{title}}',
+        send_mode: 'auto_media',
+        send_images: true
+      })
+    ).toEqual([]);
+  });
+
   it('detects newsletter media ack 479 as a channel media rejection', () => {
     const mediaResult = {
       media: { type: 'image', url: 'https://example.com/a.jpg', sent: true, error: null }

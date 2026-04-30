@@ -33,6 +33,21 @@ describe('template route normalization', () => {
     });
   });
 
+  it('preserves disabled template state while normalizing send mode', () => {
+    expect(
+      testUtils.normalizeTemplatePayload({
+        name: 'Disabled',
+        content: '{{title}}',
+        active: false,
+        send_mode: 'text_only'
+      })
+    ).toMatchObject({
+      active: false,
+      send_mode: 'text_only',
+      send_images: false
+    });
+  });
+
   it('maps legacy stored modes back to modern UI labels', () => {
     expect(
       testUtils.normalizeTemplateResponse({

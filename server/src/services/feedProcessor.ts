@@ -56,6 +56,7 @@ type TemplateSendMode =
 type TemplateRecord = {
   id?: string;
   content?: string | null;
+  active?: boolean | null;
   send_images?: boolean | null;
   send_mode?: TemplateSendMode;
   sequence_steps?: TemplateSequenceStep[] | null;
@@ -229,7 +230,7 @@ const loadTemplateStepsById = async (supabase: any, schedules: Array<Record<stri
   const stepsByTemplateId = new Map<string, TemplateQueueStep[]>();
 
   for (const templateId of templateIds) {
-    stepsByTemplateId.set(templateId, getTemplateQueueSteps(null));
+    stepsByTemplateId.set(templateId, []);
   }
   if (!templateIds.length) return stepsByTemplateId;
 
@@ -246,7 +247,7 @@ const loadTemplateStepsById = async (supabase: any, schedules: Array<Record<stri
   for (const template of (data || []) as TemplateRecord[]) {
     const templateId = String(template?.id || '').trim();
     if (!templateId) continue;
-    stepsByTemplateId.set(templateId, getTemplateQueueSteps(template));
+    stepsByTemplateId.set(templateId, template.active === false ? [] : getTemplateQueueSteps(template));
   }
 
   return stepsByTemplateId;

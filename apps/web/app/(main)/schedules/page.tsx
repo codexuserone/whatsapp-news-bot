@@ -29,7 +29,7 @@ const schema = z.object({
   time_of_day: z.string().default('09:00'),
   day_of_week: z.enum(['0', '1', '2', '3', '4', '5', '6']).default('1'),
   timezone: z.string().optional(),
-  feed_id: z.string().min(1, 'Feed is required'),
+  feed_ids: z.array(z.string()).min(1, 'Select at least one feed'),
   target_ids: z.array(z.string()).min(1),
   template_id: z.string().min(1)
 });
@@ -48,6 +48,12 @@ type ScheduleApiPayload = {
   approval_required: boolean;
   state: 'active' | 'paused' | 'stopped';
   active: boolean;
+};
+
+type SaveScheduleRequest = {
+  scheduleId: string | null;
+  payload?: ScheduleApiPayload;
+  payloads?: ScheduleApiPayload[];
 };
 
 type DispatchResult = {
@@ -257,7 +263,7 @@ const SchedulesPage = () => {
       time_of_day: '09:00',
       day_of_week: '1',
       timezone: defaultTimezone,
-      feed_id: '',
+      feed_ids: [],
       target_ids: [],
       template_id: ''
     }
@@ -282,7 +288,7 @@ const SchedulesPage = () => {
         time_of_day: timing.time_of_day,
         day_of_week: timing.day_of_week,
         timezone: active.timezone || localTimezone,
-        feed_id: active.feed_id || '',
+        feed_ids: active.feed_id ? [active.feed_id] : [],
         target_ids: (active.target_ids || []).map((id: string) => id.toString()),
         template_id: active.template_id || ''
       });
@@ -297,12 +303,52 @@ const SchedulesPage = () => {
     }
   }, [active, defaultTimezone, form, localTimezone]);
 
+  const resetCreateForm = React.useCallback(() => {
+    form.reset({
+      name: '',
+      timing_mode: 'on_new',
+      schedule_preset: 'daily',
+      delivery_mode: 'immediate',
+      batch_times: DEFAULT_BATCH_TIMES,
+      approval_required: false,
+      time_of_day: '09:00',
+      day_of_week: '1',
+      timezone: defaultTimezone,
+      feed_ids: [],
+      target_ids: [],
+      template_id: ''
+    });
+  }, [defaultTimezone, form]);
+
   const saveSchedule = useMutation({
-    mutationFn: ({ scheduleId, payload }: { scheduleId: string | null; payload: ScheduleApiPayload }) =>
-      scheduleId ? api.put<Schedule>(`/api/schedules/${scheduleId}`, payload) : api.post<Schedule>('/api/schedules', payload),
-    onSuccess: (savedSchedule: Schedule) => {
+    mutationFn: async ({ scheduleId, payload, payloads }: SaveScheduleRequest) => {
+      if (scheduleId) {
+        if (!payload) throw new Error('Schedule payload is required');
+        return api.put<Schedule>(`/api/schedules/${scheduleId}`, payload);
+      }
+
+      const createPayloads = payloads?.length ? payloads : payload ? [payload] : [];
+      if (!createPayloads.length) throw new Error('Schedule payload is required');
+
+      const saved: Schedule[] = [];
+      for (const nextPayload of createPayloads) {
+        saved.push(await api.post<Schedule>('/api/schedules', nextPayload));
+      }
+      return saved;
+    },
+    onSuccess: (result: Schedule | Schedule[]) => {
       queryClient.invalidateQueries({ queryKey: ['schedules'] });
-      setActive(savedSchedule);
+      if (Array.isArray(result)) {
+        setActive(null);
+        resetCreateForm();
+        setAutomationNotice({
+          type: 'success',
+          message: `Created ${result.length} automation${result.length !== 1 ? 's' : ''}.`
+        });
+        return;
+      }
+      setActive(result);
+      setAutomationNotice({ type: 'success', message: 'Automation saved.' });
     },
     onError: (error: unknown) => alert(`Failed to save schedule: ${getErrorMessage(error)}`)
   });
@@ -313,20 +359,7 @@ const SchedulesPage = () => {
       queryClient.invalidateQueries({ queryKey: ['schedules'] });
       if (active?.id === id) {
         setActive(null);
-        form.reset({
-          name: '',
-          timing_mode: 'on_new',
-          schedule_preset: 'daily',
-          delivery_mode: 'immediate',
-          batch_times: DEFAULT_BATCH_TIMES,
-          approval_required: false,
-          time_of_day: '09:00',
-          day_of_week: '1',
-          timezone: defaultTimezone,
-          feed_id: '',
-          target_ids: [],
-          template_id: ''
-        });
+        resetCreateForm();
       }
     },
     onError: (error: unknown) => alert(`Failed to delete schedule: ${getErrorMessage(error)}`)
@@ -476,6 +509,7 @@ const SchedulesPage = () => {
 
   const onSubmit = (values: ScheduleFormValues) => {
     const tz = defaultTimezone;
+    const feedIds = Array.from(new Set((values.feed_ids || []).map((id) => String(id || '').trim()).filter(Boolean)));
     const normalizedBatchTimes = Array.from(
       new Set((values.batch_times || []).map((time) => String(time || '').trim()).filter(Boolean))
     ).sort();
@@ -505,11 +539,11 @@ const SchedulesPage = () => {
 
     const nextState: 'active' | 'paused' | 'stopped' = active ? getScheduleState(active) : 'active';
 
-    const payload: ScheduleApiPayload = {
-      name: values.name,
+    const buildPayload = (feedId: string, name: string): ScheduleApiPayload => ({
+      name,
       cron_expression,
       timezone: tz,
-      feed_id: values.feed_id,
+      feed_id: feedId,
       target_ids: values.target_ids,
       template_id: values.template_id,
       delivery_mode: deliveryMode,
@@ -517,10 +551,28 @@ const SchedulesPage = () => {
       approval_required: values.approval_required === true,
       state: nextState,
       active: nextState === 'active'
-    };
+    });
+
+    const firstFeedId = feedIds[0];
+    if (!firstFeedId) return;
+
+    if (active) {
+      saveSchedule.mutate({
+        scheduleId: active.id,
+        payload: buildPayload(firstFeedId, values.name)
+      });
+      return;
+    }
+
+    const payloads = feedIds.map((feedId) => {
+      const feedName = feeds.find((feed) => feed.id === feedId)?.name || 'Feed';
+      const name = feedIds.length > 1 ? `${values.name} - ${feedName}` : values.name;
+      return buildPayload(feedId, name);
+    });
+
     saveSchedule.mutate({
-      scheduleId: active?.id || null,
-      payload
+      scheduleId: null,
+      payloads
     });
   };
 
@@ -528,6 +580,7 @@ const SchedulesPage = () => {
   const schedulePreset = form.watch('schedule_preset');
   const deliveryMode = form.watch('delivery_mode');
   const selectedBatchTimes = form.watch('batch_times') || [];
+  const selectedFeedIds = form.watch('feed_ids') || [];
 
   const setBatchTimes = (times: string[]) => {
     const normalized = Array.from(
@@ -575,6 +628,7 @@ const SchedulesPage = () => {
               {Object.keys(form.formState.errors).length > 0 && (
                 <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
                   <ul className="list-disc list-inside space-y-0.5">
+                    {form.formState.errors.feed_ids && <li>Select at least one feed</li>}
                     {form.formState.errors.target_ids && <li>Select at least one target</li>}
                     {form.formState.errors.template_id && <li>Select a template</li>}
                     {form.formState.errors.name && <li>Name is required</li>}
@@ -792,39 +846,79 @@ const SchedulesPage = () => {
               ) : null}
 
               <div className="space-y-2">
-                <Label htmlFor="feed_id">Feed</Label>
+                <Label>Feeds</Label>
                 <Controller
                   control={form.control}
-                  name="feed_id"
+                  name="feed_ids"
                   render={({ field }) => {
-                    const value = field.value || '__none';
+                    const selected = new Set(field.value || []);
+
                     return (
-                      <Select
-                        value={value}
-                        onValueChange={(next) => field.onChange(next === '__none' ? '' : next)}
-                      >
-                        <SelectTrigger
-                          id="feed_id"
-                          className={value === '__none' ? 'text-muted-foreground' : undefined}
-                        >
-                          <SelectValue placeholder="Select feed" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none" className="text-muted-foreground">
-                            Select feed
-                          </SelectItem>
-                          {feeds.map((feed) => (
-                            <SelectItem key={feed.id} value={feed.id}>
-                              {feed.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="space-y-2">
+                        {!active ? (
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => field.onChange(feeds.map((feed) => feed.id))}
+                              disabled={!feeds.length}
+                            >
+                              All feeds
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => field.onChange([])}
+                              disabled={!selected.size}
+                            >
+                              Clear
+                            </Button>
+                          </div>
+                        ) : null}
+                        <div className="max-h-56 space-y-1 overflow-y-auto rounded-lg border p-2">
+                          {feeds.length === 0 ? (
+                            <p className="p-2 text-sm text-muted-foreground">No feeds are configured yet.</p>
+                          ) : (
+                            feeds.map((feed) => (
+                              <label
+                                key={feed.id}
+                                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted/50"
+                              >
+                                <Checkbox
+                                  checked={selected.has(feed.id)}
+                                  onCheckedChange={(checked) => {
+                                    if (active) {
+                                      field.onChange(checked === true ? [feed.id] : []);
+                                      return;
+                                    }
+                                    const next = new Set(selected);
+                                    if (checked === true) {
+                                      next.add(feed.id);
+                                    } else {
+                                      next.delete(feed.id);
+                                    }
+                                    field.onChange(Array.from(next));
+                                  }}
+                                />
+                                <span className="min-w-0 flex-1 truncate">{feed.name}</span>
+                                {feed.active === false ? <Badge variant="secondary">Paused</Badge> : null}
+                              </label>
+                            ))
+                          )}
+                        </div>
+                        {!active && selected.size > 1 ? (
+                          <p className="text-xs text-muted-foreground">
+                            Saving creates one automation per feed, using the same destinations, template, and timing.
+                          </p>
+                        ) : null}
+                      </div>
                     );
                   }}
                 />
-                {form.formState.errors.feed_id && (
-                  <p className="text-xs text-destructive">{form.formState.errors.feed_id.message}</p>
+                {form.formState.errors.feed_ids && (
+                  <p className="text-xs text-destructive">{form.formState.errors.feed_ids.message}</p>
                 )}
               </div>
 
@@ -975,10 +1069,14 @@ const SchedulesPage = () => {
               <div className="flex gap-2">
                 <Button type="submit" disabled={saveSchedule.isPending} size="lg">
                   {saveSchedule.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  {active ? 'Update Automation' : 'Create Automation'}
+                  {active
+                    ? 'Update Automation'
+                    : selectedFeedIds.length > 1
+                      ? `Create ${selectedFeedIds.length} Automations`
+                      : 'Create Automation'}
                 </Button>
                 {active && (
-                  <Button type="button" variant="outline" onClick={() => { setActive(null); form.reset(); }}>
+                  <Button type="button" variant="outline" onClick={() => { setActive(null); resetCreateForm(); }}>
                     Cancel
                   </Button>
                 )}

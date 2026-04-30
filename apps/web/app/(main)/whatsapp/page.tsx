@@ -270,9 +270,11 @@ const WhatsAppPage = () => {
 
   React.useEffect(() => {
     if (!isConnected) return;
-    if (lastAutoSyncStatusRef.current === status?.status) return;
+    const syncKey = status?.status || 'connected';
+    if (lastAutoSyncStatusRef.current === syncKey) return;
+    lastAutoSyncStatusRef.current = syncKey;
     syncTargets.mutate();
-  }, [isConnected, status?.status]);
+  }, [isConnected, status?.status, syncTargets]);
   const targetBuckets = React.useMemo(
     () => ({
       all: activeTargets.map((target) => target.phone_number),

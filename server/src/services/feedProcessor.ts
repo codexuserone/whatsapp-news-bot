@@ -43,6 +43,38 @@ type FeedItemRecord = { id: string } & Record<string, unknown>;
 
 const DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS = Math.max(Number(process.env.MAX_AUTO_QUEUE_ITEM_AGE_HOURS || 24), 1);
 
+type TemplateSendMode =
+  | 'auto_media'
+  | 'media_only'
+  | 'text_preview'
+  | 'text_only'
+  | 'image'
+  | 'image_only'
+  | 'link_preview'
+  | null;
+
+type TemplateRecord = {
+  id?: string;
+  content?: string | null;
+  send_images?: boolean | null;
+  send_mode?: TemplateSendMode;
+  sequence_steps?: TemplateSequenceStep[] | null;
+};
+
+type TemplateSequenceStep = {
+  label?: string | null;
+  content?: string | null;
+  send_mode?: TemplateSendMode;
+  delay_seconds?: number | string | null;
+  active?: boolean | null;
+};
+
+type TemplateQueueStep = {
+  index: number;
+  label: string | null;
+  delaySeconds: number;
+};
+
 const isFeedItemFreshEnoughForAutoQueue = (
   item: Record<string, unknown>,
   maxAgeHours = DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS,
@@ -117,6 +149,107 @@ const normalizeComparableList = (value: unknown) => {
     .map((entry) => collapseWhitespace(String(entry || '')))
     .filter(Boolean)
     .sort();
+};
+
+const getTemplateQueueSteps = (template?: TemplateRecord | null): TemplateQueueStep[] => {
+  const rawSteps = Array.isArray(template?.sequence_steps) ? template.sequence_steps : [];
+  const steps: TemplateQueueStep[] = [];
+
+  rawSteps.forEach((step, index) => {
+    const content = collapseWhitespace(String(step?.content || ''));
+    if (!content || step?.active === false) return;
+    const label = collapseWhitespace(String(step?.label || `Step ${index + 1}`));
+    const delaySeconds = Number(step?.delay_seconds);
+    steps.push({
+      index,
+      label: label || `Step ${index + 1}`,
+      delaySeconds: Number.isFinite(delaySeconds) ? Math.min(Math.max(Math.floor(delaySeconds), 0), 3600) : 0
+    });
+  });
+
+  return steps.length
+    ? steps
+    : [
+      {
+        index: 0,
+        label: null,
+        delaySeconds: 0
+      }
+    ];
+};
+
+const buildDispatchKey = (feedItemId?: unknown, targetId?: unknown, sequenceStepIndex?: unknown) => {
+  const normalizedFeedItemId = String(feedItemId || '').trim();
+  const normalizedTargetId = String(targetId || '').trim();
+  if (!normalizedFeedItemId || !normalizedTargetId) return null;
+  const normalizedStepIndex = Math.max(0, Math.floor(Number(sequenceStepIndex || 0)));
+  return `${normalizedFeedItemId}:${normalizedTargetId}:${normalizedStepIndex}`;
+};
+
+const buildDispatchRowsForSteps = (options: {
+  feedItemId: string;
+  targetId: string;
+  schedule: Record<string, unknown>;
+  steps: TemplateQueueStep[];
+  status: string;
+  baseTimeMs: number;
+}) => {
+  let cumulativeDelaySeconds = 0;
+
+  return options.steps.map((step, position) => {
+    if (position > 0) {
+      cumulativeDelaySeconds += step.delaySeconds;
+    }
+    return {
+      feed_item_id: options.feedItemId,
+      target_id: options.targetId,
+      schedule_id: options.schedule.id,
+      template_id: options.schedule.template_id,
+      sequence_step_index: step.index,
+      sequence_step_label: step.label,
+      scheduled_for:
+        cumulativeDelaySeconds > 0
+          ? new Date(options.baseTimeMs + cumulativeDelaySeconds * 1000).toISOString()
+          : null,
+      status: options.status,
+      approved_at: null,
+      approved_by: null
+    };
+  });
+};
+
+const loadTemplateStepsById = async (supabase: any, schedules: Array<Record<string, unknown>>) => {
+  const templateIds = Array.from(
+    new Set(
+      schedules
+        .map((schedule) => String(schedule.template_id || '').trim())
+        .filter(Boolean)
+    )
+  );
+  const stepsByTemplateId = new Map<string, TemplateQueueStep[]>();
+
+  for (const templateId of templateIds) {
+    stepsByTemplateId.set(templateId, getTemplateQueueSteps(null));
+  }
+  if (!templateIds.length) return stepsByTemplateId;
+
+  const { data, error } = await supabase
+    .from('templates')
+    .select('*')
+    .in('id', templateIds);
+
+  if (error) {
+    console.error('Error loading template sequence steps:', error);
+    return stepsByTemplateId;
+  }
+
+  for (const template of (data || []) as TemplateRecord[]) {
+    const templateId = String(template?.id || '').trim();
+    if (!templateId) continue;
+    stepsByTemplateId.set(templateId, getTemplateQueueSteps(template));
+  }
+
+  return stepsByTemplateId;
 };
 
 const fetchAndProcessFeed = async (feed: FeedConfig): Promise<FeedProcessResult> => {
@@ -444,7 +577,9 @@ const queueFeedItemsForSchedules = async (feedId: string, items: FeedItemRecord[
     const runningSchedules = (schedules || []).filter((schedule: Record<string, unknown>) => isScheduleRunning(schedule));
     if (!runningSchedules.length) return [];
 
+    const stepsByTemplateId = await loadTemplateStepsById(supabase, runningSchedules);
     const logs: Array<Record<string, unknown>> = [];
+    const baseTimeMs = Date.now();
 
     for (const schedule of runningSchedules) {
       const targetIds = Array.isArray(schedule.target_ids) ? schedule.target_ids : [];
@@ -452,10 +587,12 @@ const queueFeedItemsForSchedules = async (feedId: string, items: FeedItemRecord[
       if (!targetIds.length) continue;
 
       const queuedStatus = schedule.approval_required === true ? 'awaiting_approval' : 'pending';
+      const templateId = String(schedule.template_id || '').trim();
+      const templateSteps = stepsByTemplateId.get(templateId) || getTemplateQueueSteps(null);
 
       const { data: existingLogs, error: existingLogsError } = await supabase
         .from('message_logs')
-        .select('feed_item_id,target_id')
+        .select('feed_item_id,target_id,sequence_step_index')
         .eq('schedule_id', schedule.id)
         .in('feed_item_id', feedItemIds)
         .in('target_id', targetIds);
@@ -466,8 +603,8 @@ const queueFeedItemsForSchedules = async (feedId: string, items: FeedItemRecord[
 
       const existingKeys = new Set(
         (existingLogs || [])
-          .map((entry: { feed_item_id?: string; target_id?: string }) =>
-            entry.feed_item_id && entry.target_id ? `${entry.feed_item_id}:${entry.target_id}` : null
+          .map((entry: { feed_item_id?: string; target_id?: string; sequence_step_index?: unknown }) =>
+            buildDispatchKey(entry.feed_item_id, entry.target_id, entry.sequence_step_index)
           )
           .filter(Boolean) as string[]
       );
@@ -476,17 +613,19 @@ const queueFeedItemsForSchedules = async (feedId: string, items: FeedItemRecord[
         const feedItemId = String(item.id || '').trim();
         if (!feedItemId) continue;
         for (const targetId of targetIds) {
-          const key = `${feedItemId}:${targetId}`;
-          if (existingKeys.has(key)) continue;
-          logs.push({
-            feed_item_id: feedItemId,
-            target_id: targetId,
-            schedule_id: schedule.id,
-            template_id: schedule.template_id,
+          const rows = buildDispatchRowsForSteps({
+            feedItemId,
+            targetId,
+            schedule,
+            steps: templateSteps,
             status: queuedStatus,
-            approved_at: null,
-            approved_by: null
+            baseTimeMs
           });
+          for (const row of rows) {
+            const key = buildDispatchKey(feedItemId, targetId, row.sequence_step_index);
+            if (key && existingKeys.has(key)) continue;
+            logs.push(row);
+          }
         }
       }
     }
@@ -494,7 +633,7 @@ const queueFeedItemsForSchedules = async (feedId: string, items: FeedItemRecord[
     if (logs.length) {
       const { error } = await supabase
         .from('message_logs')
-        .upsert(logs, { onConflict: 'schedule_id,feed_item_id,target_id', ignoreDuplicates: true });
+        .upsert(logs, { onConflict: 'schedule_id,feed_item_id,target_id,sequence_step_index', ignoreDuplicates: true });
 
       if (error) throw error;
     }

@@ -12,6 +12,19 @@ type QueueSchedule = {
 type ExistingLogRow = {
     feed_item_id?: string;
     target_id?: string;
+    sequence_step_index?: number;
+};
+
+type TemplateRow = {
+    id: string;
+    content?: string;
+    sequence_steps?: Array<{
+        label?: string | null;
+        content?: string | null;
+        send_mode?: string | null;
+        delay_seconds?: number | null;
+        active?: boolean | null;
+    }> | null;
 };
 
 const mockGetSupabaseClient: any = jest.fn();
@@ -36,6 +49,7 @@ const sampleSubset = (values: string[], nextRandom: () => number) =>
 const createQueueSupabase = (scenario: {
     schedules: QueueSchedule[];
     existingLogsBySchedule: Record<string, ExistingLogRow[]>;
+    templates?: TemplateRow[];
 }) => {
     const upsertMock: any = jest.fn(async (rows: Array<Record<string, unknown>>) => ({ data: rows, error: null }));
 
@@ -46,6 +60,17 @@ const createQueueSupabase = (scenario: {
                 return {
                     select: jest.fn(() => ({
                         eq: jest.fn(async () => ({ data: scenario.schedules, error: null }))
+                    }))
+                };
+            }
+
+            if (table === 'templates') {
+                return {
+                    select: jest.fn(() => ({
+                        in: jest.fn(async (_field: string, ids: string[]) => ({
+                            data: (scenario.templates || []).filter((template) => ids.includes(template.id)),
+                            error: null
+                        }))
                     }))
                 };
             }
@@ -115,6 +140,9 @@ describe('queueFeedItemsForSchedules', () => {
                 target_id: 'target-b',
                 schedule_id: 'schedule-active',
                 template_id: 'template-1',
+                sequence_step_index: 0,
+                sequence_step_label: null,
+                scheduled_for: null,
                 status: 'awaiting_approval',
                 approved_at: null,
                 approved_by: null
@@ -124,6 +152,9 @@ describe('queueFeedItemsForSchedules', () => {
                 target_id: 'target-a',
                 schedule_id: 'schedule-active',
                 template_id: 'template-1',
+                sequence_step_index: 0,
+                sequence_step_label: null,
+                scheduled_for: null,
                 status: 'awaiting_approval',
                 approved_at: null,
                 approved_by: null
@@ -133,6 +164,9 @@ describe('queueFeedItemsForSchedules', () => {
                 target_id: 'target-b',
                 schedule_id: 'schedule-active',
                 template_id: 'template-1',
+                sequence_step_index: 0,
+                sequence_step_label: null,
+                scheduled_for: null,
                 status: 'awaiting_approval',
                 approved_at: null,
                 approved_by: null
@@ -141,7 +175,67 @@ describe('queueFeedItemsForSchedules', () => {
         expect(supabase.upsertMock).toHaveBeenCalledTimes(1);
         expect(supabase.upsertMock).toHaveBeenCalledWith(
             queued,
-            { onConflict: 'schedule_id,feed_item_id,target_id', ignoreDuplicates: true }
+            { onConflict: 'schedule_id,feed_item_id,target_id,sequence_step_index', ignoreDuplicates: true }
+        );
+    });
+
+    it('queues one dispatch row per active template sequence step', async () => {
+        const supabase = createQueueSupabase({
+            schedules: [
+                {
+                    id: 'schedule-sequence',
+                    target_ids: ['target-a'],
+                    template_id: 'template-sequence',
+                    state: 'active',
+                    active: true
+                }
+            ],
+            templates: [
+                {
+                    id: 'template-sequence',
+                    content: '{{title}}',
+                    sequence_steps: [
+                        { label: 'Text first', content: '{{description}}', send_mode: 'text_preview', delay_seconds: 0 },
+                        { label: 'Image follow-up', content: '{{title}}', send_mode: 'auto_media', delay_seconds: 45 },
+                        { label: 'Disabled', content: '{{title}}', active: false, delay_seconds: 10 }
+                    ]
+                }
+            ],
+            existingLogsBySchedule: {}
+        });
+
+        mockGetSupabaseClient.mockReturnValue(supabase);
+
+        const before = Date.now();
+        const queued = await queueFeedItemsForSchedules('feed-1', [{ id: 'item-1' }]);
+
+        expect(queued).toHaveLength(2);
+        expect(queued[0]).toMatchObject({
+            feed_item_id: 'item-1',
+            target_id: 'target-a',
+            schedule_id: 'schedule-sequence',
+            template_id: 'template-sequence',
+            sequence_step_index: 0,
+            sequence_step_label: 'Text first',
+            scheduled_for: null,
+            status: 'pending'
+        });
+        expect(queued[1]).toMatchObject({
+            feed_item_id: 'item-1',
+            target_id: 'target-a',
+            schedule_id: 'schedule-sequence',
+            template_id: 'template-sequence',
+            sequence_step_index: 1,
+            sequence_step_label: 'Image follow-up',
+            status: 'pending'
+        });
+        const scheduledFor = Date.parse(String(queued[1].scheduled_for || ''));
+        expect(Number.isFinite(scheduledFor)).toBe(true);
+        expect(scheduledFor).toBeGreaterThanOrEqual(before + 44_000);
+        expect(scheduledFor).toBeLessThanOrEqual(Date.now() + 46_000);
+        expect(supabase.upsertMock).toHaveBeenCalledWith(
+            queued,
+            { onConflict: 'schedule_id,feed_item_id,target_id,sequence_step_index', ignoreDuplicates: true }
         );
     });
 
@@ -211,6 +305,9 @@ describe('queueFeedItemsForSchedules', () => {
                                 target_id: targetId,
                                 schedule_id: scheduleId,
                                 template_id: schedule.template_id,
+                                sequence_step_index: 0,
+                                sequence_step_label: null,
+                                scheduled_for: null,
                                 status: approvalRequired ? 'awaiting_approval' : 'pending',
                                 approved_at: null,
                                 approved_by: null
@@ -234,6 +331,7 @@ describe('queueFeedItemsForSchedules', () => {
                             row.feed_item_id,
                             row.target_id,
                             row.template_id,
+                            row.sequence_step_index,
                             row.status
                         ].join('|')
                     )

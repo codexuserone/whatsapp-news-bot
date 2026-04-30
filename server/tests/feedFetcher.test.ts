@@ -278,4 +278,51 @@ describe('fetchFeedItemsWithMeta', () => {
             categories: ['Photos']
         });
     });
+
+    it('uses the featured image embedded in RSS descriptions and prefers the largest srcset image', async () => {
+        mockSafeAxiosRequest
+            .mockResolvedValueOnce({
+                status: 200,
+                headers: { 'content-type': 'application/rss+xml' },
+                data: Buffer.from('<rss version="2.0"><channel><title>Anash</title></channel></rss>', 'utf8')
+            })
+            .mockResolvedValueOnce({
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+                data: []
+            });
+        mockParseString.mockResolvedValueOnce({
+            items: [
+                {
+                    guid: 'https://anash.org/?p=1052090',
+                    title: 'Anash RSS image',
+                    link: 'https://anash.org/anash-rss-image/?utm_source=rss',
+                    pubDate: 'Thu, 30 Apr 2026',
+                    description: `
+                        <a href="https://anash.org/anash-rss-image/">
+                            <img
+                                src="https://files.anash.org/uploads/2026/04/Outside-768x768.jpg"
+                                srcset="https://files.anash.org/uploads/2026/04/Outside-768x768.jpg 768w, https://files.anash.org/uploads/2026/04/Outside-1024x1024.jpg 1024w, https://files.anash.org/uploads/2026/04/Outside.jpg 1111w"
+                            />
+                        </a>
+                        <p>Story excerpt.</p>
+                    `
+                }
+            ]
+        });
+
+        const result = await fetchFeedItemsWithMeta({
+            url: 'https://anash.org/feed',
+            type: 'rss'
+        });
+
+        expect(result.items).toHaveLength(1);
+        expect(result.items[0]).toMatchObject({
+            guid: 'https://anash.org/?p=1052090',
+            url: 'https://anash.org/anash-rss-image/',
+            mediaUrl: 'https://files.anash.org/uploads/2026/04/Outside.jpg',
+            mediaKind: 'image',
+            imageUrl: 'https://files.anash.org/uploads/2026/04/Outside.jpg'
+        });
+    });
 });

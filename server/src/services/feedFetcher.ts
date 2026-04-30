@@ -213,11 +213,34 @@ const discoverFeedEndpointFromHtml = async (
   return ranked[0] || null;
 };
 
-const extractFirstImageFromHtml = (html?: string) => {
+const pickLargestSrcsetUrl = (srcset?: string) => {
+  const candidates = String(srcset || '')
+    .split(',')
+    .map((entry) => {
+      const [url, descriptor] = entry.trim().split(/\s+/, 2);
+      const widthMatch = String(descriptor || '').match(/^(\d+)w$/i);
+      const width = widthMatch ? Number(widthMatch[1]) : 0;
+      return { url, width: Number.isFinite(width) ? width : 0 };
+    })
+    .filter((entry) => Boolean(entry.url));
+
+  candidates.sort((a, b) => b.width - a.width);
+  return candidates[0]?.url;
+};
+
+const extractFirstImageFromHtml = (html?: string, baseUrl?: string) => {
   if (!html) return undefined;
   try {
     const $ = cheerio.load(html);
-    const src = $('img').first().attr('src');
+    const image = $('img').first();
+    const src = pickFirstUrl(
+      resolveRelativeUrl(baseUrl || '', pickLargestSrcsetUrl(image.attr('srcset'))),
+      resolveRelativeUrl(baseUrl || '', image.attr('data-src')),
+      resolveRelativeUrl(baseUrl || '', image.attr('src')),
+      pickLargestSrcsetUrl(image.attr('srcset')),
+      image.attr('data-src'),
+      image.attr('src')
+    );
     return src && isValidUrl(src) ? src : undefined;
   } catch {
     return undefined;
@@ -830,8 +853,12 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
     if (wpPostId) raw.wp_post_id = wpPostId;
     if (published.original) raw.published_input = published.original;
     if (published.precision) raw.published_precision = published.precision;
-    const htmlImage = extractFirstImageFromHtml(
-      toStringValue(rssItem['content:encoded'] || rssItem.content || rssItem.contentSnippet)
+    const htmlImage = pickFirstUrl(
+      extractFirstImageFromHtml(toStringValue(rssItem['content:encoded']), feed.url),
+      extractFirstImageFromHtml(toStringValue(rssItem.content), feed.url),
+      extractFirstImageFromHtml(toStringValue(rssItem.description), feed.url),
+      extractFirstImageFromHtml(toStringValue(rssItem.summary), feed.url),
+      extractFirstImageFromHtml(toStringValue(rssItem.contentSnippet), feed.url)
     );
     const explicitImageCandidate = pickFirstUrl(
       htmlImage,

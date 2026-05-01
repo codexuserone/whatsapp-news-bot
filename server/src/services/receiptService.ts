@@ -29,6 +29,66 @@ const chunk = <T>(items: T[], size: number) => {
 
 const uniq = (items: string[]) => Array.from(new Set(items));
 
+const isReceiptPromotableTargetType = (value: unknown) => {
+  const type = String(value || '').trim().toLowerCase();
+  return type === 'individual' || type === 'group';
+};
+
+const loadPromotableMessageLogIds = async (
+  supabase: SupabaseClient,
+  whatsappMessageIds: string[],
+  allowedCurrentStatuses: string[],
+  chunkSize: number
+) => {
+  const promotableIds: string[] = [];
+
+  for (const batch of chunk(whatsappMessageIds, chunkSize)) {
+    const { data: logRows, error: logError } = await supabase
+      .from('message_logs')
+      .select('id,target_id')
+      .in('whatsapp_message_id', batch)
+      .in('status', allowedCurrentStatuses);
+    if (logError) {
+      throw logError;
+    }
+
+    const rows = Array.isArray(logRows) ? logRows : [];
+    const targetIds = uniq(
+      rows
+        .map((row: { target_id?: unknown }) => String(row?.target_id || '').trim())
+        .filter(Boolean)
+    );
+    if (!targetIds.length) {
+      continue;
+    }
+
+    const { data: targetRows, error: targetError } = await supabase
+      .from('targets')
+      .select('id,type')
+      .in('id', targetIds);
+    if (targetError) {
+      throw targetError;
+    }
+
+    const targetTypeById = new Map(
+      (targetRows || []).map((row: { id?: unknown; type?: unknown }) => [
+        String(row?.id || '').trim(),
+        String(row?.type || '').trim().toLowerCase()
+      ])
+    );
+
+    for (const row of rows as Array<{ id?: unknown; target_id?: unknown }>) {
+      const id = String(row?.id || '').trim();
+      const targetId = String(row?.target_id || '').trim();
+      if (id && isReceiptPromotableTargetType(targetTypeById.get(targetId))) {
+        promotableIds.push(id);
+      }
+    }
+  }
+
+  return uniq(promotableIds);
+};
+
 const persistReceiptUpdates = async (
   updates: ReceiptUpdate[] = [],
   options?: { nowIso?: string; chunkSize?: number }
@@ -70,13 +130,17 @@ const persistReceiptUpdates = async (
   ): Promise<number> => {
     if (!ids.length) return 0;
     let updated = 0;
-    for (const batch of chunk(ids, chunkSize)) {
+    const promotableIds = await loadPromotableMessageLogIds(supabase, ids, allowedCurrentStatuses, chunkSize);
+    if (!promotableIds.length) {
+      return 0;
+    }
+
+    for (const batch of chunk(promotableIds, chunkSize)) {
       try {
         const { data, error } = await supabase
           .from('message_logs')
           .update(patch)
-          .in('whatsapp_message_id', batch)
-          .in('status', allowedCurrentStatuses)
+          .in('id', batch)
           .select('id');
         if (error) {
           throw error;
@@ -143,7 +207,10 @@ const persistReceiptUpdates = async (
 };
 
 module.exports = {
-  persistReceiptUpdates
+  persistReceiptUpdates,
+  __testUtils: {
+    isReceiptPromotableTargetType
+  }
 };
 export {};
 

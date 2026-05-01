@@ -176,12 +176,8 @@ const resolveTestSendLogResolution = (options: {
   }
 
   if (confirmation?.ok) {
-    const statusLabel = String(confirmation.statusLabel || '').trim().toLowerCase();
     return {
-      status:
-        statusLabel === 'delivered' || statusLabel === 'read' || statusLabel === 'played'
-          ? (statusLabel as 'delivered' | 'read' | 'played')
-          : 'sent',
+      status: 'sent',
       errorMessage: null,
       sentAt: confirmedAt
     } satisfies TestSendLogResolution;
@@ -260,9 +256,10 @@ const resolveTestSendConfirmationOptions = (jid: string, mediaType: string | nul
   const hasMedia = Boolean(String(mediaType || '').trim());
   const isStatus = String(jid || '').trim() === 'status@broadcast';
   const failureGraceMs = isStatus ? 5000 : isNewsletterJid(jid) ? 3000 : 0;
+  const requireServerAck = !isNewsletterJid(jid);
   return hasMedia
-    ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck: false, failureGraceMs }
-    : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck: false, failureGraceMs };
+    ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck, failureGraceMs }
+    : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck, failureGraceMs };
 };
 
 const toOriginOrUndefined = (value?: string | null) => {
@@ -1637,25 +1634,18 @@ const whatsappRoutes = () => {
             holdReason: entry.holdReason || null
           });
           return {
-          schedule_id: null,
-          feed_item_id: null,
-          target_id: targetIdByJid.get(entry.jid) || null,
-          template_id: null,
-          message_content: captionText || null,
-          status: resolution.status,
-          error_message: resolution.errorMessage,
+            schedule_id: null,
+            feed_item_id: null,
+            target_id: targetIdByJid.get(entry.jid) || null,
+            template_id: null,
+            message_content: captionText || null,
+            status: resolution.status,
+            error_message: resolution.errorMessage,
             whatsapp_message_id: entry.messageId || null,
             sent_at: resolution.sentAt,
             media_url: requestedMediaUrl && !requestedMediaUrl.startsWith('data:') ? requestedMediaUrl : null,
             media_type: requestedMediaType,
-          media_sent: Boolean(
-            requestedMediaType &&
-            !mediaWarning &&
-            (resolution.status === 'sent' ||
-              resolution.status === 'delivered' ||
-              resolution.status === 'read' ||
-              resolution.status === 'played')
-          ),
+            media_sent: Boolean(requestedMediaType && !mediaWarning && resolution.status === 'sent'),
             media_error: entry.holdReason || mediaWarning || (requestedMediaType ? String(entry.confirmation?.error || '').trim() || null : null)
           };
         });

@@ -1891,11 +1891,8 @@ const shouldRequireServerAckForSend = (
   targetType: Target['type'] | null | undefined,
   sendResult: SendWithMediaResult | null | undefined
 ) => {
-  // Newsletter media sends use a custom Baileys sendNode path that does not reliably emit
-  // messages.update server ACKs; sendNode rejection and immediate ACK errors are the failure signals.
-  void targetType;
   void sendResult;
-  return false;
+  return targetType !== 'channel';
 };
 
 const isChannelMediaAckRejection = (

@@ -1068,6 +1068,7 @@ class WhatsAppClient {
 
   markSessionUnhealthy(error: unknown): void {
     const message = getErrorMessage(error);
+    this.isConnecting = false;
     this.status = 'error';
     this.isAuthCorrupted = true;
     this.lastError = `WhatsApp session key mismatch detected. Background sends are blocked until recovery. ${message}`.trim();
@@ -1086,6 +1087,7 @@ class WhatsAppClient {
         logger.warn({ error: updateError }, 'Failed to persist unhealthy WhatsApp session status');
       });
     }
+    this.scheduleReconnect(5000);
   }
 
   isRateOverLimitError(error: unknown): boolean {

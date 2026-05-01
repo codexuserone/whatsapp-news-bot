@@ -472,11 +472,13 @@ describe('WhatsAppClient', () => {
         expect(client.isRecoverableSessionCryptoError('Bad MAC')).toBe(true);
         expect(client.isRecoverableSessionCryptoError('No matching sessions found for message')).toBe(true);
 
+        client.scheduleReconnect = jest.fn();
         client.markSessionUnhealthy(new Error('Bad MAC'));
 
         expect(client.isAuthCorrupted).toBe(true);
         expect(client.status).toBe('error');
         expect(client.lastError).toContain('WhatsApp session key mismatch');
+        expect(client.scheduleReconnect).toHaveBeenCalledWith(5000);
     });
 
     it('should match me participant when socket jid has a device suffix', () => {
@@ -864,7 +866,7 @@ describe('WhatsAppClient', () => {
 
         expect(clearState).not.toHaveBeenCalled();
         expect((updateStatus as any).mock.calls[0]?.[0]).toBe('error');
-        expect(client.scheduleReconnect).not.toHaveBeenCalled();
+        expect(client.scheduleReconnect).toHaveBeenCalledWith(5000);
         expect(client.isAuthCorrupted).toBe(true);
         expect(client.lastError).toContain('WhatsApp session key mismatch');
     });

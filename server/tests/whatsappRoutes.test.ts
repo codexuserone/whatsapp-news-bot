@@ -31,11 +31,25 @@ describe('whatsapp route test-send logging resolution', () => {
     });
   });
 
-  it('marks local-upsert confirmations as sent', () => {
+  it('keeps channel local-upsert confirmations send-only', () => {
     expect(
       testUtils.resolveTestSendLogResolution({
         messageId: 'abc123',
         confirmation: { ok: true, via: 'upsert', status: 1, statusLabel: 'pending' },
+        confirmedAt: '2026-03-18T21:00:00.000Z'
+      })
+    ).toEqual({
+      status: 'sent',
+      errorMessage: null,
+      sentAt: '2026-03-18T21:00:00.000Z'
+    });
+  });
+
+  it('does not turn test-send read ACKs into read history', () => {
+    expect(
+      testUtils.resolveTestSendLogResolution({
+        messageId: 'abc123',
+        confirmation: { ok: true, via: 'ack', status: 4, statusLabel: 'read' },
         confirmedAt: '2026-03-18T21:00:00.000Z'
       })
     ).toEqual({

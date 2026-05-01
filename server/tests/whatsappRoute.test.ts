@@ -30,12 +30,21 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
-  it('allows a status failure grace without requiring server ACKs', () => {
+  it('requires server ACKs for status test-send confirmation', () => {
     expect(__testUtils.resolveTestSendConfirmationOptions('status@broadcast', 'video')).toEqual({
       upsertTimeoutMs: 30000,
       ackTimeoutMs: 60000,
-      requireServerAck: false,
+      requireServerAck: true,
       failureGraceMs: 5000
+    });
+  });
+
+  it('requires server ACKs for group test-send confirmation', () => {
+    expect(__testUtils.resolveTestSendConfirmationOptions('120363425146275942@g.us', null)).toEqual({
+      upsertTimeoutMs: 5000,
+      ackTimeoutMs: 15000,
+      requireServerAck: true,
+      failureGraceMs: 0
     });
   });
 
@@ -145,7 +154,7 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
-  it('preserves delivered/read confirmations when available', () => {
+  it('records send-test ACKs as sent instead of read history', () => {
     const result = __testUtils.resolveTestSendLogResolution({
       messageId: 'abc123',
       confirmRequested: true,
@@ -154,7 +163,7 @@ describe('whatsapp route test-send logging', () => {
     });
 
     expect(result).toEqual({
-      status: 'read',
+      status: 'sent',
       errorMessage: null,
       sentAt: '2026-03-18T22:00:00.000Z'
     });

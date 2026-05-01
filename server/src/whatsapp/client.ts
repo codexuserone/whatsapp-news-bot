@@ -1269,7 +1269,9 @@ class WhatsAppClient {
           }
         }
       } else if (this.groupMetadataCache.size > 0) {
-        warnings.push('Group participants are not used as Status recipients unless WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS=true.');
+        warnings.push(
+          'Group participants are not used as Status recipients unless WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE=true.'
+        );
       }
 
       const envAudienceMode = String(process.env.WHATSAPP_STATUS_AUDIENCE_MODE || '').trim().toLowerCase();

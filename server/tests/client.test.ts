@@ -999,7 +999,7 @@ describe('WhatsAppClient', () => {
         expect(client.connect).toHaveBeenCalled();
     });
 
-    it('should include self in the final status delivery audience so the primary device can decrypt the status', async () => {
+    it('should exclude self from the final status delivery audience', async () => {
         const sendMessage = jest.fn(async () => ({
             key: { id: 'status-msg-id', remoteJid: 'status@broadcast', fromMe: true },
             message: { imageMessage: { mimetype: 'image/jpeg', caption: 'caption' } }
@@ -1035,7 +1035,7 @@ describe('WhatsAppClient', () => {
             expect.any(Object),
             expect.objectContaining({
                 broadcast: true,
-                statusJidList: ['16465527019@s.whatsapp.net', '15551234567@s.whatsapp.net']
+                statusJidList: ['15551234567@s.whatsapp.net']
             })
         );
     });

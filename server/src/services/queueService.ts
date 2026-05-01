@@ -138,7 +138,12 @@ const NON_REVIVABLE_SKIP_ERRORS = new Set([
 const NON_REVIVABLE_FAILURE_PATTERNS = [
   /channel .*rejected by whatsapp/i,
   /whatsapp server rejected message ack 479/i,
-  /newsletter ack 479/i
+  /newsletter ack 479/i,
+  /no fresh status recipients are available/i,
+  /no status recipients resolved/i,
+  /status audience only contains/i,
+  /status recipients resolved only from group participants/i,
+  /whatsapp status requires explicit\/private recipients/i
 ];
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
 const QUEUED_CORRECTION_STATUSES = new Set(['awaiting_approval', 'pending', 'failed', 'uncertain', 'skipped']);
@@ -4422,7 +4427,12 @@ const sendQueuedForSchedule = async (
             'Group ID invalid',
             'Channel ID invalid',
             'Phone number invalid',
-            'Image-only mode'
+            'Image-only mode',
+            'No fresh status recipients are available',
+            'No status recipients resolved',
+            'Status audience only contains',
+            'Status recipients resolved only from group participants',
+            'WhatsApp Status requires explicit/private recipients'
           ].some((needle) => rawErrorMessage.includes(needle));
 
           if (timeoutUnknownDelivery) {

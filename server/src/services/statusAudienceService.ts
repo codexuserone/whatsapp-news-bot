@@ -59,7 +59,8 @@ const STATUS_RECIPIENTS_UPSERT_CHUNK_SIZE = 200;
 const USE_RECENT_DIRECT_RECIPIENTS =
   String(process.env.WHATSAPP_STATUS_USE_RECENT_DIRECT_RECIPIENTS || '').trim().toLowerCase() === 'true';
 const INCLUDE_GROUP_METADATA_STATUS_AUDIENCE =
-  String(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS || '').trim().toLowerCase() === 'true';
+  String(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS || '').trim().toLowerCase() === 'true' &&
+  String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || '').trim().toLowerCase() === 'true';
 
 let refreshJob: { stop?: () => void } | null = null;
 
@@ -184,7 +185,14 @@ const getTrustedAudienceSignalCount = (sources: Partial<StatusAudienceSources> |
   Math.max(0, Math.floor(Number(sources?.storeContacts || 0))) +
   Math.max(0, Math.floor(Number(sources?.storeChats || 0))) +
   Math.max(0, Math.floor(Number(sources?.env || 0))) +
-  Math.max(0, Math.floor(Number(sources?.lidMappings || 0))) +
+  Math.max(0, Math.floor(Number(sources?.activeIndividualTargets || 0))) +
+  Math.max(0, Math.floor(Number(sources?.recentSuccessfulDirectRecipients || 0)));
+
+const getDirectAudienceSignalCount = (sources: Partial<StatusAudienceSources> | null | undefined) =>
+  Math.max(0, Math.floor(Number(sources?.contactsCache || 0))) +
+  Math.max(0, Math.floor(Number(sources?.storeContacts || 0))) +
+  Math.max(0, Math.floor(Number(sources?.storeChats || 0))) +
+  Math.max(0, Math.floor(Number(sources?.env || 0))) +
   Math.max(0, Math.floor(Number(sources?.activeIndividualTargets || 0))) +
   Math.max(0, Math.floor(Number(sources?.recentSuccessfulDirectRecipients || 0)));
 
@@ -212,12 +220,12 @@ const shouldDropImplicitLidRecipients = (sources: Partial<StatusAudienceSources>
 
 const isGroupMetadataOnlySnapshot = (snapshot: RefreshResult) =>
   Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0))) > 0 &&
-  getTrustedAudienceSignalCount(snapshot.sources) === 0;
+  getDirectAudienceSignalCount(snapshot.sources) === 0;
 
 const isGroupMetadataDominatedSnapshot = (snapshot: RefreshResult) => {
   const groupSignals = Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0)));
-  const trustedSignals = getTrustedAudienceSignalCount(snapshot.sources);
-  return groupSignals > 0 && groupSignals > Math.max(trustedSignals * 10, 25);
+  const directSignals = getDirectAudienceSignalCount(snapshot.sources);
+  return groupSignals > 0 && groupSignals > Math.max(directSignals * 10, 25);
 };
 
 const isLidHeavySnapshot = (snapshot: RefreshResult) => {
@@ -234,6 +242,13 @@ const shouldTrustStoredSnapshot = (
   if (options?.allowEnvLimited === false && isEnvLimitedSnapshot(snapshot)) return false;
   if (getTrustedAudienceSignalCount(snapshot.sources) <= 0) return false;
   if (snapshot.participantCount <= 1 && getExplicitAudienceSignalCount(snapshot.sources) <= 0) return false;
+  if (
+    !INCLUDE_GROUP_METADATA_STATUS_AUDIENCE &&
+    Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0))) > 0 &&
+    getDirectAudienceSignalCount(snapshot.sources) <= 0
+  ) {
+    return false;
+  }
   if (
     !INCLUDE_GROUP_METADATA_STATUS_AUDIENCE &&
     Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0))) > 0 &&
@@ -635,6 +650,19 @@ const refreshStatusRecipients = async (
   }
   if (!USE_RECENT_DIRECT_RECIPIENTS && recentDirectRecipients.length) {
     warnings.push('Recent direct recipients are ignored unless WHATSAPP_STATUS_USE_RECENT_DIRECT_RECIPIENTS=true.');
+  }
+  if (
+    !INCLUDE_GROUP_METADATA_STATUS_AUDIENCE &&
+    Math.max(0, Math.floor(Number(sources.groupMetadata || 0))) > 0 &&
+    getDirectAudienceSignalCount(sources) <= 0
+  ) {
+    const dropped = participants.length;
+    participants = [];
+    if (dropped > 0) {
+      warnings.push(
+        `Dropped ${dropped} Status recipients resolved only from group participants. WhatsApp Status requires explicit/private recipients, not a scraped group audience.`
+      );
+    }
   }
   if (shouldDropImplicitLidRecipients(sources)) {
     const beforeDrop = participants.length;

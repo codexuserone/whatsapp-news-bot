@@ -200,6 +200,7 @@ describe('statusAudienceService', () => {
         delete process.env.WHATSAPP_STATUS_AUDIENCE_JIDS;
         delete process.env.WHATSAPP_STATUS_JID_LIST;
         delete process.env.WHATSAPP_STATUS_AUDIENCE_MODE;
+        delete process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
     });
 
     it('does not preserve a group-metadata-only stored snapshot when a connected client resolves only self', async () => {
@@ -295,6 +296,57 @@ describe('statusAudienceService', () => {
                 })
             },
             { sampleSize: 10 }
+        );
+
+        expect(result.participantCount).toBe(0);
+        expect(result.recipients).toEqual([]);
+        expect(tables.status_recipients).toHaveLength(0);
+    });
+
+    it('does not trust a fresh group-participant snapshot just because LIDs mapped to phone JIDs', async () => {
+        const refreshedAt = new Date().toISOString();
+        const storedRecipients = Array.from({ length: 40 }, (_value, index) => `${1200000000 + index}@s.whatsapp.net`);
+        const { supabase, tables } = buildSupabaseMock({
+            status_recipients: storedRecipients.map((recipient) => ({
+                session_id: 'primary',
+                recipient_jid: recipient,
+                refreshed_at: refreshedAt,
+                sources: {
+                    contactsCache: 0,
+                    storeContacts: 0,
+                    storeChats: 0,
+                    groupMetadata: 80,
+                    env: 0,
+                    me: 1,
+                    lidMappings: 40,
+                    activeIndividualTargets: 0,
+                    recentSuccessfulDirectRecipients: 0
+                },
+                warnings: []
+            }))
+        });
+        getSupabaseClientMock.mockReturnValue(supabase);
+
+        const result = await ensureFreshStatusRecipients(
+            {
+                getStatus: () => ({ status: 'connected' }),
+                getStatusParticipants: () => [],
+                getStatusAudience: () => ({
+                    participantCount: 0,
+                    sample: [],
+                    sources: {
+                        contactsCache: 0,
+                        storeContacts: 0,
+                        storeChats: 0,
+                        groupMetadata: 0,
+                        env: 0,
+                        me: 1,
+                        lidMappings: 0
+                    },
+                    warnings: []
+                })
+            },
+            { maxAgeMinutes: 10, sampleSize: 10 }
         );
 
         expect(result.participantCount).toBe(0);
@@ -625,11 +677,11 @@ describe('statusAudienceService', () => {
 
         expect(result.participantCount).toBe(0);
         expect(result.recipients).toEqual([]);
-        expect(result.warnings.some((warning: string) => warning.includes('Dropped 2 implicit group-participant LID'))).toBe(true);
+        expect(result.warnings.some((warning: string) => warning.includes('resolved only from group participants'))).toBe(true);
         expect(tables.status_recipients).toHaveLength(0);
     });
 
-    it('keeps phone recipients resolved from LID mappings and drops remaining implicit LIDs', async () => {
+    it('drops recipients resolved only from group participant metadata even after LID mapping', async () => {
         const { supabase, tables } = buildSupabaseMock();
         getSupabaseClientMock.mockReturnValue(supabase);
 
@@ -655,9 +707,11 @@ describe('statusAudienceService', () => {
             { sampleSize: 10 }
         );
 
-        expect(result.recipients).toEqual(['972501234567@s.whatsapp.net']);
+        expect(result.participantCount).toBe(0);
+        expect(result.recipients).toEqual([]);
         expect(result.sources.lidMappings).toBe(1);
-        expect(tables.status_recipients).toHaveLength(1);
+        expect(result.warnings.some((warning: string) => warning.includes('resolved only from group participants'))).toBe(true);
+        expect(tables.status_recipients).toHaveLength(0);
     });
 
     it('reuses a fresh stored snapshot without refreshing again', async () => {

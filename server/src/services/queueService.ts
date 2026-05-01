@@ -2060,8 +2060,10 @@ const sendMessageWithTemplate = async (
       ? { text, linkPreview: null }
       : { text };
     if (target.type === 'status') {
-      Object.assign(content, buildTemplateStatusTextOptions(template));
-      const statusOptions = await buildStatusOptions();
+      const statusOptions = {
+        ...(await buildStatusOptions()),
+        ...buildTemplateStatusTextOptions(template)
+      };
       return withTimeout(
         whatsappClient.sendStatusBroadcast(content, statusOptions),
         getStatusSendTimeoutMs('text', sendTimeoutMs),
@@ -5618,6 +5620,7 @@ module.exports = {
     buildConnectionWaitErrorMessage,
     shouldBlockTextFallbackAfterMediaFailure,
     shouldBlockManualTextFallbackAfterMediaFailure,
+    sendMessageWithTemplate,
     buildTemplateStatusTextOptions,
     assertUsableStatusAudience,
     shouldRequireServerAckForSend,

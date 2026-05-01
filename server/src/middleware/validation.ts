@@ -207,6 +207,13 @@ const schemas = {
       documentFilename: z.string().max(255).optional().nullable().transform(normalizeOptional),
       documentMime: z.string().max(255).optional().nullable().transform(normalizeOptional),
       statusJidList: z.array(z.string().regex(STATUS_AUDIENCE_JID_PATTERN)).max(2000).optional(),
+      backgroundColor: z
+        .string()
+        .regex(HEX_COLOR_PATTERN, 'backgroundColor must be a hex color like #0f172a')
+        .optional()
+        .nullable()
+        .transform(normalizeOptional),
+      font: optionalInt(0, 8),
       includeCaption: z.boolean().optional().default(true),
       disableLinkPreview: z.boolean().optional().default(false),
       confirm: z.boolean().optional()

@@ -212,6 +212,55 @@ describe('WhatsAppClient', () => {
         }
     });
 
+    it('warms group metadata before resolving a group-backed status audience', async () => {
+        const originalInclude = process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS;
+        const originalAllow = process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
+        process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS = 'true';
+        delete process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
+
+        const groupFetchAllParticipating: any = jest.fn(async () => ({
+            '120363407220244757@g.us': {
+                id: '120363407220244757@g.us',
+                subject: 'Test',
+                size: 3,
+                participants: [
+                    { id: '16465527019@s.whatsapp.net' },
+                    { id: '19144477725@s.whatsapp.net' },
+                    { id: '15551234567@s.whatsapp.net' }
+                ]
+            }
+        }));
+
+        client.socket = {
+            user: { id: '16465527019:55@s.whatsapp.net' },
+            groupFetchAllParticipating
+        };
+        client.meJid = '16465527019:55@s.whatsapp.net';
+
+        try {
+            const audience = await client.getStatusAudience({ sampleSize: 10 });
+
+            expect(groupFetchAllParticipating).toHaveBeenCalled();
+            expect(audience.participantCount).toBe(2);
+            expect(audience.sample).toEqual(['15551234567@s.whatsapp.net', '19144477725@s.whatsapp.net']);
+            expect(audience.sources.groupMetadata).toBe(2);
+            expect(audience.warnings).not.toContain(
+                'Group participants are not used as Status recipients because WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS is off.'
+            );
+        } finally {
+            if (originalInclude === undefined) {
+                delete process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS;
+            } else {
+                process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS = originalInclude;
+            }
+            if (originalAllow === undefined) {
+                delete process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
+            } else {
+                process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE = originalAllow;
+            }
+        }
+    });
+
     it('should send newsletter image media with media_id and plaintext mediatype attrs', async () => {
         const originalFetch = global.fetch;
         const sendNode: any = jest.fn(async () => undefined);

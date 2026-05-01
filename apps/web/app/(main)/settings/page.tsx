@@ -9,6 +9,7 @@ import { api } from '@/lib/api';
 import type { BackendSettings, ShabbosSettings, ShabbosStatus } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
@@ -439,6 +440,70 @@ const SettingsPage = () => {
           </CardContent>
         </Card>
 
+        <Card id="status">
+          <CardHeader>
+            <CardTitle>Status</CardTitle>
+            <CardDescription>Production Status and manual preview audience.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
+              <div>
+                <Label>Production Audience</Label>
+                <p className="text-xs text-muted-foreground">
+                  Auto uses the private viewers WhatsApp can resolve from this connected account. Specific recipients limits production Status to the list below.
+                </p>
+              </div>
+              <Controller
+                control={form.control}
+                name="status_audience_mode"
+                render={({ field }) => (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Button
+                      type="button"
+                      variant={field.value === 'auto' ? 'default' : 'outline'}
+                      onClick={() => field.onChange('auto')}
+                    >
+                      Auto audience
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={field.value === 'explicit' ? 'default' : 'outline'}
+                      onClick={() => field.onChange('explicit')}
+                    >
+                      Specific recipients
+                    </Button>
+                  </div>
+                )}
+              />
+              {statusAudienceMode === 'explicit' ? (
+                <div className="space-y-2">
+                  <Label htmlFor="status_audience_jids">Production Status Recipients</Label>
+                  <Textarea
+                    id="status_audience_jids"
+                    rows={3}
+                    placeholder="19144477725@s.whatsapp.net"
+                    {...form.register('status_audience_jids')}
+                  />
+                  <p className="text-xs text-muted-foreground">One JID or phone number per line, or comma separated.</p>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="status_test_audience_jids">Manual Status Test Recipients</Label>
+              <Textarea
+                id="status_test_audience_jids"
+                rows={3}
+                placeholder="19144477725@s.whatsapp.net"
+                {...form.register('status_test_audience_jids')}
+              />
+              <p className="text-xs text-muted-foreground">
+                Template previews and manual Status tests use this list so test sends do not go to the production audience.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
         <Card id="dedupe">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -471,57 +536,6 @@ const SettingsPage = () => {
             <CardDescription>Additional backend queue and retention controls.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
-              <div>
-                <Label>Status Audience</Label>
-                <p className="text-xs text-muted-foreground">
-                  Auto is production mode. Specific recipients is for controlled Status tests.
-                </p>
-              </div>
-              <Controller
-                control={form.control}
-                name="status_audience_mode"
-                render={({ field }) => (
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <Button
-                      type="button"
-                      variant={field.value === 'auto' ? 'default' : 'outline'}
-                      onClick={() => field.onChange('auto')}
-                    >
-                      Auto audience
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={field.value === 'explicit' ? 'default' : 'outline'}
-                      onClick={() => field.onChange('explicit')}
-                    >
-                      Specific recipients
-                    </Button>
-                  </div>
-                )}
-              />
-              {statusAudienceMode === 'explicit' ? (
-                <div className="space-y-2">
-                  <Label htmlFor="status_audience_jids">Production Status Recipients</Label>
-                  <Input
-                    id="status_audience_jids"
-                    placeholder="19144477725@s.whatsapp.net"
-                    {...form.register('status_audience_jids')}
-                  />
-                </div>
-              ) : null}
-              <div className="space-y-2">
-                <Label htmlFor="status_test_audience_jids">Manual Status Test Recipients</Label>
-                <Input
-                  id="status_test_audience_jids"
-                  placeholder="19144477725@s.whatsapp.net"
-                  {...form.register('status_test_audience_jids')}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Used only when you manually send a Status from the WhatsApp page.
-                </p>
-              </div>
-            </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="send_timeout_ms">Send Timeout (ms)</Label>

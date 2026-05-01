@@ -124,6 +124,19 @@ const assertStatusMediaResponseMatches = (
   }
 };
 
+const buildTextStatusStyleOptions = (backgroundColor: unknown, font: unknown) => {
+  const normalizedBackgroundColor = String(backgroundColor || '').trim();
+  const normalizedFont = Number(font);
+  return {
+    ...(normalizedBackgroundColor && /^#[0-9a-f]{6}$/i.test(normalizedBackgroundColor)
+      ? { backgroundColor: normalizedBackgroundColor }
+      : {}),
+    ...(Number.isInteger(normalizedFont) && normalizedFont >= 0 && normalizedFont <= 8
+      ? { font: normalizedFont }
+      : {})
+  };
+};
+
 const isAck479Error = (value: unknown) =>
   /(?:ack|server rejected|rejected).*479|479.*(?:ack|server rejected|rejected)/i.test(String(value || ''));
 
@@ -1258,6 +1271,8 @@ const whatsappRoutes = () => {
       documentFilename?: string | null;
       documentMime?: string | null;
       statusJidList?: string[] | null;
+      backgroundColor?: string | null;
+      font?: number | null;
       includeCaption?: boolean;
       disableLinkPreview?: boolean;
       confirm?: boolean;
@@ -1297,6 +1312,7 @@ const whatsappRoutes = () => {
     const explicitStatusJidListRaw = Array.isArray(payload.statusJidList)
       ? payload.statusJidList.map((value) => String(value || '').trim()).filter(Boolean)
       : [];
+    const statusTextStyleOptions = buildTextStatusStyleOptions(payload.backgroundColor, payload.font);
     const disableLinkPreview = payload.disableLinkPreview === true;
     const confirmationRequired = payload.confirm !== false;
 	    const includeCaption = payload.includeCaption !== false;
@@ -1555,6 +1571,12 @@ const whatsappRoutes = () => {
             );
             assertUsableStatusAudience(snapshot);
             statusOptions = { statusJidList: snapshot.recipients };
+          }
+          if (!requestedMediaType) {
+            statusOptions = {
+              ...(statusOptions || {}),
+              ...statusTextStyleOptions
+            };
           }
         }
         const sendPromise = isStatusBroadcast(normalizedJid)
@@ -1968,6 +1990,7 @@ module.exports.__testUtils = {
   assertUsableStatusAudience,
   buildUncertainSendMessage,
   isGroupJid,
+  buildTextStatusStyleOptions,
   resolveTestSendConfirmationOptions,
   resolveSendTestTimeoutMs,
   resolveTestSendLogResolution

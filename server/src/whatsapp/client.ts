@@ -17,9 +17,6 @@ const { persistReceiptUpdates } = require('../services/receiptService');
 
 const SEND_EPHEMERAL_EXPIRATION =
   String(process.env.WHATSAPP_SEND_EPHEMERAL_EXPIRATION ?? 'true').trim().toLowerCase() !== 'false';
-const INCLUDE_GROUP_METADATA_IN_STATUS_AUDIENCE =
-  String(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS || '').trim().toLowerCase() === 'true' &&
-  String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || '').trim().toLowerCase() === 'true';
 const ALLOW_UNMAPPED_LID_STATUS_AUDIENCE =
   String(process.env.WHATSAPP_STATUS_ALLOW_UNMAPPED_LID_AUDIENCE || '').trim().toLowerCase() === 'true';
 const STATUS_LID_MAPPING_LIMIT = Math.max(
@@ -31,6 +28,12 @@ const AUTO_CLEAR_CORRUPTED_AUTH =
 const newsletterMediaPatchContext = new AsyncLocalStorage();
 
 const isTruthyEnvFlag = (value: unknown) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+const isExplicitlyFalseEnvFlag = (value: unknown) =>
+  ['0', 'false', 'no', 'off'].includes(String(value || '').trim().toLowerCase());
+
+const isGroupMetadataStatusAudienceEnabled = () =>
+  isTruthyEnvFlag(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS) &&
+  !isExplicitlyFalseEnvFlag(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE);
 
 const isNewsletterMediaDirectPathPatchEnabled = () =>
   isTruthyEnvFlag(process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH) ||
@@ -1208,6 +1211,7 @@ class WhatsAppClient {
   } {
     const socket = this.socket as any;
     const participants = new Set<string>();
+    const selfJid = normalizeStatusAudienceJid(this.meJid || socket?.user?.id) || null;
     const sources = {
       contactsCache: 0,
       storeContacts: 0,
@@ -1222,6 +1226,7 @@ class WhatsAppClient {
     const addCandidate = (value: unknown, source: keyof typeof sources) => {
       const normalized = normalizeStatusAudienceJid(value);
       if (!normalized) return;
+      if (selfJid && normalized === selfJid) return;
       if (participants.has(normalized)) return;
       participants.add(normalized);
       sources[source] += 1;
@@ -1254,7 +1259,7 @@ class WhatsAppClient {
         addCandidate(chat?.id || chat?.jid, 'storeChats');
       }
 
-      if (INCLUDE_GROUP_METADATA_IN_STATUS_AUDIENCE) {
+      if (isGroupMetadataStatusAudienceEnabled()) {
         for (const raw of this.groupMetadataCache.values()) {
           const participantsRaw = Array.isArray((raw as { participants?: unknown[] })?.participants)
             ? (raw as { participants?: unknown[] }).participants || []
@@ -1270,7 +1275,7 @@ class WhatsAppClient {
         }
       } else if (this.groupMetadataCache.size > 0) {
         warnings.push(
-          'Group participants are not used as Status recipients unless WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE=true.'
+          'Group participants are not used as Status recipients because WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS is off.'
         );
       }
 
@@ -1287,7 +1292,6 @@ class WhatsAppClient {
         }
       }
 
-      const selfJid = normalizeStatusAudienceJid(this.meJid || socket?.user?.id);
       if (selfJid) {
         sources.me += 1;
       }
@@ -1300,7 +1304,6 @@ class WhatsAppClient {
       warnings.push('No status recipients resolved from contacts/cache/store');
     }
 
-    const selfJid = normalizeStatusAudienceJid(this.meJid || socket?.user?.id) || null;
     return { participants: resolved.filter((participant) => participant !== selfJid), sources, warnings, selfJid };
   }
 
@@ -1310,6 +1313,30 @@ class WhatsAppClient {
     warnings: string[];
     selfJid: string | null;
   }> {
+    if (isGroupMetadataStatusAudienceEnabled() && this.socket) {
+      try {
+        const groups = await this.getGroups();
+        const hasParticipantMetadata = Array.from(this.groupMetadataCache.values()).some((raw) =>
+          Array.isArray((raw as { participants?: unknown[] })?.participants) &&
+          ((raw as { participants?: unknown[] }).participants || []).length > 0
+        );
+        if (!hasParticipantMetadata) {
+          const warmLimit = Math.max(
+            0,
+            Math.min(Math.floor(Number(process.env.WHATSAPP_STATUS_GROUP_METADATA_WARM_LIMIT || 25)), 100)
+          );
+          for (const group of groups.slice(0, warmLimit)) {
+            const jid = String(group?.jid || group?.id || '').trim();
+            if (jid) {
+              await this.getGroupInfo(jid, 10000);
+            }
+          }
+        }
+      } catch (error) {
+        logger.warn({ error: getErrorMessage(error) }, 'Failed to warm group metadata for Status audience');
+      }
+    }
+
     const audience = this.resolveStatusAudience();
     const participants = new Set(audience.participants);
     const lidRecipients = audience.participants.filter((participant) => participant.endsWith('@lid'));
@@ -2200,10 +2227,18 @@ class WhatsAppClient {
           } catch (error) {
             logger.error({ error }, 'Failed to initialize schedulers after reconnect');
           }
-          void refreshStatusRecipients(this, { sampleSize: 25 }).catch((error: unknown) => {
-            logger.warn({ error: getErrorMessage(error) }, 'Failed to refresh persisted status recipients after connect');
-          });
-          void runTargetAutoSyncPass(this, { silent: true });
+          void (async () => {
+            try {
+              await runTargetAutoSyncPass(this, { silent: true });
+            } catch (error) {
+              logger.warn({ error: getErrorMessage(error) }, 'Failed to auto-sync targets after connect');
+            }
+            try {
+              await refreshStatusRecipients(this, { sampleSize: 25 });
+            } catch (error) {
+              logger.warn({ error: getErrorMessage(error) }, 'Failed to refresh persisted status recipients after connect');
+            }
+          })();
           this.startPresenceOfflineHeartbeat();
         }
 

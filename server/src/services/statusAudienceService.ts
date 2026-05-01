@@ -58,9 +58,6 @@ const MAX_COLD_START_PARTICIPANTS = 10;
 const STATUS_RECIPIENTS_UPSERT_CHUNK_SIZE = 200;
 const USE_RECENT_DIRECT_RECIPIENTS =
   String(process.env.WHATSAPP_STATUS_USE_RECENT_DIRECT_RECIPIENTS || '').trim().toLowerCase() === 'true';
-const INCLUDE_GROUP_METADATA_STATUS_AUDIENCE =
-  String(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS || '').trim().toLowerCase() === 'true' &&
-  String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || '').trim().toLowerCase() === 'true';
 
 let refreshJob: { stop?: () => void } | null = null;
 
@@ -113,6 +110,16 @@ const uniqueStrings = (values: unknown[]) =>
         .filter(Boolean)
     )
   );
+
+const isTruthyEnvFlag = (value: unknown) =>
+  ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+
+const isExplicitlyFalseEnvFlag = (value: unknown) =>
+  ['0', 'false', 'no', 'off'].includes(String(value || '').trim().toLowerCase());
+
+const isGroupMetadataStatusAudienceEnabled = () =>
+  isTruthyEnvFlag(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS) &&
+  !isExplicitlyFalseEnvFlag(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE);
 
 const getExplicitEnvAudienceRecipients = () =>
   Array.from(
@@ -186,7 +193,10 @@ const getTrustedAudienceSignalCount = (sources: Partial<StatusAudienceSources> |
   Math.max(0, Math.floor(Number(sources?.storeChats || 0))) +
   Math.max(0, Math.floor(Number(sources?.env || 0))) +
   Math.max(0, Math.floor(Number(sources?.activeIndividualTargets || 0))) +
-  Math.max(0, Math.floor(Number(sources?.recentSuccessfulDirectRecipients || 0)));
+  Math.max(0, Math.floor(Number(sources?.recentSuccessfulDirectRecipients || 0))) +
+  (isGroupMetadataStatusAudienceEnabled()
+    ? Math.max(0, Math.floor(Number(sources?.groupMetadata || 0)))
+    : 0);
 
 const getDirectAudienceSignalCount = (sources: Partial<StatusAudienceSources> | null | undefined) =>
   Math.max(0, Math.floor(Number(sources?.contactsCache || 0))) +
@@ -243,20 +253,20 @@ const shouldTrustStoredSnapshot = (
   if (getTrustedAudienceSignalCount(snapshot.sources) <= 0) return false;
   if (snapshot.participantCount <= 1 && getExplicitAudienceSignalCount(snapshot.sources) <= 0) return false;
   if (
-    !INCLUDE_GROUP_METADATA_STATUS_AUDIENCE &&
+    !isGroupMetadataStatusAudienceEnabled() &&
     Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0))) > 0 &&
     getDirectAudienceSignalCount(snapshot.sources) <= 0
   ) {
     return false;
   }
   if (
-    !INCLUDE_GROUP_METADATA_STATUS_AUDIENCE &&
+    !isGroupMetadataStatusAudienceEnabled() &&
     Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0))) > 0 &&
     getExplicitAudienceSignalCount(snapshot.sources) <= 0
   ) {
     return false;
   }
-  if (isGroupMetadataOnlySnapshot(snapshot)) return false;
+  if (!isGroupMetadataStatusAudienceEnabled() && isGroupMetadataOnlySnapshot(snapshot)) return false;
   if (isGroupMetadataDominatedSnapshot(snapshot) && isLidHeavySnapshot(snapshot)) return false;
   if (isLidHeavySnapshot(snapshot) && getTrustedAudienceSignalCount(snapshot.sources) === 0) return false;
   return true;
@@ -652,7 +662,7 @@ const refreshStatusRecipients = async (
     warnings.push('Recent direct recipients are ignored unless WHATSAPP_STATUS_USE_RECENT_DIRECT_RECIPIENTS=true.');
   }
   if (
-    !INCLUDE_GROUP_METADATA_STATUS_AUDIENCE &&
+    !isGroupMetadataStatusAudienceEnabled() &&
     Math.max(0, Math.floor(Number(sources.groupMetadata || 0))) > 0 &&
     getDirectAudienceSignalCount(sources) <= 0
   ) {

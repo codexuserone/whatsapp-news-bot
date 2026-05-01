@@ -75,6 +75,8 @@ jest.mock('../src/services/statusAudienceService', () => ({
 }));
 
 const queueService = require('../src/services/queueService');
+const { ensureFreshStatusRecipients } = require('../src/services/statusAudienceService');
+const { normalizeTargetJidForSend } = require('../src/utils/targetJid');
 
 describe('queueService __testUtils', () => {
   const testUtils = queueService.__testUtils;
@@ -151,6 +153,47 @@ describe('queueService __testUtils', () => {
         status_font: 99
       })
     ).toEqual({});
+  });
+
+  it('sends template status text styling as WhatsApp status options', async () => {
+    ensureFreshStatusRecipients.mockResolvedValueOnce({
+      recipients: ['15551234567@s.whatsapp.net'],
+      sources: { env: 1 }
+    });
+    normalizeTargetJidForSend.mockReturnValueOnce('status@broadcast');
+    const sendStatusBroadcast: any = jest.fn(async (..._args: unknown[]) => ({ key: { id: 'status-1' } }));
+
+    await testUtils.sendMessageWithTemplate(
+      {
+        getStatus: () => ({ status: 'connected' }),
+        sendStatusBroadcast
+      },
+      {
+        id: 'target-status',
+        phone_number: 'status@broadcast',
+        type: 'status'
+      },
+      {
+        id: 'template-status',
+        content: '{{title}}',
+        send_mode: 'text_only',
+        status_background_color: '#166534',
+        status_font: 5
+      },
+      {
+        id: 'feed-item-1',
+        title: 'Status title'
+      }
+    );
+
+    expect(sendStatusBroadcast).toHaveBeenCalledWith(
+      { text: 'Status title', linkPreview: null },
+      {
+        statusJidList: ['15551234567@s.whatsapp.net'],
+        backgroundColor: '#166534',
+        font: 5
+      }
+    );
   });
 
   it('does not build queue steps for disabled templates', () => {

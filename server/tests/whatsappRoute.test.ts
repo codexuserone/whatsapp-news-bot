@@ -39,6 +39,14 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
+  it('builds text status styling options for test sends', () => {
+    expect(__testUtils.buildTextStatusStyleOptions('#166534', 5)).toEqual({
+      backgroundColor: '#166534',
+      font: 5
+    });
+    expect(__testUtils.buildTextStatusStyleOptions('166534', 99)).toEqual({});
+  });
+
   it('requires server ACKs for group test-send confirmation', () => {
     expect(__testUtils.resolveTestSendConfirmationOptions('120363425146275942@g.us', null)).toEqual({
       upsertTimeoutMs: 5000,

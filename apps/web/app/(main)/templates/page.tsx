@@ -430,6 +430,27 @@ const TemplatesPage = () => {
     })()
     : watchedContent || 'Start typing to preview...';
 
+  const renderedSequencePreviewSteps = watchedSequenceSteps
+    .filter((step) => step.active !== false && String(step.content || '').trim())
+    .map((step, index) => {
+      const sendMode = resolveTemplateSendMode(step.send_mode);
+      const base = previewWithData ? applyTemplate(step.content || '', sampleData) : step.content || '';
+      const link = String(sampleData.link || sampleData.url || '').trim();
+      const renderedText =
+        sendMode === 'text_preview' && link && !/https?:\/\//i.test(base)
+          ? `${base}\n${link}`.trim()
+          : base;
+      return {
+        index,
+        label: String(step.label || `Step ${index + 1}`).trim() || `Step ${index + 1}`,
+        sendMode,
+        renderedText: renderedText || 'Empty step',
+        delaySeconds: Math.max(0, Math.min(3600, Number(step.delay_seconds || 0))),
+        backgroundColor: resolveStatusBackgroundColor(step.status_background_color || watchedStatusBackgroundColor),
+        font: resolveStatusFont(step.status_font ?? watchedStatusFont)
+      };
+    });
+
   const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Unknown error');
 
   useEffect(() => {
@@ -502,6 +523,8 @@ const TemplatesPage = () => {
       audioUrl?: string;
       documentUrl?: string;
       statusJidList?: string[];
+      backgroundColor?: string;
+      font?: number;
       includeCaption?: boolean;
       disableLinkPreview?: boolean;
       confirm?: boolean;
@@ -571,6 +594,12 @@ const TemplatesPage = () => {
     const mediaKind = String(sampleData.media_kind || sampleData.mediaKind || '').trim().toLowerCase();
     const isStatusPreview = selectedPreviewTarget?.type === 'status';
     const statusAudiencePatch = isStatusPreview ? { statusJidList: statusPreviewAudience } : {};
+    const statusTextStylePatch = isStatusPreview
+      ? {
+        backgroundColor: resolveStatusBackgroundColor(watchedStatusBackgroundColor),
+        font: resolveStatusFont(watchedStatusFont)
+      }
+      : {};
 
     if (isStatusPreview && statusPreviewAudience.length === 0) {
       setPreviewSendNotice('Add a Manual Status Test Recipient in Settings before sending a Status preview.');
@@ -612,6 +641,7 @@ const TemplatesPage = () => {
           message,
           disableLinkPreview: false,
           confirm: true,
+          ...statusTextStylePatch,
           ...statusAudiencePatch
         });
         return;
@@ -639,6 +669,7 @@ const TemplatesPage = () => {
         message,
         disableLinkPreview: false,
         confirm: true,
+        ...statusTextStylePatch,
         ...statusAudiencePatch
       });
       return;
@@ -649,6 +680,7 @@ const TemplatesPage = () => {
       message,
       disableLinkPreview: true,
       confirm: true,
+      ...statusTextStylePatch,
       ...statusAudiencePatch
     });
   };
@@ -1237,6 +1269,46 @@ const TemplatesPage = () => {
                   {renderedPreviewText || 'Status text preview'}
                 </div>
               </div>
+
+              {renderedSequencePreviewSteps.length ? (
+                <div className="mt-4 space-y-3 rounded-lg border p-3">
+                  <div>
+                    <p className="text-sm font-medium">Sequence preview</p>
+                    <p className="text-xs text-muted-foreground">These steps are queued in this order for each story.</p>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {renderedSequencePreviewSteps.map((step, position) => (
+                      <div key={`${step.index}-${position}`} className="space-y-2 rounded-md border bg-muted/20 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium">
+                              {position + 1}. {step.label}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {getTemplateModeLabel(step.sendMode)}
+                              {step.delaySeconds > 0 ? ` after ${step.delaySeconds}s` : ''}
+                            </p>
+                          </div>
+                          <span
+                            className="h-8 w-8 shrink-0 rounded-md border"
+                            style={{ backgroundColor: step.backgroundColor }}
+                            aria-label={`Status color ${step.backgroundColor}`}
+                          />
+                        </div>
+                        <div
+                          className="rounded-md p-3 text-sm text-white"
+                          style={{
+                            backgroundColor: step.backgroundColor,
+                            fontFamily: getStatusPreviewFontFamily(step.font)
+                          }}
+                        >
+                          <div className="max-h-32 overflow-hidden whitespace-pre-wrap">{step.renderedText}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
 
               {previewWithData ? (
                 <p className="text-xs text-muted-foreground mt-2">

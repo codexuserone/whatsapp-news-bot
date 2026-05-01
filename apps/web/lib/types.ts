@@ -305,6 +305,7 @@ export type WhatsAppStatusAudience = {
     me: number;
     activeIndividualTargets?: number;
     recentSuccessfulDirectRecipients?: number;
+    lidMappings?: number;
   };
   warnings?: string[];
   stale?: boolean;

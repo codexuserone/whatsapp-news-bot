@@ -17,6 +17,7 @@ const { normalizeChannelJid, isValidChannelJid } = require('../utils/targetJid')
 const { WHATSAPP_STATUS_ENABLED, WHATSAPP_STATUS_DISABLED_REASON } = require('../config/features');
 
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
+const DIRECT_MEDIA_SEND_TIMEOUT_MS = 60000;
 const GROUP_SEND_TIMEOUT_MS = 60000;
 const GROUP_MEDIA_SEND_TIMEOUT_MS = 90000;
 const STATUS_AUDIENCE_REFRESH_TIMEOUT_MS = 15000;
@@ -261,8 +262,18 @@ const isHttpUrl = (value: string) => {
 const isGroupJid = (value: string) => String(value || '').trim().endsWith('@g.us');
 
 const resolveSendTestTimeoutMs = (jid: string, mediaType: string | null) => {
-  if (!isGroupJid(jid)) return DEFAULT_SEND_TIMEOUT_MS;
-  return mediaType ? GROUP_MEDIA_SEND_TIMEOUT_MS : GROUP_SEND_TIMEOUT_MS;
+  const normalizedJid = String(jid || '').trim();
+  const hasMedia = Boolean(String(mediaType || '').trim());
+  if (normalizedJid === 'status@broadcast') {
+    return hasMedia ? STATUS_SEND_TIMEOUT_MS : Math.max(DEFAULT_SEND_TIMEOUT_MS, 30000);
+  }
+  if (isGroupJid(normalizedJid)) {
+    return hasMedia ? GROUP_MEDIA_SEND_TIMEOUT_MS : GROUP_SEND_TIMEOUT_MS;
+  }
+  if (isNewsletterJid(normalizedJid)) {
+    return hasMedia ? GROUP_MEDIA_SEND_TIMEOUT_MS : DEFAULT_SEND_TIMEOUT_MS;
+  }
+  return hasMedia ? DIRECT_MEDIA_SEND_TIMEOUT_MS : DEFAULT_SEND_TIMEOUT_MS;
 };
 
 const resolveTestSendConfirmationOptions = (jid: string, mediaType: string | null) => {

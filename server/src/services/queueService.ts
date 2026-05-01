@@ -197,6 +197,18 @@ const getStatusSendTimeoutMs = (kind: 'text' | 'media', fallbackMs: number) => {
   return kind === 'media' ? Math.max(baseline, 90000) : Math.max(baseline, 60000);
 };
 
+const getRegularSendTimeoutMs = (
+  kind: 'text' | 'media',
+  fallbackMs: number,
+  targetType?: Target['type'] | null
+) => {
+  const baseline = Math.max(Number(fallbackMs || DEFAULT_SEND_TIMEOUT_MS), 10000);
+  if (kind !== 'media') return baseline;
+  return targetType === 'group' || targetType === 'channel'
+    ? Math.max(baseline, 90000)
+    : Math.max(baseline, 60000);
+};
+
 const computeUncertainRetryDelayMs = (sendTimeoutMs: number) =>
   Math.max(Math.round(Math.max(sendTimeoutMs, 10000) * 2), DEFAULT_UNCERTAIN_RETRY_DELAY_MS);
 
@@ -2163,7 +2175,7 @@ const sendMessageWithTemplate = async (
             )
             : await withTimeout(
               whatsappClient.sendMessage(jid, content),
-              sendTimeoutMs,
+              getRegularSendTimeoutMs('media', sendTimeoutMs, target.type),
               'Timed out sending video message'
             );
 
@@ -2196,7 +2208,7 @@ const sendMessageWithTemplate = async (
         const content: Record<string, unknown> = { audio: buffer, mimetype, ptt: false };
         const response = await withTimeout(
           whatsappClient.sendMessage(jid, content),
-          sendTimeoutMs,
+          getRegularSendTimeoutMs('media', sendTimeoutMs, target.type),
           'Timed out sending audio message'
         );
         return {
@@ -2235,7 +2247,7 @@ const sendMessageWithTemplate = async (
         }
         const response = await withTimeout(
           whatsappClient.sendMessage(jid, content),
-          sendTimeoutMs,
+          getRegularSendTimeoutMs('media', sendTimeoutMs, target.type),
           'Timed out sending document message'
         );
         return {
@@ -2301,7 +2313,7 @@ const sendMessageWithTemplate = async (
           )
           : await withTimeout(
             whatsappClient.sendMessage(jid, content),
-            sendTimeoutMs,
+            getRegularSendTimeoutMs('media', sendTimeoutMs, target.type),
             'Timed out sending image message'
           );
 
@@ -5143,7 +5155,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
                 )
                 : await withTimeout(
                   activeWhatsappClient.sendMessage(jid, content),
-                  Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+                  getRegularSendTimeoutMs('media', Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS), targetRow.type),
                   'Timed out sending video message'
                 );
 
@@ -5178,7 +5190,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             const content: Record<string, unknown> = { audio: buffer, mimetype, ptt: false };
             const response = await withTimeout(
               activeWhatsappClient.sendMessage(jid, content),
-              Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+              getRegularSendTimeoutMs('media', Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS), targetRow.type),
               'Timed out sending audio message'
             );
 
@@ -5224,7 +5236,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             }
             const response = await withTimeout(
               activeWhatsappClient.sendMessage(jid, content),
-              Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+              getRegularSendTimeoutMs('media', Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS), targetRow.type),
               'Timed out sending document message'
             );
 
@@ -5295,7 +5307,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
               )
               : await withTimeout(
                 activeWhatsappClient.sendMessage(jid, content),
-                Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS),
+                getRegularSendTimeoutMs('media', Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS), targetRow.type),
                 'Timed out sending image message'
               );
 

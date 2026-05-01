@@ -9,10 +9,16 @@ describe('whatsapp route test-send logging', () => {
     expect(__testUtils.resolveSendTestTimeoutMs('120363425146275942@g.us', 'image')).toBe(90000);
   });
 
-  it('keeps direct and channel sends on the default timeout', () => {
+  it('keeps text sends on the default timeout outside groups', () => {
     expect(__testUtils.isGroupJid('16465527019@s.whatsapp.net')).toBe(false);
     expect(__testUtils.resolveSendTestTimeoutMs('16465527019@s.whatsapp.net', null)).toBe(15000);
-    expect(__testUtils.resolveSendTestTimeoutMs('120363406955649221@newsletter', 'video')).toBe(15000);
+    expect(__testUtils.resolveSendTestTimeoutMs('120363406955649221@newsletter', null)).toBe(15000);
+  });
+
+  it('uses longer timeouts for media sends outside groups', () => {
+    expect(__testUtils.resolveSendTestTimeoutMs('16465527019@s.whatsapp.net', 'image')).toBe(60000);
+    expect(__testUtils.resolveSendTestTimeoutMs('120363406955649221@newsletter', 'video')).toBe(90000);
+    expect(__testUtils.resolveSendTestTimeoutMs('status@broadcast', 'video')).toBe(90000);
   });
 
   it('does not require server ACKs for channel test-send confirmation', () => {

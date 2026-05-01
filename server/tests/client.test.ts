@@ -827,6 +827,33 @@ describe('WhatsAppClient', () => {
         });
     });
 
+    it('should not close the session for a Baileys log-only incoming decrypt miss', () => {
+        const baileysLogger = client.createBaileysLogger();
+        client.markSessionUnhealthy = jest.fn();
+
+        baileysLogger.error(
+            {
+                key: {
+                    remoteJid: '42198154350791@lid',
+                    remoteJidAlt: '13474227704@s.whatsapp.net',
+                    fromMe: false,
+                    id: 'incoming-1',
+                    addressingMode: 'lid'
+                },
+                err: new Error('No matching sessions found for message'),
+                messageType: 'msg',
+                sender: '42198154350791@lid',
+                author: '42198154350791@lid',
+                isSessionRecordError: false
+            },
+            'failed to decrypt message'
+        );
+
+        expect(client.markSessionUnhealthy).not.toHaveBeenCalled();
+        expect(client.status).toBe('disconnected');
+        expect(client.isAuthCorrupted).toBe(false);
+    });
+
     it('should require server ack or better before confirming a send', async () => {
         client.waitForMessage = jest.fn(async () => null);
         client.waitForMessageStatus = jest.fn(async () => ({

@@ -1593,7 +1593,7 @@ class WhatsAppClient {
         /unexpected error in ['"]?init queries['"]?/i.test(message) &&
         (!errorMessage || /bad-request/i.test(errorMessage))
       );
-    const handleArgs = (args: unknown[]) => {
+    const handleArgs = (args: unknown[], options: { mutateRecoverableSessionState?: boolean } = {}) => {
       const message = this.extractLogMessage(args);
       const errorMessage = this.extractErrorMessage(args);
       const ackFailure = this.extractAckFailure(args);
@@ -1611,7 +1611,10 @@ class WhatsAppClient {
         void this.handleCorruptedAuthState(
           errorMessage ? new Error(errorMessage) : new Error(message || 'Auth error')
         );
-      } else if (this.isRecoverableSessionCryptoError(message) || this.isRecoverableSessionCryptoError(errorMessage)) {
+      } else if (
+        options.mutateRecoverableSessionState &&
+        (this.isRecoverableSessionCryptoError(message) || this.isRecoverableSessionCryptoError(errorMessage))
+      ) {
         this.markSessionUnhealthy(errorMessage ? new Error(errorMessage) : new Error(message || 'Session crypto error'));
       }
     };

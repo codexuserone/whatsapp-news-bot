@@ -4,59 +4,12 @@ import React from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { BackendSettings, Target, WhatsAppQrState, WhatsAppStatus, WhatsAppStatusAudience } from '@/lib/types';
-import { dedupeTargets, formatTargetLabel } from '@/lib/targetUtils';
+import type { Target, WhatsAppQrState, WhatsAppStatus, WhatsAppStatusAudience } from '@/lib/types';
+import { dedupeTargets } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RefreshCw, Power, CheckCircle, QrCode, Loader2, Send, MessageSquare, RadioTower } from 'lucide-react';
-import { Textarea } from '@/components/ui/textarea';
-import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Switch } from '@/components/ui/switch';
-
-type SendTestPayload = {
-  jid?: string;
-  jids?: string[];
-  statusJidList?: string[];
-  message?: string;
-  linkUrl?: string;
-  imageUrl?: string;
-  audioUrl?: string;
-  documentUrl?: string;
-  imageDataUrl?: string;
-  videoDataUrl?: string;
-  audioDataUrl?: string;
-  documentDataUrl?: string;
-  documentFilename?: string;
-  documentMime?: string;
-  includeCaption?: boolean;
-  disableLinkPreview?: boolean;
-  confirm?: boolean;
-};
-
-type SendTestResponse = {
-  ok: boolean;
-  messageId?: string | null;
-  sent?: number;
-  confirmed?: number;
-  uncertain?: number;
-  failed?: number;
-  results?: Array<{
-    jid: string;
-    ok: boolean;
-    messageId?: string | null;
-    confirmed?: boolean;
-    error?: string;
-  }>;
-  confirmation?: {
-    ok: boolean;
-    via?: string;
-    status?: number | null;
-    statusLabel?: string | null;
-  } | null;
-};
+import { RefreshCw, Power, CheckCircle, QrCode, Loader2, RadioTower, Send } from 'lucide-react';
 
 const isSafeImageSrc = (value: unknown) => {
   const src = String(value || '').trim();
@@ -81,14 +34,6 @@ const formatQrCountdown = (remainingMs: number | null | undefined) => {
 
 const WhatsAppPage = () => {
   const queryClient = useQueryClient();
-  const [selectedTargets, setSelectedTargets] = React.useState<string[]>([]);
-  const [testMessage, setTestMessage] = React.useState('');
-  const [attachMedia, setAttachMedia] = React.useState(false);
-  const [includeTextWithMedia, setIncludeTextWithMedia] = React.useState(true);
-  const [disableLinkPreview, setDisableLinkPreview] = React.useState(false);
-  const [attachmentDataUrl, setAttachmentDataUrl] = React.useState('');
-  const [attachmentMimeType, setAttachmentMimeType] = React.useState('');
-  const [attachmentName, setAttachmentName] = React.useState('');
   const [showAdvancedRecovery, setShowAdvancedRecovery] = React.useState(false);
   const [qrTickMs, setQrTickMs] = React.useState<number | null>(null);
   const lastAutoSyncStatusRef = React.useRef<string | null>(null);
@@ -129,11 +74,6 @@ const WhatsAppPage = () => {
     queryFn: () => api.get('/api/whatsapp/status-audience'),
     refetchInterval: status?.status === 'connected' ? 30000 : 60000
   });
-  const { data: settings } = useQuery<BackendSettings>({
-    queryKey: ['settings'],
-    queryFn: () => api.get('/api/settings')
-  });
-
   const existingTargets = React.useMemo<Target[]>(() => {
     if (!Array.isArray(existingTargetsRaw)) return [];
     return dedupeTargets(existingTargetsRaw as Array<Partial<Target>>, { activeOnly: false });
@@ -183,15 +123,6 @@ const WhatsAppPage = () => {
     },
     onError: () => {
       lastAutoSyncStatusRef.current = null;
-    }
-  });
-
-  const sendTestMessage = useMutation({
-    mutationFn: (payload: SendTestPayload) => api.post<SendTestResponse>('/api/whatsapp/send-test', payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-outbox'] });
-      queryClient.invalidateQueries({ queryKey: ['logs'] });
-      queryClient.invalidateQueries({ queryKey: ['queue'] });
     }
   });
 
@@ -275,24 +206,6 @@ const WhatsAppPage = () => {
     lastAutoSyncStatusRef.current = syncKey;
     syncTargets.mutate();
   }, [isConnected, status?.status, syncTargets]);
-  const targetBuckets = React.useMemo(
-    () => ({
-      all: activeTargets.map((target) => target.phone_number),
-      group: groupedTargets.groups.map((target) => target.phone_number),
-      channel: groupedTargets.channels.map((target) => target.phone_number),
-      individual: groupedTargets.individuals.map((target) => target.phone_number),
-      status: groupedTargets.statuses.map((target) => target.phone_number)
-    }),
-    [activeTargets, groupedTargets]
-  );
-
-  React.useEffect(() => {
-    setSelectedTargets((current) => {
-      if (!current.length) return current;
-      const allowed = new Set(activeTargets.map((target) => target.phone_number));
-      return current.filter((jid) => allowed.has(jid));
-    });
-  }, [activeTargets]);
 
   const getStatusBadge = () => {
     if (statusLoading) return <Badge variant="secondary">Loading...</Badge>;
@@ -301,121 +214,6 @@ const WhatsAppPage = () => {
     if (isQrReady) return <Badge variant="warning">Scan QR Code</Badge>;
     if (status?.status === 'connecting') return <Badge variant="secondary">Connecting...</Badge>;
     return <Badge variant="destructive">{status?.status || 'Disconnected'}</Badge>;
-  };
-
-  const onPickAttachmentFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0] || null;
-    if (!file) {
-      setAttachmentDataUrl('');
-      setAttachmentMimeType('');
-      setAttachmentName('');
-      return;
-    }
-
-    const isImage = file.type.startsWith('image/');
-    const isVideo = file.type.startsWith('video/');
-    const isAudio = file.type.startsWith('audio/');
-    const isDocument = !isImage && !isVideo && !isAudio;
-    if (!isImage && !isVideo && !isAudio && !isDocument) {
-      alert('Please choose an image, video, audio, or document file.');
-      event.target.value = '';
-      return;
-    }
-
-    const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-    const MAX_VIDEO_BYTES = 24 * 1024 * 1024;
-    const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
-    const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
-    const maxBytes = isVideo
-      ? MAX_VIDEO_BYTES
-      : isAudio
-        ? MAX_AUDIO_BYTES
-        : isDocument
-          ? MAX_DOCUMENT_BYTES
-          : MAX_IMAGE_BYTES;
-    if (file.size > maxBytes) {
-      const maxLabel = isVideo ? '24MB' : isAudio ? '20MB' : isDocument ? '25MB' : '8MB';
-      alert(`File too large. Max allowed is ${maxLabel}.`);
-      event.target.value = '';
-      return;
-    }
-
-    const reader = new FileReader();
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      reader.onload = () => resolve(String(reader.result || ''));
-      reader.onerror = () => reject(new Error('Failed to read file'));
-      reader.readAsDataURL(file);
-    }).catch(() => '');
-
-    if (!dataUrl) {
-      alert('Could not read file.');
-      event.target.value = '';
-      return;
-    }
-
-    setAttachmentDataUrl(dataUrl);
-    setAttachmentMimeType(file.type);
-    setAttachmentName(file.name);
-  };
-
-  const needsAttachment = attachMedia;
-  const hasAttachment = Boolean(attachmentDataUrl);
-  const hasAnyText = Boolean(testMessage.trim());
-
-  const canSendTest = Boolean(
-    selectedTargets.length > 0 &&
-    (needsAttachment ? hasAttachment : hasAnyText)
-  );
-
-  const messagePlaceholder =
-    attachMedia
-      ? includeTextWithMedia
-        ? 'Write text to send with your attachment'
-        : 'Optional text'
-      : disableLinkPreview
-        ? 'Write plain text message'
-        : 'Write your message (include a link for preview)';
-
-  const submitTestMessage = () => {
-    if (!canSendTest) return;
-    const selectedIncludesStatus = selectedTargets.some((target) => target === 'status@broadcast');
-    const statusTestAudience = String(settings?.status_test_audience_jids || '')
-      .split(/[\n,]+/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-
-    const payload: SendTestPayload = {
-      jids: selectedTargets,
-      includeCaption: attachMedia ? includeTextWithMedia : true,
-      disableLinkPreview: attachMedia ? false : disableLinkPreview,
-      confirm: true
-    };
-    if (selectedIncludesStatus && statusTestAudience.length) {
-      payload.statusJidList = statusTestAudience;
-    }
-
-    const normalizedMessage = testMessage.trim();
-    if (normalizedMessage && (!attachMedia || includeTextWithMedia)) {
-      payload.message = normalizedMessage;
-    }
-
-    if (attachmentDataUrl && needsAttachment) {
-      if (attachmentMimeType.startsWith('video/')) {
-        payload.videoDataUrl = attachmentDataUrl;
-      } else if (attachmentMimeType.startsWith('audio/')) {
-        payload.audioDataUrl = attachmentDataUrl;
-      } else if (attachmentMimeType && !attachmentMimeType.startsWith('image/')) {
-        payload.documentDataUrl = attachmentDataUrl;
-        payload.documentFilename = attachmentName || 'attachment';
-        if (attachmentMimeType) {
-          payload.documentMime = attachmentMimeType;
-        }
-      } else {
-        payload.imageDataUrl = attachmentDataUrl;
-      }
-    }
-
-    sendTestMessage.mutate(payload);
   };
 
   return (
@@ -635,210 +433,27 @@ const WhatsAppPage = () => {
         </CardContent>
       </Card>
 
-      {isConnected ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <MessageSquare className="h-5 w-5" />
-              Send Message
-            </CardTitle>
-            <CardDescription>Select one or many destinations, then send text or media.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label>Targets</Label>
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setSelectedTargets(targetBuckets.all)}
-                    disabled={!activeTargets.length}
-                  >
-                    Select all
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setSelectedTargets([])}
-                    disabled={!selectedTargets.length}
-                  >
-                    Clear
-                  </Button>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setSelectedTargets(targetBuckets.group)}
-                  disabled={!targetBuckets.group.length}
-                >
-                  Groups ({targetBuckets.group.length})
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setSelectedTargets(targetBuckets.channel)}
-                  disabled={!targetBuckets.channel.length}
-                >
-                  Channels ({targetBuckets.channel.length})
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setSelectedTargets(targetBuckets.individual)}
-                  disabled={!targetBuckets.individual.length}
-                >
-                  Individuals ({targetBuckets.individual.length})
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setSelectedTargets(targetBuckets.status)}
-                  disabled={!targetBuckets.status.length || statusHasOnlySelfAudience}
-                >
-                  Status ({targetBuckets.status.length})
-                </Button>
-              </div>
-              <div className="max-h-60 space-y-3 overflow-y-auto rounded-lg border p-3">
-                {!activeTargets.length ? (
-                  <p className="text-sm text-muted-foreground">No active targets available.</p>
-                ) : (
-                  <>
-                    {[
-                      { label: 'Channels', items: groupedTargets.channels },
-                      { label: 'Groups', items: groupedTargets.groups },
-                      { label: 'Individuals', items: groupedTargets.individuals },
-                      { label: 'Status', items: groupedTargets.statuses }
-                    ].map((group) =>
-                      group.items.length ? (
-                        <div key={group.label} className="space-y-1">
-                          <p className="text-xs font-medium text-muted-foreground">{group.label}</p>
-                          {group.items.map((target) => {
-                            const checked = selectedTargets.includes(target.phone_number);
-                            return (
-                              <label key={target.id} className="flex cursor-pointer items-center gap-2 text-sm">
-                                <Checkbox
-                                  checked={checked}
-                                  onCheckedChange={(next) => {
-                                    setSelectedTargets((current) => {
-                                      if (next === true) {
-                                        return current.includes(target.phone_number)
-                                          ? current
-                                          : [...current, target.phone_number];
-                                      }
-                                      return current.filter((value) => value !== target.phone_number);
-                                    });
-                                  }}
-                                />
-                                <span className="min-w-0 flex-1 truncate">{formatTargetLabel(target)}</span>
-                                <span className="ml-auto text-xs text-muted-foreground">{target.type}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      ) : null
-                    )}
-                  </>
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Selected: {selectedTargets.length}
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Send style</Label>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <Button type="button" variant={!attachMedia ? 'default' : 'outline'} onClick={() => setAttachMedia(false)}>
-                  Text / link message
-                </Button>
-                <Button type="button" variant={attachMedia ? 'default' : 'outline'} onClick={() => setAttachMedia(true)}>
-                  Attach media/file
-                </Button>
-              </div>
-              {!attachMedia ? (
-                <label className="flex items-center justify-between rounded-lg border p-3 text-sm">
-                  <span>Disable link preview</span>
-                  <Switch checked={disableLinkPreview} onCheckedChange={(checked) => setDisableLinkPreview(checked === true)} />
-                </label>
-              ) : (
-                <label className="flex items-center justify-between rounded-lg border p-3 text-sm">
-                  <span>Include message text under media</span>
-                  <Switch
-                    checked={includeTextWithMedia}
-                    onCheckedChange={(checked) => setIncludeTextWithMedia(checked === true)}
-                  />
-                </label>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="testMessage">
-                {attachMedia && !includeTextWithMedia ? 'Message (optional)' : 'Message'}
-              </Label>
-              <Textarea
-                id="testMessage"
-                value={testMessage}
-                onChange={(event) => setTestMessage(event.target.value)}
-                rows={4}
-                placeholder={messagePlaceholder}
-              />
-            </div>
-
-            {needsAttachment ? (
-              <div className="space-y-2">
-                <Label htmlFor="attachmentUpload">Attachment</Label>
-                <Input
-                  id="attachmentUpload"
-                  type="file"
-                  accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.txt,.rtf,.zip"
-                  onChange={onPickAttachmentFile}
-                />
-                {attachmentName ? <p className="text-xs text-muted-foreground">Selected: {attachmentName}</p> : null}
-              </div>
-            ) : null}
-
-            <div className="flex items-center gap-4">
-              <Button onClick={submitTestMessage} disabled={sendTestMessage.isPending || !canSendTest}>
-                {sendTestMessage.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-                Send
-              </Button>
-              {sendTestMessage.isSuccess ? (
-                (() => {
-                  const sent = Number(sendTestMessage.data?.sent || 0);
-                  const confirmed = Number(sendTestMessage.data?.confirmed || 0);
-                  const uncertain = Number(sendTestMessage.data?.uncertain || 0);
-                  const failed = Number(sendTestMessage.data?.failed || 0);
-                  const className = failed > 0 && sent === 0 ? 'text-sm text-destructive' : confirmed > 0 ? 'text-sm text-success' : 'text-sm text-warning-foreground';
-                  const primary = confirmed > 0
-                    ? `Sent to WhatsApp, confirmed ${confirmed}`
-                    : sent > 0
-                      ? `Submitted to WhatsApp ${sent}`
-                      : 'No WhatsApp send was accepted';
-                  return (
-                    <span className={className}>
-                      {primary}
-                      {uncertain > 0 ? `, awaiting confirmation ${uncertain}` : ''}
-                      {failed > 0 ? `, failed ${failed}` : ''}.
-                    </span>
-                  );
-                })()
-              ) : null}
-              {sendTestMessage.isError ? (
-                <span className="text-sm text-destructive">Failed: {(sendTestMessage.error as Error)?.message || 'Unknown error'}</span>
-              ) : null}
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Send className="h-5 w-5" />
+            Send Messages
+          </CardTitle>
+          <CardDescription>
+            Use the normal composer for text, image captions, videos, documents, and multi-target sends.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button asChild disabled={!isConnected}>
+            <Link href="/compose">Open composer</Link>
+          </Button>
+          {!isConnected ? (
+            <p className="mt-2 text-sm text-muted-foreground">
+              Connect WhatsApp before sending or queueing new manual messages.
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
 
     </div>
   );

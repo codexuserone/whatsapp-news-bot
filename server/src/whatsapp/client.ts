@@ -1922,8 +1922,8 @@ class WhatsAppClient {
 
       // Acquire a cross-instance lease so only one bot connects at a time.
       // This prevents WhatsApp "conflict/replaced" errors during rolling deploys.
-      // Auto-takeover is intentionally opt-in: forcing takeovers during deploy overlaps can
-      // cause WhatsApp "conflict/replaced" churn. Use POST /api/whatsapp/takeover when needed.
+      // Auto-takeover is intentionally opt-in. When enabled, a fresh production
+      // instance may claim a stale or overlapping lease instead of leaving the app down.
       const allowAutoTakeover = String(process.env.WHATSAPP_LEASE_AUTO_TAKEOVER || '').toLowerCase() === 'true';
       if (authStore.acquireLease) {
         try {
@@ -1950,9 +1950,7 @@ class WhatsAppClient {
             const retryDelayMs = Number.isFinite(expiryMs)
               ? Math.min(Math.max(expiryMs - nowMs, 10_000), 60_000) + retryJitterMs
               : 15_000 + retryJitterMs;
-            const nearExpiry = Number.isFinite(expiryMs) ? expiryMs - nowMs <= 10_000 : true;
-
-            if (!allowAutoTakeover || (leaseStillValid && !nearExpiry)) {
+            if (!allowAutoTakeover) {
               logger.warn(
                 { holder: lease.ownerId, expiresAt: lease.expiresAt, retryDelayMs },
                 'Lease held by another instance; skipping connect until lease is available'

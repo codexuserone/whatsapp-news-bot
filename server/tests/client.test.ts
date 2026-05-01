@@ -102,6 +102,54 @@ describe('WhatsAppClient', () => {
         expect(client.authStore).toBeTruthy();
     });
 
+    it('should force-acquire a still-valid lease when auto-takeover is enabled', async () => {
+        const originalAutoTakeover = process.env.WHATSAPP_LEASE_AUTO_TAKEOVER;
+        process.env.WHATSAPP_LEASE_AUTO_TAKEOVER = 'true';
+
+        const acquireLease = jest.fn(async () => ({
+            ok: false,
+            supported: true,
+            ownerId: 'old-render-instance',
+            expiresAt: new Date(Date.now() + 60_000).toISOString()
+        }));
+        const forceAcquireLease = jest.fn(async () => ({
+            ok: true,
+            supported: true,
+            ownerId: 'new-render-instance',
+            expiresAt: new Date(Date.now() + 90_000).toISOString()
+        }));
+        const updateStatus = jest.fn(async () => {});
+        const renewLease = jest.fn(async () => ({ ok: true, supported: true, ownerId: 'new-render-instance' }));
+
+        (useSupabaseAuthState as any).mockResolvedValueOnce({
+            state: {},
+            saveCreds: jest.fn(),
+            clearState: jest.fn(),
+            updateStatus,
+            acquireLease,
+            forceAcquireLease,
+            renewLease
+        });
+
+        try {
+            await client.connect();
+
+            expect(acquireLease as any).toHaveBeenCalledWith(client.instanceId, 90_000);
+            expect(forceAcquireLease as any).toHaveBeenCalledWith(client.instanceId, 90_000);
+            expect(client.leaseHeld).toBe(true);
+            expect(client.leaseOwnerId).toBe('new-render-instance');
+            expect(client.status).not.toBe('conflict');
+            expect(updateStatus as any).not.toHaveBeenCalledWith('conflict');
+        } finally {
+            client.stopLeaseRenewal();
+            if (originalAutoTakeover === undefined) {
+                delete process.env.WHATSAPP_LEASE_AUTO_TAKEOVER;
+            } else {
+                process.env.WHATSAPP_LEASE_AUTO_TAKEOVER = originalAutoTakeover;
+            }
+        }
+    });
+
     it('should default browser tuples to the configured device label', () => {
         const originalPlatform = process.env.WHATSAPP_BROWSER_PLATFORM;
         const originalBrowserName = process.env.WHATSAPP_BROWSER_NAME;

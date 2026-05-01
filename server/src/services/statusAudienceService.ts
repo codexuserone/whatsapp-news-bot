@@ -228,6 +228,17 @@ const shouldDropImplicitLidRecipients = (sources: Partial<StatusAudienceSources>
   return getExplicitAudienceSignalCount(sources) <= 0;
 };
 
+const cleanLidMappingWarningsForFinalAudience = (warnings: string[], recipients: string[]) => {
+  const phoneCount = recipients.filter((recipient) => recipient.endsWith('@s.whatsapp.net')).length;
+  const lidCount = recipients.filter((recipient) => recipient.endsWith('@lid')).length;
+  if (!phoneCount || lidCount > 0) return warnings;
+  return warnings.filter(
+    (warning) =>
+      !/LID recipients (?:but no Baileys phone-number mapping store|without phone-number mappings)/i.test(warning) &&
+      !/Dropped \d+ implicit group-participant LID Status recipients/i.test(warning)
+  );
+};
+
 const isGroupMetadataOnlySnapshot = (snapshot: RefreshResult) =>
   Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0))) > 0 &&
   getDirectAudienceSignalCount(snapshot.sources) === 0;
@@ -679,18 +690,22 @@ const refreshStatusRecipients = async (
     participants = participants.filter((recipient) => !recipient.endsWith('@lid'));
     const dropped = beforeDrop - participants.length;
     if (dropped > 0) {
+      const phoneCount = participants.filter((recipient) => recipient.endsWith('@s.whatsapp.net')).length;
       warnings.push(
-        `Dropped ${dropped} implicit group-participant LID Status recipients because no phone-number mappings or explicit private recipients were available.`
+        phoneCount > 0
+          ? `Ignored ${dropped} unresolved group-participant LID Status recipients; ${phoneCount} phone-number Status recipients are available.`
+          : `Dropped ${dropped} implicit group-participant LID Status recipients because no phone-number mappings or explicit private recipients were available.`
       );
     }
   }
+  const finalWarnings = cleanLidMappingWarningsForFinalAudience(warnings, participants);
 
   if (shouldPreserveStoredSnapshot(stored, participants.length, sources, { allowEnvLimited: explicitAudience.source !== 'auto' })) {
     const preservedRecipients = Array.from(new Set([...stored.recipients, ...participants])).sort();
     const preservedSources = mergeSources(stored.sources, sources);
     const preservedWarnings = uniqueStrings([
       ...stored.warnings,
-      ...warnings,
+      ...finalWarnings,
       `Preserved the previous status audience snapshot because the current WhatsApp audience is still warming up (${participants.length} resolved, ${stored.participantCount} stored).`
     ]);
 
@@ -722,7 +737,7 @@ const refreshStatusRecipients = async (
     await persistStatusRecipientsSnapshot(supabase, participants, {
       refreshedAt,
       sources,
-      warnings,
+      warnings: finalWarnings,
       recentDirectRecipients
     });
   } catch (persistError) {
@@ -735,7 +750,7 @@ const refreshStatusRecipients = async (
     sample: buildSample(participants, options?.sampleSize),
     refreshedAt,
     sources,
-    warnings: participants.length ? warnings : [...warnings, 'No status recipients resolved from the current audience sources.']
+    warnings: participants.length ? finalWarnings : [...finalWarnings, 'No status recipients resolved from the current audience sources.']
   };
   if (result.recipients.length) {
     cacheSnapshot(result);

@@ -555,29 +555,31 @@ describe('statusAudienceService', () => {
         const result = await refreshStatusRecipients(
             {
                 getStatus: () => ({ status: 'connected' }),
-                getStatusParticipants: () => ['19144477725@s.whatsapp.net', '15551234567@s.whatsapp.net'],
+                getStatusParticipants: () => ['19144477725@s.whatsapp.net', '15551234567@s.whatsapp.net', '103140015788103@lid'],
                 getStatusAudience: () => ({
-                    participantCount: 2,
-                    sample: ['19144477725@s.whatsapp.net', '15551234567@s.whatsapp.net'],
+                    participantCount: 3,
+                    sample: ['19144477725@s.whatsapp.net', '15551234567@s.whatsapp.net', '103140015788103@lid'],
                     selfJid: '16465527019@s.whatsapp.net',
                     sources: {
                         contactsCache: 0,
                         storeContacts: 0,
                         storeChats: 0,
-                        groupMetadata: 2,
+                        groupMetadata: 3,
                         env: 0,
                         me: 1,
                         lidMappings: 0
                     },
-                    warnings: []
+                    warnings: ['Status audience has 1 LID recipients without phone-number mappings.']
                 })
             },
             { sampleSize: 10 }
         );
 
         expect(result.recipients).toEqual(['15551234567@s.whatsapp.net', '19144477725@s.whatsapp.net']);
-        expect(result.sources.groupMetadata).toBe(2);
+        expect(result.sources.groupMetadata).toBe(3);
         expect(result.warnings.some((warning: string) => warning.includes('resolved only from group participants'))).toBe(false);
+        expect(result.warnings.some((warning: string) => warning.includes('without phone-number mappings'))).toBe(false);
+        expect(result.warnings.some((warning: string) => warning.includes('Ignored 1 unresolved group-participant LID'))).toBe(true);
         expect(tables.status_recipients.map((row) => row.recipient_jid).sort()).toEqual(result.recipients);
     });
 

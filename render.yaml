@@ -13,7 +13,7 @@ services:
       - key: NODE_VERSION
         value: "22"
       - key: DB_PROVIDER
-        value: postgres
+        value: neon
       - key: DATABASE_URL
         sync: false
       - key: SUPABASE_URL
@@ -61,7 +61,7 @@ services:
       - key: WHATSAPP_SESSION_ID
         value: primary
       - key: WHATSAPP_LEASE_AUTO_TAKEOVER
-        value: "false"
+        value: "true"
       - key: WHATSAPP_DEVICE_NAME
         value: Anash Bot
       - key: WHATSAPP_BROWSER_PLATFORM

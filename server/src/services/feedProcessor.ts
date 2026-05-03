@@ -66,6 +66,7 @@ type TemplateSequenceStep = {
   label?: string | null;
   content?: string | null;
   send_mode?: TemplateSendMode;
+  media_source?: 'auto' | 'image' | 'video' | null;
   delay_seconds?: number | string | null;
   active?: boolean | null;
 };

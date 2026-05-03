@@ -39,6 +39,7 @@ export type Template = {
     label?: string | null;
     content: string;
     send_mode: 'auto_media' | 'media_only' | 'text_preview' | 'text_only';
+    media_source?: 'auto' | 'image' | 'video' | null;
     status_background_color?: string | null;
     status_font?: number | null;
     delay_seconds?: number | null;

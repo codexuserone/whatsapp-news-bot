@@ -166,6 +166,7 @@ const schemas = {
             .enum(['auto_media', 'media_only', 'text_preview', 'text_only', 'image', 'image_only', 'link_preview'])
             .optional()
             .default('auto_media'),
+          media_source: z.enum(['auto', 'image', 'video', 'featured_image', 'feed_video']).optional().default('auto'),
           status_background_color: z
             .string()
             .regex(HEX_COLOR_PATTERN, 'status_background_color must be a hex color like #0f172a')

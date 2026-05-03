@@ -1,4 +1,4 @@
-import { describe, expect, it, jest } from '@jest/globals';
+import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 jest.mock('../src/db/supabase', () => ({
   getSupabaseClient: jest.fn()
@@ -77,9 +77,17 @@ jest.mock('../src/services/statusAudienceService', () => ({
 const queueService = require('../src/services/queueService');
 const { ensureFreshStatusRecipients } = require('../src/services/statusAudienceService');
 const { normalizeTargetJidForSend } = require('../src/utils/targetJid');
+const { normalizeFeedMedia } = require('../src/utils/feedMedia');
+const { safeAxiosRequest } = require('../src/utils/safeAxios');
 
 describe('queueService __testUtils', () => {
   const testUtils = queueService.__testUtils;
+  const jpegBuffer = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0xff, 0xd9]);
+  const mp4Buffer = Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]);
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
 
   it('builds a stable dispatch identity key', () => {
     expect(testUtils.buildDispatchIdentityKey('schedule-1', 'target-1', 'feed-1')).toBe('schedule-1:target-1:feed-1:0');
@@ -194,6 +202,177 @@ describe('queueService __testUtils', () => {
         font: 5
       }
     );
+  });
+
+  it('uses feed video media in automatic media mode when the story has a video and featured image', async () => {
+    normalizeTargetJidForSend.mockReturnValueOnce('120363000@g.us');
+    normalizeFeedMedia.mockReturnValueOnce({
+      mediaUrl: 'https://example.com/story.mp4',
+      mediaKind: 'video',
+      mediaMime: 'video/mp4',
+      mediaFilename: '',
+      imageUrl: 'https://example.com/featured.jpg'
+    });
+    safeAxiosRequest.mockResolvedValueOnce({
+      data: mp4Buffer,
+      headers: { 'content-type': 'video/mp4' }
+    });
+    const sendMessage: any = jest.fn(async (..._args: unknown[]) => ({ key: { id: 'video-1' } }));
+
+    const result = await testUtils.sendMessageWithTemplate(
+      {
+        getStatus: () => ({ status: 'connected' }),
+        sendMessage
+      },
+      {
+        id: 'target-group',
+        phone_number: '120363000@g.us',
+        type: 'group'
+      },
+      {
+        id: 'template-video',
+        content: '{{title}}',
+        send_mode: 'auto_media',
+        send_images: true
+      },
+      {
+        id: 'feed-item-video',
+        title: 'Story title',
+        link: 'https://example.com/story',
+        image_url: 'https://example.com/featured.jpg',
+        media_url: 'https://example.com/story.mp4',
+        media_kind: 'video',
+        media_mime: 'video/mp4'
+      }
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      '120363000@g.us',
+      expect.objectContaining({
+        video: expect.any(Buffer),
+        caption: 'Story title',
+        mimetype: 'video/mp4'
+      })
+    );
+    expect(result.media).toEqual({
+      type: 'video',
+      url: 'https://example.com/story.mp4',
+      sent: true,
+      error: null
+    });
+  });
+
+  it('can force a sequence step to use the featured image even when a story video exists', async () => {
+    normalizeTargetJidForSend.mockReturnValueOnce('120363000@g.us');
+    normalizeFeedMedia.mockReturnValueOnce({
+      mediaUrl: 'https://example.com/story.mp4',
+      mediaKind: 'video',
+      mediaMime: 'video/mp4',
+      mediaFilename: '',
+      imageUrl: 'https://example.com/featured.jpg'
+    });
+    safeAxiosRequest.mockResolvedValueOnce({
+      data: jpegBuffer,
+      headers: { 'content-type': 'image/jpeg' }
+    });
+    const sendMessage: any = jest.fn(async (..._args: unknown[]) => ({ key: { id: 'image-1' } }));
+
+    const result = await testUtils.sendMessageWithTemplate(
+      {
+        getStatus: () => ({ status: 'connected' }),
+        sendMessage
+      },
+      {
+        id: 'target-group',
+        phone_number: '120363000@g.us',
+        type: 'group'
+      },
+      {
+        id: 'template-image',
+        content: '{{title}}',
+        send_mode: 'auto_media',
+        send_images: true,
+        media_source: 'image'
+      },
+      {
+        id: 'feed-item-video',
+        title: 'Story title',
+        link: 'https://example.com/story',
+        image_url: 'https://example.com/featured.jpg',
+        media_url: 'https://example.com/story.mp4',
+        media_kind: 'video',
+        media_mime: 'video/mp4'
+      }
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      '120363000@g.us',
+      expect.objectContaining({
+        image: expect.any(Buffer),
+        caption: 'Story title',
+        mimetype: 'image/jpeg'
+      })
+    );
+    expect(result.media).toEqual({
+      type: 'image',
+      url: 'https://example.com/featured.jpg',
+      sent: true,
+      error: null
+    });
+  });
+
+  it('does not silently replace a requested story video with a featured image', async () => {
+    normalizeTargetJidForSend.mockReturnValueOnce('120363000@g.us');
+    normalizeFeedMedia.mockReturnValueOnce({
+      mediaUrl: '',
+      mediaKind: '',
+      mediaMime: '',
+      mediaFilename: '',
+      imageUrl: 'https://example.com/featured.jpg'
+    });
+    const sendMessage: any = jest.fn(async (..._args: unknown[]) => ({ key: { id: 'text-1' } }));
+
+    const result = await testUtils.sendMessageWithTemplate(
+      {
+        getStatus: () => ({ status: 'connected' }),
+        sendMessage
+      },
+      {
+        id: 'target-group',
+        phone_number: '120363000@g.us',
+        type: 'group'
+      },
+      {
+        id: 'template-video',
+        content: '{{title}}',
+        send_mode: 'auto_media',
+        send_images: true,
+        media_source: 'video'
+      },
+      {
+        id: 'feed-item-image-only',
+        title: 'Story title',
+        link: 'https://example.com/story',
+        image_url: 'https://example.com/featured.jpg'
+      }
+    );
+
+    expect(safeAxiosRequest).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      '120363000@g.us',
+      expect.objectContaining({
+        text: expect.stringContaining('Story title')
+      })
+    );
+    const sentPayload = sendMessage.mock.calls[0][1];
+    expect(sentPayload).not.toHaveProperty('image');
+    expect(sentPayload).not.toHaveProperty('video');
+    expect(result.media).toEqual({
+      type: null,
+      url: null,
+      sent: false,
+      error: null
+    });
   });
 
   it('does not build queue steps for disabled templates', () => {

@@ -40,6 +40,7 @@ type Template = {
   content: string;
   active?: boolean | null;
   send_images?: boolean | null;
+  media_source?: TemplateMediaSource | null;
   status_background_color?: string | null;
   status_font?: number | null;
   send_mode?:
@@ -58,6 +59,7 @@ type TemplateSequenceStep = {
   label?: string | null;
   content?: string | null;
   send_mode?: Template['send_mode'];
+  media_source?: TemplateMediaSource | null;
   status_background_color?: string | null;
   status_font?: number | null;
   delay_seconds?: number | null;
@@ -89,6 +91,17 @@ type FeedItem = {
   pub_date?: string | Date;
   categories?: string[];
   raw_data?: Record<string, unknown> | null;
+};
+
+type TemplateMediaSource = 'auto' | 'image' | 'video';
+type ResolvedFeedMedia = {
+  url: string | null;
+  kind: 'image' | 'video' | 'audio' | 'document' | null;
+  mime: string | null;
+  filename: string | null;
+  source: string | null;
+  scraped: boolean;
+  error: string | null;
 };
 
 type WhatsAppClient = {
@@ -150,6 +163,7 @@ const QUEUED_CORRECTION_STATUSES = new Set(['awaiting_approval', 'pending', 'fai
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.wma'];
 const DOCUMENT_EXTENSIONS = ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv', '.txt', '.rtf', '.zip'];
 const EDITABLE_MEDIA_TYPES = new Set(['image']);
+const ALLOW_AUTOMATION_VIDEO_MEDIA = String(process.env.FEED_AUTOMATION_ALLOW_VIDEO_MEDIA || 'true').trim().toLowerCase() !== 'false';
 const ALLOW_AUTOMATION_NON_IMAGE_MEDIA = String(process.env.FEED_AUTOMATION_ALLOW_NON_IMAGE_MEDIA || '').trim().toLowerCase() === 'true';
 const ALLOW_POST_SEND_MEDIA_EDITS = String(process.env.WHATSAPP_ALLOW_POST_SEND_MEDIA_EDITS || '').trim().toLowerCase() === 'true';
 const ALLOW_AUTO_REPLACE_CORRECTIONS =
@@ -1511,16 +1525,9 @@ const maybeUpdateFeedItemImage = async (
 const resolveMediaUrlForFeedItem = async (
   supabase: SupabaseClient | undefined,
   feedItem: FeedItem,
-  allowMedia: boolean
-): Promise<{
-  url: string | null;
-  kind: 'image' | 'video' | 'audio' | 'document' | null;
-  mime: string | null;
-  filename: string | null;
-  source: string | null;
-  scraped: boolean;
-  error: string | null;
-}> => {
+  allowMedia: boolean,
+  mediaSource: TemplateMediaSource = 'auto'
+): Promise<ResolvedFeedMedia> => {
   if (!allowMedia) {
     return { url: null, kind: null, mime: null, filename: null, source: null, scraped: false, error: null };
   }
@@ -1542,8 +1549,29 @@ const resolveMediaUrlForFeedItem = async (
     imageUrl: typeof feedItem.image_url === 'string' ? feedItem.image_url : null,
     rawData: feedItem.raw_data || null
   });
+  const normalizedMediaSource = normalizeTemplateMediaSource(mediaSource);
   const preferredImageUrl = normalizedMedia.imageUrl || null;
-  if (preferredImageUrl && isUsableFeedImageUrl(preferredImageUrl)) {
+  const existing = normalizedMedia.mediaUrl || null;
+  const existingKind =
+    normalizedMedia.mediaKind ||
+    (existing && isVideoUrl(existing)
+      ? 'video'
+      : existing && isAudioUrl(existing)
+        ? 'audio'
+        : existing && isDocumentUrl(existing)
+          ? 'document'
+          : existing && isImageUrl(existing)
+            ? 'image'
+            : null);
+  const isMediaKindAllowed = (kind: string | null) => {
+    if (kind === 'image') return true;
+    if (kind === 'video') return ALLOW_AUTOMATION_VIDEO_MEDIA;
+    if (kind === 'audio' || kind === 'document') return ALLOW_AUTOMATION_NON_IMAGE_MEDIA;
+    return false;
+  };
+
+  const usePreferredImage = async (): Promise<ResolvedFeedMedia | null> => {
+    if (!preferredImageUrl || !isUsableFeedImageUrl(preferredImageUrl)) return null;
     try {
       await assertSafeOutboundUrl(preferredImageUrl);
       return {
@@ -1557,31 +1585,21 @@ const resolveMediaUrlForFeedItem = async (
       };
     } catch (error) {
       existingUrlIssue = getErrorMessage(error);
+      return null;
     }
-  }
+  };
 
-  const existing = normalizedMedia.mediaUrl || null;
-  if (existing && isHttpUrl(existing)) {
-    const normalizedKind =
-      normalizedMedia.mediaKind ||
-      (isVideoUrl(existing)
-        ? 'video'
-        : isAudioUrl(existing)
-          ? 'audio'
-          : isDocumentUrl(existing)
-            ? 'document'
-            : isImageUrl(existing)
-              ? 'image'
-              : null);
-    if (normalizedKind === 'image' || normalizedKind === 'video' || normalizedKind === 'audio' || normalizedKind === 'document') {
-      if (normalizedKind !== 'image' && !ALLOW_AUTOMATION_NON_IMAGE_MEDIA) {
-        existingUrlIssue = `Feed media ${normalizedKind} suppressed by image-first automation policy`;
+  const useExistingMedia = async (): Promise<ResolvedFeedMedia | null> => {
+    if (!existing || !isHttpUrl(existing)) return null;
+    if (existingKind === 'image' || existingKind === 'video' || existingKind === 'audio' || existingKind === 'document') {
+      if (!isMediaKindAllowed(existingKind)) {
+        existingUrlIssue = `Feed media ${existingKind} is disabled for automation`;
       } else {
         try {
           await assertSafeOutboundUrl(existing);
           return {
             url: existing,
-            kind: normalizedKind,
+            kind: existingKind,
             mime: normalizedMedia.mediaMime || null,
             filename: normalizedMedia.mediaFilename || null,
             source: feedItem.image_source || 'feed',
@@ -1595,6 +1613,29 @@ const resolveMediaUrlForFeedItem = async (
     } else {
       existingUrlIssue = 'Feed media URL is not a supported WhatsApp media type';
     }
+    return null;
+  };
+
+  if (normalizedMediaSource === 'image') {
+    const selectedImage = await usePreferredImage();
+    if (selectedImage) return selectedImage;
+    if (existingKind === 'image') {
+      const selectedImageMedia = await useExistingMedia();
+      if (selectedImageMedia) return selectedImageMedia;
+    }
+  } else if (normalizedMediaSource === 'video') {
+    if (existingKind === 'video') {
+      const selectedVideo = await useExistingMedia();
+      if (selectedVideo) return selectedVideo;
+    } else if (existing) {
+      existingUrlIssue = 'Feed item does not have a video media file';
+    }
+    return { url: null, kind: null, mime: null, filename: null, source: null, scraped: false, error: existingUrlIssue };
+  } else {
+    const selectedExisting = await useExistingMedia();
+    if (selectedExisting) return selectedExisting;
+    const selectedImage = await usePreferredImage();
+    if (selectedImage) return selectedImage;
   }
 
   const link = typeof feedItem.link === 'string' ? feedItem.link : null;
@@ -1748,6 +1789,13 @@ const normalizeTemplateStepMode = (value: unknown): TemplateSendMode => {
   return 'auto_media';
 };
 
+const normalizeTemplateMediaSource = (value: unknown): TemplateMediaSource => {
+  const source = String(value || '').trim().toLowerCase();
+  if (source === 'image' || source === 'featured_image') return 'image';
+  if (source === 'video' || source === 'feed_video') return 'video';
+  return 'auto';
+};
+
 const getTemplateSendMode = (template: Template): TemplateSendMode => {
   if ((template?.send_mode === 'image' || template?.send_mode === 'auto_media') && template?.send_images === false) {
     return 'text_preview';
@@ -1783,6 +1831,7 @@ const getTemplateQueueSteps = (template: Template): TemplateQueueStep[] => {
       content,
       send_mode: sendMode,
       send_images: sendMode === 'auto_media' || sendMode === 'media_only',
+      media_source: normalizeTemplateMediaSource(step.media_source || template.media_source),
       status_background_color: step.status_background_color || template.status_background_color || null,
       status_font: step.status_font ?? template.status_font ?? null
     };
@@ -2146,7 +2195,12 @@ const sendMessageWithTemplate = async (
     };
   }
 
-  const resolved = await resolveMediaUrlForFeedItem(options?.supabase, feedItem, allowImages);
+  const resolved = await resolveMediaUrlForFeedItem(
+    options?.supabase,
+    feedItem,
+    allowImages,
+    normalizeTemplateMediaSource(template.media_source)
+  );
   if (sendMode === 'media_only' && !resolved.url) {
     throw new Error('Media-only mode requires an available media file for this feed item');
   }

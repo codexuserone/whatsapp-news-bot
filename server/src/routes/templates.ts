@@ -48,6 +48,13 @@ const normalizeStatusFont = (value: unknown) => {
   return Math.min(Math.max(Math.floor(parsed), 0), 8);
 };
 
+const normalizeMediaSource = (value: unknown) => {
+  const source = String(value || '').trim().toLowerCase();
+  if (source === 'image' || source === 'featured_image') return 'image';
+  if (source === 'video' || source === 'feed_video') return 'video';
+  return 'auto';
+};
+
 const normalizeTemplateSequenceSteps = (value: unknown) => {
   if (!Array.isArray(value)) return [];
 
@@ -62,6 +69,7 @@ const normalizeTemplateSequenceSteps = (value: unknown) => {
         label: label || `Step ${index + 1}`,
         content,
         send_mode: normalizeModernSendMode(step.send_mode),
+        media_source: normalizeMediaSource(step.media_source),
         status_background_color: normalizeStatusBackgroundColor(step.status_background_color),
         status_font: normalizeStatusFont(step.status_font),
         delay_seconds: Number.isFinite(delaySeconds)

@@ -31,6 +31,7 @@ const schema = z.object({
     label: z.string().optional(),
     content: z.string().min(1),
     send_mode: z.enum(['auto_media', 'media_only', 'text_preview', 'text_only']).default('auto_media'),
+    media_source: z.enum(['auto', 'image', 'video']).default('auto'),
     status_background_color: z.string().regex(/^#[0-9a-f]{6}$/i).nullable().optional(),
     status_font: z.coerce.number().int().min(0).max(8).nullable().optional(),
     delay_seconds: z.coerce.number().int().min(0).max(3600).default(0),
@@ -40,6 +41,7 @@ const schema = z.object({
 
 type TemplateFormValues = z.infer<typeof schema>;
 type TemplateSendMode = TemplateFormValues['send_mode'];
+type TemplateMediaSource = TemplateFormValues['sequence_steps'][number]['media_source'];
 
 const WORD_JOINER = '\u2060';
 const DEFAULT_STATUS_BACKGROUND = '#0f172a';
@@ -163,6 +165,23 @@ const resolveTemplateSendMode = (mode: unknown): TemplateSendMode => {
   return 'auto_media';
 };
 
+const resolveTemplateMediaSource = (source: unknown): TemplateMediaSource => {
+  if (source === 'image' || source === 'video') return source;
+  return 'auto';
+};
+
+const getTemplateMediaSourceLabel = (source: unknown) => {
+  switch (resolveTemplateMediaSource(source)) {
+    case 'image':
+      return 'Featured image';
+    case 'video':
+      return 'Story video';
+    case 'auto':
+    default:
+      return 'Auto media';
+  }
+};
+
 const resolveStatusBackgroundColor = (value: unknown) => {
   const raw = String(value || '').trim();
   if (!raw) return DEFAULT_STATUS_BACKGROUND;
@@ -204,6 +223,7 @@ const getTemplateSequenceSteps = (template?: Template | null): TemplateFormValue
           label: String(step.label || `Step ${index + 1}`),
           content: String(step.content || ''),
           send_mode: resolveTemplateSendMode(step.send_mode),
+          media_source: resolveTemplateMediaSource(step.media_source),
           status_background_color: resolveStatusBackgroundColor(step.status_background_color || template.status_background_color),
           status_font: resolveStatusFont(step.status_font ?? template.status_font),
           delay_seconds: Number(step.delay_seconds || 0),
@@ -444,6 +464,7 @@ const TemplatesPage = () => {
         index,
         label: String(step.label || `Step ${index + 1}`).trim() || `Step ${index + 1}`,
         sendMode,
+        mediaSource: resolveTemplateMediaSource(step.media_source),
         renderedText: renderedText || 'Empty step',
         delaySeconds: Math.max(0, Math.min(3600, Number(step.delay_seconds || 0))),
         backgroundColor: resolveStatusBackgroundColor(step.status_background_color || watchedStatusBackgroundColor),
@@ -571,6 +592,7 @@ const TemplatesPage = () => {
             label: String(step.label || `Step ${index + 1}`).trim(),
             content: String(step.content || '').trim(),
             send_mode: step.send_mode,
+            media_source: resolveTemplateMediaSource(step.media_source),
             status_background_color: resolveStatusBackgroundColor(step.status_background_color || values.status_background_color),
             status_font: resolveStatusFont(step.status_font ?? values.status_font),
             delay_seconds: Math.max(0, Math.min(3600, Number(step.delay_seconds || 0))),
@@ -749,6 +771,7 @@ const TemplatesPage = () => {
           label: `Step ${current.length + 1}`,
           content,
           send_mode: current.length === 0 ? resolveTemplateSendMode(watchedSendMode) : 'auto_media',
+          media_source: 'auto',
           status_background_color: resolveStatusBackgroundColor(watchedStatusBackgroundColor),
           status_font: resolveStatusFont(watchedStatusFont),
           delay_seconds: current.length === 0 ? 0 : 8,
@@ -1000,7 +1023,7 @@ const TemplatesPage = () => {
                     <div className="space-y-3">
                       {watchedSequenceSteps.map((step, index) => (
                         <div key={index} className="space-y-3 rounded-md border bg-muted/20 p-3">
-                          <div className="grid gap-2 sm:grid-cols-[1fr_170px_130px_auto]">
+                          <div className="grid gap-2 sm:grid-cols-[1fr_150px_150px_110px_auto]">
                             <Input
                               value={step.label || ''}
                               onChange={(event) => updateSequenceStep(index, { label: event.target.value })}
@@ -1020,6 +1043,22 @@ const TemplatesPage = () => {
                                 <SelectItem value="text_preview">Text + preview</SelectItem>
                                 <SelectItem value="auto_media">Media + text</SelectItem>
                                 <SelectItem value="media_only">Media only</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <Select
+                              value={resolveTemplateMediaSource(step.media_source)}
+                              disabled={step.send_mode === 'text_only' || step.send_mode === 'text_preview'}
+                              onValueChange={(value) =>
+                                updateSequenceStep(index, { media_source: value as TemplateMediaSource })
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="auto">Auto media</SelectItem>
+                                <SelectItem value="image">Featured image</SelectItem>
+                                <SelectItem value="video">Story video</SelectItem>
                               </SelectContent>
                             </Select>
                             <Input
@@ -1286,6 +1325,9 @@ const TemplatesPage = () => {
                             </p>
                             <p className="text-xs text-muted-foreground">
                               {getTemplateModeLabel(step.sendMode)}
+                              {step.sendMode === 'auto_media' || step.sendMode === 'media_only'
+                                ? ` / ${getTemplateMediaSourceLabel(step.mediaSource)}`
+                                : ''}
                               {step.delaySeconds > 0 ? ` after ${step.delaySeconds}s` : ''}
                             </p>
                           </div>

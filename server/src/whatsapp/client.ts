@@ -25,6 +25,8 @@ const STATUS_LID_MAPPING_LIMIT = Math.max(
 );
 const AUTO_CLEAR_CORRUPTED_AUTH =
   String(process.env.WHATSAPP_AUTH_AUTO_CLEAR_CORRUPTION ?? 'false').trim().toLowerCase() === 'true';
+const ALLOW_CLEAR_ESTABLISHED_AUTH =
+  String(process.env.WHATSAPP_AUTH_ALLOW_CLEAR_ESTABLISHED_SESSION ?? 'false').trim().toLowerCase() === 'true';
 const newsletterMediaPatchContext = new AsyncLocalStorage();
 
 const isTruthyEnvFlag = (value: unknown) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
@@ -1110,6 +1112,18 @@ class WhatsAppClient {
     );
   }
 
+  hasStoredAuthenticatedIdentity(): boolean {
+    try {
+      const creds = (this.authStore as { state?: { creds?: Record<string, unknown> } } | null | undefined)?.state?.creds;
+      if (!creds || typeof creds !== 'object') return false;
+      const registered = creds.registered === true || String(creds.registered || '').toLowerCase() === 'true';
+      const me = creds.me as { id?: unknown } | null | undefined;
+      return registered || Boolean(me?.id);
+    } catch {
+      return false;
+    }
+  }
+
   isRateOverLimitError(error: unknown): boolean {
     const message = getErrorMessage(error).toLowerCase();
     if (message.includes('rate-overlimit') || message.includes('too many requests')) {
@@ -1506,7 +1520,13 @@ class WhatsAppClient {
           return null;
         }
       })();
-      const hasAuthenticatedIdentity = Boolean(this.hasConnectedOnce || this.lastSeenAt || this.meJid || socketUserId);
+      const hasAuthenticatedIdentity = Boolean(
+        this.hasConnectedOnce ||
+        this.lastSeenAt ||
+        this.meJid ||
+        socketUserId ||
+        this.hasStoredAuthenticatedIdentity()
+      );
 
       if (looksLikePairingSignatureFailure && hasActiveQr && !hasAuthenticatedIdentity && this.authStore?.clearState) {
         logger.warn({ err }, 'QR pairing was rejected before login completed; generating a fresh QR');
@@ -1534,6 +1554,15 @@ class WhatsAppClient {
 
       if (!AUTO_CLEAR_CORRUPTED_AUTH) {
         logger.error({ err }, 'Crypto/auth error detected - marking session unhealthy without clearing auth state');
+        this.markSessionUnhealthy(err);
+        return;
+      }
+
+      if (hasAuthenticatedIdentity && !ALLOW_CLEAR_ESTABLISHED_AUTH) {
+        logger.error(
+          { err },
+          'Crypto/auth error detected after a linked session existed - preserving auth state and blocking sends'
+        );
         this.markSessionUnhealthy(err);
         return;
       }
@@ -2286,7 +2315,8 @@ class WhatsAppClient {
             this.hasConnectedOnce ||
             this.lastSeenAt ||
             this.meJid ||
-            ((socket as any)?.user?.id ? String((socket as any).user.id) : null)
+            ((socket as any)?.user?.id ? String((socket as any).user.id) : null) ||
+            this.hasStoredAuthenticatedIdentity()
           );
 
           if (statusCode === 405 && !hasAuthenticatedIdentity) {
@@ -2317,12 +2347,23 @@ class WhatsAppClient {
           logger.warn({ statusCode, reason }, 'WhatsApp connection closed');
 
           // Handle specific disconnect reasons
-          if (statusCode === DisconnectReason.loggedOut || statusCode === 405) {
+          if (statusCode === DisconnectReason.loggedOut) {
             logger.info('Logged out, clearing credentials');
             await authStore.clearState();
             this.reconnectAttempts = 0;
             // Schedule reconnect to get new QR
             this.scheduleReconnect(2000);
+            return;
+          }
+
+          if (statusCode === 405) {
+            logger.warn(
+              { statusCode, reason },
+              'WhatsApp returned 405 after a linked session existed; preserving credentials and reconnecting'
+            );
+            this.lastError = 'WhatsApp rejected the current connection. The linked session was kept and will retry.';
+            await authStore.updateStatus('disconnected', null);
+            this.scheduleReconnect(5000 + Math.random() * 5000);
             return;
           }
 

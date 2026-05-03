@@ -1,4 +1,4 @@
-import { describe, it, expect, jest, beforeEach, afterAll } from '@jest/globals';
+import { describe, it, expect, jest, beforeEach, afterEach, afterAll } from '@jest/globals';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -67,6 +67,7 @@ jest.mock('../src/whatsapp/authStore', () => {
 
 const WhatsAppClient = require('../src/whatsapp/client');
 const useSupabaseAuthState = require('../src/whatsapp/authStore');
+const { loadBaileys } = require('../src/whatsapp/baileys');
 
 describe('WhatsAppClient', () => {
     let client: any;
@@ -74,6 +75,19 @@ describe('WhatsAppClient', () => {
     beforeEach(() => {
         jest.clearAllMocks();
         client = WhatsAppClient();
+    });
+
+    afterEach(() => {
+        client?.stopLeaseRenewal?.();
+        client?.clearPresenceOfflineHeartbeat?.();
+        if (client?.reconnectTimer) {
+            clearTimeout(client.reconnectTimer);
+            client.reconnectTimer = null;
+        }
+        if (client?.pendingReceiptFlushTimer) {
+            clearTimeout(client.pendingReceiptFlushTimer);
+            client.pendingReceiptFlushTimer = null;
+        }
     });
 
     afterAll(() => {
@@ -1070,6 +1084,71 @@ describe('WhatsAppClient', () => {
         expect(client.isAuthCorrupted).toBe(false);
         expect(client.lastError).toContain('QR was rejected');
         expect(client.scheduleReconnect).toHaveBeenCalledWith(1000);
+    });
+
+    it('should preserve linked credentials on a post-login 405 connection close', async () => {
+        const clearState = jest.fn(async () => {});
+        const updateStatus = jest.fn(async () => {});
+        const saveCreds = jest.fn(async () => {});
+        let connectionHandler: ((update: unknown) => Promise<void>) | null = null;
+        const socket = {
+            ev: {
+                on: jest.fn((event: string, handler: (update: unknown) => Promise<void>) => {
+                    if (event === 'connection.update') connectionHandler = handler;
+                }),
+                removeAllListeners: jest.fn()
+            },
+            end: jest.fn(),
+            user: null
+        };
+
+        (useSupabaseAuthState as any).mockResolvedValueOnce({
+            state: {
+                creds: {
+                    registered: true,
+                    me: { id: '16465527019:39@s.whatsapp.net' }
+                }
+            },
+            saveCreds,
+            clearState,
+            updateStatus,
+            acquireLease: jest.fn(async () => ({ ok: true, supported: true, ownerId: client.instanceId, expiresAt: 'future' })),
+            renewLease: jest.fn(async () => ({ ok: true, supported: true, ownerId: client.instanceId }))
+        });
+        (loadBaileys as any).mockResolvedValueOnce({
+            makeWASocket: jest.fn(() => socket),
+            DisconnectReason: { loggedOut: 401, restartRequired: 415 },
+            fetchLatestWaWebVersion: jest.fn(async () => ({ version: [2, 24, 1] })),
+            fetchLatestBaileysVersion: jest.fn(async () => ({ version: [2, 24, 1] })),
+            Browsers: { ubuntu: jest.fn((name: string) => ['Ubuntu', name, '22.04.4']) },
+            DEFAULT_ORIGIN: 'https://web.whatsapp.com'
+        });
+
+        await client.connect();
+        client.stopLeaseRenewal();
+        client.scheduleReconnect = jest.fn();
+        client.hasConnectedOnce = false;
+        client.lastSeenAt = null;
+        client.meJid = null;
+
+        const handler = connectionHandler as ((update: unknown) => Promise<void>) | null;
+        expect(handler).toBeTruthy();
+        await handler!({
+            connection: 'close',
+            lastDisconnect: {
+                error: {
+                    output: {
+                        statusCode: 405,
+                        payload: { message: 'Method Not Allowed' }
+                    }
+                }
+            }
+        });
+
+        expect(clearState).not.toHaveBeenCalled();
+        expect(updateStatus as any).toHaveBeenCalledWith('disconnected', null);
+        expect(client.scheduleReconnect).toHaveBeenCalled();
+        expect(client.lastError).toContain('linked session was kept');
     });
 
     it('should treat info-level pairing traces as auth corruption', async () => {

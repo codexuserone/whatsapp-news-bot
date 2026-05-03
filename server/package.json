@@ -14,7 +14,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
-    "axios": "^1.13.5",
+    "axios": "^1.16.0",
     "cheerio": "^1.0.0-rc.12",
     "cors": "^2.8.5",
     "cron-parser": "^4.9.0",
@@ -25,7 +25,7 @@
     "he": "^1.2.0",
     "link-preview-js": "^3.2.0",
     "nanoid": "^5.0.7",
-    "node-cron": "^3.0.3",
+    "node-cron": "^4.2.1",
     "pg": "^8.11.5",
     "pino": "^9.2.0",
     "qrcode": "^1.5.4",
@@ -42,9 +42,20 @@
     "@types/node-cron": "^3.0.11",
     "@types/pg": "^8.11.10",
     "@types/qrcode": "^1.5.5",
-    "jest": "^30.2.0",
-    "ts-jest": "^29.4.6",
+    "jest": "^30.3.0",
+    "ts-jest": "^29.4.9",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
+  },
+  "overrides": {
+    "brace-expansion": "^2.0.3",
+    "follow-redirects": "^1.16.0",
+    "handlebars": "^4.7.9",
+    "minimatch": "^9.0.7",
+    "path-to-regexp": "^0.1.13",
+    "picomatch": "^4.0.4",
+    "protobufjs": "^7.5.5",
+    "qs": "^6.15.1",
+    "undici": "^7.24.0"
   }
 }

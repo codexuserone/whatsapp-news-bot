@@ -15,7 +15,7 @@ const DEFAULTS = {
   authRetentionDays: Number(process.env.AUTH_RETENTION_DAYS || 60),
   defaultInterTargetDelaySec: env.DEFAULT_INTER_TARGET_DELAY_SEC,
   defaultIntraTargetDelaySec: env.DEFAULT_INTRA_TARGET_DELAY_SEC,
-  initial_fetch_limit: Number(process.env.INITIAL_FETCH_LIMIT || 1),
+  initial_fetch_limit: Number(process.env.INITIAL_FETCH_LIMIT || 20),
   max_pending_age_hours: Number(process.env.MAX_PENDING_AGE_HOURS || 48),
   send_timeout_ms: Number(process.env.SEND_TIMEOUT_MS || 45000),
   post_send_edit_window_minutes: Math.min(

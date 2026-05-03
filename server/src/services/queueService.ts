@@ -2802,10 +2802,11 @@ const reconcileUpdatedFeedItems = async (
     let rendered: ReturnType<typeof renderTemplateMessage>;
     let expectedMedia: Awaited<ReturnType<typeof resolveMediaUrlForFeedItem>>;
     try {
-      rendered = renderTemplateMessage(getTemplateStepForLog(template, log), feedItem);
+      const stepTemplate = getTemplateStepForLog(template, log);
+      rendered = renderTemplateMessage(stepTemplate, feedItem);
       expectedMedia =
         rendered.sendMode === 'auto_media' || rendered.sendMode === 'media_only'
-          ? await resolveMediaUrlForFeedItem(supabase, feedItem, true)
+          ? await resolveMediaUrlForFeedItem(supabase, feedItem, true, normalizeTemplateMediaSource(stepTemplate.media_source))
           : { url: null, kind: null, mime: null, filename: null, source: null, scraped: false, error: null };
     } catch (error) {
       result.failed += 1;
@@ -2875,10 +2876,11 @@ const reconcileUpdatedFeedItems = async (
     let rendered: ReturnType<typeof renderTemplateMessage>;
     let expectedMedia: Awaited<ReturnType<typeof resolveMediaUrlForFeedItem>>;
     try {
-      rendered = renderTemplateMessage(getTemplateStepForLog(template, log), feedItem);
+      const stepTemplate = getTemplateStepForLog(template, log);
+      rendered = renderTemplateMessage(stepTemplate, feedItem);
       expectedMedia =
         rendered.sendMode === 'auto_media' || rendered.sendMode === 'media_only'
-          ? await resolveMediaUrlForFeedItem(supabase, feedItem, true)
+          ? await resolveMediaUrlForFeedItem(supabase, feedItem, true, normalizeTemplateMediaSource(stepTemplate.media_source))
           : { url: null, kind: null, mime: null, filename: null, source: null, scraped: false, error: null };
     } catch (error) {
       result.failed += 1;
@@ -4386,7 +4388,7 @@ const sendQueuedForSchedule = async (
           expectedRender = renderTemplateMessage(stepTemplate, feedItem, typeof log.message_content === 'string' ? log.message_content : null);
           expectedMedia =
             expectedRender.sendMode === 'auto_media' || expectedRender.sendMode === 'media_only'
-              ? await resolveMediaUrlForFeedItem(supabase, feedItem, true)
+              ? await resolveMediaUrlForFeedItem(supabase, feedItem, true, normalizeTemplateMediaSource(stepTemplate.media_source))
               : { url: null, kind: null };
           const sendResult = await withTargetSendLock(target as Target, async () => {
             const { data: claimedRows, error: claimError } = await supabase
@@ -5013,7 +5015,12 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
         );
         const expectedMedia =
           expectedRender.sendMode === 'auto_media' || expectedRender.sendMode === 'media_only'
-            ? await resolveMediaUrlForFeedItem(supabase, feedItemRes.data as FeedItem, true)
+            ? await resolveMediaUrlForFeedItem(
+                supabase,
+                feedItemRes.data as FeedItem,
+                true,
+                normalizeTemplateMediaSource(stepTemplate.media_source)
+              )
             : { url: null, kind: null };
         uncertainMessageContent = expectedRender.outboundText || null;
         uncertainMediaUrl = expectedMedia.url || null;

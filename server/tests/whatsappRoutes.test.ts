@@ -97,4 +97,25 @@ describe('whatsapp route test-send logging resolution', () => {
       })
     ).toThrow('explicit/private recipients');
   });
+
+  it('allows group-derived status audiences when production group audience is enabled', () => {
+    const originalInclude = process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS;
+    const originalAllow = process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
+    process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS = 'true';
+    process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE = 'unsafe';
+
+    try {
+      expect(() =>
+        testUtils.assertUsableStatusAudience({
+          recipients: ['972501234567@s.whatsapp.net'],
+          sources: { groupMetadata: 1, env: 0, activeIndividualTargets: 0, recentSuccessfulDirectRecipients: 0, lidMappings: 1 }
+        })
+      ).not.toThrow();
+    } finally {
+      if (originalInclude === undefined) delete process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS;
+      else process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS = originalInclude;
+      if (originalAllow === undefined) delete process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
+      else process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE = originalAllow;
+    }
+  });
 });

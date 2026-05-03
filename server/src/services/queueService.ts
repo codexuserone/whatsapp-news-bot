@@ -208,13 +208,22 @@ const getStatusAudienceGroupSourceCount = (snapshot: Record<string, any> | null 
   return Math.max(0, Math.floor(Number(sources.groupMetadata || 0)));
 };
 
+const isTruthyEnvFlag = (value: unknown) =>
+  ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+
+const isGroupStatusAudienceAllowed = () =>
+  isTruthyEnvFlag(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS) &&
+  ['1', 'true', 'yes', 'on', 'unsafe', 'force'].includes(
+    String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || '').trim().toLowerCase()
+  );
+
 const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undefined) => {
   const recipients = Array.isArray(snapshot?.recipients) ? snapshot!.recipients : [];
   if (!recipients.length) {
     throw new Error('No fresh status recipients are available for this status send.');
   }
   const privateSourceCount = getStatusAudiencePrivateSourceCount(snapshot);
-  if (getStatusAudienceGroupSourceCount(snapshot) > 0 && privateSourceCount <= 0) {
+  if (getStatusAudienceGroupSourceCount(snapshot) > 0 && privateSourceCount <= 0 && !isGroupStatusAudienceAllowed()) {
     throw new Error('WhatsApp Status requires explicit/private recipients; group participant-derived recipients are not safe for Status delivery.');
   }
   const lidCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@lid')).length;

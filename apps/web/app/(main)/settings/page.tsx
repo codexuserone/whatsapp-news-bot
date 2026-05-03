@@ -107,7 +107,7 @@ const toSettingsFormValues = (settings?: Partial<BackendSettings> | null): Setti
       ? undefined
       : Number(settings.dedupeThreshold),
   authRetentionDays: Number(settings?.authRetentionDays ?? 60),
-  initial_fetch_limit: Number(settings?.initial_fetch_limit ?? 1),
+  initial_fetch_limit: Number(settings?.initial_fetch_limit ?? 20),
   max_pending_age_hours: Number(settings?.max_pending_age_hours ?? 48),
   send_timeout_ms: Number(settings?.send_timeout_ms ?? 45000),
   reconcile_queue_lookback_hours: Number(settings?.reconcile_queue_lookback_hours ?? 12),
@@ -443,14 +443,14 @@ const SettingsPage = () => {
         <Card id="status">
           <CardHeader>
             <CardTitle>Status</CardTitle>
-            <CardDescription>Production Status and manual preview audience.</CardDescription>
+            <CardDescription>Production Status and preview audience.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
               <div>
                 <Label>Production Audience</Label>
                 <p className="text-xs text-muted-foreground">
-                  Auto uses the private viewers WhatsApp can resolve from this connected account. Specific recipients limits production Status to the list below.
+                  Auto uses the private viewers WhatsApp can resolve from this connected account. Specific recipients limits production Status to the people below.
                 </p>
               </div>
               <Controller
@@ -481,20 +481,20 @@ const SettingsPage = () => {
                   <Textarea
                     id="status_audience_jids"
                     rows={3}
-                    placeholder="19144477725@s.whatsapp.net"
+                    placeholder="+1 914 447 7725"
                     {...form.register('status_audience_jids')}
                   />
-                  <p className="text-xs text-muted-foreground">One JID or phone number per line, or comma separated.</p>
+                  <p className="text-xs text-muted-foreground">One phone number per line, or comma separated.</p>
                 </div>
               ) : null}
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="status_test_audience_jids">Manual Status Test Recipients</Label>
+              <Label htmlFor="status_test_audience_jids">Status Preview Recipients</Label>
               <Textarea
                 id="status_test_audience_jids"
                 rows={3}
-                placeholder="19144477725@s.whatsapp.net"
+                placeholder="+1 914 447 7725"
                 {...form.register('status_test_audience_jids')}
               />
               <p className="text-xs text-muted-foreground">

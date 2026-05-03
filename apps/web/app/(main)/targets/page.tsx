@@ -59,7 +59,7 @@ type ChannelDiagnostics = {
     provided?: number;
     verified?: number;
     failed?: number;
-    failedJids?: string[];
+    failedAddresses?: string[];
   };
   limitation?: string | null;
 };
@@ -345,10 +345,10 @@ const TargetsPage = () => {
                   </Button>
                 </div>
                 <div className="space-y-2 rounded-lg border p-3">
-                  <p className="text-sm font-medium">Add from WhatsApp link or JID</p>
+                  <p className="text-sm font-medium">Add from WhatsApp link</p>
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <Input
-                      placeholder="Paste link/JID: chat.whatsapp.com/... or whatsapp.com/channel/..."
+                      placeholder="Paste chat.whatsapp.com/... or whatsapp.com/channel/..."
                       value={addValue}
                       onChange={(event) => setAddValue(event.target.value)}
                       className="min-w-0 flex-1"
@@ -371,9 +371,7 @@ const TargetsPage = () => {
                       {addNotice.message}
                     </p>
                   ) : (
-                    <p className="text-xs text-muted-foreground">
-                      Use this only if automatic sync missed a destination.
-                    </p>
+                    <p className="text-xs text-muted-foreground">Use this only if automatic sync missed a destination.</p>
                   )}
                 </div>
               </div>

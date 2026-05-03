@@ -3819,12 +3819,12 @@ class WhatsAppClient {
 
       if (!candidateStatusJidList.length) {
         throw new Error(
-          'No status recipients resolved. Open WhatsApp contacts/chats first or set WHATSAPP_STATUS_AUDIENCE_JIDS.'
+          'No Status viewers could be resolved. Reconnect WhatsApp, open recent private chats on the phone, or add Status preview/recipient phone numbers in Settings.'
         );
       }
       if (!dedupedExplicit.length && isUnsafeImplicitStatusAudience(candidateStatusJidList, resolvedAudience.sources)) {
         throw new Error(
-          'Status audience only contains group-participant LID recipients. Add explicit private Status recipients or wait for Baileys to resolve phone-number mappings before sending.'
+          'Status viewers only contain unresolved linked-device identities. Add private Status recipient phone numbers in Settings or wait for WhatsApp sync to finish.'
         );
       }
       const statusJidList = buildStatusDeliveryRecipients(

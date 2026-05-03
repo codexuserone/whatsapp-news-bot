@@ -886,7 +886,7 @@ const getStatusRecipientSnapshot = async (options?: { sampleSize?: number }): Pr
         sources: stored.sources,
         warnings: uniqueStrings([
           ...stored.warnings,
-          'Stored Status audience is not safe to use. Reconnect WhatsApp or configure explicit/private Status recipients.'
+          'Stored Status viewers are not safe to use. Reconnect WhatsApp or add private Status recipient phone numbers in Settings.'
         ]),
         stale: true
       };

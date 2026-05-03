@@ -604,7 +604,7 @@ describe('WhatsAppClient', () => {
 
         await expect(client.sendStatusBroadcast({ text: 'hello' }))
             .rejects
-            .toThrow('No status recipients resolved');
+            .toThrow('No Status viewers could be resolved');
         expect(sendMessage).not.toHaveBeenCalled();
     });
 
@@ -775,7 +775,7 @@ describe('WhatsAppClient', () => {
 
         await expect(client.sendStatusBroadcast({ text: 'hello' }))
             .rejects
-            .toThrow('No status recipients resolved');
+            .toThrow('No Status viewers could be resolved');
         expect(sendMessage).not.toHaveBeenCalled();
     });
 

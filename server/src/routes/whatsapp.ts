@@ -104,7 +104,7 @@ const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undef
     phoneCount === 0 &&
     getStatusAudienceExplicitSourceCount(snapshot) <= 0
   ) {
-    throw badRequest('Status audience only contains implicit LID recipients. Add explicit private Status recipients or wait for phone-number mappings before sending Status.');
+    throw badRequest('Status viewers only contain unresolved linked-device identities. Add private Status recipient phone numbers in Settings or wait for WhatsApp sync to finish.');
   }
   if (
     recipients.length <= 1 &&

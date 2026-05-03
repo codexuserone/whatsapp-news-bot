@@ -1,25 +1,32 @@
 name: Keep Render Awake
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
   schedule:
     - cron: "*/10 * * * *"
 
+permissions:
+  contents: read
+
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     steps:
       - name: Ping Render service
         run: |
           set -euo pipefail
           BASE_URL="https://whatsapp-news-bot-3-69qh.onrender.com"
           for path in /ping /health; do
+            echo "Pinging $BASE_URL$path"
             curl -fsS \
-              --retry 5 \
+              --retry 8 \
               --retry-all-errors \
-              --retry-delay 15 \
+              --retry-delay 20 \
               --connect-timeout 20 \
-              --max-time 90 \
+              --max-time 120 \
               "$BASE_URL$path"
           done

@@ -624,7 +624,7 @@ const TemplatesPage = () => {
       : {};
 
     if (isStatusPreview && statusPreviewAudience.length === 0) {
-      setPreviewSendNotice('Add a Manual Status Test Recipient in Settings before sending a Status preview.');
+      setPreviewSendNotice('Add a Status Preview Recipient in Settings before sending a Status preview.');
       return;
     }
 

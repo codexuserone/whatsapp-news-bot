@@ -2,7 +2,7 @@ const sleep = require('../utils/sleep');
 const logger = require('../utils/logger');
 
 type WhatsAppLikeClient = {
-  getStatus?: () => { status?: string; lastSeenAt?: Date | null };
+  getStatus?: () => { status?: string; lastSeenAt?: Date | null; lastError?: string | null; requiresManualPairing?: boolean };
   reconnect?: () => Promise<void> | void;
   takeoverLease?: (
     ttlMs?: number
@@ -18,6 +18,26 @@ type EnsureConnectedOptions = {
   logContext?: string;
 };
 
+const isManualPairingRequired = (snapshot?: {
+  status?: string;
+  lastError?: string | null;
+  requiresManualPairing?: boolean;
+}) => {
+  if (!snapshot) return false;
+  if (snapshot.requiresManualPairing === true) return true;
+
+  const status = String(snapshot.status || '').toLowerCase();
+  if (status !== 'error') return false;
+
+  const lastError = String(snapshot.lastError || '').toLowerCase();
+  return (
+    lastError.includes('fresh pairing required') ||
+    lastError.includes('automatic recovery could not open') ||
+    lastError.includes('login handshake before a qr') ||
+    lastError.includes('pairing bootstrap failed before authentication')
+  );
+};
+
 const ensureWhatsAppConnected = async (
   whatsappClient?: WhatsAppLikeClient | null,
   options?: EnsureConnectedOptions
@@ -30,11 +50,12 @@ const ensureWhatsAppConnected = async (
   const logContext = String(options?.logContext || 'WhatsApp recovery');
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const status = String(whatsappClient.getStatus?.().status || 'unknown');
+    const statusSnapshot = whatsappClient.getStatus?.() || {};
+    const status = String(statusSnapshot.status || 'unknown');
     if (status === 'connected') {
       return true;
     }
-    if (status === 'paused') {
+    if (status === 'paused' || isManualPairingRequired(statusSnapshot)) {
       return false;
     }
     if (status === 'qr' || status === 'qr_ready') {
@@ -95,8 +116,9 @@ const ensureWhatsAppReadyForOutbound = async (
   const fastPath = await ensureWhatsAppConnected(whatsappClient, options);
   if (fastPath) return true;
 
-  const status = String(whatsappClient.getStatus?.().status || 'unknown');
-  if (status === 'paused' || status === 'qr' || status === 'qr_ready') {
+  const statusSnapshot = whatsappClient.getStatus?.() || {};
+  const status = String(statusSnapshot.status || 'unknown');
+  if (status === 'paused' || status === 'qr' || status === 'qr_ready' || isManualPairingRequired(statusSnapshot)) {
     return false;
   }
 
@@ -109,5 +131,6 @@ const ensureWhatsAppReadyForOutbound = async (
 
 module.exports = {
   ensureWhatsAppConnected,
-  ensureWhatsAppReadyForOutbound
+  ensureWhatsAppReadyForOutbound,
+  isManualPairingRequired
 };

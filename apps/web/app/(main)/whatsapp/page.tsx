@@ -9,7 +9,7 @@ import { dedupeTargets } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RefreshCw, Power, CheckCircle, QrCode, Loader2, RadioTower, Send } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Power, CheckCircle, QrCode, Loader2, RadioTower, Send } from 'lucide-react';
 
 const isSafeImageSrc = (value: unknown) => {
   const src = String(value || '').trim();
@@ -106,7 +106,7 @@ const WhatsAppPage = () => {
   });
 
   const refreshQr = useMutation({
-    mutationFn: () => api.post('/api/whatsapp/hard-refresh'),
+    mutationFn: (force?: boolean) => api.post('/api/whatsapp/hard-refresh', { force: Boolean(force) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
       queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
@@ -129,6 +129,12 @@ const WhatsAppPage = () => {
   const isConnected = status?.status === 'connected';
   const isPaused = status?.status === 'paused';
   const isQrReady = status?.status === 'qr' || status?.status === 'qr_ready';
+  const requiresManualPairing =
+    status?.requiresManualPairing === true ||
+    (status?.status === 'error' &&
+      /fresh pairing required|automatic recovery could not open|login handshake before a qr|pairing bootstrap failed/i.test(
+        String(status?.lastError || '')
+      ));
   const qrExpiresAtMs = qr?.expiresAt ? Date.parse(qr.expiresAt) : Number.NaN;
   const qrRemainingMs =
     Number.isFinite(qrExpiresAtMs) && qrTickMs !== null
@@ -194,10 +200,11 @@ const WhatsAppPage = () => {
     if (isConnected) return 'Connected and ready for normal queue work.';
     if (isPaused) return 'Paused. Automation and WhatsApp sends are intentionally stopped.';
     if (isQrReady || activeQr) return 'Waiting for you to scan the login code.';
+    if (requiresManualPairing) return 'WhatsApp did not issue a login code. Queued messages are being held, not marked sent.';
     if (status?.status === 'connecting') return 'Connecting to WhatsApp.';
     if (status?.status === 'conflict') return 'Another instance still has the WhatsApp session.';
     return 'Disconnected. Resume or request a fresh login code.';
-  }, [activeQr, isConnected, isPaused, isQrReady, status?.status]);
+  }, [activeQr, isConnected, isPaused, isQrReady, requiresManualPairing, status?.status]);
 
   React.useEffect(() => {
     if (!isConnected) return;
@@ -212,6 +219,7 @@ const WhatsAppPage = () => {
     if (isPaused) return <Badge variant="secondary">Paused</Badge>;
     if (isConnected) return <Badge variant="success">Connected</Badge>;
     if (isQrReady) return <Badge variant="warning">Scan QR Code</Badge>;
+    if (requiresManualPairing) return <Badge variant="destructive">Login blocked</Badge>;
     if (status?.status === 'connecting') return <Badge variant="secondary">Connecting...</Badge>;
     return <Badge variant="destructive">{status?.status || 'Disconnected'}</Badge>;
   };
@@ -282,10 +290,21 @@ const WhatsAppPage = () => {
               <div className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
                 WhatsApp is paused. Resume to reconnect (and to generate a QR code if needed).
               </div>
+            ) : requiresManualPairing ? (
+              <div className="space-y-3 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+                <p>
+                  WhatsApp rejected the login before the app received a QR code. Automatic retries are stopped so the phone
+                  and desktop sessions are not disturbed.
+                </p>
+                <Button onClick={() => refreshQr.mutate(true)} disabled={refreshQr.isPending} variant="outline" size="sm">
+                  <RefreshCw className={`mr-2 h-4 w-4 ${refreshQr.isPending ? 'animate-spin' : ''}`} />
+                  {refreshQr.isPending ? 'Trying login...' : 'Try login again'}
+                </Button>
+              </div>
             ) : !isConnected && !isQrReady ? (
               <div className="space-y-3 rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
                 <p>Request a fresh login QR, then scan it from WhatsApp Linked Devices.</p>
-                <Button onClick={() => refreshQr.mutate()} disabled={refreshQr.isPending} variant="outline" size="sm">
+                <Button onClick={() => refreshQr.mutate(false)} disabled={refreshQr.isPending} variant="outline" size="sm">
                   <RefreshCw className={`mr-2 h-4 w-4 ${refreshQr.isPending ? 'animate-spin' : ''}`} />
                   {refreshQr.isPending ? 'Refreshing QR...' : 'Get QR code'}
                 </Button>
@@ -297,9 +316,9 @@ const WhatsAppPage = () => {
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Recovery tools</p>
                 <div className="flex flex-wrap gap-2">
                   {!isConnected && !isPaused ? (
-                    <Button onClick={() => refreshQr.mutate()} disabled={refreshQr.isPending} variant="outline">
+                    <Button onClick={() => refreshQr.mutate(requiresManualPairing)} disabled={refreshQr.isPending} variant="outline">
                       <RefreshCw className={`mr-2 h-4 w-4 ${refreshQr.isPending ? 'animate-spin' : ''}`} />
-                      {refreshQr.isPending ? 'Refreshing QR...' : 'Get QR code'}
+                      {refreshQr.isPending ? 'Trying login...' : requiresManualPairing ? 'Try login again' : 'Get QR code'}
                     </Button>
                   ) : null}
                   <Button
@@ -340,6 +359,16 @@ const WhatsAppPage = () => {
                   <CheckCircle className="h-8 w-8 text-success" />
                 </div>
                 <p className="text-sm text-muted-foreground">Session is active</p>
+              </div>
+            ) : requiresManualPairing ? (
+              <div className="space-y-3 text-center">
+                <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
+                  <AlertTriangle className="h-8 w-8 text-destructive" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">No login code available</p>
+                  <p className="text-sm text-muted-foreground">Queued messages are held until WhatsApp connects.</p>
+                </div>
               </div>
             ) : activeQr && isSafeImageSrc(activeQr) ? (
               <div className="space-y-3 text-center">

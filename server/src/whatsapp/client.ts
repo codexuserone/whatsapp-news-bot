@@ -274,6 +274,9 @@ const buildStatusDeliveryRecipients = (recipients: string[], selfJid: unknown) =
 
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict' | 'paused';
 
+const MANUAL_PAIRING_REQUIRED_MESSAGE =
+  'WhatsApp rejected the login handshake before a QR code could be issued. Sending is blocked until a real login code is available; queued messages remain queued.';
+
 type MessageStatusSnapshot = {
   status: number | null;
   statusLabel: string | null;
@@ -1092,6 +1095,17 @@ class WhatsAppClient {
       });
     }
     this.scheduleReconnect(5000);
+  }
+
+  requiresManualPairing(): boolean {
+    if (this.status !== 'error') return false;
+    const lastError = String(this.lastError || '').toLowerCase();
+    return (
+      lastError.includes('fresh pairing required') ||
+      lastError.includes('automatic recovery could not open') ||
+      lastError.includes('login handshake before a qr') ||
+      lastError.includes('pairing bootstrap failed before authentication')
+    );
   }
 
   isRateOverLimitError(error: unknown): boolean {
@@ -2288,8 +2302,7 @@ class WhatsAppClient {
 
             if (this.preAuthRegistrationFailures >= 3) {
               this.status = 'error';
-              this.lastError =
-                'Fresh pairing required. Automatic recovery could not open a WhatsApp login code. Use Advanced recovery to request a new QR and pair this device again.';
+              this.lastError = MANUAL_PAIRING_REQUIRED_MESSAGE;
               await authStore.updateStatus('error', null);
               return;
             }
@@ -2543,6 +2556,7 @@ class WhatsAppClient {
     lastError: string | null;
     lastSeenAt: Date | null;
     hasQr: boolean;
+    requiresManualPairing: boolean;
     qr: {
       generatedAt: string | null;
       expiresAt: string | null;
@@ -2565,6 +2579,7 @@ class WhatsAppClient {
         lastError: this.lastError,
         lastSeenAt: this.lastSeenAt,
         hasQr: Boolean(qrState.qr),
+        requiresManualPairing: false,
         qr: {
           generatedAt: qrState.generatedAt,
           expiresAt: qrState.expiresAt,
@@ -2598,6 +2613,7 @@ class WhatsAppClient {
       lastError: this.lastError,
       lastSeenAt: this.lastSeenAt,
       hasQr: Boolean(qrState.qr),
+      requiresManualPairing: this.requiresManualPairing(),
       qr: {
         generatedAt: qrState.generatedAt,
         expiresAt: qrState.expiresAt,

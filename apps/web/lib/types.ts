@@ -226,6 +226,7 @@ export type WhatsAppStatus = {
   lastError?: string | null;
   lastSeenAt?: string | null;
   hasQr?: boolean;
+  requiresManualPairing?: boolean;
   qr?: {
     generatedAt?: string | null;
     expiresAt?: string | null;

@@ -453,10 +453,11 @@ const upsertPendingDispatchRows = async (
   context: string
 ) => {
   if (!rows.length) return 0;
+  const enrichedRows = await enrichPendingDispatchRows(supabase, rows);
 
   const { data: insertedRows, error: upsertError } = await supabase
     .from('message_logs')
-    .upsert(rows, { onConflict: 'schedule_id,feed_item_id,target_id,sequence_step_index', ignoreDuplicates: true })
+    .upsert(enrichedRows, { onConflict: 'schedule_id,feed_item_id,target_id,sequence_step_index', ignoreDuplicates: true })
     .select('id');
 
   if (!upsertError) {
@@ -470,7 +471,7 @@ const upsertPendingDispatchRows = async (
 
   // Fallback path for legacy/partial unique index definitions that bypass onConflict matching.
   let inserted = 0;
-  for (const row of rows) {
+  for (const row of enrichedRows) {
     const { data: rowInserted, error: rowError } = await supabase
       .from('message_logs')
       .insert(row)
@@ -1968,6 +1969,187 @@ const renderTemplateMessage = (
     includeImageCaption,
     allowTextFallback
   };
+};
+
+const isAutomationMediaKindAllowed = (kind: string | null) => {
+  if (kind === 'image') return true;
+  if (kind === 'video') return ALLOW_AUTOMATION_VIDEO_MEDIA;
+  if (kind === 'audio' || kind === 'document') return ALLOW_AUTOMATION_NON_IMAGE_MEDIA;
+  return false;
+};
+
+const resolveExistingMediaPreviewForFeedItem = (
+  feedItem: FeedItem,
+  allowMedia: boolean,
+  mediaSource: TemplateMediaSource = 'auto'
+): ResolvedFeedMedia => {
+  if (!allowMedia) {
+    return { url: null, kind: null, mime: null, filename: null, source: null, scraped: false, error: null };
+  }
+
+  const rawData =
+    feedItem?.raw_data && typeof feedItem.raw_data === 'object'
+      ? (feedItem.raw_data as Record<string, unknown>)
+      : null;
+  const normalizedMedia = normalizeFeedMedia({
+    mediaUrl: feedItem.media_url || (rawData ? rawData.media_url : null),
+    mediaKind: feedItem.media_kind || (rawData ? rawData.media_kind : null),
+    mediaMime: feedItem.media_mime || (rawData ? rawData.media_mime : null),
+    mediaFilename: feedItem.media_filename || (rawData ? rawData.media_filename : null),
+    imageUrl: typeof feedItem.image_url === 'string' ? feedItem.image_url : null,
+    rawData
+  });
+  const normalizedMediaSource = normalizeTemplateMediaSource(mediaSource);
+  const existing = normalizedMedia.mediaUrl || null;
+  const existingKind =
+    normalizedMedia.mediaKind ||
+    (existing && isVideoUrl(existing)
+      ? 'video'
+      : existing && isAudioUrl(existing)
+        ? 'audio'
+        : existing && isDocumentUrl(existing)
+          ? 'document'
+          : existing && isImageUrl(existing)
+            ? 'image'
+            : null);
+  const imageUrl = normalizedMedia.imageUrl || null;
+  const imagePreview: ResolvedFeedMedia | null =
+    imageUrl && isUsableFeedImageUrl(imageUrl)
+      ? {
+        url: imageUrl,
+        kind: 'image',
+        mime: 'image/*',
+        filename: null,
+        source: feedItem.image_source || 'feed',
+        scraped: false,
+        error: null
+      }
+      : null;
+  const existingPreview: ResolvedFeedMedia | null =
+    existing && isHttpUrl(existing) && existingKind && isAutomationMediaKindAllowed(existingKind)
+      ? {
+        url: existing,
+        kind: existingKind,
+        mime: normalizedMedia.mediaMime || null,
+        filename: normalizedMedia.mediaFilename || null,
+        source: feedItem.image_source || 'feed',
+        scraped: false,
+        error: null
+      }
+      : null;
+
+  if (normalizedMediaSource === 'image') {
+    return imagePreview || (existingKind === 'image' ? existingPreview : null) || {
+      url: null,
+      kind: null,
+      mime: null,
+      filename: null,
+      source: null,
+      scraped: false,
+      error: null
+    };
+  }
+
+  if (normalizedMediaSource === 'video') {
+    return existingKind === 'video' && existingPreview
+      ? existingPreview
+      : { url: null, kind: null, mime: null, filename: null, source: null, scraped: false, error: null };
+  }
+
+  return existingPreview || imagePreview || {
+    url: null,
+    kind: null,
+    mime: null,
+    filename: null,
+    source: null,
+    scraped: false,
+    error: null
+  };
+};
+
+const buildQueuedAutomationPreview = (
+  log: Record<string, unknown>,
+  template: Template,
+  feedItem: FeedItem
+) => {
+  const stepTemplate = getTemplateStepForLog(template, log);
+  const rendered = renderTemplateMessage(
+    stepTemplate,
+    feedItem,
+    typeof log.message_content === 'string' ? log.message_content : null
+  );
+  const expectsMedia = rendered.sendMode === 'auto_media' || rendered.sendMode === 'media_only';
+  const media = resolveExistingMediaPreviewForFeedItem(
+    feedItem,
+    expectsMedia,
+    normalizeTemplateMediaSource(stepTemplate.media_source)
+  );
+  const text =
+    media.url
+      ? rendered.outboundText || null
+      : rendered.sendMode === 'media_only'
+        ? null
+        : rendered.textWithPreview || rendered.renderedText || null;
+
+  return {
+    text,
+    mediaUrl: media.url,
+    mediaType: media.kind,
+    mediaMime: media.mime,
+    mediaFilename: media.filename,
+    includeCaption: Boolean(media.url && rendered.includeImageCaption),
+    disableLinkPreview: rendered.sendMode === 'text_only'
+  };
+};
+
+const enrichPendingDispatchRows = async (
+  supabase: SupabaseClient,
+  rows: Array<Record<string, unknown>>
+) => {
+  const templateIds = Array.from(
+    new Set(rows.map((row) => String(row.template_id || '').trim()).filter(Boolean))
+  );
+  const feedItemIds = Array.from(
+    new Set(rows.map((row) => String(row.feed_item_id || '').trim()).filter(Boolean))
+  );
+  if (!templateIds.length || !feedItemIds.length) return rows;
+
+  const [{ data: templates, error: templatesError }, { data: feedItems, error: feedItemsError }] = await Promise.all([
+    supabase.from('templates').select('*').in('id', templateIds),
+    supabase.from('feed_items').select('*').in('id', feedItemIds)
+  ]);
+
+  if (templatesError || feedItemsError) {
+    logger.warn({ templatesError, feedItemsError }, 'Failed to load queued payload previews');
+    return rows;
+  }
+
+  const templatesById = new Map((templates || []).map((template: Template) => [String(template.id || ''), template]));
+  const feedItemsById = new Map((feedItems || []).map((feedItem: FeedItem) => [String(feedItem.id || ''), feedItem]));
+
+  return rows.map((row) => {
+    const template = templatesById.get(String(row.template_id || ''));
+    const feedItem = feedItemsById.get(String(row.feed_item_id || ''));
+    if (!template || !feedItem) return row;
+
+    try {
+      const preview = buildQueuedAutomationPreview(row, template, feedItem);
+      return {
+        ...row,
+        message_content: row.message_content || preview.text || null,
+        media_url: row.media_url || preview.mediaUrl || null,
+        media_type: row.media_type || preview.mediaType || null,
+        include_caption: typeof row.include_caption === 'boolean' ? row.include_caption : preview.includeCaption,
+        disable_link_preview:
+          typeof row.disable_link_preview === 'boolean' ? row.disable_link_preview : preview.disableLinkPreview,
+        media_sent: false,
+        media_error: row.media_error || null
+      };
+    } catch (error) {
+      logger.warn({ error, feedItemId: row.feed_item_id, templateId: row.template_id }, 'Failed to preview queued payload');
+      return row;
+    }
+  });
 };
 
 type SendWithMediaResult = {
@@ -5703,11 +5885,13 @@ module.exports = {
   queueLatestForSchedule,
   sendQueueLogNow,
   reconcileUpdatedFeedItems,
+  buildQueuedAutomationPreview,
   buildEditableMessageContent,
   hasEditableQueuePayload,
   __testUtils: {
     buildDispatchIdentityKey,
     getTemplateQueueSteps,
+    buildQueuedAutomationPreview,
     computeStaleProcessingThresholdMs,
     partitionStaleProcessingRows,
     computeUncertainRetryDelayMs,

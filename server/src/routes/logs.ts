@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
+const { buildQueuedAutomationPreview } = require('../services/queueService');
 
 const SUCCESSFUL_SEND_STATUSES = ['sent', 'delivered', 'read', 'played'];
 
@@ -22,9 +23,9 @@ const logRoutes = () => {
         .select(`
           *,
           schedule:schedules(id, name),
-          feed_item:feed_items(id, title, link),
+          feed_item:feed_items(id, title, link, description, content, author, image_url, media_url, media_kind, media_mime, media_filename, raw_data),
           target:targets(id, name, phone_number, type),
-          template:templates(id, name)
+          template:templates(id, name, content, send_images, send_mode, sequence_steps, status_background_color, status_font)
         `)
         .order('created_at', { ascending: false })
         .limit(200);
@@ -43,7 +44,30 @@ const logRoutes = () => {
       const { data: logs, error } = await query;
       
       if (error) throw error;
-      res.json(logs);
+
+      const enrichedLogs = (logs || []).map((log: Record<string, unknown>) => {
+        if (log.schedule_id == null) return log;
+        const template = log.template as Record<string, unknown> | null | undefined;
+        const feedItem = log.feed_item as Record<string, unknown> | null | undefined;
+        if (!template?.content || !feedItem) return log;
+
+        try {
+          const preview = buildQueuedAutomationPreview(log, template, {
+            ...feedItem,
+            id: log.feed_item_id
+          });
+          return {
+            ...log,
+            message_content: log.message_content || preview.text || null,
+            media_url: log.media_url || preview.mediaUrl || null,
+            media_type: log.media_type || preview.mediaType || null
+          };
+        } catch {
+          return log;
+        }
+      });
+
+      res.json(enrichedLogs);
     } catch (error) {
       console.error('Error fetching logs:', error);
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });

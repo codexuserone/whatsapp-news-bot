@@ -375,6 +375,83 @@ describe('queueService __testUtils', () => {
     });
   });
 
+  it('previews queued automation text and intended media before sending', () => {
+    normalizeFeedMedia.mockReturnValueOnce({
+      mediaUrl: 'https://example.com/story.mp4',
+      mediaKind: 'video',
+      mediaMime: 'video/mp4',
+      mediaFilename: '',
+      imageUrl: 'https://example.com/featured.jpg'
+    });
+
+    const preview = testUtils.buildQueuedAutomationPreview(
+      { sequence_step_index: 0 },
+      {
+        id: 'template-video',
+        content: '*{{title}}*\n{{link}}',
+        send_mode: 'auto_media',
+        send_images: true
+      },
+      {
+        id: 'feed-item-video',
+        title: 'Story title',
+        link: 'https://example.com/story',
+        image_url: 'https://example.com/featured.jpg',
+        media_url: 'https://example.com/story.mp4',
+        media_kind: 'video',
+        media_mime: 'video/mp4'
+      }
+    );
+
+    expect(preview).toEqual({
+      text: '*Story title*\nhttps://example.com/story',
+      mediaUrl: 'https://example.com/story.mp4',
+      mediaType: 'video',
+      mediaMime: 'video/mp4',
+      mediaFilename: null,
+      includeCaption: true,
+      disableLinkPreview: false
+    });
+  });
+
+  it('previews a sequence step forced to the featured image', () => {
+    normalizeFeedMedia.mockReturnValueOnce({
+      mediaUrl: 'https://example.com/story.mp4',
+      mediaKind: 'video',
+      mediaMime: 'video/mp4',
+      mediaFilename: '',
+      imageUrl: 'https://example.com/featured.jpg'
+    });
+
+    const preview = testUtils.buildQueuedAutomationPreview(
+      { sequence_step_index: 1 },
+      {
+        id: 'template-sequence',
+        content: '{{title}}',
+        send_mode: 'auto_media',
+        send_images: true,
+        sequence_steps: [
+          { label: 'Video', content: '{{title}}', send_mode: 'auto_media', media_source: 'video' },
+          { label: 'Featured image', content: '{{description}}', send_mode: 'auto_media', media_source: 'image' }
+        ]
+      },
+      {
+        id: 'feed-item-video',
+        title: 'Story title',
+        description: 'Story excerpt',
+        link: 'https://example.com/story',
+        image_url: 'https://example.com/featured.jpg',
+        media_url: 'https://example.com/story.mp4',
+        media_kind: 'video',
+        media_mime: 'video/mp4'
+      }
+    );
+
+    expect(preview.mediaUrl).toBe('https://example.com/featured.jpg');
+    expect(preview.mediaType).toBe('image');
+    expect(preview.text).toBe('Story excerpt');
+  });
+
   it('does not build queue steps for disabled templates', () => {
     expect(
       testUtils.getTemplateQueueSteps({

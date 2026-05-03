@@ -2,7 +2,12 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
 const { resetStuckProcessingLogs } = require('../services/retentionService');
-const { sendQueueLogNow, buildEditableMessageContent, hasEditableQueuePayload } = require('../services/queueService');
+const {
+  sendQueueLogNow,
+  buildQueuedAutomationPreview,
+  buildEditableMessageContent,
+  hasEditableQueuePayload
+} = require('../services/queueService');
 const { isScheduleRunning } = require('../services/scheduleState');
 const settingsService = require('../services/settingsService');
 const { serviceUnavailable } = require('../core/errors');
@@ -324,6 +329,16 @@ const queueRoutes = () => {
             delivery_mode,
             batch_times
           ),
+          template:templates (
+            id,
+            name,
+            content,
+            send_images,
+            send_mode,
+            sequence_steps,
+            status_background_color,
+            status_font
+          ),
           target:targets (
             id,
             name,
@@ -407,10 +422,35 @@ const queueRoutes = () => {
           delivery_mode?: string;
           batch_times?: string[];
         } | undefined;
+        const template = row.template as {
+          id?: string;
+          name?: string;
+          content?: string;
+          send_images?: boolean | null;
+          send_mode?: string | null;
+          sequence_steps?: Array<Record<string, unknown>> | null;
+          status_background_color?: string | null;
+          status_font?: number | null;
+        } | undefined;
         const target = row.target as { id?: string; name?: string; type?: string } | undefined;
         const isManual = row.schedule_id == null;
         const rawMessageContent = typeof row.message_content === 'string' ? String(row.message_content) : '';
         const displayMessageContent = String(isManual ? stripManualMeta(rawMessageContent) : rawMessageContent).trim();
+        let automationPreview: {
+          text?: string | null;
+          mediaUrl?: string | null;
+          mediaType?: string | null;
+        } | null = null;
+        if (!isManual && template?.content && feedItems) {
+          try {
+            automationPreview = buildQueuedAutomationPreview(row, template, {
+              ...feedItems,
+              id: row.feed_item_id
+            });
+          } catch {
+            automationPreview = null;
+          }
+        }
         const manualTitleCandidate = displayMessageContent
           ? (displayMessageContent.split('\n').find((line) => String(line || '').trim()) || '').trim()
           : '';
@@ -434,11 +474,11 @@ const queueRoutes = () => {
           media_kind: normalizedMedia.mediaKind || null,
           pub_date: feedItems?.pub_date || null,
           pub_precision: rawData ? String(rawData.published_precision || '') || null : null,
-          rendered_content: isManual ? displayMessageContent : row.message_content,
+          rendered_content: isManual ? displayMessageContent : displayMessageContent || automationPreview?.text || null,
           status: row.status,
           error_message: row.error_message,
-          media_url: row.media_url || normalizedMedia.mediaUrl || null,
-          media_type: row.media_type || normalizedMedia.mediaKind || null,
+          media_url: row.media_url || automationPreview?.mediaUrl || normalizedMedia.mediaUrl || null,
+          media_type: row.media_type || automationPreview?.mediaType || normalizedMedia.mediaKind || null,
           media_sent: Boolean(row.media_sent),
           media_error: row.media_error || null,
           approved_at: row.approved_at || null,

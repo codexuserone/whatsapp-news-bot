@@ -186,6 +186,7 @@ jest.mock('node-cron', () => ({
 const {
     __testUtils,
     ensureFreshStatusRecipients,
+    getStatusRecipientSnapshot,
     refreshStatusRecipients
 } = require('../src/services/statusAudienceService');
 
@@ -685,6 +686,76 @@ describe('statusAudienceService', () => {
         expect(result.recipients).toEqual([]);
         expect(result.warnings.some((warning: string) => warning.includes('limited to WHATSAPP_STATUS_AUDIENCE_JIDS'))).toBe(false);
         expect(tables.status_recipients).toHaveLength(0);
+    });
+
+    it('does not return an unsafe stored group snapshot while WhatsApp is disconnected', async () => {
+        const refreshedAt = new Date().toISOString();
+        const storedRecipients = Array.from({ length: 20 }, (_value, index) => `${1200000000 + index}@s.whatsapp.net`);
+        const { supabase } = buildSupabaseMock({
+            status_recipients: storedRecipients.map((recipient) => ({
+                session_id: 'primary',
+                recipient_jid: recipient,
+                refreshed_at: refreshedAt,
+                sources: {
+                    contactsCache: 0,
+                    storeContacts: 0,
+                    storeChats: 0,
+                    groupMetadata: 20,
+                    env: 0,
+                    me: 1,
+                    lidMappings: 20,
+                    activeIndividualTargets: 0,
+                    recentSuccessfulDirectRecipients: 0
+                },
+                warnings: []
+            }))
+        });
+        getSupabaseClientMock.mockReturnValue(supabase);
+
+        const result = await refreshStatusRecipients(
+            {
+                getStatus: () => ({ status: 'qr' })
+            },
+            { sampleSize: 10 }
+        );
+
+        expect(result.participantCount).toBe(0);
+        expect(result.recipients).toEqual([]);
+        expect(result.stale).toBe(true);
+        expect(result.warnings.some((warning: string) => warning.includes('not safe to use'))).toBe(true);
+    });
+
+    it('does not show an unsafe stored group snapshot in the status audience UI snapshot', async () => {
+        const refreshedAt = new Date().toISOString();
+        const { supabase } = buildSupabaseMock({
+            status_recipients: [
+                {
+                    session_id: 'primary',
+                    recipient_jid: '19144477725@s.whatsapp.net',
+                    refreshed_at: refreshedAt,
+                    sources: {
+                        contactsCache: 0,
+                        storeContacts: 0,
+                        storeChats: 0,
+                        groupMetadata: 1,
+                        env: 0,
+                        me: 1,
+                        lidMappings: 1,
+                        activeIndividualTargets: 0,
+                        recentSuccessfulDirectRecipients: 0
+                    },
+                    warnings: []
+                }
+            ]
+        });
+        getSupabaseClientMock.mockReturnValue(supabase);
+
+        const result = await getStatusRecipientSnapshot({ sampleSize: 10 });
+
+        expect(result.participantCount).toBe(0);
+        expect(result.sample).toEqual([]);
+        expect(result.stale).toBe(true);
+        expect(result.warnings.some((warning: string) => warning.includes('not safe to use'))).toBe(true);
     });
 
     it('drops implicit group LID recipients when no phone mappings or explicit recipients exist', async () => {

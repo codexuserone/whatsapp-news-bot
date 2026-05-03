@@ -616,6 +616,20 @@ const refreshStatusRecipients = async (
   const connectionStatus = String(whatsappClient?.getStatus?.()?.status || '').trim().toLowerCase();
   if (!whatsappClient || connectionStatus !== 'connected') {
     const warnings = [...stored.warnings];
+    if (!shouldTrustStoredSnapshot(stored, { allowEnvLimited: explicitAudience.source !== 'auto' })) {
+      return {
+        participantCount: 0,
+        recipients: [],
+        sample: [],
+        refreshedAt: stored.refreshedAt,
+        sources: stored.sources,
+        warnings: uniqueStrings([
+          ...warnings,
+          'WhatsApp is not connected and the stored Status audience is not safe to use.'
+        ]),
+        stale: true
+      };
+    }
     warnings.push('WhatsApp is not connected, using the last stored status audience snapshot.');
     const result = { ...stored, warnings };
     if (result.recipients.length) {
@@ -862,7 +876,21 @@ const getStatusRecipientSnapshot = async (options?: { sampleSize?: number }): Pr
   }
 
   try {
+    const explicitAudience = await getConfiguredExplicitAudienceRecipients();
     const stored = await getStoredRecipients(supabase, options?.sampleSize, { includeRecipients: false });
+    if (!shouldTrustStoredSnapshot(stored as RefreshResult, { allowEnvLimited: explicitAudience.source !== 'auto' })) {
+      return {
+        participantCount: 0,
+        sample: [],
+        refreshedAt: stored.refreshedAt,
+        sources: stored.sources,
+        warnings: uniqueStrings([
+          ...stored.warnings,
+          'Stored Status audience is not safe to use. Reconnect WhatsApp or configure explicit/private Status recipients.'
+        ]),
+        stale: true
+      };
+    }
     return {
       participantCount: stored.participantCount,
       sample: stored.sample,

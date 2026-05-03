@@ -172,9 +172,26 @@ const getStatusAudienceExplicitSourceCount = (snapshot: Record<string, any> | nu
   );
 };
 
+const getStatusAudiencePrivateSourceCount = (snapshot: Record<string, any> | null | undefined) => {
+  const sources = snapshot?.sources || {};
+  return (
+    Math.max(0, Math.floor(Number(sources.contactsCache || 0))) +
+    Math.max(0, Math.floor(Number(sources.storeContacts || 0))) +
+    Math.max(0, Math.floor(Number(sources.storeChats || 0))) +
+    Math.max(0, Math.floor(Number(sources.env || 0))) +
+    Math.max(0, Math.floor(Number(sources.activeIndividualTargets || 0))) +
+    Math.max(0, Math.floor(Number(sources.recentSuccessfulDirectRecipients || 0)))
+  );
+};
+
 const getStatusAudienceMappedSourceCount = (snapshot: Record<string, any> | null | undefined) => {
   const sources = snapshot?.sources || {};
   return Math.max(0, Math.floor(Number(sources.lidMappings || 0)));
+};
+
+const getStatusAudienceGroupSourceCount = (snapshot: Record<string, any> | null | undefined) => {
+  const sources = snapshot?.sources || {};
+  return Math.max(0, Math.floor(Number(sources.groupMetadata || 0)));
 };
 
 const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undefined) => {
@@ -182,12 +199,16 @@ const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undef
   if (!recipients.length) {
     throw new Error('No fresh status recipients are available for this status send.');
   }
+  const privateSourceCount = getStatusAudiencePrivateSourceCount(snapshot);
+  if (getStatusAudienceGroupSourceCount(snapshot) > 0 && privateSourceCount <= 0) {
+    throw new Error('WhatsApp Status requires explicit/private recipients; group participant-derived recipients are not safe for Status delivery.');
+  }
   const lidCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@lid')).length;
   const phoneCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@s.whatsapp.net')).length;
   if (lidCount > 0 && phoneCount === 0 && getStatusAudienceExplicitSourceCount(snapshot) <= 0) {
     throw new Error('Status audience only contains implicit LID recipients; refusing to mark a Status send as sent.');
   }
-  if (recipients.length <= 1 && getStatusAudienceExplicitSourceCount(snapshot) <= 0 && getStatusAudienceMappedSourceCount(snapshot) <= 0) {
+  if (recipients.length <= 1 && privateSourceCount <= 0 && getStatusAudienceMappedSourceCount(snapshot) <= 0) {
     throw new Error('Status audience has no private viewers yet; refusing to mark a self-only Status send as sent.');
   }
 };
@@ -669,7 +690,7 @@ const reconcileUncertainMessageLogs = async (supabase: SupabaseClient, settings:
   const { data: uncertainRows, error: uncertainRowsError } = await supabase
     .from('message_logs')
     .select(
-      'id,status,schedule_id,target_id,feed_item_id,message_content,media_url,media_type,whatsapp_message_id,processing_started_at,created_at,updated_at,retry_count'
+      'id,status,schedule_id,target_id,feed_item_id,message_content,media_url,media_type,whatsapp_message_id,error_message,media_error,processing_started_at,created_at,updated_at,retry_count'
     )
     .eq('status', 'uncertain')
     .order('created_at', { ascending: true })
@@ -711,6 +732,8 @@ const reconcileUncertainMessageLogs = async (supabase: SupabaseClient, settings:
     message_content?: string | null;
     media_type?: string | null;
     whatsapp_message_id?: string | null;
+    error_message?: string | null;
+    media_error?: string | null;
     processing_started_at?: string | null;
     created_at?: string | null;
     updated_at?: string | null;
@@ -718,6 +741,22 @@ const reconcileUncertainMessageLogs = async (supabase: SupabaseClient, settings:
   }>) {
     const id = String(row?.id || '').trim();
     if (!id) continue;
+
+    if (isNonRevivableFailureMessage(row.error_message, row.media_error)) {
+      const terminalMessage = String(row.error_message || row.media_error || 'Permanent send failure').trim();
+      await supabase
+        .from('message_logs')
+        .update({
+          status: 'failed',
+          processing_started_at: null,
+          error_message: terminalMessage,
+          media_sent: false,
+          media_error: String(row.media_error || terminalMessage || '').trim() || null
+        })
+        .eq('id', id);
+      terminalFailed += 1;
+      continue;
+    }
 
     const target = targetById.get(String(row?.target_id || '').trim()) as Target | undefined;
     const targetJid = target ? normalizeTargetJid(target) : '';
@@ -4433,9 +4472,8 @@ const sendQueuedForSchedule = async (
           const errorMessage = authError
             ? `${AUTH_ERROR_HINT} (${rawErrorMessage || 'unknown auth error'})`
             : rawErrorMessage;
-          const timeoutUnknownDelivery = isUnknownDeliveryTimeout(rawErrorMessage);
           const connectionStateError = isConnectionStateError(rawErrorMessage);
-          const nonRetryable = [
+          const nonRetryable = isNonRevivableFailureMessage(rawErrorMessage, errorMessage) || [
             'Template rendered empty message',
             'Target phone number missing',
             'Group ID invalid',
@@ -4448,18 +4486,19 @@ const sendQueuedForSchedule = async (
             'Status recipients resolved only from group participants',
             'WhatsApp Status requires explicit/private recipients'
           ].some((needle) => rawErrorMessage.includes(needle));
+          const timeoutUnknownDelivery = isUnknownDeliveryTimeout(rawErrorMessage) && !nonRetryable;
 
-          if (timeoutUnknownDelivery) {
+          if (nonRetryable) {
             await supabase
               .from('message_logs')
               .update({
-                status: 'uncertain',
-                error_message: buildUncertainErrorMessage(errorMessage),
-                message_content: expectedRender?.outboundText || null,
-                media_url: expectedMedia.url || null,
-                media_type: expectedMedia.kind || null,
+                status: 'failed',
+                processing_started_at: null,
+                error_message: errorMessage,
+                media_url: null,
+                media_type: null,
                 media_sent: false,
-                media_error: errorMessage
+                media_error: null
               })
               .eq('id', log.id);
             continue;
@@ -4481,17 +4520,17 @@ const sendQueuedForSchedule = async (
             continue;
           }
 
-          if (nonRetryable) {
+          if (timeoutUnknownDelivery) {
             await supabase
               .from('message_logs')
               .update({
-                status: 'failed',
-                processing_started_at: null,
-                error_message: errorMessage,
-                media_url: null,
-                media_type: null,
+                status: 'uncertain',
+                error_message: buildUncertainErrorMessage(errorMessage),
+                message_content: expectedRender?.outboundText || null,
+                media_url: expectedMedia.url || null,
+                media_type: expectedMedia.kind || null,
                 media_sent: false,
-                media_error: null
+                media_error: errorMessage
               })
               .eq('id', log.id);
             continue;
@@ -5359,7 +5398,8 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
         ? `${AUTH_ERROR_HINT} (${rawErrorMessage || 'unknown auth error'})`
         : rawErrorMessage;
       const connectionStateError = isConnectionStateError(rawErrorMessage);
-      const timedOut = isUnknownDeliveryTimeout(rawErrorMessage);
+      const nonRevivableFailure = isNonRevivableFailureMessage(rawErrorMessage, errorMessage);
+      const timedOut = isUnknownDeliveryTimeout(rawErrorMessage) && !nonRevivableFailure;
       const manualChannelMediaRejected =
         !isAutomationBacked &&
         targetRow.type === 'channel' &&

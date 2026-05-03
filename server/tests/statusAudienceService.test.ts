@@ -547,8 +547,9 @@ describe('statusAudienceService', () => {
         expect(result.sources.activeIndividualTargets).toBe(1);
     });
 
-    it('uses group participant phone recipients when status group audience is enabled', async () => {
+    it('uses group participant phone recipients only with an explicit unsafe override', async () => {
         process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS = 'true';
+        process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE = 'unsafe';
         const { supabase, tables } = buildSupabaseMock();
         getSupabaseClientMock.mockReturnValue(supabase);
 

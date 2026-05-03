@@ -114,12 +114,13 @@ const uniqueStrings = (values: unknown[]) =>
 const isTruthyEnvFlag = (value: unknown) =>
   ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 
-const isExplicitlyFalseEnvFlag = (value: unknown) =>
-  ['0', 'false', 'no', 'off'].includes(String(value || '').trim().toLowerCase());
-
 const isGroupMetadataStatusAudienceEnabled = () =>
   isTruthyEnvFlag(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS) &&
-  !isExplicitlyFalseEnvFlag(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE);
+  ['unsafe', 'force'].includes(
+    String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || '')
+      .trim()
+      .toLowerCase()
+  );
 
 const getExplicitEnvAudienceRecipients = () =>
   Array.from(

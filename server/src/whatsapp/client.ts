@@ -28,12 +28,14 @@ const AUTO_CLEAR_CORRUPTED_AUTH =
 const newsletterMediaPatchContext = new AsyncLocalStorage();
 
 const isTruthyEnvFlag = (value: unknown) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
-const isExplicitlyFalseEnvFlag = (value: unknown) =>
-  ['0', 'false', 'no', 'off'].includes(String(value || '').trim().toLowerCase());
 
 const isGroupMetadataStatusAudienceEnabled = () =>
   isTruthyEnvFlag(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS) &&
-  !isExplicitlyFalseEnvFlag(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE);
+  ['unsafe', 'force'].includes(
+    String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || '')
+      .trim()
+      .toLowerCase()
+  );
 
 const isNewsletterMediaDirectPathPatchEnabled = () =>
   isTruthyEnvFlag(process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH) ||
@@ -1289,7 +1291,7 @@ class WhatsAppClient {
         }
       } else if (this.groupMetadataCache.size > 0) {
         warnings.push(
-          'Group participants are not used as Status recipients because WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS is off.'
+          'Group participants are not used as Status recipients because WhatsApp Status needs explicit/private recipients.'
         );
       }
 

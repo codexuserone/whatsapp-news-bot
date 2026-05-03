@@ -66,15 +66,36 @@ const getStatusAudienceExplicitSourceCount = (snapshot: Record<string, any> | nu
   );
 };
 
+const getStatusAudiencePrivateSourceCount = (snapshot: Record<string, any> | null | undefined) => {
+  const sources = snapshot?.sources || {};
+  return (
+    Math.max(0, Math.floor(Number(sources.contactsCache || 0))) +
+    Math.max(0, Math.floor(Number(sources.storeContacts || 0))) +
+    Math.max(0, Math.floor(Number(sources.storeChats || 0))) +
+    Math.max(0, Math.floor(Number(sources.env || 0))) +
+    Math.max(0, Math.floor(Number(sources.activeIndividualTargets || 0))) +
+    Math.max(0, Math.floor(Number(sources.recentSuccessfulDirectRecipients || 0)))
+  );
+};
+
 const getStatusAudienceMappedSourceCount = (snapshot: Record<string, any> | null | undefined) => {
   const sources = snapshot?.sources || {};
   return Math.max(0, Math.floor(Number(sources.lidMappings || 0)));
+};
+
+const getStatusAudienceGroupSourceCount = (snapshot: Record<string, any> | null | undefined) => {
+  const sources = snapshot?.sources || {};
+  return Math.max(0, Math.floor(Number(sources.groupMetadata || 0)));
 };
 
 const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undefined) => {
   const recipients = Array.isArray(snapshot?.recipients) ? snapshot!.recipients : [];
   if (!recipients.length) {
     throw badRequest('No fresh status recipients are available for this status send.');
+  }
+  const privateSourceCount = getStatusAudiencePrivateSourceCount(snapshot);
+  if (getStatusAudienceGroupSourceCount(snapshot) > 0 && privateSourceCount <= 0) {
+    throw badRequest('WhatsApp Status requires explicit/private recipients; group participant-derived recipients are not safe for Status delivery.');
   }
   const lidCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@lid')).length;
   const phoneCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@s.whatsapp.net')).length;
@@ -87,7 +108,7 @@ const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undef
   }
   if (
     recipients.length <= 1 &&
-    getStatusAudienceExplicitSourceCount(snapshot) <= 0 &&
+    privateSourceCount <= 0 &&
     getStatusAudienceMappedSourceCount(snapshot) <= 0
   ) {
     throw badRequest('Status audience has no private viewers yet. Add or sync at least one private WhatsApp contact before sending Status.');

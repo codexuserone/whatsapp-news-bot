@@ -260,11 +260,11 @@ describe('WhatsAppClient', () => {
         }
     });
 
-    it('warms group metadata before resolving a group-backed status audience', async () => {
+    it('warms group metadata only for the explicit unsafe group-backed status audience override', async () => {
         const originalInclude = process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS;
         const originalAllow = process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
         process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS = 'true';
-        delete process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
+        process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE = 'unsafe';
 
         const groupFetchAllParticipating: any = jest.fn(async () => ({
             '120363407220244757@g.us': {
@@ -293,8 +293,52 @@ describe('WhatsAppClient', () => {
             expect(audience.sample).toEqual(['15551234567@s.whatsapp.net', '19144477725@s.whatsapp.net']);
             expect(audience.sources.groupMetadata).toBe(2);
             expect(audience.warnings).not.toContain(
-                'Group participants are not used as Status recipients because WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS is off.'
+                'Group participants are not used as Status recipients because WhatsApp Status needs explicit/private recipients.'
             );
+        } finally {
+            if (originalInclude === undefined) {
+                delete process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS;
+            } else {
+                process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS = originalInclude;
+            }
+            if (originalAllow === undefined) {
+                delete process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
+            } else {
+                process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE = originalAllow;
+            }
+        }
+    });
+
+    it('does not use group metadata for status audience when the unsafe override is absent', async () => {
+        const originalInclude = process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS;
+        const originalAllow = process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
+        process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS = 'true';
+        delete process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
+
+        const groupFetchAllParticipating: any = jest.fn(async () => ({
+            '120363407220244757@g.us': {
+                id: '120363407220244757@g.us',
+                subject: 'Test',
+                size: 2,
+                participants: [
+                    { id: '16465527019@s.whatsapp.net' },
+                    { id: '19144477725@s.whatsapp.net' }
+                ]
+            }
+        }));
+
+        client.socket = {
+            user: { id: '16465527019:55@s.whatsapp.net' },
+            groupFetchAllParticipating
+        };
+        client.meJid = '16465527019:55@s.whatsapp.net';
+
+        try {
+            const audience = await client.getStatusAudience({ sampleSize: 10 });
+
+            expect(groupFetchAllParticipating).not.toHaveBeenCalled();
+            expect(audience.participantCount).toBe(0);
+            expect(audience.sources.groupMetadata).toBe(0);
         } finally {
             if (originalInclude === undefined) {
                 delete process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS;

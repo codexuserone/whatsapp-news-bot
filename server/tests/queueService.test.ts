@@ -247,7 +247,7 @@ describe('queueService __testUtils', () => {
           lidMappings: 0
         }
       })
-    ).toThrow('implicit LID recipients');
+    ).toThrow('explicit/private recipients');
   });
 
   it('rejects all-LID status snapshots even when a stale mapping counter exists', () => {
@@ -262,10 +262,10 @@ describe('queueService __testUtils', () => {
           lidMappings: 1
         }
       })
-    ).toThrow('implicit LID recipients');
+    ).toThrow('explicit/private recipients');
   });
 
-  it('allows status snapshots with mapped phone recipients', () => {
+  it('rejects group participant status snapshots even after LID phone mapping', () => {
     expect(() =>
       testUtils.assertUsableStatusAudience({
         recipients: ['972501234567@s.whatsapp.net'],
@@ -275,6 +275,24 @@ describe('queueService __testUtils', () => {
           activeIndividualTargets: 0,
           recentSuccessfulDirectRecipients: 0,
           lidMappings: 1
+        }
+      })
+    ).toThrow('explicit/private recipients');
+  });
+
+  it('allows status snapshots resolved from private contacts', () => {
+    expect(() =>
+      testUtils.assertUsableStatusAudience({
+        recipients: ['972501234567@s.whatsapp.net'],
+        sources: {
+          contactsCache: 1,
+          storeContacts: 0,
+          storeChats: 0,
+          groupMetadata: 0,
+          env: 0,
+          activeIndividualTargets: 0,
+          recentSuccessfulDirectRecipients: 0,
+          lidMappings: 0
         }
       })
     ).not.toThrow();

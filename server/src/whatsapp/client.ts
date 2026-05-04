@@ -3250,8 +3250,10 @@ class WhatsAppClient {
 
     try {
       const count = Math.max(1, Math.min(Math.floor(Number(options?.count || 10)), 50));
-      const since = Math.max(0, Math.floor(Number(options?.since || 0)));
-      const after = Math.max(0, Math.floor(Number(options?.after || 0)));
+      const hasSince = options?.since !== undefined && options?.since !== null;
+      const hasAfter = options?.after !== undefined && options?.after !== null;
+      const since = hasSince ? Math.max(0, Math.floor(Number(options?.since || 0))) : undefined;
+      const after = hasAfter ? Math.max(0, Math.floor(Number(options?.after || 0))) : undefined;
       const timeoutMs = Math.max(1000, Math.min(Number(options?.timeoutMs || 8000), 30000));
       const result = await withTimeout(
         socket.newsletterFetchMessages(normalizedJid, count, since, after),

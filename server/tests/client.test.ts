@@ -167,8 +167,8 @@ describe('WhatsAppClient', () => {
         expect(client.socket.newsletterFetchMessages).toHaveBeenCalledWith(
             '120363406955649221@newsletter',
             10,
-            0,
-            0
+            undefined,
+            undefined
         );
     });
 

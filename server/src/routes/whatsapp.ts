@@ -1998,8 +1998,8 @@ const whatsappRoutes = () => {
           whatsapp.confirmSend(
             messageId,
             normalizedImageUrl || normalizedImageDataUrl || normalizedVideoUrl || normalizedVideoDataUrl
-              ? { upsertTimeoutMs: 30000, ackTimeoutMs: 90000, failureGraceMs: STATUS_FAILURE_GRACE_MS }
-              : { upsertTimeoutMs: 5000, ackTimeoutMs: 60000, failureGraceMs: STATUS_FAILURE_GRACE_MS }
+              ? { upsertTimeoutMs: 30000, ackTimeoutMs: 90000, requireServerAck: true, failureGraceMs: STATUS_FAILURE_GRACE_MS }
+              : { upsertTimeoutMs: 5000, ackTimeoutMs: 60000, requireServerAck: true, failureGraceMs: STATUS_FAILURE_GRACE_MS }
           ),
           STATUS_CONFIRM_TIMEOUT_MS,
           'Timed out confirming status broadcast'

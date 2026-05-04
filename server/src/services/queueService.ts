@@ -5193,7 +5193,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
     const ensureSendConfirmed = async (messageId: string | null | undefined, isMedia: boolean, isStatus = false) => {
       if (!messageId) return;
       if (activeWhatsappClient.confirmSend) {
-        const requireServerAck = false;
+        const requireServerAck = isStatus;
         const failureGraceMs = isStatus
           ? STATUS_FAILURE_GRACE_MS
           : targetRow.type === 'channel'

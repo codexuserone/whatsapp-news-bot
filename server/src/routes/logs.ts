@@ -6,6 +6,23 @@ const { buildQueuedAutomationPreview } = require('../services/queueService');
 const { isInlineMediaDataUrl, sanitizeMediaUrlForApi } = require('../utils/mediaUrlPresentation');
 
 const SUCCESSFUL_SEND_STATUSES = ['sent', 'delivered', 'read', 'played'];
+const DEFAULT_LOG_LIMIT = 200;
+const MAX_LOG_LIMIT = 200;
+
+const parseLogLimit = (value: unknown) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_LOG_LIMIT;
+  return Math.min(Math.floor(parsed), MAX_LOG_LIMIT);
+};
+
+const finalizeLog = (row: Record<string, unknown>) => {
+  const rawMediaUrl = row.media_url || null;
+  return {
+    ...row,
+    media_url: sanitizeMediaUrlForApi(rawMediaUrl),
+    media_stored: isInlineMediaDataUrl(rawMediaUrl)
+  };
+};
 
 const logRoutes = () => {
   const router = express.Router();
@@ -26,10 +43,10 @@ const logRoutes = () => {
           schedule:schedules(id, name),
           feed_item:feed_items(id, title, link, description, content, author, image_url, media_url, media_kind, media_mime, media_filename, raw_data),
           target:targets(id, name, phone_number, type),
-          template:templates(id, name, content, send_images, send_mode, sequence_steps, status_background_color, status_font)
+          template:templates(id, name, content, send_images, send_mode, media_source, sequence_steps, status_background_color, status_font)
         `)
         .order('created_at', { ascending: false })
-        .limit(200);
+        .limit(parseLogLimit(req.query.limit));
       
       if (statusFilter) {
         if (statusFilter === 'sent') {
@@ -47,15 +64,6 @@ const logRoutes = () => {
       if (error) throw error;
 
       const enrichedLogs = (logs || []).map((log: Record<string, unknown>) => {
-        const finalizeLog = (row: Record<string, unknown>) => {
-          const rawMediaUrl = row.media_url || null;
-          return {
-            ...row,
-            media_url: sanitizeMediaUrlForApi(rawMediaUrl),
-            media_stored: isInlineMediaDataUrl(rawMediaUrl)
-          };
-        };
-
         if (log.schedule_id == null) return finalizeLog(log);
         const template = log.template as Record<string, unknown> | null | undefined;
         const feedItem = log.feed_item as Record<string, unknown> | null | undefined;
@@ -88,3 +96,7 @@ const logRoutes = () => {
 };
 
 module.exports = logRoutes;
+module.exports.__testUtils = {
+  parseLogLimit,
+  finalizeLog
+};

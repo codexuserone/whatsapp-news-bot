@@ -2443,7 +2443,6 @@ const sendMessageWithTemplate = async (
             sendBuffer = prepared.buffer;
             sendMime = prepared.mimetype || sendMime;
             newsletterExtras = {
-              ...(prepared.jpegThumbnail ? { jpegThumbnail: prepared.jpegThumbnail } : {}),
               ...(typeof prepared.seconds === 'number' ? { seconds: prepared.seconds } : {}),
               ...(typeof prepared.width === 'number' ? { width: prepared.width } : {}),
               ...(typeof prepared.height === 'number' ? { height: prepared.height } : {})
@@ -2751,7 +2750,6 @@ const buildEditableMessageContent = async (options: {
         sendBuffer = prepared.buffer;
         sendMime = prepared.mimetype || sendMime;
         newsletterExtras = {
-          ...(prepared.jpegThumbnail ? { jpegThumbnail: prepared.jpegThumbnail } : {}),
           ...(typeof prepared.seconds === 'number' ? { seconds: prepared.seconds } : {}),
           ...(typeof prepared.width === 'number' ? { width: prepared.width } : {}),
           ...(typeof prepared.height === 'number' ? { height: prepared.height } : {})
@@ -5449,7 +5447,6 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
                 sendBuffer = prepared.buffer;
                 sendMime = prepared.mimetype || sendMime;
                 newsletterExtras = {
-                  ...(prepared.jpegThumbnail ? { jpegThumbnail: prepared.jpegThumbnail } : {}),
                   ...(typeof prepared.seconds === 'number' ? { seconds: prepared.seconds } : {}),
                   ...(typeof prepared.width === 'number' ? { width: prepared.width } : {}),
                   ...(typeof prepared.height === 'number' ? { height: prepared.height } : {})

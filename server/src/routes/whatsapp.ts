@@ -1558,8 +1558,7 @@ const whatsappRoutes = () => {
         }
         let effectiveContent: Record<string, unknown> = content;
 
-        // Baileys uses a special raw-media path for newsletters; in practice it is far pickier
-        // about media payloads. Normalize newsletter media (image/video) and include thumbnails/dimensions.
+        // Baileys uses a special raw-media path for newsletters; normalize media payloads before relay.
         if (isNewsletterJid(normalizedJid)) {
           const videoValue = (content as any)?.video;
           if (Buffer.isBuffer(videoValue)) {
@@ -1569,7 +1568,6 @@ const whatsappRoutes = () => {
                 ...effectiveContent,
                 video: prepared.buffer,
                 mimetype: prepared.mimetype || (effectiveContent as any)?.mimetype,
-                ...(prepared.jpegThumbnail ? { jpegThumbnail: prepared.jpegThumbnail } : {}),
                 ...(typeof prepared.seconds === 'number' ? { seconds: prepared.seconds } : {}),
                 ...(typeof prepared.width === 'number' ? { width: prepared.width } : {}),
                 ...(typeof prepared.height === 'number' ? { height: prepared.height } : {})

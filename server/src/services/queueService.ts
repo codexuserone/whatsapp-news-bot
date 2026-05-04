@@ -1423,16 +1423,17 @@ const downloadImageBuffer = async (imageUrl: string, refererUrl?: string | null)
 
   let detectedMimeType = detectMimeTypeFromBuffer(buffer);
 
-  // Some sites return formats like AVIF/SVG/GIF even when we prefer jpeg/png/webp.
-  // If sharp is available, transcode to JPEG so WhatsApp uploads work reliably.
-  if (!detectedMimeType || !SUPPORTED_WHATSAPP_IMAGE_MIME.has(detectedMimeType)) {
-    const baseContentType = contentType.split(';')[0]?.trim() || '';
-    const isProbablyImage =
-      baseContentType.startsWith('image/') || baseContentType === '' || baseContentType === 'application/octet-stream';
-    if (!isProbablyImage) {
-      throw new Error('URL did not return an image');
-    }
+  const baseContentType = contentType.split(';')[0]?.trim() || '';
+  const isProbablyImage =
+    baseContentType.startsWith('image/') || baseContentType === '' || baseContentType === 'application/octet-stream';
+  if (!detectedMimeType && !isProbablyImage) {
+    throw new Error('URL did not return an image');
+  }
 
+  // CDNs often serve WebP bytes behind .jpg URLs. Normalize non-JPEG payloads before
+  // upload so Android/Web linked devices receive a regular WhatsApp image, not a
+  // format-dependent preview that can render blurry or fail to hydrate.
+  if (detectedMimeType !== 'image/jpeg') {
     try {
       const prepared = await prepareNewsletterImage(buffer, { maxBytes: MAX_IMAGE_BYTES, jpegQuality: 92 });
       buffer = prepared.buffer;

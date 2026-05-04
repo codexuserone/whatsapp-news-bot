@@ -1080,6 +1080,7 @@ describe('WhatsAppClient', () => {
             '19144477725@s.whatsapp.net',
             '16465527019@s.whatsapp.net'
         ]);
+        expect(sentOptions.useUserDevicesCache).toBe(false);
         expect(sentOptions).not.toHaveProperty('includeSender');
         expect(sentOptions).not.toHaveProperty('includeSelf');
     });
@@ -1105,6 +1106,7 @@ describe('WhatsAppClient', () => {
             '16465527019@s.whatsapp.net',
             '123456789012345@lid'
         ]);
+        expect(sentOptions.useUserDevicesCache).toBe(false);
     });
 
     it('should allow sender account status delivery to be disabled explicitly', async () => {
@@ -1191,6 +1193,8 @@ describe('WhatsAppClient', () => {
         );
         expect(sentOptions).not.toHaveProperty('backgroundColor');
         expect(sentOptions).not.toHaveProperty('font');
+        expect(sentOptions.useUserDevicesCache).toBe(false);
+        expect(sentOptions.mediaUploadTimeoutMs).toBeGreaterThanOrEqual(120000);
     });
 
     it('should preserve text-only status styling options for text status sends', async () => {

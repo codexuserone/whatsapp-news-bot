@@ -79,6 +79,7 @@ const { ensureFreshStatusRecipients } = require('../src/services/statusAudienceS
 const { normalizeTargetJidForSend } = require('../src/utils/targetJid');
 const { normalizeFeedMedia } = require('../src/utils/feedMedia');
 const { safeAxiosRequest } = require('../src/utils/safeAxios');
+const { prepareNewsletterImage } = require('../src/utils/whatsappMedia');
 
 describe('queueService __testUtils', () => {
   const testUtils = queueService.__testUtils;
@@ -398,6 +399,63 @@ describe('queueService __testUtils', () => {
       sent: true,
       error: null
     });
+  });
+
+  it('normalizes CDN WebP image responses to JPEG before WhatsApp upload', async () => {
+    const webpBuffer = Buffer.from('RIFF\x10\x00\x00\x00WEBPVP8 ');
+    normalizeTargetJidForSend.mockReturnValueOnce('120363000@g.us');
+    normalizeFeedMedia.mockReturnValueOnce({
+      mediaUrl: 'https://cdn.example.com/featured.jpg',
+      mediaKind: 'image',
+      mediaMime: 'image/*',
+      mediaFilename: '',
+      imageUrl: 'https://cdn.example.com/featured.jpg'
+    });
+    safeAxiosRequest.mockResolvedValueOnce({
+      data: webpBuffer,
+      headers: { 'content-type': 'image/webp' }
+    });
+    prepareNewsletterImage.mockResolvedValueOnce({
+      buffer: jpegBuffer,
+      mimetype: 'image/jpeg',
+      converted: true
+    });
+    const sendMessage: any = jest.fn(async (..._args: unknown[]) => ({ key: { id: 'image-1' } }));
+
+    await testUtils.sendMessageWithTemplate(
+      {
+        getStatus: () => ({ status: 'connected' }),
+        sendMessage
+      },
+      {
+        id: 'target-group',
+        phone_number: '120363000@g.us',
+        type: 'group'
+      },
+      {
+        id: 'template-image',
+        content: '{{title}}',
+        send_mode: 'auto_media',
+        send_images: true,
+        media_source: 'image'
+      },
+      {
+        id: 'feed-item-image',
+        title: 'Story title',
+        link: 'https://example.com/story',
+        image_url: 'https://cdn.example.com/featured.jpg'
+      }
+    );
+
+    expect(prepareNewsletterImage).toHaveBeenCalledWith(webpBuffer, expect.objectContaining({ jpegQuality: 92 }));
+    expect(sendMessage).toHaveBeenCalledWith(
+      '120363000@g.us',
+      expect.objectContaining({
+        image: jpegBuffer,
+        caption: 'Story title',
+        mimetype: 'image/jpeg'
+      })
+    );
   });
 
   it('does not silently replace a requested story video with a featured image', async () => {

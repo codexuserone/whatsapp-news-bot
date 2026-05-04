@@ -336,6 +336,10 @@ const newsletterSummaryMatchesId = (summary: NewsletterMessageSummary, messageId
 };
 
 const STATUS_MEDIA_CONTENT_KEYS = ['image', 'video', 'audio', 'document', 'sticker'] as const;
+const STATUS_MEDIA_UPLOAD_TIMEOUT_MS = Math.max(
+  30000,
+  Math.floor(Number(process.env.WHATSAPP_STATUS_MEDIA_UPLOAD_TIMEOUT_MS || 120000))
+);
 
 const isStatusMediaContent = (content: AnyMessageContent) =>
   Boolean(
@@ -4191,7 +4195,18 @@ class WhatsAppClient {
         includeSender
       );
 
-      options = { ...sanitized.options, broadcast: true, statusJidList };
+      options = {
+        ...sanitized.options,
+        broadcast: true,
+        statusJidList,
+        useUserDevicesCache: false
+      };
+      if (isStatusMediaContent(content)) {
+        const requestedTimeout = Number((sanitized.options as { mediaUploadTimeoutMs?: unknown }).mediaUploadTimeoutMs);
+        if (!Number.isFinite(requestedTimeout) || requestedTimeout < STATUS_MEDIA_UPLOAD_TIMEOUT_MS) {
+          options.mediaUploadTimeoutMs = STATUS_MEDIA_UPLOAD_TIMEOUT_MS;
+        }
+      }
       logger.info(
         {
           participantCount: statusJidList.length,

@@ -188,6 +188,23 @@ describe('WhatsAppClient', () => {
         });
     });
 
+    it('times out channel fetch verification instead of hanging the route', async () => {
+        client.socket = {
+            newsletterFetchMessages: jest.fn(() => new Promise(() => {}))
+        };
+
+        await expect(
+            client.fetchNewsletterMessages('120363406955649221@newsletter', {
+                count: 1,
+                timeoutMs: 50
+            })
+        ).resolves.toMatchObject({
+            ok: false,
+            messages: [],
+            error: 'Timed out fetching channel messages'
+        });
+    });
+
     it('should lazily initialize the auth store during connect', async () => {
         await client.connect();
 

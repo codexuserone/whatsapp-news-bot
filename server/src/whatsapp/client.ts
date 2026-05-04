@@ -3237,7 +3237,7 @@ class WhatsAppClient {
 
   async fetchNewsletterMessages(
     jid: string,
-    options?: { count?: number; since?: number; after?: number }
+    options?: { count?: number; since?: number; after?: number; timeoutMs?: number }
   ): Promise<{ ok: boolean; messages: NewsletterMessageSummary[]; error?: string | null; unsupported?: boolean }> {
     const normalizedJid = normalizeNewsletterJid(jid, { allowNumeric: false });
     if (!normalizedJid) {
@@ -3252,7 +3252,12 @@ class WhatsAppClient {
       const count = Math.max(1, Math.min(Math.floor(Number(options?.count || 10)), 50));
       const since = Math.max(0, Math.floor(Number(options?.since || 0)));
       const after = Math.max(0, Math.floor(Number(options?.after || 0)));
-      const result = await socket.newsletterFetchMessages(normalizedJid, count, since, after);
+      const timeoutMs = Math.max(1000, Math.min(Number(options?.timeoutMs || 8000), 30000));
+      const result = await withTimeout(
+        socket.newsletterFetchMessages(normalizedJid, count, since, after),
+        timeoutMs,
+        'Timed out fetching channel messages'
+      );
       let protoImpl: { Message?: { decode?: (value: Uint8Array) => { toJSON?: () => Record<string, any> } } } | null = null;
       try {
         const baileys = await loadBaileys();
@@ -3288,7 +3293,10 @@ class WhatsAppClient {
     let unsupported = false;
 
     do {
-      const result = await this.fetchNewsletterMessages(jid, { count: options?.count || 10 });
+      const result = await this.fetchNewsletterMessages(jid, {
+        count: options?.count || 10,
+        timeoutMs: Math.min(timeoutMs, Math.max(1000, pollMs + 2500))
+      });
       if (result.unsupported) {
         return {
           ok: false,

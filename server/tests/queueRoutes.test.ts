@@ -106,4 +106,10 @@ describe('queue route retry safeguards', () => {
       media_url: 'https://example.com/audio.mp3'
     })).toBe(false);
   });
+
+  it('does not expose inline attachment payloads in queue list responses', () => {
+    expect(testUtils.isInlineMediaDataUrl('data:image/png;base64,AAAA')).toBe(true);
+    expect(testUtils.sanitizeMediaUrlForApi('data:image/png;base64,AAAA')).toBeNull();
+    expect(testUtils.sanitizeMediaUrlForApi('https://example.com/image.jpg')).toBe('https://example.com/image.jpg');
+  });
 });

@@ -3,6 +3,7 @@ const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const { buildQueuedAutomationPreview } = require('../services/queueService');
+const { isInlineMediaDataUrl, sanitizeMediaUrlForApi } = require('../utils/mediaUrlPresentation');
 
 const SUCCESSFUL_SEND_STATUSES = ['sent', 'delivered', 'read', 'played'];
 
@@ -46,24 +47,33 @@ const logRoutes = () => {
       if (error) throw error;
 
       const enrichedLogs = (logs || []).map((log: Record<string, unknown>) => {
-        if (log.schedule_id == null) return log;
+        const finalizeLog = (row: Record<string, unknown>) => {
+          const rawMediaUrl = row.media_url || null;
+          return {
+            ...row,
+            media_url: sanitizeMediaUrlForApi(rawMediaUrl),
+            media_stored: isInlineMediaDataUrl(rawMediaUrl)
+          };
+        };
+
+        if (log.schedule_id == null) return finalizeLog(log);
         const template = log.template as Record<string, unknown> | null | undefined;
         const feedItem = log.feed_item as Record<string, unknown> | null | undefined;
-        if (!template?.content || !feedItem) return log;
+        if (!template?.content || !feedItem) return finalizeLog(log);
 
         try {
           const preview = buildQueuedAutomationPreview(log, template, {
             ...feedItem,
             id: log.feed_item_id
           });
-          return {
+          return finalizeLog({
             ...log,
             message_content: log.message_content || preview.text || null,
             media_url: log.media_url || preview.mediaUrl || null,
             media_type: log.media_type || preview.mediaType || null
-          };
+          });
         } catch {
-          return log;
+          return finalizeLog(log);
         }
       });
 

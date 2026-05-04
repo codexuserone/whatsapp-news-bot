@@ -102,9 +102,11 @@ const normalizeTemplatePayload = (payload: Record<string, unknown>) => {
       | 'image_only'
       | 'link_preview';
     send_images?: boolean;
+    media_source?: unknown;
     sequence_steps?: unknown;
   };
   next.sequence_steps = normalizeTemplateSequenceSteps(payload.sequence_steps);
+  next.media_source = normalizeMediaSource(payload.media_source);
   next.status_background_color = normalizeStatusBackgroundColor(payload.status_background_color);
   next.status_font = normalizeStatusFont(payload.status_font);
 
@@ -144,6 +146,7 @@ const normalizeTemplateResponse = <T extends Record<string, unknown>>(template: 
   const next = { ...template } as T & {
     send_mode?: 'auto_media' | 'text_preview' | 'text_only' | 'media_only' | 'image' | 'image_only' | 'link_preview' | null;
     send_images?: boolean | null;
+    media_source?: unknown;
     sequence_steps?: unknown;
     status_background_color?: unknown;
     status_font?: unknown;
@@ -163,6 +166,7 @@ const normalizeTemplateResponse = <T extends Record<string, unknown>>(template: 
     next.send_images = false;
   }
 
+  next.media_source = normalizeMediaSource(next.media_source);
   next.sequence_steps = normalizeTemplateSequenceSteps(next.sequence_steps);
   next.status_background_color = normalizeStatusBackgroundColor(next.status_background_color);
   next.status_font = normalizeStatusFont(next.status_font);

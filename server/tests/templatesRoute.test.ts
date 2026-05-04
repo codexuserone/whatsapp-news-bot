@@ -11,11 +11,13 @@ describe('template route normalization', () => {
         name: 'Test',
         content: '{{title}}',
         send_mode: 'auto_media',
-        send_images: true
+        send_images: true,
+        media_source: 'featured_image'
       })
     ).toMatchObject({
       send_mode: 'image',
-      send_images: true
+      send_images: true,
+      media_source: 'image'
     });
   });
 
@@ -53,11 +55,13 @@ describe('template route normalization', () => {
       testUtils.normalizeTemplateResponse({
         id: 'template-1',
         send_mode: 'image',
-        send_images: true
+        send_images: true,
+        media_source: 'feed_video'
       })
     ).toMatchObject({
       send_mode: 'auto_media',
-      send_images: true
+      send_images: true,
+      media_source: 'video'
     });
 
     expect(

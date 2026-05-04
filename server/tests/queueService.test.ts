@@ -429,6 +429,40 @@ describe('queueService __testUtils', () => {
     });
   });
 
+  it('previews a normal template forced to the featured image', () => {
+    normalizeFeedMedia.mockReturnValueOnce({
+      mediaUrl: 'https://example.com/story.mp4',
+      mediaKind: 'video',
+      mediaMime: 'video/mp4',
+      mediaFilename: '',
+      imageUrl: 'https://example.com/featured.jpg'
+    });
+
+    const preview = testUtils.buildQueuedAutomationPreview(
+      { sequence_step_index: 0 },
+      {
+        id: 'template-image',
+        content: '{{title}}',
+        send_mode: 'auto_media',
+        send_images: true,
+        media_source: 'image'
+      },
+      {
+        id: 'feed-item-video',
+        title: 'Story title',
+        link: 'https://example.com/story',
+        image_url: 'https://example.com/featured.jpg',
+        media_url: 'https://example.com/story.mp4',
+        media_kind: 'video',
+        media_mime: 'video/mp4'
+      }
+    );
+
+    expect(preview.mediaUrl).toBe('https://example.com/featured.jpg');
+    expect(preview.mediaType).toBe('image');
+    expect(preview.text).toBe('Story title');
+  });
+
   it('previews a sequence step forced to the featured image', () => {
     normalizeFeedMedia.mockReturnValueOnce({
       mediaUrl: 'https://example.com/story.mp4',

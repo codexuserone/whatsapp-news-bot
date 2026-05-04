@@ -25,6 +25,7 @@ const schema = z.object({
   description: z.string().optional(),
   active: z.boolean().default(true),
   send_mode: z.enum(['auto_media', 'media_only', 'text_preview', 'text_only']).default('auto_media'),
+  media_source: z.enum(['auto', 'image', 'video']).default('auto'),
   status_background_color: z.string().regex(/^#[0-9a-f]{6}$/i).nullable().optional(),
   status_font: z.coerce.number().int().min(0).max(8).nullable().optional(),
   sequence_steps: z.array(z.object({
@@ -168,6 +169,42 @@ const resolveTemplateSendMode = (mode: unknown): TemplateSendMode => {
 const resolveTemplateMediaSource = (source: unknown): TemplateMediaSource => {
   if (source === 'image' || source === 'video') return source;
   return 'auto';
+};
+
+const selectMediaForSource = (
+  data: Record<string, unknown>,
+  source: TemplateMediaSource
+) => {
+  const imageUrl = String(data.image_url || data.imageUrl || '').trim();
+  const mediaUrl = String(data.media_url || data.mediaUrl || '').trim();
+  const rawKind = String(data.media_kind || data.mediaKind || '').trim().toLowerCase();
+  const inferredKind =
+    rawKind ||
+    (/\.(mp4|webm|mov|m4v)(?:[?#]|$)/i.test(mediaUrl)
+      ? 'video'
+      : /\.(mp3|wav|ogg|m4a|flac|aac|opus)(?:[?#]|$)/i.test(mediaUrl)
+        ? 'audio'
+        : /\.(pdf|doc|docx|ppt|pptx|xls|xlsx|csv|txt|rtf|zip)(?:[?#]|$)/i.test(mediaUrl)
+          ? 'document'
+          : mediaUrl
+            ? 'image'
+            : '');
+
+  if (source === 'image') {
+    return imageUrl
+      ? { mediaUrl: imageUrl, mediaKind: 'image' }
+      : inferredKind === 'image'
+        ? { mediaUrl, mediaKind: 'image' }
+        : { mediaUrl: '', mediaKind: '' };
+  }
+
+  if (source === 'video') {
+    return inferredKind === 'video'
+      ? { mediaUrl, mediaKind: 'video' }
+      : { mediaUrl: '', mediaKind: '' };
+  }
+
+  return { mediaUrl: mediaUrl || imageUrl, mediaKind: inferredKind || (imageUrl ? 'image' : '') };
 };
 
 const getTemplateMediaSourceLabel = (source: unknown) => {
@@ -427,6 +464,7 @@ const TemplatesPage = () => {
       description: '',
       active: true,
       send_mode: 'auto_media',
+      media_source: 'auto',
       status_background_color: DEFAULT_STATUS_BACKGROUND,
       status_font: 0,
       sequence_steps: []
@@ -436,9 +474,14 @@ const TemplatesPage = () => {
   const watchedContent = useWatch({ control: form.control, name: 'content' });
   const watchedActive = useWatch({ control: form.control, name: 'active' });
   const watchedSendMode = useWatch({ control: form.control, name: 'send_mode' });
+  const watchedMediaSource = useWatch({ control: form.control, name: 'media_source' });
   const watchedStatusBackgroundColor = useWatch({ control: form.control, name: 'status_background_color' });
   const watchedStatusFont = useWatch({ control: form.control, name: 'status_font' });
   const watchedSequenceSteps = useWatch({ control: form.control, name: 'sequence_steps' }) || [];
+  const selectedTemplateMedia = React.useMemo(
+    () => selectMediaForSource(sampleData, resolveTemplateMediaSource(watchedMediaSource)),
+    [sampleData, watchedMediaSource]
+  );
 
   const renderedPreviewText = previewWithData
     ? (() => {
@@ -482,6 +525,7 @@ const TemplatesPage = () => {
         description: active.description || '',
         active: active.active ?? true,
         send_mode: resolveSendMode(active),
+        media_source: resolveTemplateMediaSource(active.media_source),
         status_background_color: resolveStatusBackgroundColor(active.status_background_color),
         status_font: resolveStatusFont(active.status_font),
         sequence_steps: getTemplateSequenceSteps(active)
@@ -505,6 +549,7 @@ const TemplatesPage = () => {
         description: savedTemplate.description || '',
         active: savedTemplate.active ?? true,
         send_mode: resolveSendMode(savedTemplate),
+        media_source: resolveTemplateMediaSource(savedTemplate.media_source),
         status_background_color: resolveStatusBackgroundColor(savedTemplate.status_background_color),
         status_font: resolveStatusFont(savedTemplate.status_font),
         sequence_steps: getTemplateSequenceSteps(savedTemplate)
@@ -526,6 +571,7 @@ const TemplatesPage = () => {
           description: '',
           active: true,
           send_mode: 'auto_media',
+          media_source: 'auto',
           status_background_color: DEFAULT_STATUS_BACKGROUND,
           status_font: 0,
           sequence_steps: []
@@ -584,6 +630,7 @@ const TemplatesPage = () => {
         description: values.description,
         active: values.active === true,
         send_mode: values.send_mode,
+        media_source: resolveTemplateMediaSource(values.media_source),
         status_background_color: resolveStatusBackgroundColor(values.status_background_color),
         status_font: resolveStatusFont(values.status_font),
         sequence_steps: values.sequence_steps
@@ -612,8 +659,8 @@ const TemplatesPage = () => {
     }
 
     const message = String(renderedPreviewText || '').trim();
-    const mediaUrl = String(sampleData.media_url || sampleData.mediaUrl || sampleData.image_url || sampleData.imageUrl || '').trim();
-    const mediaKind = String(sampleData.media_kind || sampleData.mediaKind || '').trim().toLowerCase();
+    const mediaUrl = selectedTemplateMedia.mediaUrl;
+    const mediaKind = selectedTemplateMedia.mediaKind;
     const isStatusPreview = selectedPreviewTarget?.type === 'status';
     const statusAudiencePatch = isStatusPreview ? { statusJidList: statusPreviewAudience } : {};
     const statusTextStylePatch = isStatusPreview
@@ -947,6 +994,34 @@ const TemplatesPage = () => {
 
                   <input type="hidden" {...form.register('send_mode')} />
 
+                  {(watchedSendMode === 'auto_media' || watchedSendMode === 'media_only') ? (
+                    <div className="space-y-2 rounded-md border p-3">
+                      <Label>Media source</Label>
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        {([
+                          { value: 'auto', label: 'Auto' },
+                          { value: 'image', label: 'Featured image' },
+                          { value: 'video', label: 'Story video' }
+                        ] as const).map((option) => (
+                          <Button
+                            key={option.value}
+                            type="button"
+                            variant={resolveTemplateMediaSource(watchedMediaSource) === option.value ? 'default' : 'outline'}
+                            className="justify-start"
+                            onClick={() =>
+                              form.setValue('media_source', option.value, { shouldDirty: true, shouldValidate: true })
+                            }
+                          >
+                            {option.label}
+                          </Button>
+                        ))}
+                      </div>
+                      <input type="hidden" {...form.register('media_source')} />
+                    </div>
+                  ) : (
+                    <input type="hidden" {...form.register('media_source')} />
+                  )}
+
                   <p className="border-t pt-3 text-xs text-muted-foreground">
                     Templates are always available to automations; pick which one to use on the Automations page.
                   </p>
@@ -1147,6 +1222,7 @@ const TemplatesPage = () => {
                           description: '',
                           active: true,
                           send_mode: 'auto_media',
+                          media_source: 'auto',
                           status_background_color: DEFAULT_STATUS_BACKGROUND,
                           status_font: 0,
                           sequence_steps: []
@@ -1200,6 +1276,12 @@ const TemplatesPage = () => {
 
               <div className="rounded-md border p-3 text-xs text-muted-foreground">
                 Format: <span className="font-medium text-foreground">{getTemplateModeLabel(watchedSendMode)}</span>
+                {(watchedSendMode === 'auto_media' || watchedSendMode === 'media_only') ? (
+                  <>
+                    <br />
+                    Media: <span className="font-medium text-foreground">{getTemplateMediaSourceLabel(watchedMediaSource)}</span>
+                  </>
+                ) : null}
                 {watchedSendMode === 'media_only' ? ' (requires sample media)' : ''}
                 {selectedPreviewTarget?.type === 'status' ? (
                   <>
@@ -1261,21 +1343,21 @@ const TemplatesPage = () => {
                 <div className="max-w-[85%] rounded-lg bg-white/80 px-3 py-2 shadow-sm ring-1 ring-emerald-200/60 dark:bg-emerald-900/50 dark:ring-emerald-800/60">
                   {previewWithData &&
                   (watchedSendMode === 'auto_media' || watchedSendMode === 'media_only') &&
-                  String(sampleData.media_kind || sampleData.mediaKind || '').trim().toLowerCase() === 'video' &&
-                  isSafeVideoSrc(sampleData.media_url || sampleData.mediaUrl) ? (
+                  selectedTemplateMedia.mediaKind === 'video' &&
+                  isSafeVideoSrc(selectedTemplateMedia.mediaUrl) ? (
                     <div className="mb-2 overflow-hidden rounded-md border border-black/5 bg-black">
                       <video
-                        src={String(sampleData.media_url || sampleData.mediaUrl)}
+                        src={selectedTemplateMedia.mediaUrl}
                         controls
                         className="block h-40 w-full object-cover"
                       />
                     </div>
                   ) : previewWithData &&
                   (watchedSendMode === 'auto_media' || watchedSendMode === 'media_only') &&
-                  isSafeImageSrc(sampleData.media_url || sampleData.mediaUrl || sampleData.image_url) ? (
+                  isSafeImageSrc(selectedTemplateMedia.mediaUrl) ? (
                     <div className="mb-2 overflow-hidden rounded-md border border-black/5 bg-white">
                       <Image
-                        src={String(sampleData.media_url || sampleData.mediaUrl || sampleData.image_url)}
+                        src={selectedTemplateMedia.mediaUrl}
                         alt="Template preview"
                         width={640}
                         height={360}

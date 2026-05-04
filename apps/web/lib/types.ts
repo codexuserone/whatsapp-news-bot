@@ -33,6 +33,7 @@ export type Template = {
   active: boolean;
   send_images?: boolean | null;
   send_mode?: 'auto_media' | 'media_only' | 'text_preview' | 'text_only' | null;
+  media_source?: 'auto' | 'image' | 'video' | null;
   status_background_color?: string | null;
   status_font?: number | null;
   sequence_steps?: Array<{
@@ -85,6 +86,7 @@ export type LogEntry = {
   message_content?: string | null;
   error_message?: string | null;
   media_url?: string | null;
+  media_stored?: boolean | null;
   media_type?: string | null;
   media_sent?: boolean | null;
   media_error?: string | null;
@@ -172,6 +174,7 @@ export type QueueItem = {
   media_kind?: 'image' | 'video' | 'audio' | 'document' | null | string;
   rendered_content?: string | null;
   media_url?: string | null;
+  media_stored?: boolean | null;
   media_type?: string | null;
   media_sent?: boolean | null;
   media_error?: string | null;

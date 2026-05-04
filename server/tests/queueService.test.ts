@@ -920,6 +920,24 @@ describe('queueService __testUtils', () => {
     expect(testUtils.hasQueueCursorAdvanced(cursorAt, 'b', '2026-04-29T00:31:42.499Z', 'a')).toBe(true);
   });
 
+  it('filters repeated feed cursor rows before planning the next queue page', () => {
+    const cursorAt = '2026-04-29T00:31:42.498Z';
+    const page = [
+      { id: 'b', created_at: cursorAt, pub_date: '2026-04-29T00:31:42.498Z' },
+      { id: 'c', created_at: cursorAt, pub_date: '2026-04-29T00:31:42.498Z' },
+      { id: 'a', created_at: '2026-04-29T00:31:42.497Z', pub_date: '2026-04-29T00:31:42.497Z' },
+      { id: 'd', created_at: '2026-04-29T00:31:42.499Z', pub_date: '2026-04-29T00:31:42.499Z' }
+    ];
+
+    expect(testUtils.filterFeedPageAfterCursor(page, cursorAt, 'b').map((item: { id: string }) => item.id)).toEqual(['c', 'd']);
+    expect(testUtils.filterFeedPageAfterCursor(page, cursorAt, null).map((item: { id: string }) => item.id)).toEqual([
+      'b',
+      'c',
+      'a',
+      'd'
+    ]);
+  });
+
   it('accepts only real image candidates for feed automation images', () => {
     expect(testUtils.isUsableFeedImageUrl('https://example.com/photo.jpg')).toBe(true);
     expect(testUtils.isUsableFeedImageUrl('https://example.com/video.mp4')).toBe(false);

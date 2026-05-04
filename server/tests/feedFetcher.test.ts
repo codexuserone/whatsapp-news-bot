@@ -182,6 +182,38 @@ describe('fetchFeedItemsWithMeta', () => {
         expect(result.items[0]?.imageUrl).toBeUndefined();
     });
 
+    it('parses JSON bodies even when a saved feed type is stale RSS', async () => {
+        mockSafeAxiosRequest.mockResolvedValueOnce({
+            status: 200,
+            headers: { 'content-type': 'application/json; charset=utf-8' },
+            data: Buffer.from(JSON.stringify({
+                items: [
+                    {
+                        id: 'json-from-rss-type',
+                        title: 'JSON from stale type',
+                        link: 'https://example.com/status/1/',
+                        image_url: 'https://cdn.example.com/status.jpg'
+                    }
+                ]
+            }), 'utf8')
+        });
+
+        const result = await fetchFeedItemsWithMeta({
+            url: 'https://example.com/wp-json/wp/v2/anash_status',
+            type: 'rss'
+        });
+
+        expect(mockParseString).not.toHaveBeenCalled();
+        expect(result.meta.detectedType).toBe('json');
+        expect(result.meta.contentType).toBe('application/json; charset=utf-8');
+        expect(result.items).toHaveLength(1);
+        expect(result.items[0]).toMatchObject({
+            guid: 'json-from-rss-type',
+            mediaUrl: 'https://cdn.example.com/status.jpg',
+            mediaKind: 'image'
+        });
+    });
+
     it('discovers feed endpoints from HTML sources before parsing items', async () => {
         mockSafeAxiosRequest
             .mockResolvedValueOnce({

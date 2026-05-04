@@ -3517,6 +3517,39 @@ const hasQueueCursorAdvanced = (
   return Boolean(nextIdValue && nextIdValue > previousIdValue);
 };
 
+const isFeedItemAfterQueueCursor = (
+  item: { created_at?: string | null; id?: string | null },
+  cursorAt: unknown,
+  cursorId: unknown
+) => {
+  const normalizedCursorAt = normalizeQueueCursorIso(cursorAt);
+  const itemAt = normalizeQueueCursorIso(item?.created_at);
+  if (!normalizedCursorAt || !itemAt) return true;
+
+  const cursorMs = Date.parse(normalizedCursorAt);
+  const itemMs = Date.parse(itemAt);
+  if (Number.isFinite(cursorMs) && Number.isFinite(itemMs)) {
+    if (itemMs > cursorMs) return true;
+    if (itemMs < cursorMs) return false;
+  }
+
+  const cursorIdValue = String(cursorId || '').trim();
+  if (!cursorIdValue) return true;
+  const itemIdValue = String(item?.id || '').trim();
+  return Boolean(itemIdValue && itemIdValue > cursorIdValue);
+};
+
+const filterFeedPageAfterCursor = <T extends { created_at?: string | null; id?: string | null }>(
+  page: T[],
+  cursorAt: unknown,
+  cursorId: unknown
+) => {
+  if (!cursorId) return page;
+  return page.filter((item) => isFeedItemAfterQueueCursor(item, cursorAt, cursorId));
+};
+
+type FeedQueueCursorRow = { id?: string; created_at?: string | null; pub_date?: string | null };
+
 const isAutoQueueReplayTooOld = (
   log: { created_at?: string | null },
   item: { pub_date?: string | null; created_at?: string | null } | null | undefined,
@@ -3661,8 +3694,17 @@ const queueSinceLastRunForSchedule = async (
       break;
     }
 
-    const pagePlan = planFeedDispatchPage((page || []) as Array<{ id?: string; created_at?: string; pub_date?: string }>);
-    const items = pagePlan.dispatchItems.filter((item) => isFeedItemFreshEnoughForAutoQueue(item, maxLookbackHours));
+    const rawPageRows = (page || []) as FeedQueueCursorRow[];
+    const pageRows: FeedQueueCursorRow[] = filterFeedPageAfterCursor(rawPageRows, cursorAt, cursorId);
+    if (!pageRows.length) {
+      break;
+    }
+
+    const pagePlan: { dispatchItems: FeedQueueCursorRow[]; cursorAt: string | null; cursorId: string | null } =
+      planFeedDispatchPage(pageRows);
+    const items = pagePlan.dispatchItems.filter((item: FeedQueueCursorRow) =>
+      isFeedItemFreshEnoughForAutoQueue(item, maxLookbackHours)
+    );
     if (!items.length) {
       if (!pagePlan.dispatchItems.length) {
         break;
@@ -5962,6 +6004,8 @@ module.exports = {
     normalizeQueueCursorIso,
     clampQueueCursorToLookback,
     hasQueueCursorAdvanced,
+    isFeedItemAfterQueueCursor,
+    filterFeedPageAfterCursor,
     isUsableFeedImageUrl,
     isAuthStateError,
     isConnectionStateError,

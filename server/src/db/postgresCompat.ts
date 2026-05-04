@@ -83,13 +83,23 @@ const preferIpv4 = () => {
 };
 
 const resolvePostgresConnectionString = () => {
-  const candidates = [
-    process.env.DATABASE_URL,
-    process.env.NEON_DATABASE_URL,
-    process.env.POSTGRES_URL,
-    process.env.SUPABASE_POOLER_URL,
-    process.env.SUPABASE_DB_URL
-  ];
+  const provider = String(process.env.DB_PROVIDER || '').trim().toLowerCase();
+  const candidates =
+    provider === 'neon' || provider === 'postgres'
+      ? [
+          process.env.NEON_DATABASE_URL,
+          process.env.POSTGRES_URL,
+          process.env.DATABASE_URL,
+          process.env.SUPABASE_POOLER_URL,
+          process.env.SUPABASE_DB_URL
+        ]
+      : [
+          process.env.DATABASE_URL,
+          process.env.NEON_DATABASE_URL,
+          process.env.POSTGRES_URL,
+          process.env.SUPABASE_POOLER_URL,
+          process.env.SUPABASE_DB_URL
+        ];
 
   for (const candidate of candidates) {
     const value = String(candidate || '').trim();

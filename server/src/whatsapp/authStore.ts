@@ -84,7 +84,11 @@ const resolveAuthStateDbUrl = () => {
     return explicitPoolerUrl;
   }
 
-  const configuredUrl = String(process.env.SUPABASE_DB_URL || process.env.NEON_DATABASE_URL || process.env.DATABASE_URL || '').trim();
+  const provider = String(process.env.DB_PROVIDER || '').trim().toLowerCase();
+  const configuredUrl =
+    provider === 'neon' || provider === 'postgres'
+      ? String(process.env.NEON_DATABASE_URL || process.env.POSTGRES_URL || process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || '').trim()
+      : String(process.env.SUPABASE_DB_URL || process.env.NEON_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL || '').trim();
   if (!configuredUrl) return '';
 
   try {
@@ -311,9 +315,26 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     query: string,
     params: unknown[] = []
   ) => {
-    if (!authStatePool) throw new Error('auth_state postgres pool is not configured');
-    const result = await authStatePool.query(query, params);
-    return result.rows as T[];
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const pool = getAuthStatePool();
+      if (!pool) throw new Error('auth_state postgres pool is not configured');
+      try {
+        const result = await pool.query(query, params);
+        return result.rows as T[];
+      } catch (error) {
+        const transient = isTransientLeaseTransportError(error);
+        if (!transient || attempt >= maxAttempts) {
+          throw error;
+        }
+        console.warn(
+          `Transient auth_state Postgres query failure; retrying ${attempt}/${maxAttempts - 1}:`,
+          getErrorMessage(error)
+        );
+        await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+      }
+    }
+    return [];
   };
 
   const getAuthStateRowViaPg = async (): Promise<AuthStateRow | null> => {
@@ -1226,7 +1247,10 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
           });
           return;
         } catch (pgError) {
-          console.warn('Failed to update auth_state status via Postgres:', pgError);
+          console.warn(
+            'Failed to update auth_state status via Postgres:',
+            getErrorMessage(pgError, 'Unknown auth_state status update failure')
+          );
           if (!supabase) return;
         }
       }

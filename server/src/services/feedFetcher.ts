@@ -138,6 +138,18 @@ const detectFeedTypeHint = (value?: string | null): 'rss' | 'atom' | 'json' | nu
   return null;
 };
 
+const getHeaderText = (headers: Record<string, unknown> | undefined, name: string) => {
+  const lowerName = name.toLowerCase();
+  const entry = Object.entries(headers || {}).find(([key]) => key.toLowerCase() === lowerName);
+  return entry ? String(entry[1] || '') : '';
+};
+
+const looksLikeJsonPayload = (contentType: string, bodyText: string) => {
+  const normalizedType = String(contentType || '').toLowerCase();
+  const trimmed = String(bodyText || '').trimStart();
+  return normalizedType.includes('json') || trimmed.startsWith('{') || trimmed.startsWith('[');
+};
+
 const discoverFeedEndpointFromHtml = async (
   pageUrl: string
 ): Promise<{ url: string; type: 'rss' | 'atom' | 'json' | null } | null> => {
@@ -823,7 +835,7 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
     etag: response.headers?.etag,
     lastModified: response.headers?.['last-modified'],
     notModified: response.status === 304,
-    contentType: response.headers?.['content-type']
+    contentType: getHeaderText(response.headers, 'content-type')
   };
 
   if (response.status === 304) {
@@ -834,6 +846,20 @@ const fetchRssItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIte
   const buffer = response.data;
   const decoder = new TextDecoder('utf-8'); // Default to utf-8
   const xmlString = decoder.decode(buffer);
+
+  if (looksLikeJsonPayload(String(meta.contentType || ''), xmlString)) {
+    try {
+      const json = JSON.parse(xmlString);
+      const itemsPath = (feed.parseConfig?.itemsPath as string) || 'items';
+      const items = extractJsonItemsArray(json, itemsPath);
+      return {
+        items: (items as Record<string, unknown>[]).map((item) => mapJsonFeedItem(feed, item)),
+        meta: { ...meta, detectedType: 'json' }
+      };
+    } catch {
+      // Fall through to XML parsing so malformed JSON still reports the real parse failure.
+    }
+  }
 
   const data = await parser.parseString(xmlString);
   const items = (data.items || []).map((item: Record<string, unknown>) => {
@@ -1009,8 +1035,9 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
     const result = await tryFetch(preferred, sourceFeed);
     items = result.items;
     meta = result.meta;
-    detectedType =
-      preferred === 'json' ? 'json' : sourceFeed.type === 'atom' ? 'atom' : 'rss';
+    detectedType = result.meta?.detectedType || (
+      preferred === 'json' ? 'json' : sourceFeed.type === 'atom' ? 'atom' : 'rss'
+    );
 
     if (!meta?.notModified && (!items || items.length === 0)) {
       try {
@@ -1018,7 +1045,7 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
         if (alt?.items?.length) {
           items = alt.items;
           meta = alt.meta;
-          detectedType = fallback === 'json' ? 'json' : 'rss';
+          detectedType = alt.meta?.detectedType || (fallback === 'json' ? 'json' : 'rss');
         }
       } catch {
         // ignore fallback errors
@@ -1028,7 +1055,7 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
     const alt = await tryFetch(fallback, sourceFeed);
     items = alt.items;
     meta = alt.meta;
-    detectedType = fallback === 'json' ? 'json' : 'rss';
+    detectedType = alt.meta?.detectedType || (fallback === 'json' ? 'json' : 'rss');
   }
 
   // Last fallback: if the URL is an HTML page, auto-discover its feed endpoint and retry.
@@ -1053,12 +1080,13 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
             sourceUrl: discovered.url,
             discoveredFromUrl: feed.url
           };
-          detectedType =
+          detectedType = discoveredResult.meta?.detectedType || (
             discoveredPreferred === 'json'
               ? 'json'
               : discoveredFeed.type === 'atom'
                 ? 'atom'
-                : 'rss';
+                : 'rss'
+          );
 
           if (!meta?.notModified && (!items || items.length === 0)) {
             const discoveredAlt = await tryFetch(discoveredFallback, discoveredFeed);
@@ -1069,7 +1097,7 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
                 sourceUrl: discovered.url,
                 discoveredFromUrl: feed.url
               };
-              detectedType = discoveredFallback === 'json' ? 'json' : 'rss';
+              detectedType = discoveredAlt.meta?.detectedType || (discoveredFallback === 'json' ? 'json' : 'rss');
             }
           }
         } catch {
@@ -1080,7 +1108,7 @@ const fetchFeedItemsWithMeta = async (feed: FeedConfig): Promise<{ items: FeedIt
             sourceUrl: discovered.url,
             discoveredFromUrl: feed.url
           };
-          detectedType = discoveredFallback === 'json' ? 'json' : 'rss';
+          detectedType = discoveredAlt.meta?.detectedType || (discoveredFallback === 'json' ? 'json' : 'rss');
         }
       }
     } catch {

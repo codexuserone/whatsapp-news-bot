@@ -2092,11 +2092,15 @@ const whatsappRoutes = () => {
     });
     const statuses = Array.from(recentStatuses.entries()).map(([id, snap]) => {
       const s = snap as Record<string, unknown>;
+      const remoteJid = String(s.remoteJid || '').trim();
+      const statusLabel = remoteJid === 'status@broadcast' && s.statusLabel === 'read'
+        ? 'server_ack'
+        : s.statusLabel ?? null;
       return {
         id,
         status: s.status ?? null,
-        statusLabel: s.statusLabel ?? null,
-        remoteJid: s.remoteJid ?? null,
+        statusLabel,
+        remoteJid: remoteJid || null,
         updatedAtMs: s.updatedAtMs ?? null
       };
     });

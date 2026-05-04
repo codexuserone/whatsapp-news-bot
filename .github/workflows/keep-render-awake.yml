@@ -1,14 +1,7 @@
-name: Keep Render Awake
+name: Manual Render Health Check
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/keep-render-awake.yml
-  schedule:
-    - cron: "*/5 * * * *"
 
 permissions:
   contents: read

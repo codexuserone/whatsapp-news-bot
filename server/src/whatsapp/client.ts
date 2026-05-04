@@ -3048,6 +3048,12 @@ class WhatsAppClient {
 
     const cachedFailure = this.recentMessageFailures.get(messageId);
     if (cachedFailure) {
+      if (failureGraceMs > 0) {
+        const acked = await this.waitForMessageStatus(messageId, minStatus, failureGraceMs);
+        if (acked) {
+          return { ok: true, via: 'ack', status: acked.status, statusLabel: acked.statusLabel };
+        }
+      }
       return { ok: false, via: 'none', error: cachedFailure.errorMessage };
     }
 

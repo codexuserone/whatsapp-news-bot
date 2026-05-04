@@ -1316,6 +1316,37 @@ describe('WhatsAppClient', () => {
         });
     });
 
+    it('should let a later server ack override a cached ack error during the grace window', async () => {
+        const baileysLogger = client.createBaileysLogger();
+        client.waitForMessage = jest.fn(async () => ({ key: { id: 'msg-cached-ack-error' } }));
+        client.waitForMessageStatus = jest.fn(async () => ({
+            status: 3,
+            statusLabel: 'delivered',
+            remoteJid: 'status@broadcast',
+            updatedAtMs: Date.now()
+        }));
+
+        baileysLogger.warn(
+            { node: { attrs: { class: 'message', from: 'status@broadcast', id: 'msg-cached-ack-error', error: '479' } } },
+            'received error in ack'
+        );
+
+        const result = await client.confirmSend('msg-cached-ack-error', {
+            upsertTimeoutMs: 10,
+            ackTimeoutMs: 10,
+            requireServerAck: true,
+            failureGraceMs: 10
+        });
+
+        expect(result).toEqual({
+            ok: true,
+            via: 'ack',
+            status: 3,
+            statusLabel: 'delivered'
+        });
+        expect(client.waitForMessageStatus).toHaveBeenCalledWith('msg-cached-ack-error', 2, 10);
+    });
+
     it('should not close the session for a Baileys log-only incoming decrypt miss', () => {
         const baileysLogger = client.createBaileysLogger();
         client.markSessionUnhealthy = jest.fn();

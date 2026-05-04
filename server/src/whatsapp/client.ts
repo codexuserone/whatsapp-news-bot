@@ -389,7 +389,7 @@ const preferDeliverableStatusRecipients = (
   };
 };
 
-const buildStatusDeliveryRecipients = (recipients: string[], selfJid: unknown, includeSelf: boolean) => {
+const buildStatusDeliveryRecipients = (recipients: string[], selfJids: unknown, includeSelf: boolean) => {
   const normalizedRecipients = Array.from(
     new Set(
       (Array.isArray(recipients) ? recipients : [])
@@ -398,10 +398,33 @@ const buildStatusDeliveryRecipients = (recipients: string[], selfJid: unknown, i
     )
   );
 
-  const normalizedSelf = normalizeStatusAudienceJid(selfJid);
-  if (!normalizedSelf) return normalizedRecipients;
-  const withoutSelf = normalizedRecipients.filter((recipient) => recipient !== normalizedSelf);
-  return includeSelf ? Array.from(new Set([...withoutSelf, normalizedSelf])) : withoutSelf;
+  const selfCandidates = Array.isArray(selfJids) ? selfJids : [selfJids];
+  const normalizedSelfJids = Array.from(
+    new Set(selfCandidates.map((candidate) => normalizeStatusAudienceJid(candidate)).filter(Boolean))
+  );
+  if (!normalizedSelfJids.length) return normalizedRecipients;
+  const selfSet = new Set(normalizedSelfJids);
+  const withoutSelf = normalizedRecipients.filter((recipient) => !selfSet.has(recipient));
+  return includeSelf ? Array.from(new Set([...withoutSelf, ...normalizedSelfJids])) : withoutSelf;
+};
+
+const buildStatusSelfCandidates = (
+  socket: unknown,
+  meJid: unknown,
+  resolvedSelfJid: unknown
+) => {
+  const socketUser = (socket as { user?: Record<string, unknown> } | null | undefined)?.user || {};
+  return [
+    meJid,
+    socketUser.id,
+    socketUser.jid,
+    socketUser.lid,
+    socketUser.lidJid,
+    socketUser.lidJID,
+    socketUser.phone,
+    socketUser.pn,
+    resolvedSelfJid
+  ];
 };
 
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict' | 'paused';
@@ -4155,9 +4178,16 @@ class WhatsAppClient {
           'Status viewers only contain unresolved linked-device identities. Add private Status recipient phone numbers in Settings or wait for WhatsApp sync to finish.'
         );
       }
+      const selfAudienceJids = buildStatusSelfCandidates(
+        this.socket,
+        this.meJid,
+        resolvedAudience.selfJid
+      )
+        .map((candidate) => normalizeStatusAudienceJid(candidate))
+        .filter(Boolean);
       const statusJidList = buildStatusDeliveryRecipients(
         candidateStatusJidList,
-        this.meJid || this.socket?.user?.id || resolvedAudience.selfJid,
+        selfAudienceJids,
         includeSender
       );
 
@@ -4167,11 +4197,9 @@ class WhatsAppClient {
           participantCount: statusJidList.length,
           explicitCount: dedupedExplicit.length,
           includesSelf: Boolean(
-            normalizeStatusAudienceJid(this.meJid || this.socket?.user?.id || resolvedAudience.selfJid) &&
-            statusJidList.includes(
-              normalizeStatusAudienceJid(this.meJid || this.socket?.user?.id || resolvedAudience.selfJid)
-            )
+            selfAudienceJids.some((selfJid) => statusJidList.includes(selfJid))
           ),
+          selfCandidateCount: selfAudienceJids.length,
           sources: resolvedAudience.sources,
           warnings: resolvedAudience.warnings
         },

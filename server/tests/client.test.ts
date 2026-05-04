@@ -1084,11 +1084,34 @@ describe('WhatsAppClient', () => {
         expect(sentOptions).not.toHaveProperty('includeSelf');
     });
 
+    it('should include all known sender identities in status delivery by default', async () => {
+        const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-self-lid' } }));
+        client.socket = {
+            sendMessage,
+            user: {
+                id: '16465527019:58@s.whatsapp.net',
+                lid: '123456789012345@lid'
+            }
+        };
+
+        await client.sendStatusBroadcast(
+            { text: 'hello' },
+            { statusJidList: ['19144477725@s.whatsapp.net'] }
+        );
+
+        const sentOptions = sendMessage.mock.calls[0]?.[2];
+        expect(sentOptions.statusJidList).toEqual([
+            '19144477725@s.whatsapp.net',
+            '16465527019@s.whatsapp.net',
+            '123456789012345@lid'
+        ]);
+    });
+
     it('should allow sender account status delivery to be disabled explicitly', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-no-self' } }));
         client.socket = {
             sendMessage,
-            user: { id: '16465527019:58@s.whatsapp.net' }
+            user: { id: '16465527019:58@s.whatsapp.net', lid: '123456789012345@lid' }
         };
 
         await client.sendStatusBroadcast(

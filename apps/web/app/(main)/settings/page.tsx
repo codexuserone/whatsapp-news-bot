@@ -513,9 +513,9 @@ const SettingsPage = () => {
               ) : null}
               <div className="flex items-center justify-between gap-3 rounded-lg border bg-background/40 p-4">
                 <div>
-                  <p className="text-sm font-medium">Show On Sender Account</p>
+                  <p className="text-sm font-medium">Include Sender Account</p>
                   <p className="text-xs text-muted-foreground">
-                    Also delivers bot-posted Status to the connected Business account so its own phone/web can sync the post.
+                    Adds the connected Business number to the Status audience.
                   </p>
                 </div>
                 <Controller

@@ -3276,12 +3276,12 @@ class WhatsAppClient {
     }
 
     try {
-      const count = Math.max(1, Math.min(Math.floor(Number(options?.count || 10)), 50));
+      const count = Math.max(1, Math.min(Math.floor(Number(options?.count || 25)), 50));
       const hasSince = options?.since !== undefined && options?.since !== null;
       const hasAfter = options?.after !== undefined && options?.after !== null;
       const since = hasSince ? Math.max(0, Math.floor(Number(options?.since || 0))) : undefined;
       const after = hasAfter ? Math.max(0, Math.floor(Number(options?.after || 0))) : undefined;
-      const timeoutMs = Math.max(1000, Math.min(Number(options?.timeoutMs || 8000), 30000));
+      const timeoutMs = Math.max(1000, Math.min(Number(options?.timeoutMs || 12000), 45000));
       const result = await withTimeout(
         socket.newsletterFetchMessages(normalizedJid, count, since, after),
         timeoutMs,
@@ -3315,7 +3315,7 @@ class WhatsAppClient {
     const expectedId = String(messageId || '').trim();
     if (!expectedId) return { ok: false, via: 'none', error: 'Message id is required for channel verification' };
 
-    const timeoutMs = Math.max(1000, Math.min(Number(options?.timeoutMs || 15000), 90000));
+    const timeoutMs = Math.max(1000, Math.min(Number(options?.timeoutMs || 45000), 90000));
     const pollMs = Math.max(500, Math.min(Number(options?.pollMs || 2500), 10000));
     const startedAt = Date.now();
     let lastError: string | null = null;
@@ -3323,7 +3323,7 @@ class WhatsAppClient {
 
     do {
       const result = await this.fetchNewsletterMessages(jid, {
-        count: options?.count || 10,
+        count: options?.count || 25,
         timeoutMs: Math.min(timeoutMs, Math.max(1000, pollMs + 2500))
       });
       if (result.unsupported) {
@@ -4150,6 +4150,52 @@ class WhatsAppClient {
     }
   }
 
+  private async relayStatusBroadcast(content: AnyMessageContent, options: Record<string, unknown>) {
+    const socket = this.socket as any;
+    if (!socket) throw new Error('WhatsApp not connected');
+
+    if (typeof socket.relayMessage !== 'function') {
+      return socket.sendMessage('status@broadcast', content, options);
+    }
+
+    const { generateWAMessage, getUrlInfo } = await loadBaileys();
+    if (typeof generateWAMessage !== 'function') {
+      return socket.sendMessage('status@broadcast', content, options);
+    }
+
+    const fullMsg = await generateWAMessage('status@broadcast', content, {
+      ...options,
+      logger,
+      userJid: socket.user?.id,
+      getUrlInfo: typeof getUrlInfo === 'function'
+        ? (text: string) => getUrlInfo(text, { fetchOpts: { timeout: 3000 }, logger })
+        : undefined,
+      getProfilePicUrl: typeof socket.profilePictureUrl === 'function'
+        ? socket.profilePictureUrl.bind(socket)
+        : undefined,
+      getCallLink: typeof socket.createCallLink === 'function'
+        ? socket.createCallLink.bind(socket)
+        : undefined,
+      upload: socket.waUploadToServer,
+      mediaCache: socket.mediaCache,
+      options: socket.options
+    });
+
+    await socket.relayMessage('status@broadcast', fullMsg.message, {
+      messageId: fullMsg.key?.id,
+      statusJidList: options.statusJidList,
+      useUserDevicesCache: false
+    });
+
+    if (socket.ev && typeof socket.ev.emit === 'function') {
+      process.nextTick(() => {
+        socket.ev.emit('messages.upsert', { messages: [fullMsg], type: 'append' });
+      });
+    }
+
+    return fullMsg;
+  }
+
   async sendStatusBroadcast(content: AnyMessageContent, options: Record<string, unknown> = {}) {
     if (!this.socket) throw new Error('WhatsApp not connected');
     if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
@@ -4238,7 +4284,7 @@ class WhatsAppClient {
         );
       }
 
-      const msg = await this.socket.sendMessage('status@broadcast', content, options);
+      const msg = await this.relayStatusBroadcast(content, options);
 
       try {
         const id = msg?.key?.id;

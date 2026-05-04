@@ -175,8 +175,8 @@ describe('queueService __testUtils', () => {
     });
 
     expect(confirmNewsletterMessage).toHaveBeenCalledWith('120363406955649221@newsletter', 'newsletter-msg-123', {
-      timeoutMs: 15000,
-      count: 10
+      timeoutMs: 30000,
+      count: 25
     });
     expect(confirmSend).not.toHaveBeenCalled();
   });
@@ -206,8 +206,8 @@ describe('queueService __testUtils', () => {
     });
 
     expect(confirmNewsletterMessage).toHaveBeenCalledWith('120363406955649221@newsletter', 'newsletter-msg-123', {
-      timeoutMs: 30000,
-      count: 10
+      timeoutMs: 60000,
+      count: 25
     });
     expect(confirmSend).not.toHaveBeenCalled();
   });

@@ -25,6 +25,19 @@ jest.mock('../src/whatsapp/baileys', () => ({
             }
         },
         generateMessageIDV2: jest.fn(() => 'newsletter-msg-id'),
+        generateWAMessage: jest.fn(async (jid: string, content: Record<string, unknown>, options: Record<string, unknown>) => ({
+            key: {
+                remoteJid: jid,
+                fromMe: true,
+                id: String(options?.messageId || 'status-generated-id')
+            },
+            message: Object.prototype.hasOwnProperty.call(content, 'text')
+                ? { extendedTextMessage: { text: content.text } }
+                : content,
+            status: 1,
+            messageTimestamp: Math.floor(Date.now() / 1000)
+        })),
+        getUrlInfo: jest.fn(async () => undefined),
         encodeNewsletterMessage: jest.fn((message: unknown) => Buffer.from(JSON.stringify(message))),
         prepareWAMessageMedia: jest.fn(async (message: Record<string, unknown>, options: Record<string, unknown>) => {
             let uploadResult: any = null;
@@ -166,7 +179,7 @@ describe('WhatsAppClient', () => {
         });
         expect(client.socket.newsletterFetchMessages).toHaveBeenCalledWith(
             '120363406955649221@newsletter',
-            10,
+            25,
             undefined,
             undefined
         );
@@ -1107,6 +1120,40 @@ describe('WhatsAppClient', () => {
             '123456789012345@lid'
         ]);
         expect(sentOptions.useUserDevicesCache).toBe(false);
+    });
+
+    it('should relay live status sends with a fresh device lookup when Baileys exposes relayMessage', async () => {
+        const relayMessage: any = jest.fn(async () => 'status-generated-id');
+        const sendMessage: any = jest.fn();
+        const emit: any = jest.fn();
+        client.socket = {
+            relayMessage,
+            sendMessage,
+            ev: { emit },
+            user: { id: '16465527019:58@s.whatsapp.net' }
+        };
+
+        const result = await client.sendStatusBroadcast(
+            { text: 'hello' },
+            { statusJidList: ['19144477725@s.whatsapp.net'] }
+        );
+
+        expect(sendMessage).not.toHaveBeenCalled();
+        expect(relayMessage).toHaveBeenCalledWith(
+            'status@broadcast',
+            expect.objectContaining({
+                extendedTextMessage: expect.objectContaining({ text: 'hello' })
+            }),
+            expect.objectContaining({
+                messageId: 'status-generated-id',
+                useUserDevicesCache: false,
+                statusJidList: [
+                    '19144477725@s.whatsapp.net',
+                    '16465527019@s.whatsapp.net'
+                ]
+            })
+        );
+        expect(result.key.id).toBe('status-generated-id');
     });
 
     it('should allow sender account status delivery to be disabled explicitly', async () => {

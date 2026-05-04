@@ -1718,8 +1718,8 @@ const whatsappRoutes = () => {
         if (confirmationRequired && messageId && whatsapp?.confirmSend) {
           if (isNewsletterJid(normalizedJid) && typeof whatsapp.confirmNewsletterMessage === 'function') {
             const channelConfirmation = await whatsapp.confirmNewsletterMessage(normalizedJid, messageId, {
-              timeoutMs: requestedMediaType ? 30000 : 15000,
-              count: 10
+              timeoutMs: requestedMediaType ? 60000 : 30000,
+              count: 25
             });
             if (channelConfirmation?.ok || !channelConfirmation?.unsupported) {
               confirmation = channelConfirmation;

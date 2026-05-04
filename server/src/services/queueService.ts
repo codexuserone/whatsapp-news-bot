@@ -2305,8 +2305,8 @@ const confirmSendResult = async (
     if (targetType === 'channel' && whatsappClient.confirmNewsletterMessage) {
       const jid = String(sendResult?.response?.key?.remoteJid || '').trim();
       const channelConfirmation = await whatsappClient.confirmNewsletterMessage(jid, messageId, {
-        timeoutMs: media ? 30000 : 15000,
-        count: 10
+        timeoutMs: media ? 60000 : 30000,
+        count: 25
       });
       if (channelConfirmation.ok) {
         return {

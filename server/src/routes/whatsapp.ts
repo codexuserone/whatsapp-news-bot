@@ -1091,6 +1091,29 @@ const whatsappRoutes = () => {
     }
   }));
 
+  router.get('/channels/:jid/messages', asyncHandler(async (req: Request, res: Response) => {
+    const whatsapp = req.app.locals.whatsapp;
+    if (!whatsapp || whatsapp.getStatus?.().status !== 'connected') {
+      throw badRequest('WhatsApp is not connected');
+    }
+    if (typeof whatsapp.fetchNewsletterMessages !== 'function') {
+      throw badRequest('Channel message fetch is not available in this Baileys session');
+    }
+
+    const jid = normalizeChannelJid(String(req.params.jid || '').trim());
+    if (!jid || !isValidChannelJid(jid)) {
+      throw badRequest('Channel JID invalid');
+    }
+    const count = Math.max(1, Math.min(Math.floor(Number(req.query.count || 10)), 50));
+    const result = await whatsapp.fetchNewsletterMessages(jid, { count });
+    res.json({
+      ok: Boolean(result?.ok),
+      unsupported: Boolean(result?.unsupported),
+      error: result?.error || null,
+      messages: result?.messages || []
+    });
+  }));
+
   router.post('/channels/discover', asyncHandler(async (req: Request, res: Response) => {
     const whatsapp = req.app.locals.whatsapp;
     const supabase = getSupabaseClient();
@@ -1677,10 +1700,21 @@ const whatsappRoutes = () => {
           throw new Error('Test message was not assigned a WhatsApp message id');
         }
         if (confirmationRequired && messageId && whatsapp?.confirmSend) {
-          confirmation = await whatsapp.confirmSend(
-            messageId,
-            resolveTestSendConfirmationOptions(normalizedJid, requestedMediaType)
-          );
+          if (isNewsletterJid(normalizedJid) && typeof whatsapp.confirmNewsletterMessage === 'function') {
+            const channelConfirmation = await whatsapp.confirmNewsletterMessage(normalizedJid, messageId, {
+              timeoutMs: requestedMediaType ? 30000 : 15000,
+              count: 10
+            });
+            if (channelConfirmation?.ok || !channelConfirmation?.unsupported) {
+              confirmation = channelConfirmation;
+            }
+          }
+          if (!confirmation) {
+            confirmation = await whatsapp.confirmSend(
+              messageId,
+              resolveTestSendConfirmationOptions(normalizedJid, requestedMediaType)
+            );
+          }
         }
         const held = shouldHoldRejectedChannelMediaTestSend({
           jid: normalizedJid,

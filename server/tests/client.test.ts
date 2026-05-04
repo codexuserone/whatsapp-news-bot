@@ -17,6 +17,13 @@ jest.mock('../src/whatsapp/baileys', () => ({
         fetchLatestBaileysVersion: jest.fn(async () => ({ version: [2, 24, 1] })),
         Browsers: { windows: jest.fn() },
         DEFAULT_ORIGIN: 'https://web.whatsapp.com',
+        proto: {
+            Message: {
+                decode: jest.fn((value: Uint8Array) => ({
+                    toJSON: () => JSON.parse(Buffer.from(value).toString('utf8'))
+                }))
+            }
+        },
         generateMessageIDV2: jest.fn(() => 'newsletter-msg-id'),
         encodeNewsletterMessage: jest.fn((message: unknown) => Buffer.from(JSON.stringify(message))),
         prepareWAMessageMedia: jest.fn(async (message: Record<string, unknown>, options: Record<string, unknown>) => {
@@ -108,6 +115,77 @@ describe('WhatsAppClient', () => {
         expect(client).toBeDefined();
         expect(client.status).toBe('disconnected');
         expect(client.instanceId).toBeDefined();
+    });
+
+    it('confirms a channel message by fetching newsletter messages', async () => {
+        client.socket = {
+            newsletterFetchMessages: jest.fn(async () => ({
+                tag: 'iq',
+                attrs: {},
+                content: [
+                    {
+                        tag: 'message_updates',
+                        attrs: {},
+                        content: [
+                            {
+                                tag: 'message',
+                                attrs: { message_id: 'newsletter-msg-123', server_id: 'newsletter-msg-123', t: '1770000000' },
+                                content: [
+                                    {
+                                        tag: 'plaintext',
+                                        attrs: {},
+                                        content: Buffer.from(JSON.stringify({ imageMessage: { caption: 'Published image' } }))
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }))
+        };
+
+        const result = await client.confirmNewsletterMessage(
+            '120363406955649221@newsletter',
+            'newsletter-msg-123',
+            { timeoutMs: 1000, pollMs: 100 }
+        );
+
+        expect(result).toEqual({ ok: true, via: 'fetch', status: 2, statusLabel: 'published' });
+        await expect(client.fetchNewsletterMessages('120363406955649221@newsletter', { count: 1 })).resolves.toMatchObject({
+            ok: true,
+            messages: [
+                {
+                    id: 'newsletter-msg-123',
+                    serverId: 'newsletter-msg-123',
+                    hasImage: true,
+                    hasVideo: false,
+                    hasText: true,
+                    caption: 'Published image'
+                }
+            ]
+        });
+        expect(client.socket.newsletterFetchMessages).toHaveBeenCalledWith(
+            '120363406955649221@newsletter',
+            10,
+            0,
+            0
+        );
+    });
+
+    it('reports unsupported channel fetch verification when Baileys lacks the API', async () => {
+        client.socket = {};
+
+        await expect(
+            client.confirmNewsletterMessage('120363406955649221@newsletter', 'newsletter-msg-123', {
+                timeoutMs: 1000,
+                pollMs: 100
+            })
+        ).resolves.toMatchObject({
+            ok: false,
+            via: 'none',
+            unsupported: true,
+            error: 'Baileys newsletterFetchMessages is not available'
+        });
     });
 
     it('should lazily initialize the auth store during connect', async () => {

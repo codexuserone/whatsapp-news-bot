@@ -120,6 +120,18 @@ type WhatsAppClient = {
     messageId: string,
     options?: { upsertTimeoutMs?: number; ackTimeoutMs?: number; requireServerAck?: boolean; failureGraceMs?: number }
   ) => Promise<{ ok: boolean; via: 'upsert' | 'ack' | 'none'; status?: number | null; statusLabel?: string | null; error?: string | null }>;
+  confirmNewsletterMessage?: (
+    jid: string,
+    messageId: string,
+    options?: { timeoutMs?: number; pollMs?: number; count?: number }
+  ) => Promise<{
+    ok: boolean;
+    via: 'fetch' | 'none';
+    status?: number | null;
+    statusLabel?: string | null;
+    error?: string | null;
+    unsupported?: boolean;
+  }>;
   getGroupInfo?: (
     jid: string,
     timeoutMs?: number
@@ -2192,7 +2204,7 @@ type SendWithMediaResult = {
 
 type SendConfirmation = {
   ok: boolean;
-  via: 'upsert' | 'ack' | 'none';
+  via: 'upsert' | 'ack' | 'fetch' | 'none';
   status?: number | null;
   statusLabel?: string | null;
   error?: string | null;
@@ -2289,6 +2301,28 @@ const confirmSendResult = async (
 
   if (whatsappClient.confirmSend) {
     const media = isMediaSendResult(sendResult);
+    if (targetType === 'channel' && whatsappClient.confirmNewsletterMessage) {
+      const jid = String(sendResult?.response?.key?.remoteJid || '').trim();
+      const channelConfirmation = await whatsappClient.confirmNewsletterMessage(jid, messageId, {
+        timeoutMs: media ? 30000 : 15000,
+        count: 10
+      });
+      if (channelConfirmation.ok) {
+        return {
+          ok: true,
+          via: 'fetch',
+          status: channelConfirmation.status ?? 2,
+          statusLabel: channelConfirmation.statusLabel || 'published'
+        };
+      }
+      if (!channelConfirmation.unsupported) {
+        return {
+          ok: false,
+          via: 'none',
+          error: `Message send not confirmed (${channelConfirmation.error || 'channel fetch did not find message'})`
+        };
+      }
+    }
     const requireServerAck = shouldRequireServerAckForSend(targetType, sendResult);
     const isStatus = Boolean(options?.isStatus);
     const failureGraceMs = isStatus ? STATUS_FAILURE_GRACE_MS : targetType === 'channel' ? 3000 : 0;
@@ -6057,6 +6091,7 @@ module.exports = {
     sendMessageWithTemplate,
     buildTemplateStatusTextOptions,
     assertUsableStatusAudience,
+    confirmSendResult,
     shouldRequireServerAckForSend,
     isChannelMediaAckRejection,
     buildChannelMediaHoldError,

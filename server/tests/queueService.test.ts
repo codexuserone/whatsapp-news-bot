@@ -148,6 +148,69 @@ describe('queueService __testUtils', () => {
     expect(testUtils.shouldRequireServerAckForSend('status', mediaResult)).toBe(true);
   });
 
+  it('confirms channel sends with newsletter fetch when available', async () => {
+    const confirmNewsletterMessage: any = jest.fn(async () => ({
+      ok: true,
+      via: 'fetch',
+      status: 2,
+      statusLabel: 'published'
+    }));
+    const confirmSend: any = jest.fn();
+
+    await expect(
+      testUtils.confirmSendResult(
+        { confirmNewsletterMessage, confirmSend },
+        'channel',
+        {
+          response: { key: { id: 'newsletter-msg-123', remoteJid: '120363406955649221@newsletter' } },
+          media: { type: null, url: null, sent: false, error: null }
+        }
+      )
+    ).resolves.toEqual({
+      ok: true,
+      via: 'fetch',
+      status: 2,
+      statusLabel: 'published'
+    });
+
+    expect(confirmNewsletterMessage).toHaveBeenCalledWith('120363406955649221@newsletter', 'newsletter-msg-123', {
+      timeoutMs: 15000,
+      count: 10
+    });
+    expect(confirmSend).not.toHaveBeenCalled();
+  });
+
+  it('marks channel sends uncertain when newsletter fetch is supported but does not find the post', async () => {
+    const confirmNewsletterMessage: any = jest.fn(async () => ({
+      ok: false,
+      via: 'none',
+      error: 'Channel fetch did not include message newsletter-msg-123',
+      unsupported: false
+    }));
+    const confirmSend: any = jest.fn();
+
+    await expect(
+      testUtils.confirmSendResult(
+        { confirmNewsletterMessage, confirmSend },
+        'channel',
+        {
+          response: { key: { id: 'newsletter-msg-123', remoteJid: '120363406955649221@newsletter' } },
+          media: { type: 'image', url: 'https://example.com/a.jpg', sent: true, error: null }
+        }
+      )
+    ).resolves.toEqual({
+      ok: false,
+      via: 'none',
+      error: 'Message send not confirmed (Channel fetch did not include message newsletter-msg-123)'
+    });
+
+    expect(confirmNewsletterMessage).toHaveBeenCalledWith('120363406955649221@newsletter', 'newsletter-msg-123', {
+      timeoutMs: 30000,
+      count: 10
+    });
+    expect(confirmSend).not.toHaveBeenCalled();
+  });
+
   it('blocks text fallback after media failure for status and channel targets', () => {
     expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('status')).toBe(true);
     expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('channel')).toBe(true);

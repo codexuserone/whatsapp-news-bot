@@ -231,6 +231,110 @@ const applyNewsletterUploadMetadata = (
   return message;
 };
 
+const parseNewsletterPlaintextMessage = (
+  content: unknown,
+  protoImpl?: { Message?: { decode?: (value: Uint8Array) => { toJSON?: () => Record<string, any> } } } | null
+): Partial<NewsletterMessageSummary> => {
+  if (!content) return {};
+  let message: Record<string, any> | null = null;
+
+  try {
+    const buffer = typeof content === 'string' ? Buffer.from(content, 'binary') : Buffer.from(content as Buffer);
+    if (protoImpl?.Message?.decode) {
+      const decoded = protoImpl.Message.decode(buffer);
+      message = typeof decoded?.toJSON === 'function' ? decoded.toJSON() : decoded as Record<string, any>;
+    }
+    if (!message) {
+      message = JSON.parse(buffer.toString('utf8'));
+    }
+  } catch {
+    return {};
+  }
+
+  const imageMessage = message?.imageMessage || null;
+  const videoMessage = message?.videoMessage || null;
+  const extendedTextMessage = message?.extendedTextMessage || null;
+  const conversation = typeof message?.conversation === 'string' ? message.conversation : '';
+  const caption = String(imageMessage?.caption || videoMessage?.caption || extendedTextMessage?.text || conversation || '').trim();
+
+  return {
+    hasImage: Boolean(imageMessage),
+    hasVideo: Boolean(videoMessage),
+    hasText: Boolean(caption),
+    caption: caption || null
+  };
+};
+
+const summarizeNewsletterFetchResult = (
+  value: unknown,
+  protoImpl?: { Message?: { decode?: (value: Uint8Array) => { toJSON?: () => Record<string, any> } } } | null
+): NewsletterMessageSummary[] => {
+  const summaries: NewsletterMessageSummary[] = [];
+  const seenObjects = new WeakSet<object>();
+
+  const visit = (node: unknown) => {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child);
+      return;
+    }
+    if (Buffer.isBuffer(node) || typeof node !== 'object') return;
+    if (seenObjects.has(node as object)) return;
+    seenObjects.add(node as object);
+
+    const record = node as Record<string, any>;
+    const attrs = record.attrs && typeof record.attrs === 'object' ? record.attrs as Record<string, unknown> : null;
+    const tag = String(record.tag || '').trim();
+    const id = String(
+      attrs?.message_id ||
+      attrs?.messageId ||
+      attrs?.server_id ||
+      attrs?.serverId ||
+      (tag === 'message' ? attrs?.id : '') ||
+      ''
+    ).trim() || null;
+    const serverId = String(attrs?.server_id || attrs?.serverId || attrs?.message_id || attrs?.messageId || '').trim() || null;
+    const timestamp = Number(attrs?.t || attrs?.timestamp || attrs?.ts || NaN);
+    let media: Partial<NewsletterMessageSummary> = {};
+
+    const content = Array.isArray(record.content) ? record.content : [];
+    for (const child of content) {
+      if (child && typeof child === 'object' && String((child as Record<string, unknown>).tag || '') === 'plaintext') {
+        media = parseNewsletterPlaintextMessage((child as Record<string, unknown>).content, protoImpl);
+        break;
+      }
+    }
+
+    if (id || serverId) {
+      summaries.push({
+        id,
+        serverId,
+        timestamp: Number.isFinite(timestamp) ? timestamp : null,
+        hasImage: Boolean(media.hasImage),
+        hasVideo: Boolean(media.hasVideo),
+        hasText: Boolean(media.hasText),
+        caption: media.caption || null
+      });
+    }
+
+    for (const child of content) visit(child);
+  };
+
+  visit(value);
+  const deduped = new Map<string, NewsletterMessageSummary>();
+  for (const summary of summaries) {
+    const key = summary.serverId || summary.id;
+    if (key && !deduped.has(key)) deduped.set(key, summary);
+  }
+  return Array.from(deduped.values());
+};
+
+const newsletterSummaryMatchesId = (summary: NewsletterMessageSummary, messageId: string) => {
+  const expected = String(messageId || '').trim();
+  if (!expected) return false;
+  return summary.id === expected || summary.serverId === expected;
+};
+
 const STATUS_MEDIA_CONTENT_KEYS = ['image', 'video', 'audio', 'document', 'sticker'] as const;
 
 const isStatusMediaContent = (content: AnyMessageContent) =>
@@ -317,6 +421,16 @@ type MessageFailureSnapshot = {
   errorMessage: string;
   remoteJid: string | null;
   updatedAtMs: number;
+};
+
+type NewsletterMessageSummary = {
+  id: string | null;
+  serverId: string | null;
+  timestamp: number | null;
+  hasImage: boolean;
+  hasVideo: boolean;
+  hasText: boolean;
+  caption: string | null;
 };
 
 type ChannelSummary = {
@@ -3119,6 +3233,85 @@ class WhatsAppClient {
     }
 
     return { ok: false, via: 'none', error: requireServerAck ? 'Server ack not observed' : null };
+  }
+
+  async fetchNewsletterMessages(
+    jid: string,
+    options?: { count?: number; since?: number; after?: number }
+  ): Promise<{ ok: boolean; messages: NewsletterMessageSummary[]; error?: string | null; unsupported?: boolean }> {
+    const normalizedJid = normalizeNewsletterJid(jid, { allowNumeric: false });
+    if (!normalizedJid) {
+      return { ok: false, messages: [], error: 'Channel JID invalid' };
+    }
+    const socket = this.socket as any;
+    if (!socket || typeof socket.newsletterFetchMessages !== 'function') {
+      return { ok: false, messages: [], error: 'Baileys newsletterFetchMessages is not available', unsupported: true };
+    }
+
+    try {
+      const count = Math.max(1, Math.min(Math.floor(Number(options?.count || 10)), 50));
+      const since = Math.max(0, Math.floor(Number(options?.since || 0)));
+      const after = Math.max(0, Math.floor(Number(options?.after || 0)));
+      const result = await socket.newsletterFetchMessages(normalizedJid, count, since, after);
+      let protoImpl: { Message?: { decode?: (value: Uint8Array) => { toJSON?: () => Record<string, any> } } } | null = null;
+      try {
+        const baileys = await loadBaileys();
+        protoImpl = (baileys as { proto?: typeof proto }).proto || null;
+      } catch {
+        protoImpl = null;
+      }
+      return { ok: true, messages: summarizeNewsletterFetchResult(result, protoImpl), error: null };
+    } catch (error) {
+      return { ok: false, messages: [], error: getErrorMessage(error) };
+    }
+  }
+
+  async confirmNewsletterMessage(
+    jid: string,
+    messageId: string,
+    options?: { timeoutMs?: number; pollMs?: number; count?: number }
+  ): Promise<{
+    ok: boolean;
+    via: 'fetch' | 'none';
+    status?: number | null;
+    statusLabel?: string | null;
+    error?: string | null;
+    unsupported?: boolean;
+  }> {
+    const expectedId = String(messageId || '').trim();
+    if (!expectedId) return { ok: false, via: 'none', error: 'Message id is required for channel verification' };
+
+    const timeoutMs = Math.max(1000, Math.min(Number(options?.timeoutMs || 15000), 90000));
+    const pollMs = Math.max(500, Math.min(Number(options?.pollMs || 2500), 10000));
+    const startedAt = Date.now();
+    let lastError: string | null = null;
+    let unsupported = false;
+
+    do {
+      const result = await this.fetchNewsletterMessages(jid, { count: options?.count || 10 });
+      if (result.unsupported) {
+        return {
+          ok: false,
+          via: 'none',
+          error: result.error || 'Channel fetch verification is not available',
+          unsupported: true
+        };
+      }
+      if (result.ok && result.messages.some((summary) => newsletterSummaryMatchesId(summary, expectedId))) {
+        return { ok: true, via: 'fetch', status: 2, statusLabel: 'published' };
+      }
+      lastError = result.error || `Channel fetch did not include message ${expectedId}`;
+      unsupported = Boolean(result.unsupported);
+      if (Date.now() - startedAt >= timeoutMs) break;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    } while (Date.now() - startedAt < timeoutMs);
+
+    return {
+      ok: false,
+      via: 'none',
+      error: lastError || `Channel fetch did not include message ${expectedId}`,
+      unsupported
+    };
   }
 
   getQrCode(): string | null {

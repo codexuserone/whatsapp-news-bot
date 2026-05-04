@@ -54,6 +54,9 @@ const spec = {
     '/api/whatsapp/channels/diagnostics': {
       get: { tags: ['whatsapp'], summary: 'Get channel discovery diagnostics', responses: { 200: { description: 'OK' } } }
     },
+    '/api/whatsapp/channels/{jid}/messages': {
+      get: { tags: ['whatsapp'], summary: 'Fetch recent channel messages for verification', responses: { 200: { description: 'OK' } } }
+    },
     '/api/whatsapp/channels/discover': {
       post: { tags: ['whatsapp'], summary: 'Run channel discovery refresh', responses: { 200: { description: 'OK' } } }
     },

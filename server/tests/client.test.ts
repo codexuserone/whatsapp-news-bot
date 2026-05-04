@@ -164,6 +164,77 @@ describe('WhatsAppClient', () => {
         }
     });
 
+    it('should not auto-take back a lease after this instance already lost it', async () => {
+        const originalAutoTakeover = process.env.WHATSAPP_LEASE_AUTO_TAKEOVER;
+        process.env.WHATSAPP_LEASE_AUTO_TAKEOVER = 'true';
+        client.leaseLostToAnotherOwner = true;
+
+        const acquireLease = jest.fn(async () => ({
+            ok: false,
+            supported: true,
+            ownerId: 'new-render-instance',
+            expiresAt: new Date(Date.now() + 60_000).toISOString()
+        }));
+        const forceAcquireLease = jest.fn(async () => ({
+            ok: true,
+            supported: true,
+            ownerId: 'old-render-instance',
+            expiresAt: new Date(Date.now() + 90_000).toISOString()
+        }));
+        const updateStatus = jest.fn(async () => {});
+
+        (useSupabaseAuthState as any).mockResolvedValueOnce({
+            state: {},
+            saveCreds: jest.fn(),
+            clearState: jest.fn(),
+            updateStatus,
+            acquireLease,
+            forceAcquireLease,
+            renewLease: jest.fn()
+        });
+
+        try {
+            await client.connect();
+
+            expect(acquireLease as any).toHaveBeenCalledWith(client.instanceId, 90_000);
+            expect(forceAcquireLease as any).not.toHaveBeenCalled();
+            expect(client.leaseHeld).toBe(false);
+            expect(client.leaseOwnerId).toBe('new-render-instance');
+            expect(client.status).toBe('conflict');
+        } finally {
+            client.stopLeaseRenewal();
+            if (client.reconnectTimer) {
+                clearTimeout(client.reconnectTimer);
+                client.reconnectTimer = null;
+            }
+            if (originalAutoTakeover === undefined) {
+                delete process.env.WHATSAPP_LEASE_AUTO_TAKEOVER;
+            } else {
+                process.env.WHATSAPP_LEASE_AUTO_TAKEOVER = originalAutoTakeover;
+            }
+        }
+    });
+
+    it('should reject background takeover after this instance already lost its lease', async () => {
+        client.leaseLostToAnotherOwner = true;
+        client.isPaused = false;
+        const forceAcquireLease = jest.fn(async () => ({
+            ok: true,
+            supported: true,
+            ownerId: client.instanceId,
+            expiresAt: new Date(Date.now() + 90_000).toISOString()
+        }));
+        client.authStore = {
+            forceAcquireLease
+        };
+
+        const lease = await client.takeoverLease();
+
+        expect(forceAcquireLease as any).not.toHaveBeenCalled();
+        expect(lease.ok).toBe(false);
+        expect(lease.reason).toBe('lost_lease_to_another_owner');
+    });
+
     it('should default browser tuples to the configured device label', () => {
         const originalPlatform = process.env.WHATSAPP_BROWSER_PLATFORM;
         const originalBrowserName = process.env.WHATSAPP_BROWSER_NAME;

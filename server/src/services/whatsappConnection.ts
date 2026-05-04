@@ -5,7 +5,8 @@ type WhatsAppLikeClient = {
   getStatus?: () => { status?: string; lastSeenAt?: Date | null; lastError?: string | null; requiresManualPairing?: boolean };
   reconnect?: () => Promise<void> | void;
   takeoverLease?: (
-    ttlMs?: number
+    ttlMs?: number,
+    options?: { manual?: boolean }
   ) => Promise<{ ok: boolean; supported: boolean; ownerId: string | null; expiresAt: string | null; reason?: string }>;
 };
 

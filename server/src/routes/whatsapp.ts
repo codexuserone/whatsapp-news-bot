@@ -1237,7 +1237,7 @@ const whatsappRoutes = () => {
     if (!whatsapp || typeof whatsapp.takeoverLease !== 'function') {
       throw badRequest('WhatsApp client not available');
     }
-    const lease = await whatsapp.takeoverLease();
+    const lease = await whatsapp.takeoverLease(90_000, { manual: true });
     res.json({ ok: true, lease });
   }));
 

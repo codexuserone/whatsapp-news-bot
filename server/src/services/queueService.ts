@@ -112,7 +112,8 @@ type WhatsAppClient = {
   deleteMessage?: (jid: string, messageId: string) => Promise<any>;
   reconnect?: () => Promise<void> | void;
   takeoverLease?: (
-    ttlMs?: number
+    ttlMs?: number,
+    options?: { manual?: boolean }
   ) => Promise<{ ok: boolean; supported: boolean; ownerId: string | null; expiresAt: string | null; reason?: string }>;
   waitForMessage?: (messageId: string, timeoutMs?: number) => Promise<any>;
   confirmSend?: (

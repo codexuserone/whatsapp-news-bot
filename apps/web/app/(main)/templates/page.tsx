@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { buildTemplatePreviewSendPayloads, type TemplatePreviewPayload } from '@/lib/templatePreviewPayload';
 import type { BackendSettings, Feed, FeedItem, Target, Template } from '@/lib/types';
 import { dedupeTargets, formatTargetLabel, normalizeTargetName } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
@@ -582,20 +583,8 @@ const TemplatesPage = () => {
   });
 
   const sendPreview = useMutation({
-    mutationFn: (payload: {
-      jid: string;
-      message: string;
-      imageUrl?: string;
-      videoUrl?: string;
-      audioUrl?: string;
-      documentUrl?: string;
-      statusJidList?: string[];
-      backgroundColor?: string;
-      font?: number;
-      includeCaption?: boolean;
-      disableLinkPreview?: boolean;
-      confirm?: boolean;
-    }) => api.post<{ messageId?: string; confirmed?: number; uncertain?: number }>('/api/whatsapp/send-test', payload),
+    mutationFn: (payload: TemplatePreviewPayload) =>
+      api.post<{ messageId?: string; confirmed?: number; uncertain?: number }>('/api/whatsapp/send-test', payload),
     onSuccess: (result: { messageId?: string; confirmed?: number; uncertain?: number }) => {
       const messageId = String(result?.messageId || '').trim();
       const confirmed = Number(result?.confirmed || 0);
@@ -649,7 +638,7 @@ const TemplatesPage = () => {
     });
   };
 
-  const submitPreviewSend = () => {
+  const submitPreviewSend = async () => {
     setPreviewSendNotice('');
 
     const jid = String(selectedPreviewTarget?.phone_number || '').trim();
@@ -658,100 +647,63 @@ const TemplatesPage = () => {
       return;
     }
 
-    const message = String(renderedPreviewText || '').trim();
-    const mediaUrl = selectedTemplateMedia.mediaUrl;
-    const mediaKind = selectedTemplateMedia.mediaKind;
     const isStatusPreview = selectedPreviewTarget?.type === 'status';
-    const statusAudiencePatch = isStatusPreview ? { statusJidList: statusPreviewAudience } : {};
-    const statusTextStylePatch = isStatusPreview
-      ? {
-        backgroundColor: resolveStatusBackgroundColor(watchedStatusBackgroundColor),
-        font: resolveStatusFont(watchedStatusFont)
-      }
-      : {};
 
     if (isStatusPreview && statusPreviewAudience.length === 0) {
       setPreviewSendNotice('Add a Status Preview Recipient in Settings before sending a Status preview.');
       return;
     }
 
-    if (isStatusPreview && (mediaKind === 'audio' || mediaKind === 'document')) {
-      setPreviewSendNotice('Status previews support text, image, and video only.');
+    let payloads;
+    try {
+      payloads = buildTemplatePreviewSendPayloads({
+        jid,
+        isStatus: isStatusPreview,
+        statusAudience: statusPreviewAudience,
+        sampleData: previewWithData ? sampleData : {},
+        fallback: {
+          content: watchedContent || '',
+          sendMode: resolveTemplateSendMode(watchedSendMode),
+          mediaSource: resolveTemplateMediaSource(watchedMediaSource),
+          statusBackgroundColor: resolveStatusBackgroundColor(watchedStatusBackgroundColor),
+          statusFont: resolveStatusFont(watchedStatusFont)
+        },
+        sequenceSteps: watchedSequenceSteps.map((step, index) => ({
+          label: String(step.label || `Step ${index + 1}`).trim(),
+          content: String(step.content || ''),
+          sendMode: resolveTemplateSendMode(step.send_mode),
+          mediaSource: resolveTemplateMediaSource(step.media_source),
+          statusBackgroundColor: resolveStatusBackgroundColor(step.status_background_color || watchedStatusBackgroundColor),
+          statusFont: resolveStatusFont(step.status_font ?? watchedStatusFont),
+          delaySeconds: Number(step.delay_seconds || 0),
+          active: step.active !== false
+        }))
+      });
+    } catch (error) {
+      setPreviewSendNotice(getErrorMessage(error));
       return;
     }
 
-    if (watchedSendMode === 'media_only') {
-      if (!mediaUrl) {
-        setPreviewSendNotice('Media only needs a sample item with media.');
-        return;
+    if (!payloads.length) {
+      setPreviewSendNotice('Nothing to send.');
+      return;
+    }
+
+    try {
+      for (const [index, step] of payloads.entries()) {
+        setPreviewSendNotice(
+          payloads.length > 1
+            ? `Sending ${step.label} (${index + 1}/${payloads.length})...`
+            : 'Sending preview...'
+        );
+        await sendPreview.mutateAsync(step.payload);
       }
-      sendPreview.mutate({
-        jid,
-        message: message || ' ',
-        ...(mediaKind === 'video'
-          ? { videoUrl: mediaUrl }
-          : mediaKind === 'audio'
-            ? { audioUrl: mediaUrl }
-            : mediaKind === 'document'
-              ? { documentUrl: mediaUrl }
-              : { imageUrl: mediaUrl }),
-        includeCaption: false,
-        confirm: true,
-        ...statusAudiencePatch
-      });
-      return;
-    }
-
-    if (watchedSendMode === 'auto_media') {
-      if (!mediaUrl) {
-        setPreviewSendNotice('No sample media found. Preview send will use text with a preview link.');
-        sendPreview.mutate({
-          jid,
-          message,
-          disableLinkPreview: false,
-          confirm: true,
-          ...statusTextStylePatch,
-          ...statusAudiencePatch
-        });
-        return;
+      if (payloads.length > 1) {
+        setPreviewSendNotice(`Sequence preview recorded (${payloads.length} steps).`);
       }
-      sendPreview.mutate({
-        jid,
-        message,
-        ...(mediaKind === 'video'
-          ? { videoUrl: mediaUrl }
-          : mediaKind === 'audio'
-            ? { audioUrl: mediaUrl }
-            : mediaKind === 'document'
-              ? { documentUrl: mediaUrl }
-              : { imageUrl: mediaUrl }),
-        includeCaption: true,
-        confirm: true,
-        ...statusAudiencePatch
-      });
-      return;
+    } catch {
+      // useMutation already writes the operator-facing error into previewSendNotice.
     }
-
-    if (watchedSendMode === 'text_preview') {
-      sendPreview.mutate({
-        jid,
-        message,
-        disableLinkPreview: false,
-        confirm: true,
-        ...statusTextStylePatch,
-        ...statusAudiencePatch
-      });
-      return;
-    }
-
-    sendPreview.mutate({
-      jid,
-      message,
-      disableLinkPreview: true,
-      confirm: true,
-      ...statusTextStylePatch,
-      ...statusAudiencePatch
-    });
   };
 
   const insertVariable = (varName: string) => {
@@ -1275,14 +1227,24 @@ const TemplatesPage = () => {
               </div>
 
               <div className="rounded-md border p-3 text-xs text-muted-foreground">
-                Format: <span className="font-medium text-foreground">{getTemplateModeLabel(watchedSendMode)}</span>
-                {(watchedSendMode === 'auto_media' || watchedSendMode === 'media_only') ? (
+                {renderedSequencePreviewSteps.length ? (
                   <>
+                    Sequence: <span className="font-medium text-foreground">{renderedSequencePreviewSteps.length} steps</span>
                     <br />
-                    Media: <span className="font-medium text-foreground">{getTemplateMediaSourceLabel(watchedMediaSource)}</span>
+                    First step: <span className="font-medium text-foreground">{renderedSequencePreviewSteps[0]?.label}</span>
                   </>
-                ) : null}
-                {watchedSendMode === 'media_only' ? ' (requires sample media)' : ''}
+                ) : (
+                  <>
+                    Format: <span className="font-medium text-foreground">{getTemplateModeLabel(watchedSendMode)}</span>
+                    {(watchedSendMode === 'auto_media' || watchedSendMode === 'media_only') ? (
+                      <>
+                        <br />
+                        Media: <span className="font-medium text-foreground">{getTemplateMediaSourceLabel(watchedMediaSource)}</span>
+                      </>
+                    ) : null}
+                    {watchedSendMode === 'media_only' ? ' (requires sample media)' : ''}
+                  </>
+                )}
                 {selectedPreviewTarget?.type === 'status' ? (
                   <>
                     <br />
@@ -1294,7 +1256,7 @@ const TemplatesPage = () => {
               <div className="flex items-center gap-2">
                 <Button type="button" onClick={submitPreviewSend} disabled={sendPreview.isPending || !selectedPreviewTarget}>
                   {sendPreview.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-                  Send Preview
+                  {renderedSequencePreviewSteps.length ? 'Send Sequence Preview' : 'Send Preview'}
                 </Button>
                 {previewSendNotice ? <span className="text-sm text-muted-foreground">{previewSendNotice}</span> : null}
               </div>

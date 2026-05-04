@@ -125,6 +125,31 @@ const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undef
   }
 };
 
+const buildStatusAudienceResponse = (
+  audience: Record<string, unknown>,
+  options: { includeRecipients?: boolean; sampleSize?: number; stale?: boolean } = {}
+) => {
+  const recipients = Array.isArray(audience.recipients) ? audience.recipients.map((entry) => String(entry || '')).filter(Boolean) : [];
+  const sampleSource = Array.isArray(audience.sample) ? audience.sample.map((entry) => String(entry || '')).filter(Boolean) : recipients;
+  const sampleSize = Math.max(1, Math.min(Math.floor(Number(options.sampleSize || 25)), 200));
+  const sample = sampleSource.slice(0, sampleSize);
+  const { recipients: _recipients, sample: _sample, ...snapshot } = audience;
+  const response: Record<string, unknown> = {
+    ...snapshot,
+    participantCount: Number(audience.participantCount || recipients.length || 0),
+    sample,
+    stale: Boolean(options.stale)
+  };
+
+  if (options.includeRecipients) {
+    response.recipients = sample;
+    response.recipientCount = Number(response.participantCount || recipients.length || 0);
+    response.recipientsTruncated = recipients.length > sample.length;
+  }
+
+  return response;
+};
+
 const inferMessageMediaType = (message: unknown) => {
   const record = (message || {}) as Record<string, unknown>;
   if (record.image || record.imageMessage) return 'image';
@@ -1788,28 +1813,11 @@ const whatsappRoutes = () => {
       : connected
         ? await ensureFreshStatusRecipients(whatsapp, { maxAgeMinutes: 10, sampleSize })
         : await getStatusRecipientSnapshot({ sampleSize });
-    if (includeRecipients) {
-      return res.json({ ...audience, stale: !connected });
-    }
-    const { recipients: _recipients, ...snapshot } = audience as {
-      recipients?: string[];
-      participantCount: number;
-      sample: string[];
-      refreshedAt: string | null;
-      sources: {
-        contactsCache: number;
-        storeContacts: number;
-        storeChats: number;
-        groupMetadata: number;
-        env: number;
-        me: number;
-        lidMappings?: number;
-        activeIndividualTargets?: number;
-        recentSuccessfulDirectRecipients: number;
-      };
-      warnings: string[];
-    };
-    return res.json({ ...snapshot, stale: !connected });
+    return res.json(buildStatusAudienceResponse(audience as Record<string, unknown>, {
+      includeRecipients,
+      sampleSize,
+      stale: !connected
+    }));
   }));
 
   // Send to status broadcast
@@ -2030,6 +2038,7 @@ const whatsappRoutes = () => {
 module.exports = whatsappRoutes;
 module.exports.__testUtils = {
   assertUsableStatusAudience,
+  buildStatusAudienceResponse,
   buildUncertainSendMessage,
   isGroupJid,
   buildTextStatusStyleOptions,

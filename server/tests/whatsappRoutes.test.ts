@@ -128,4 +128,28 @@ describe('whatsapp route test-send logging resolution', () => {
       })
     ).not.toThrow();
   });
+
+  it('returns only a bounded status audience sample when recipients are requested', () => {
+    expect(
+      testUtils.buildStatusAudienceResponse(
+        {
+          participantCount: 3,
+          recipients: [
+            '12015550101@s.whatsapp.net',
+            '12015550102@s.whatsapp.net',
+            '12015550103@s.whatsapp.net'
+          ],
+          sources: { groupMetadata: 3 },
+          warnings: []
+        },
+        { includeRecipients: true, sampleSize: 2, stale: false }
+      )
+    ).toMatchObject({
+      participantCount: 3,
+      recipientCount: 3,
+      recipients: ['12015550101@s.whatsapp.net', '12015550102@s.whatsapp.net'],
+      recipientsTruncated: true,
+      sample: ['12015550101@s.whatsapp.net', '12015550102@s.whatsapp.net']
+    });
+  });
 });

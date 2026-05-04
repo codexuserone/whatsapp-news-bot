@@ -178,6 +178,16 @@ const isNonRevivableFailureMessage = (...messages: unknown[]) => {
   return NON_REVIVABLE_FAILURE_PATTERNS.some((pattern) => pattern.test(combined));
 };
 
+const isUnconfirmedSendWithMessageId = (row: { whatsapp_message_id?: unknown; error_message?: unknown; media_error?: unknown }) => {
+  const messageId = String(row?.whatsapp_message_id || '').trim();
+  if (!messageId) return false;
+  const combined = [row?.error_message, row?.media_error]
+    .map((message) => String(message || '').trim())
+    .filter(Boolean)
+    .join(' ');
+  return /message send not confirmed|server ack not observed|no upsert\/ack|send result is uncertain/i.test(combined);
+};
+
 const getStatusAudienceExplicitSourceCount = (snapshot: Record<string, any> | null | undefined) => {
   const sources = snapshot?.sources || {};
   return (
@@ -870,6 +880,11 @@ const reconcileUncertainMessageLogs = async (supabase: SupabaseClient, settings:
 
     const currentRetry = Number(row?.retry_count || 0);
     const canAutoRetry = Boolean(String(row?.schedule_id || '').trim() && String(row?.feed_item_id || '').trim());
+
+    if (isUnconfirmedSendWithMessageId(row)) {
+      pendingReview += 1;
+      continue;
+    }
 
     if (canAutoRetry && currentRetry < maxRetries) {
       await supabase
@@ -4547,6 +4562,7 @@ const sendQueuedForSchedule = async (
       }
 
       for (const log of sortedLogs || []) {
+        let attemptedMessageId: string | null = null;
         // Get feed item
         const { data: feedItem, error: feedItemError } = await supabase
           .from('feed_items')
@@ -4642,6 +4658,7 @@ const sendQueuedForSchedule = async (
           let confirmedSendResult = sendResult;
           let response = confirmedSendResult?.response;
           let messageId = response?.key?.id;
+          attemptedMessageId = messageId ? String(messageId) : null;
           if (!messageId) {
             throw new Error('Message send not confirmed (missing message id)');
           }
@@ -4776,6 +4793,7 @@ const sendQueuedForSchedule = async (
                 status: 'uncertain',
                 error_message: buildUncertainErrorMessage(errorMessage),
                 message_content: expectedRender?.outboundText || null,
+                whatsapp_message_id: attemptedMessageId,
                 media_url: expectedMedia.url || null,
                 media_type: expectedMedia.kind || null,
                 media_sent: false,
@@ -4953,6 +4971,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
     }
 
     const isAutomationBacked = Boolean(log.schedule_id && log.feed_item_id);
+    let uncertainWhatsAppMessageId = String((log as { whatsapp_message_id?: string | null }).whatsapp_message_id || '').trim() || null;
 
     const actor = process.env.BASIC_AUTH_USER || 'send-now';
     const claimPatch: Record<string, unknown> = {
@@ -5264,6 +5283,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
 
         let confirmedSendResult = sendResult;
         let messageId = confirmedSendResult?.response?.key?.id;
+        uncertainWhatsAppMessageId = messageId ? String(messageId) : uncertainWhatsAppMessageId;
         const confirmation = await confirmSendResult(activeWhatsappClient, targetRow.type, confirmedSendResult, {
           isStatus: targetRow.type === 'status'
         });
@@ -5625,6 +5645,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       });
 
       const messageId = sendResult?.response?.key?.id;
+      uncertainWhatsAppMessageId = messageId ? String(messageId) : uncertainWhatsAppMessageId;
       const isMediaConfirmed = Boolean(sendResult?.media?.type) && Boolean(sendResult?.media?.sent);
       await ensureSendConfirmed(messageId || null, isMediaConfirmed, targetRow.type === 'status');
 
@@ -5681,7 +5702,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             processing_started_at: null,
             error_message: holdError,
             message_content: log.message_content || uncertainMessageContent,
-            whatsapp_message_id: null,
+            whatsapp_message_id: uncertainWhatsAppMessageId,
             media_url: uncertainMediaUrl,
             media_type: uncertainMediaType,
             media_sent: false,
@@ -5702,6 +5723,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             ? buildConnectionWaitErrorMessage(errorMessage)
             : errorMessage,
         message_content: timedOut ? uncertainMessageContent : log.message_content || null,
+        whatsapp_message_id: timedOut ? uncertainWhatsAppMessageId : null,
         media_url: timedOut ? uncertainMediaUrl : keepMedia ? log.media_url || null : null,
         media_type: timedOut ? uncertainMediaType : keepMedia ? log.media_type || null : null,
         media_sent: false,
@@ -5926,6 +5948,7 @@ module.exports = {
     isAuthStateError,
     isConnectionStateError,
     buildConnectionWaitErrorMessage,
+    isUnconfirmedSendWithMessageId,
     shouldBlockTextFallbackAfterMediaFailure,
     shouldBlockManualTextFallbackAfterMediaFailure,
     sendMessageWithTemplate,

@@ -105,6 +105,21 @@ describe('queueService __testUtils', () => {
     expect(testUtils.computeUncertainRetryDelayMs(90000)).toBe(180000);
   });
 
+  it('keeps uncertain rows with a WhatsApp id out of automatic retry', () => {
+    expect(
+      testUtils.isUnconfirmedSendWithMessageId({
+        whatsapp_message_id: 'ABC123',
+        error_message: 'Send result is uncertain. Verifying delivery before retrying. Message send not confirmed (Server ack not observed)'
+      })
+    ).toBe(true);
+    expect(
+      testUtils.isUnconfirmedSendWithMessageId({
+        whatsapp_message_id: '',
+        error_message: 'Message send not confirmed (Server ack not observed)'
+      })
+    ).toBe(false);
+  });
+
   it('treats connection-state errors as recoverable without consuming retries', () => {
     expect(testUtils.isConnectionStateError('WhatsApp not connected')).toBe(true);
     expect(testUtils.isConnectionStateError('WhatsApp requires QR scan')).toBe(true);

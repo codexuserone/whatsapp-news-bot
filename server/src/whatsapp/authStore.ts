@@ -84,7 +84,7 @@ const resolveAuthStateDbUrl = () => {
     return explicitPoolerUrl;
   }
 
-  const configuredUrl = String(process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || '').trim();
+  const configuredUrl = String(process.env.SUPABASE_DB_URL || process.env.NEON_DATABASE_URL || process.env.DATABASE_URL || '').trim();
   if (!configuredUrl) return '';
 
   try {

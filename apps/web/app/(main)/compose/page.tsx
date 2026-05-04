@@ -37,7 +37,8 @@ type ComposerAttachment = {
   name: string;
   mime: string;
   size: number;
-  dataUrl: string;
+  dataUrl?: string;
+  url?: string;
 };
 
 type SavedAttachmentSummary = {
@@ -77,6 +78,10 @@ type ManualSendPayload = {
   message: string | null;
   disableLinkPreview: boolean;
   includeCaption: boolean;
+  imageUrl?: string | null;
+  videoUrl?: string | null;
+  audioUrl?: string | null;
+  documentUrl?: string | null;
   imageDataUrl?: string | null;
   videoDataUrl?: string | null;
   audioDataUrl?: string | null;
@@ -131,6 +136,16 @@ const readFileAsDataUrl = (file: File) =>
     reader.onerror = () => reject(new Error('Could not read attachment'));
     reader.readAsDataURL(file);
   });
+
+const filenameFromUrl = (value: string, fallback: string) => {
+  try {
+    const url = new URL(value);
+    const name = decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || '');
+    return name || fallback;
+  } catch {
+    return fallback;
+  }
+};
 
 const getAttachmentKind = (file: File): AttachmentKind | null => {
   const mime = file.type.toLowerCase();
@@ -201,12 +216,30 @@ const ComposeInner = () => {
   const prefill = useMemo(() => {
     const title = String(searchParams?.get('title') || '').trim();
     const url = String(searchParams?.get('url') || '').trim();
+    const mediaCandidates: Array<{ kind: AttachmentKind; value: string; fallback: string }> = [
+      { kind: 'image', value: String(searchParams?.get('imageUrl') || '').trim(), fallback: 'Selected image' },
+      { kind: 'video', value: String(searchParams?.get('videoUrl') || '').trim(), fallback: 'Selected video' },
+      { kind: 'audio', value: String(searchParams?.get('audioUrl') || '').trim(), fallback: 'Selected audio' },
+      { kind: 'document', value: String(searchParams?.get('documentUrl') || '').trim(), fallback: 'Selected document' }
+    ];
+    const selectedMedia = mediaCandidates.find((candidate) => candidate.value);
     const header = title ? `*${title}*` : '';
-    return [header, url].filter(Boolean).join('\n\n');
+    return {
+      message: [header, url].filter(Boolean).join('\n\n'),
+      attachment: selectedMedia
+        ? {
+            kind: selectedMedia.kind,
+            name: filenameFromUrl(selectedMedia.value, selectedMedia.fallback),
+            mime: '',
+            size: 0,
+            url: selectedMedia.value
+          }
+        : null
+    };
   }, [searchParams]);
 
-  const [message, setMessage] = useState(() => prefill);
-  const [attachment, setAttachment] = useState<ComposerAttachment | null>(null);
+  const [message, setMessage] = useState(() => prefill.message);
+  const [attachment, setAttachment] = useState<ComposerAttachment | null>(() => prefill.attachment);
   const [disableLinkPreview, setDisableLinkPreview] = useState(false);
   const [includeCaption, setIncludeCaption] = useState(true);
   const [blockName, setBlockName] = useState('');
@@ -279,11 +312,21 @@ const ComposeInner = () => {
     };
 
     if (!attachment) return payload;
-    if (attachment.kind === 'image') payload.imageDataUrl = attachment.dataUrl;
-    if (attachment.kind === 'video') payload.videoDataUrl = attachment.dataUrl;
-    if (attachment.kind === 'audio') payload.audioDataUrl = attachment.dataUrl;
+    if (attachment.kind === 'image') {
+      if (attachment.dataUrl) payload.imageDataUrl = attachment.dataUrl;
+      else if (attachment.url) payload.imageUrl = attachment.url;
+    }
+    if (attachment.kind === 'video') {
+      if (attachment.dataUrl) payload.videoDataUrl = attachment.dataUrl;
+      else if (attachment.url) payload.videoUrl = attachment.url;
+    }
+    if (attachment.kind === 'audio') {
+      if (attachment.dataUrl) payload.audioDataUrl = attachment.dataUrl;
+      else if (attachment.url) payload.audioUrl = attachment.url;
+    }
     if (attachment.kind === 'document') {
-      payload.documentDataUrl = attachment.dataUrl;
+      if (attachment.dataUrl) payload.documentDataUrl = attachment.dataUrl;
+      else if (attachment.url) payload.documentUrl = attachment.url;
       payload.documentFilename = attachment.name;
       payload.documentMime = attachment.mime || null;
     }
@@ -620,9 +663,9 @@ const ComposeInner = () => {
                     <div className="flex aspect-square items-center justify-center overflow-hidden rounded-md bg-background">
                       {attachment.kind === 'image' ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={attachment.dataUrl} alt="" className="h-full w-full object-cover" />
+                        <img src={attachment.dataUrl || attachment.url} alt="" className="h-full w-full object-cover" />
                       ) : attachment.kind === 'video' ? (
-                        <video src={attachment.dataUrl} className="h-full w-full object-cover" muted />
+                        <video src={attachment.dataUrl || attachment.url} className="h-full w-full object-cover" muted />
                       ) : (
                         <div className="flex h-full w-full items-center justify-center text-muted-foreground">
                           {attachmentIcon(attachment.kind)}
@@ -638,7 +681,7 @@ const ComposeInner = () => {
                         <span className="truncate text-sm font-medium">{attachment.name}</span>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        {attachment.mime || 'application/octet-stream'} - {formatBytes(attachment.size)}
+                        {attachment.mime || (attachment.url ? 'Selected from feed item' : 'application/octet-stream')} - {attachment.size ? formatBytes(attachment.size) : 'remote media'}
                       </p>
                       <div className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2">
                         <div className="min-w-0">
@@ -766,11 +809,11 @@ const ComposeInner = () => {
                   <div className="mb-3 overflow-hidden rounded-md bg-background">
                     {attachment.kind === 'image' ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={attachment.dataUrl} alt="" className="max-h-64 w-full object-contain" />
+                      <img src={attachment.dataUrl || attachment.url} alt="" className="max-h-64 w-full object-contain" />
                     ) : attachment.kind === 'video' ? (
-                      <video src={attachment.dataUrl} controls className="max-h-64 w-full bg-black" />
+                      <video src={attachment.dataUrl || attachment.url} controls className="max-h-64 w-full bg-black" />
                     ) : attachment.kind === 'audio' ? (
-                      <audio src={attachment.dataUrl} controls className="w-full" />
+                      <audio src={attachment.dataUrl || attachment.url} controls className="w-full" />
                     ) : (
                       <div className="flex items-center gap-2 p-3 text-sm">
                         <FileText className="h-4 w-4" />

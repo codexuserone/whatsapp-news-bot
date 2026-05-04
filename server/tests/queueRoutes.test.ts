@@ -19,8 +19,10 @@ describe('queue route retry safeguards', () => {
         {
           id: 'recent-running',
           schedule_id: 'schedule-1',
+          target_id: 'target-1',
           updated_at: '2026-03-17T02:00:00.000Z',
-          schedule: { state: 'active', active: true }
+          schedule: { state: 'active', active: true },
+          target: { active: true }
         },
         windowStartIso
       )
@@ -31,8 +33,10 @@ describe('queue route retry safeguards', () => {
         {
           id: 'old-row',
           schedule_id: 'schedule-1',
+          target_id: 'target-1',
           updated_at: '2026-03-16T23:59:59.000Z',
-          schedule: { state: 'active', active: true }
+          schedule: { state: 'active', active: true },
+          target: { active: true }
         },
         windowStartIso
       )
@@ -43,8 +47,10 @@ describe('queue route retry safeguards', () => {
         {
           id: 'paused-row',
           schedule_id: 'schedule-2',
+          target_id: 'target-1',
           updated_at: '2026-03-17T03:00:00.000Z',
-          schedule: { state: 'paused', active: false }
+          schedule: { state: 'paused', active: false },
+          target: { active: true }
         },
         windowStartIso
       )
@@ -67,9 +73,25 @@ describe('queue route retry safeguards', () => {
         {
           id: 'terminal-channel-media',
           schedule_id: 'schedule-1',
+          target_id: 'target-1',
           updated_at: '2026-03-17T05:00:00.000Z',
           media_error: 'Channel image was rejected by WhatsApp (WhatsApp server rejected message ack 479)',
-          schedule: { state: 'active', active: true }
+          schedule: { state: 'active', active: true },
+          target: { active: true }
+        },
+        windowStartIso
+      )
+    ).toBe(false);
+
+    expect(
+      testUtils.isRetryableQueueRow(
+        {
+          id: 'inactive-target',
+          schedule_id: 'schedule-1',
+          target_id: 'target-inactive',
+          updated_at: '2026-03-17T05:00:00.000Z',
+          schedule: { state: 'active', active: true },
+          target: { active: false }
         },
         windowStartIso
       )
@@ -109,6 +131,8 @@ describe('queue route retry safeguards', () => {
 
   it('does not expose inline attachment payloads in queue list responses', () => {
     expect(testUtils.isInlineMediaDataUrl('data:image/png;base64,AAAA')).toBe(true);
+    expect(testUtils.isStoredMediaReference('data:image/png;base64,AAAA')).toBe(true);
+    expect(testUtils.isStoredMediaReference('uploaded:image')).toBe(true);
     expect(testUtils.sanitizeMediaUrlForApi('data:image/png;base64,AAAA')).toBeNull();
     expect(testUtils.sanitizeMediaUrlForApi('https://example.com/image.jpg')).toBe('https://example.com/image.jpg');
   });

@@ -28,10 +28,21 @@ describe('logs route response helpers', () => {
     expect(
       testUtils.finalizeLog({
         id: 'log-2',
-        media_url: 'https://example.com/image.jpg'
+        media_url: 'uploaded:image'
       })
     ).toMatchObject({
       id: 'log-2',
+      media_url: 'uploaded:image',
+      media_stored: true
+    });
+
+    expect(
+      testUtils.finalizeLog({
+        id: 'log-3',
+        media_url: 'https://example.com/image.jpg'
+      })
+    ).toMatchObject({
+      id: 'log-3',
       media_url: 'https://example.com/image.jpg',
       media_stored: false
     });

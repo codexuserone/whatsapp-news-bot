@@ -310,16 +310,18 @@ const runMigrations = async () => {
   preferIpv4();
   loadEnv();
 
-  // Prefer SUPABASE_DB_URL (typically a pooler/IPv4-friendly endpoint) when available.
-  const databaseUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+  // Prefer explicit Postgres pooler URLs, then the active Neon URL, then legacy DATABASE_URL.
+  const databaseUrl = process.env.SUPABASE_DB_URL || process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
   const databaseUrlSource = process.env.SUPABASE_DB_URL
     ? 'SUPABASE_DB_URL'
-    : process.env.DATABASE_URL
-      ? 'DATABASE_URL'
-      : null;
+    : process.env.NEON_DATABASE_URL
+      ? 'NEON_DATABASE_URL'
+      : process.env.DATABASE_URL
+        ? 'DATABASE_URL'
+        : null;
   if (!databaseUrl) {
     throw new Error(
-      'Missing DATABASE_URL (or SUPABASE_DB_URL). Add a Postgres connection string to server/.env (local) or Render env vars (prod) before running migrations.'
+      'Missing DATABASE_URL, NEON_DATABASE_URL, or SUPABASE_DB_URL. Add a Postgres connection string to server/.env (local) or Render env vars (prod) before running migrations.'
     );
   }
 

@@ -51,8 +51,18 @@ const createQueueSupabase = (scenario: {
     schedules: QueueSchedule[];
     existingLogsBySchedule: Record<string, ExistingLogRow[]>;
     templates?: TemplateRow[];
+    activeTargetIds?: string[];
 }) => {
     const upsertMock: any = jest.fn(async (rows: Array<Record<string, unknown>>) => ({ data: rows, error: null }));
+    const defaultTargetIds = Array.from(
+        new Set(
+            scenario.schedules
+                .flatMap((schedule) => schedule.target_ids || [])
+                .map((targetId) => String(targetId || '').trim())
+                .filter(Boolean)
+        )
+    );
+    const activeTargetIds = new Set(scenario.activeTargetIds || defaultTargetIds);
 
     return {
         upsertMock,
@@ -71,6 +81,21 @@ const createQueueSupabase = (scenario: {
                         in: jest.fn(async (_field: string, ids: string[]) => ({
                             data: (scenario.templates ?? ids.map((id) => ({ id, content: '{{title}}' }))).filter((template) => ids.includes(template.id)),
                             error: null
+                        }))
+                    }))
+                };
+            }
+
+            if (table === 'targets') {
+                return {
+                    select: jest.fn(() => ({
+                        in: jest.fn((_field: string, ids: string[]) => ({
+                            eq: jest.fn(async () => ({
+                                data: ids
+                                    .filter((id) => activeTargetIds.has(id))
+                                    .map((id) => ({ id })),
+                                error: null
+                            }))
                         }))
                     }))
                 };
@@ -178,6 +203,36 @@ describe('queueFeedItemsForSchedules', () => {
             queued,
             { onConflict: 'schedule_id,feed_item_id,target_id,sequence_step_index', ignoreDuplicates: true }
         );
+    });
+
+    it('does not queue feed dispatches for inactive targets', async () => {
+        const supabase = createQueueSupabase({
+            schedules: [
+                {
+                    id: 'schedule-active',
+                    target_ids: ['target-active', 'target-inactive'],
+                    template_id: 'template-1',
+                    approval_required: false,
+                    state: 'active',
+                    active: true
+                }
+            ],
+            existingLogsBySchedule: {},
+            activeTargetIds: ['target-active']
+        });
+
+        mockGetSupabaseClient.mockReturnValue(supabase);
+
+        const queued = await queueFeedItemsForSchedules('feed-1', [{ id: 'item-1' }]);
+
+        expect(queued).toHaveLength(1);
+        expect(queued[0]).toMatchObject({
+            feed_item_id: 'item-1',
+            target_id: 'target-active',
+            schedule_id: 'schedule-active',
+            status: 'pending'
+        });
+        expect(supabase.upsertMock).toHaveBeenCalledTimes(1);
     });
 
     it('queues one dispatch row per active template sequence step', async () => {

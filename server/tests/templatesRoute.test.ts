@@ -5,7 +5,7 @@ const templateRoutes = require('../src/routes/templates');
 describe('template route normalization', () => {
   const testUtils = templateRoutes.__testUtils;
 
-  it('stores modern auto media mode using the legacy database enum', () => {
+  it('stores modern auto media mode directly', () => {
     expect(
       testUtils.normalizeTemplatePayload({
         name: 'Test',
@@ -15,13 +15,13 @@ describe('template route normalization', () => {
         media_source: 'featured_image'
       })
     ).toMatchObject({
-      send_mode: 'image',
+      send_mode: 'auto_media',
       send_images: true,
       media_source: 'image'
     });
   });
 
-  it('stores text preview using the legacy database enum', () => {
+  it('stores text preview mode directly', () => {
     expect(
       testUtils.normalizeTemplatePayload({
         name: 'Test',
@@ -30,7 +30,7 @@ describe('template route normalization', () => {
         send_images: false
       })
     ).toMatchObject({
-      send_mode: 'link_preview',
+      send_mode: 'text_preview',
       send_images: false
     });
   });
@@ -76,7 +76,7 @@ describe('template route normalization', () => {
     });
   });
 
-  it('normalizes sequence steps without changing the legacy template mode', () => {
+  it('normalizes sequence steps while storing the modern template mode', () => {
     expect(
       testUtils.normalizeTemplatePayload({
         name: 'Status sequence',
@@ -90,7 +90,7 @@ describe('template route normalization', () => {
         ]
       })
     ).toMatchObject({
-      send_mode: 'link_preview',
+      send_mode: 'text_preview',
       status_background_color: '#166534',
       status_font: 5,
       sequence_steps: [

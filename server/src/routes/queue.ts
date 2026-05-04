@@ -16,7 +16,7 @@ const { normalizeMessageText } = require('../utils/messageText');
 const { stripManualMeta } = require('../utils/manualMeta');
 const { normalizeTargetJidForSend } = require('../utils/targetJid');
 const { normalizeFeedMedia } = require('../utils/feedMedia');
-const { isInlineMediaDataUrl, sanitizeMediaUrlForApi } = require('../utils/mediaUrlPresentation');
+const { isInlineMediaDataUrl, isStoredMediaReference, sanitizeMediaUrlForApi } = require('../utils/mediaUrlPresentation');
 
 const WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES = 15;
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
@@ -100,12 +100,16 @@ const buildCombinedQueueFilter = (windowStartIso: string) =>
 type RetryableQueueRow = {
   id?: string | null;
   schedule_id?: string | null;
+  target_id?: string | null;
   updated_at?: string | null;
   created_at?: string | null;
   error_message?: string | null;
   media_error?: string | null;
   schedule?: {
     state?: string | null;
+    active?: boolean | null;
+  } | null;
+  target?: {
     active?: boolean | null;
   } | null;
 };
@@ -122,6 +126,11 @@ const isRetryableQueueRow = (row: RetryableQueueRow, windowStartIso: string) => 
   const id = String(row?.id || '').trim();
   if (!id) return false;
   if (isTerminalChannelMediaFailure(row)) return false;
+
+  const targetId = String(row?.target_id || '').trim();
+  if (targetId && (!row?.target || row.target.active === false)) {
+    return false;
+  }
 
   const comparisonIso = String(row?.updated_at || row?.created_at || '').trim();
   if (!comparisonIso || comparisonIso < windowStartIso) {
@@ -147,12 +156,16 @@ const loadRetryableQueueLogIds = async (
     .select(`
       id,
       schedule_id,
+      target_id,
       updated_at,
       created_at,
       error_message,
       media_error,
       schedule:schedules (
         state,
+        active
+      ),
+      target:targets (
         active
       )
     `)
@@ -480,7 +493,7 @@ const queueRoutes = () => {
           status: row.status,
           error_message: row.error_message,
           media_url: sanitizeMediaUrlForApi(rawMediaUrl),
-          media_stored: isInlineMediaDataUrl(rawMediaUrl),
+          media_stored: isStoredMediaReference(rawMediaUrl),
           media_type: row.media_type || automationPreview?.mediaType || normalizedMedia.mediaKind || null,
           media_sent: Boolean(row.media_sent),
           media_error: row.media_error || null,
@@ -1068,5 +1081,6 @@ module.exports.__testUtils = {
   buildCombinedQueueFilter,
   hasEditableQueuePayload,
   isInlineMediaDataUrl,
+  isStoredMediaReference,
   sanitizeMediaUrlForApi
 };

@@ -5023,6 +5023,22 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       return { ok: false, error: 'Target not found' };
     }
 
+    if ((targetRes.data as { active?: boolean | null }).active === false) {
+      await supabase
+        .from('message_logs')
+        .update({
+          status: 'skipped',
+          processing_started_at: null,
+          error_message: 'Destination inactive',
+          media_url: null,
+          media_type: null,
+          media_sent: false,
+          media_error: null
+        })
+        .eq('id', log.id);
+      return { ok: false, error: 'Destination inactive' };
+    }
+
     if (isAutomationBacked && (scheduleRes as { error?: unknown }).error) {
       await supabase
         .from('message_logs')

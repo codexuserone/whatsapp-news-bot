@@ -3,7 +3,7 @@ const express = require('express');
 const { getSupabaseClient } = require('../db/supabase');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const { buildQueuedAutomationPreview } = require('../services/queueService');
-const { isInlineMediaDataUrl, sanitizeMediaUrlForApi } = require('../utils/mediaUrlPresentation');
+const { isStoredMediaReference, sanitizeMediaUrlForApi } = require('../utils/mediaUrlPresentation');
 
 const SUCCESSFUL_SEND_STATUSES = ['sent', 'delivered', 'read', 'played'];
 const DEFAULT_LOG_LIMIT = 200;
@@ -20,7 +20,7 @@ const finalizeLog = (row: Record<string, unknown>) => {
   return {
     ...row,
     media_url: sanitizeMediaUrlForApi(rawMediaUrl),
-    media_stored: isInlineMediaDataUrl(rawMediaUrl)
+    media_stored: isStoredMediaReference(rawMediaUrl)
   };
 };
 

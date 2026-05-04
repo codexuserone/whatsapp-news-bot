@@ -579,12 +579,38 @@ const queueFeedItemsForSchedules = async (feedId: string, items: FeedItemRecord[
     const runningSchedules = (schedules || []).filter((schedule: Record<string, unknown>) => isScheduleRunning(schedule));
     if (!runningSchedules.length) return [];
 
+    const allTargetIds = Array.from(
+      new Set(
+        runningSchedules
+          .flatMap((schedule: Record<string, unknown>) => (Array.isArray(schedule.target_ids) ? schedule.target_ids : []))
+          .map((targetId: unknown) => String(targetId || '').trim())
+          .filter(Boolean)
+      )
+    );
+    if (!allTargetIds.length) return [];
+
+    const { data: activeTargets, error: activeTargetsError } = await supabase
+      .from('targets')
+      .select('id')
+      .in('id', allTargetIds)
+      .eq('active', true);
+
+    if (activeTargetsError) throw activeTargetsError;
+    const activeTargetIds = new Set(
+      (activeTargets || [])
+        .map((target: { id?: string | null }) => String(target.id || '').trim())
+        .filter(Boolean)
+    );
+    if (!activeTargetIds.size) return [];
+
     const stepsByTemplateId = await loadTemplateStepsById(supabase, runningSchedules);
     const logs: Array<Record<string, unknown>> = [];
     const baseTimeMs = Date.now();
 
     for (const schedule of runningSchedules) {
-      const targetIds = Array.isArray(schedule.target_ids) ? schedule.target_ids : [];
+      const targetIds = (Array.isArray(schedule.target_ids) ? schedule.target_ids : [])
+        .map((targetId: unknown) => String(targetId || '').trim())
+        .filter((targetId: string) => targetId && activeTargetIds.has(targetId));
 
       if (!targetIds.length) continue;
 

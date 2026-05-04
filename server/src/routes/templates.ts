@@ -113,19 +113,19 @@ const normalizeTemplatePayload = (payload: Record<string, unknown>) => {
   const explicitMode = next.send_mode;
 
   if (explicitMode === 'auto_media' || explicitMode === 'image') {
-    next.send_mode = 'image';
+    next.send_mode = 'auto_media';
     next.send_images = true;
     return next;
   }
 
   if (explicitMode === 'media_only' || explicitMode === 'image_only') {
-    next.send_mode = 'image_only';
+    next.send_mode = 'media_only';
     next.send_images = true;
     return next;
   }
 
   if (explicitMode === 'text_preview' || explicitMode === 'link_preview') {
-    next.send_mode = 'link_preview';
+    next.send_mode = 'text_preview';
     next.send_images = false;
     return next;
   }
@@ -136,9 +136,9 @@ const normalizeTemplatePayload = (payload: Record<string, unknown>) => {
     return next;
   }
 
-  const legacyMode = next.send_images === false ? 'link_preview' : 'image';
-  next.send_mode = legacyMode;
-  next.send_images = legacyMode === 'image';
+  const defaultMode = next.send_images === false ? 'text_preview' : 'auto_media';
+  next.send_mode = defaultMode;
+  next.send_images = defaultMode === 'auto_media';
   return next;
 };
 

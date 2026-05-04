@@ -26,7 +26,7 @@ const prepareNewsletterImage = async (
   const buffer = Buffer.isBuffer(input) ? input : Buffer.from(input);
   const maxBytes = Math.max(Number(options?.maxBytes ?? 8 * 1024 * 1024), 1);
   const jpegQuality = Math.min(Math.max(Number(options?.jpegQuality ?? 92), 30), 95);
-  const thumbWidth = Math.min(Math.max(Number(options?.thumbWidth ?? 32), 16), 96);
+  const thumbWidth = Math.min(Math.max(Number(options?.thumbWidth ?? 128), 32), 256);
 
   if (!buffer.length) {
     throw new Error('Empty image buffer');

@@ -3411,8 +3411,8 @@ const computeNextBatchRunAt = (times: string[], timezone?: string | null) => {
 };
 
 const compareFeedDispatchOrder = (
-  left: { pub_date?: string | null; created_at?: string | null; id?: string | null },
-  right: { pub_date?: string | null; created_at?: string | null; id?: string | null }
+  left: { pub_date?: string | Date | null; created_at?: string | Date | null; id?: string | null },
+  right: { pub_date?: string | Date | null; created_at?: string | Date | null; id?: string | null }
 ) => {
   const leftPub = left?.pub_date ? Date.parse(String(left.pub_date)) : Number.NaN;
   const rightPub = right?.pub_date ? Date.parse(String(right.pub_date)) : Number.NaN;
@@ -3425,7 +3425,18 @@ const compareFeedDispatchOrder = (
   return String(left?.id || '').localeCompare(String(right?.id || ''));
 };
 
-const planFeedDispatchPage = <T extends { pub_date?: string | null; created_at?: string | null; id?: string | null }>(
+const normalizeFeedDispatchCursorIso = (value: unknown): string | null => {
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isFinite(time) ? value.toISOString() : null;
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const time = Date.parse(raw);
+  return Number.isFinite(time) ? new Date(time).toISOString() : null;
+};
+
+const planFeedDispatchPage = <T extends { pub_date?: string | Date | null; created_at?: string | Date | null; id?: string | null }>(
   page: T[]
 ) => {
   const scanItems = Array.isArray(page) ? [...page] : [];
@@ -3433,13 +3444,13 @@ const planFeedDispatchPage = <T extends { pub_date?: string | null; created_at?:
   const lastScanned = scanItems.length ? scanItems[scanItems.length - 1] : null;
   return {
     dispatchItems,
-    cursorAt: lastScanned?.created_at ? String(lastScanned.created_at) : null,
+    cursorAt: lastScanned?.created_at ? normalizeFeedDispatchCursorIso(lastScanned.created_at) : null,
     cursorId: lastScanned?.id ? String(lastScanned.id) : null
   };
 };
 
 const isFeedItemFreshEnoughForAutoQueue = (
-  item: { pub_date?: string | null; created_at?: string | null },
+  item: { pub_date?: string | Date | null; created_at?: string | Date | null },
   maxAgeHours = DEFAULT_MAX_AUTO_QUEUE_ITEM_AGE_HOURS,
   nowMs = Date.now()
 ) => {
@@ -3452,7 +3463,7 @@ const isFeedItemFreshEnoughForAutoQueue = (
 };
 
 const resolveFeedItemTimestampMs = (
-  item: { pub_date?: string | null; created_at?: string | null } | null | undefined
+  item: { pub_date?: string | Date | null; created_at?: string | Date | null } | null | undefined
 ) => {
   const preferredTimestamp = String(item?.pub_date || '').trim() || String(item?.created_at || '').trim();
   if (!preferredTimestamp) return Number.NaN;
@@ -3518,7 +3529,7 @@ const hasQueueCursorAdvanced = (
 };
 
 const isFeedItemAfterQueueCursor = (
-  item: { created_at?: string | null; id?: string | null },
+  item: { created_at?: string | Date | null; id?: string | null },
   cursorAt: unknown,
   cursorId: unknown
 ) => {
@@ -3539,7 +3550,7 @@ const isFeedItemAfterQueueCursor = (
   return Boolean(itemIdValue && itemIdValue > cursorIdValue);
 };
 
-const filterFeedPageAfterCursor = <T extends { created_at?: string | null; id?: string | null }>(
+const filterFeedPageAfterCursor = <T extends { created_at?: string | Date | null; id?: string | null }>(
   page: T[],
   cursorAt: unknown,
   cursorId: unknown
@@ -3548,7 +3559,7 @@ const filterFeedPageAfterCursor = <T extends { created_at?: string | null; id?: 
   return page.filter((item) => isFeedItemAfterQueueCursor(item, cursorAt, cursorId));
 };
 
-type FeedQueueCursorRow = { id?: string; created_at?: string | null; pub_date?: string | null };
+type FeedQueueCursorRow = { id?: string; created_at?: string | Date | null; pub_date?: string | Date | null };
 
 const isAutoQueueReplayTooOld = (
   log: { created_at?: string | null },

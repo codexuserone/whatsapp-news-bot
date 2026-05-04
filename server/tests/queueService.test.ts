@@ -713,6 +713,14 @@ describe('queueService __testUtils', () => {
     expect(plan.cursorId).toBe('c');
   });
 
+  it('preserves millisecond precision when queue cursors come back as Date objects', () => {
+    const plan = testUtils.planFeedDispatchPage([
+      { id: 'cursor-row', created_at: new Date('2026-05-04T04:38:38.286Z'), pub_date: '2026-05-04T04:38:06.000Z' }
+    ]);
+
+    expect(plan.cursorAt).toBe('2026-05-04T04:38:38.286Z');
+  });
+
   it('detects text or media changes for correction decisions', () => {
     expect(
       testUtils.hasCorrectionChanges(

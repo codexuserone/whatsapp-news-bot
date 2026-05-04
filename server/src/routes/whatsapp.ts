@@ -182,14 +182,21 @@ const assertStatusMediaResponseMatches = (
   }
 };
 
+const parseProvidedStatusFont = (font: unknown) => {
+  if (font === null || font === undefined || font === '') return null;
+  const normalizedFont = Number(font);
+  if (!Number.isInteger(normalizedFont) || normalizedFont < 0 || normalizedFont > 8) return null;
+  return normalizedFont;
+};
+
 const buildTextStatusStyleOptions = (backgroundColor: unknown, font: unknown) => {
   const normalizedBackgroundColor = String(backgroundColor || '').trim();
-  const normalizedFont = Number(font);
+  const normalizedFont = parseProvidedStatusFont(font);
   return {
     ...(normalizedBackgroundColor && /^#[0-9a-f]{6}$/i.test(normalizedBackgroundColor)
       ? { backgroundColor: normalizedBackgroundColor }
       : {}),
-    ...(Number.isInteger(normalizedFont) && normalizedFont >= 0 && normalizedFont <= 8
+    ...(normalizedFont !== null
       ? { font: normalizedFont }
       : {})
   };
@@ -1950,6 +1957,7 @@ const whatsappRoutes = () => {
     assertUsableStatusAudience(statusSnapshot);
     const sendOptions: Record<string, unknown> = {};
     const strippedStatusStyleOptions: string[] = [];
+    const providedStatusFont = parseProvidedStatusFont(font);
     if (statusSnapshot.recipients.length) sendOptions.statusJidList = statusSnapshot.recipients;
     if (!requestedStatusMediaType && normalizedBackgroundColor) {
       sendOptions.backgroundColor = normalizedBackgroundColor.startsWith('#')
@@ -1958,9 +1966,9 @@ const whatsappRoutes = () => {
     } else if (requestedStatusMediaType && normalizedBackgroundColor) {
       strippedStatusStyleOptions.push('backgroundColor');
     }
-    if (!requestedStatusMediaType && Number.isFinite(Number(font))) {
-      sendOptions.font = Number(font);
-    } else if (requestedStatusMediaType && Number.isFinite(Number(font))) {
+    if (!requestedStatusMediaType && providedStatusFont !== null) {
+      sendOptions.font = providedStatusFont;
+    } else if (requestedStatusMediaType && providedStatusFont !== null) {
       strippedStatusStyleOptions.push('font');
     }
     if (Number.isFinite(Number(mediaUploadTimeoutMs))) sendOptions.mediaUploadTimeoutMs = Number(mediaUploadTimeoutMs);

@@ -51,6 +51,12 @@ describe('whatsapp route test-send logging', () => {
       font: 5
     });
     expect(__testUtils.buildTextStatusStyleOptions('166534', 99)).toEqual({});
+    expect(__testUtils.buildTextStatusStyleOptions(null, null)).toEqual({});
+    expect(__testUtils.buildTextStatusStyleOptions(undefined, undefined)).toEqual({});
+    expect(__testUtils.buildTextStatusStyleOptions('#166534', 0)).toEqual({
+      backgroundColor: '#166534',
+      font: 0
+    });
   });
 
   it('requires server ACKs for group test-send confirmation', () => {

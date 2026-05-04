@@ -1795,9 +1795,6 @@ class WhatsAppClient {
           this.status = 'conflict';
           this.lastError =
             'Another bot instance took over this WhatsApp session. This instance will stay idle.';
-          if (this.authStore?.updateStatus) {
-            await this.authStore.updateStatus('conflict');
-          }
           if (this.socket) {
             try {
               this.cleanupSocket();
@@ -2018,7 +2015,6 @@ class WhatsAppClient {
               );
               this.status = 'conflict';
               this.lastError = 'Another instance currently holds the WhatsApp lease.';
-              await authStore.updateStatus('conflict');
               this.isConnecting = false;
               this.scheduleReconnect(retryDelayMs);
               return;
@@ -2030,7 +2026,6 @@ class WhatsAppClient {
               );
               this.status = 'conflict';
               this.lastError = 'Another instance currently holds the WhatsApp lease.';
-              await authStore.updateStatus('conflict');
               this.isConnecting = false;
               this.scheduleReconnect(retryDelayMs);
               return;
@@ -2063,7 +2058,6 @@ class WhatsAppClient {
                   logger.warn({ holder: takeover.ownerId }, 'Lease held by another instance; skipping connect');
                   this.status = 'conflict';
                   this.lastError = 'Another instance currently holds the WhatsApp lease.';
-                  await authStore.updateStatus('conflict');
                   this.isConnecting = false;
                   this.scheduleReconnect(retryDelayMs);
                   return;
@@ -2072,7 +2066,6 @@ class WhatsAppClient {
                 logger.warn('Auto-takeover requested but forceAcquireLease is not available; skipping connect');
                 this.status = 'conflict';
                 this.lastError = 'Another instance currently holds the WhatsApp lease.';
-                await authStore.updateStatus('conflict');
                 this.isConnecting = false;
                 this.scheduleReconnect(retryDelayMs);
                 return;

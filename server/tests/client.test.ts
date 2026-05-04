@@ -201,6 +201,7 @@ describe('WhatsAppClient', () => {
             expect(client.leaseHeld).toBe(false);
             expect(client.leaseOwnerId).toBe('new-render-instance');
             expect(client.status).toBe('conflict');
+            expect(updateStatus as any).not.toHaveBeenCalledWith('conflict');
         } finally {
             client.stopLeaseRenewal();
             if (client.reconnectTimer) {
@@ -233,6 +234,38 @@ describe('WhatsAppClient', () => {
         expect(forceAcquireLease as any).not.toHaveBeenCalled();
         expect(lease.ok).toBe(false);
         expect(lease.reason).toBe('lost_lease_to_another_owner');
+    });
+
+    it('should not overwrite global status when an old instance loses its lease', async () => {
+        const updateStatus = jest.fn(async () => {});
+        const renewLease = jest.fn(async () => ({
+            ok: false,
+            supported: true,
+            ownerId: 'new-render-instance',
+            expiresAt: new Date(Date.now() + 90_000).toISOString()
+        }));
+        const socketEnd = jest.fn();
+        client.authStore = {
+            updateStatus,
+            renewLease
+        };
+        client.leaseSupported = true;
+        client.leaseHeld = true;
+        client.leaseOwnerId = client.instanceId;
+        client.status = 'qr_ready';
+        client.socket = { end: socketEnd };
+        client.cleanupSocket = jest.fn();
+        client.scheduleReconnect = jest.fn();
+
+        client.startLeaseRenewal(90_000);
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(renewLease as any).toHaveBeenCalledWith(client.instanceId, 90_000);
+        expect(client.status).toBe('conflict');
+        expect(client.leaseLostToAnotherOwner).toBe(true);
+        expect(updateStatus as any).not.toHaveBeenCalledWith('conflict');
+        expect(socketEnd).toHaveBeenCalled();
+        expect(client.scheduleReconnect).toHaveBeenCalledWith(15000);
     });
 
     it('should default browser tuples to the configured device label', () => {

@@ -38,6 +38,8 @@ const resolveWhatsAppLeaseTtlMs = () => {
 const WHATSAPP_LEASE_TTL_MS = resolveWhatsAppLeaseTtlMs();
 const isWhatsAppLeaseAutoTakeoverEnabled = () =>
   String(process.env.WHATSAPP_LEASE_AUTO_TAKEOVER || '').trim().toLowerCase() === 'true';
+const isWhatsAppLeaseDeployTakeoverEnabled = () =>
+  String(process.env.WHATSAPP_LEASE_DEPLOY_TAKEOVER || '').trim().toLowerCase() === 'true';
 
 const isTruthyEnvFlag = (value: unknown) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 
@@ -2000,6 +2002,10 @@ class WhatsAppClient {
       // Auto-takeover is intentionally opt-in. When enabled, a fresh production
       // instance may claim a stale or overlapping lease instead of leaving the app down.
       const allowAutoTakeover = isWhatsAppLeaseAutoTakeoverEnabled() && !this.leaseLostToAnotherOwner;
+      const allowDeployTakeover =
+        isWhatsAppLeaseDeployTakeoverEnabled() &&
+        !this.hasConnectedOnce &&
+        !this.leaseLostToAnotherOwner;
       if (authStore.acquireLease) {
         try {
           const lease = await authStore.acquireLease(this.instanceId, WHATSAPP_LEASE_TTL_MS);
@@ -2036,7 +2042,7 @@ class WhatsAppClient {
               this.scheduleReconnect(retryDelayMs);
               return;
             }
-            if (!allowAutoTakeover) {
+            if (!allowAutoTakeover && !allowDeployTakeover) {
               logger.warn(
                 { holder: lease.ownerId, expiresAt: lease.expiresAt, retryDelayMs },
                 'Lease held by another instance; skipping connect until lease is available'
@@ -2048,7 +2054,10 @@ class WhatsAppClient {
               return;
             }
 
-            logger.warn({ holder: lease.ownerId, expiresAt: lease.expiresAt }, 'Lease held, attempting auto-takeover...');
+            logger.warn(
+              { holder: lease.ownerId, expiresAt: lease.expiresAt, deployHandoff: allowDeployTakeover },
+              allowDeployTakeover ? 'Lease held by previous instance; taking over for deploy handoff...' : 'Lease held, attempting auto-takeover...'
+            );
             this.status = 'connecting';
             this.lastError = null; // Don't show confusing messages to users
 

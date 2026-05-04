@@ -165,6 +165,119 @@ describe('WhatsAppClient', () => {
         }
     });
 
+    it('should allow a fresh deploy handoff takeover before the instance has connected', async () => {
+        const originalAutoTakeover = process.env.WHATSAPP_LEASE_AUTO_TAKEOVER;
+        const originalDeployTakeover = process.env.WHATSAPP_LEASE_DEPLOY_TAKEOVER;
+        process.env.WHATSAPP_LEASE_AUTO_TAKEOVER = 'false';
+        process.env.WHATSAPP_LEASE_DEPLOY_TAKEOVER = 'true';
+        client.hasConnectedOnce = false;
+
+        const acquireLease = jest.fn(async () => ({
+            ok: false,
+            supported: true,
+            ownerId: 'previous-render-instance',
+            expiresAt: new Date(Date.now() + DEFAULT_LEASE_TTL_MS).toISOString()
+        }));
+        const forceAcquireLease = jest.fn(async () => ({
+            ok: true,
+            supported: true,
+            ownerId: 'new-render-instance',
+            expiresAt: new Date(Date.now() + DEFAULT_LEASE_TTL_MS).toISOString()
+        }));
+        const updateStatus = jest.fn(async () => {});
+        const renewLease = jest.fn(async () => ({ ok: true, supported: true, ownerId: 'new-render-instance' }));
+
+        (useSupabaseAuthState as any).mockResolvedValueOnce({
+            state: {},
+            saveCreds: jest.fn(),
+            clearState: jest.fn(),
+            updateStatus,
+            acquireLease,
+            forceAcquireLease,
+            renewLease
+        });
+
+        try {
+            await client.connect();
+
+            expect(acquireLease as any).toHaveBeenCalledWith(client.instanceId, DEFAULT_LEASE_TTL_MS);
+            expect(forceAcquireLease as any).toHaveBeenCalledWith(client.instanceId, DEFAULT_LEASE_TTL_MS);
+            expect(client.leaseHeld).toBe(true);
+            expect(client.leaseOwnerId).toBe('new-render-instance');
+            expect(client.status).not.toBe('conflict');
+        } finally {
+            client.stopLeaseRenewal();
+            if (originalAutoTakeover === undefined) {
+                delete process.env.WHATSAPP_LEASE_AUTO_TAKEOVER;
+            } else {
+                process.env.WHATSAPP_LEASE_AUTO_TAKEOVER = originalAutoTakeover;
+            }
+            if (originalDeployTakeover === undefined) {
+                delete process.env.WHATSAPP_LEASE_DEPLOY_TAKEOVER;
+            } else {
+                process.env.WHATSAPP_LEASE_DEPLOY_TAKEOVER = originalDeployTakeover;
+            }
+        }
+    });
+
+    it('should not use deploy handoff takeover after the instance has already connected', async () => {
+        const originalAutoTakeover = process.env.WHATSAPP_LEASE_AUTO_TAKEOVER;
+        const originalDeployTakeover = process.env.WHATSAPP_LEASE_DEPLOY_TAKEOVER;
+        process.env.WHATSAPP_LEASE_AUTO_TAKEOVER = 'false';
+        process.env.WHATSAPP_LEASE_DEPLOY_TAKEOVER = 'true';
+        client.hasConnectedOnce = true;
+
+        const acquireLease = jest.fn(async () => ({
+            ok: false,
+            supported: true,
+            ownerId: 'new-render-instance',
+            expiresAt: new Date(Date.now() + DEFAULT_LEASE_TTL_MS).toISOString()
+        }));
+        const forceAcquireLease = jest.fn(async () => ({
+            ok: true,
+            supported: true,
+            ownerId: 'old-render-instance',
+            expiresAt: new Date(Date.now() + DEFAULT_LEASE_TTL_MS).toISOString()
+        }));
+        const updateStatus = jest.fn(async () => {});
+
+        (useSupabaseAuthState as any).mockResolvedValueOnce({
+            state: {},
+            saveCreds: jest.fn(),
+            clearState: jest.fn(),
+            updateStatus,
+            acquireLease,
+            forceAcquireLease,
+            renewLease: jest.fn()
+        });
+
+        try {
+            await client.connect();
+
+            expect(acquireLease as any).toHaveBeenCalledWith(client.instanceId, DEFAULT_LEASE_TTL_MS);
+            expect(forceAcquireLease as any).not.toHaveBeenCalled();
+            expect(client.leaseHeld).toBe(false);
+            expect(client.leaseOwnerId).toBe('new-render-instance');
+            expect(client.status).toBe('conflict');
+        } finally {
+            client.stopLeaseRenewal();
+            if (client.reconnectTimer) {
+                clearTimeout(client.reconnectTimer);
+                client.reconnectTimer = null;
+            }
+            if (originalAutoTakeover === undefined) {
+                delete process.env.WHATSAPP_LEASE_AUTO_TAKEOVER;
+            } else {
+                process.env.WHATSAPP_LEASE_AUTO_TAKEOVER = originalAutoTakeover;
+            }
+            if (originalDeployTakeover === undefined) {
+                delete process.env.WHATSAPP_LEASE_DEPLOY_TAKEOVER;
+            } else {
+                process.env.WHATSAPP_LEASE_DEPLOY_TAKEOVER = originalDeployTakeover;
+            }
+        }
+    });
+
     it('should not auto-take back a lease after this instance already lost it', async () => {
         const originalAutoTakeover = process.env.WHATSAPP_LEASE_AUTO_TAKEOVER;
         process.env.WHATSAPP_LEASE_AUTO_TAKEOVER = 'true';

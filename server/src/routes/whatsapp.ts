@@ -142,9 +142,10 @@ const buildStatusAudienceResponse = (
   };
 
   if (options.includeRecipients) {
+    const recipientCount = Number(response.participantCount || recipients.length || 0);
     response.recipients = sample;
-    response.recipientCount = Number(response.participantCount || recipients.length || 0);
-    response.recipientsTruncated = recipients.length > sample.length;
+    response.recipientCount = recipientCount;
+    response.recipientsTruncated = recipientCount > sample.length;
   }
 
   return response;

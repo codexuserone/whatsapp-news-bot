@@ -152,4 +152,28 @@ describe('whatsapp route test-send logging resolution', () => {
       sample: ['12015550101@s.whatsapp.net', '12015550102@s.whatsapp.net']
     });
   });
+
+  it('marks status audience samples truncated when total count exceeds returned recipients', () => {
+    expect(
+      testUtils.buildStatusAudienceResponse(
+        {
+          participantCount: 1154,
+          recipients: [
+            '12015550101@s.whatsapp.net',
+            '12015550102@s.whatsapp.net',
+            '12015550103@s.whatsapp.net',
+            '12015550104@s.whatsapp.net',
+            '12015550105@s.whatsapp.net'
+          ],
+          sources: { contactsCache: 1154 },
+          warnings: []
+        },
+        { includeRecipients: true, sampleSize: 5, stale: false }
+      )
+    ).toMatchObject({
+      participantCount: 1154,
+      recipientCount: 1154,
+      recipientsTruncated: true
+    });
+  });
 });

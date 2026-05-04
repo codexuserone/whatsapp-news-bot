@@ -25,6 +25,88 @@ type ManualPostBody = {
   documentMime?: string | null;
 };
 
+const buildTargetIds = (body: ManualPostBody) => {
+  const ids = Array.isArray(body.target_ids) ? body.target_ids : [];
+  const single = String(body.target_id || '').trim();
+  const combined = [...ids, ...(single ? [single] : [])]
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
+  return Array.from(new Set(combined));
+};
+
+const buildMediaFields = (body: ManualPostBody) => {
+  const imageUrl = String(body.imageUrl || '').trim();
+  const videoUrl = String(body.videoUrl || '').trim();
+  const audioUrl = String(body.audioUrl || '').trim();
+  const documentUrl = String(body.documentUrl || '').trim();
+  const imageDataUrl = String(body.imageDataUrl || '').trim();
+  const videoDataUrl = String(body.videoDataUrl || '').trim();
+  const audioDataUrl = String(body.audioDataUrl || '').trim();
+  const documentDataUrl = String(body.documentDataUrl || '').trim();
+  if (documentDataUrl) {
+    return { media_url: documentDataUrl, media_type: 'document' as const };
+  }
+  if (audioDataUrl) {
+    return { media_url: audioDataUrl, media_type: 'audio' as const };
+  }
+  if (videoDataUrl) {
+    return { media_url: videoDataUrl, media_type: 'video' as const };
+  }
+  if (imageDataUrl) {
+    return { media_url: imageDataUrl, media_type: 'image' as const };
+  }
+  if (documentUrl) {
+    return { media_url: documentUrl, media_type: 'document' as const };
+  }
+  if (audioUrl) {
+    return { media_url: audioUrl, media_type: 'audio' as const };
+  }
+  if (videoUrl) {
+    return { media_url: videoUrl, media_type: 'video' as const };
+  }
+  if (imageUrl) {
+    return { media_url: imageUrl, media_type: 'image' as const };
+  }
+  return { media_url: null, media_type: null };
+};
+
+const buildManualLogRows = (body: ManualPostBody) => {
+  const targetIds = buildTargetIds(body);
+  if (!targetIds.length) {
+    throw new Error('target_id or target_ids is required');
+  }
+
+  const messageRaw = typeof body.message === 'string' ? body.message : null;
+  const media = buildMediaFields(body);
+  const disableLinkPreview = body.disableLinkPreview === true;
+  const includeCaption = body.includeCaption !== false;
+  const message = encodeManualMessageContent(messageRaw, {
+    disableLinkPreview,
+    includeCaption,
+    documentFilename: body.documentFilename || null,
+    documentMime: body.documentMime || null
+  });
+
+  return targetIds.map((targetId) => ({
+    schedule_id: null,
+    feed_item_id: null,
+    target_id: targetId,
+    template_id: null,
+    status: 'pending',
+    message_content: message,
+    error_message: null,
+    retry_count: 0,
+    processing_started_at: null,
+    sent_at: null,
+    whatsapp_message_id: null,
+    ...media,
+    media_sent: false,
+    media_error: null,
+    disable_link_preview: disableLinkPreview,
+    include_caption: includeCaption
+  }));
+};
+
 const manualRoutes = () => {
   const router = express.Router();
 
@@ -34,84 +116,8 @@ const manualRoutes = () => {
     return supabase;
   };
 
-  const buildTargetIds = (body: ManualPostBody) => {
-    const ids = Array.isArray(body.target_ids) ? body.target_ids : [];
-    const single = String(body.target_id || '').trim();
-    const combined = [...ids, ...(single ? [single] : [])]
-      .map((id) => String(id || '').trim())
-      .filter(Boolean);
-    return Array.from(new Set(combined));
-  };
-
-  const buildMediaFields = (body: ManualPostBody) => {
-    const imageUrl = String(body.imageUrl || '').trim();
-    const videoUrl = String(body.videoUrl || '').trim();
-    const audioUrl = String(body.audioUrl || '').trim();
-    const documentUrl = String(body.documentUrl || '').trim();
-    const imageDataUrl = String(body.imageDataUrl || '').trim();
-    const videoDataUrl = String(body.videoDataUrl || '').trim();
-    const audioDataUrl = String(body.audioDataUrl || '').trim();
-    const documentDataUrl = String(body.documentDataUrl || '').trim();
-    if (documentDataUrl) {
-      return { media_url: documentDataUrl, media_type: 'document' as const };
-    }
-    if (audioDataUrl) {
-      return { media_url: audioDataUrl, media_type: 'audio' as const };
-    }
-    if (videoDataUrl) {
-      return { media_url: videoDataUrl, media_type: 'video' as const };
-    }
-    if (imageDataUrl) {
-      return { media_url: imageDataUrl, media_type: 'image' as const };
-    }
-    if (documentUrl) {
-      return { media_url: documentUrl, media_type: 'document' as const };
-    }
-    if (audioUrl) {
-      return { media_url: audioUrl, media_type: 'audio' as const };
-    }
-    if (videoUrl) {
-      return { media_url: videoUrl, media_type: 'video' as const };
-    }
-    if (imageUrl) {
-      return { media_url: imageUrl, media_type: 'image' as const };
-    }
-    return { media_url: null, media_type: null };
-  };
-
   const insertManualLogs = async (supabase: ReturnType<typeof getSupabaseClient>, body: ManualPostBody) => {
-    const targetIds = buildTargetIds(body);
-    if (!targetIds.length) {
-      throw new Error('target_id or target_ids is required');
-    }
-
-    const messageRaw = typeof body.message === 'string' ? body.message : null;
-    const media = buildMediaFields(body);
-    const disableLinkPreview = body.disableLinkPreview === true;
-    const includeCaption = body.includeCaption !== false;
-    const message = encodeManualMessageContent(messageRaw, {
-      disableLinkPreview,
-      includeCaption,
-      documentFilename: body.documentFilename || null,
-      documentMime: body.documentMime || null
-    });
-
-    const rows = targetIds.map((targetId) => ({
-      schedule_id: null,
-      feed_item_id: null,
-      target_id: targetId,
-      template_id: null,
-      status: 'pending',
-      message_content: message,
-      error_message: null,
-      retry_count: 0,
-      processing_started_at: null,
-      sent_at: null,
-      whatsapp_message_id: null,
-      ...media,
-      media_sent: false,
-      media_error: null
-    }));
+    const rows = buildManualLogRows(body);
 
     const { data: inserted, error } = await supabase
       .from('message_logs')
@@ -177,3 +183,8 @@ const manualRoutes = () => {
 };
 
 module.exports = manualRoutes;
+module.exports.__testUtils = {
+  buildMediaFields,
+  buildManualLogRows,
+  buildTargetIds
+};

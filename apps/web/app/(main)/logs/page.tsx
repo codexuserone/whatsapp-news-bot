@@ -244,7 +244,13 @@ const LogsPage = () => {
                             </Badge>
                           ) : null}
                         </TableCell>
-                        <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>
+                        <TableCell className="font-medium">
+                          <div className="flex flex-wrap items-center gap-1">
+                            <span>{log.target?.name || log.target_id}</span>
+                            {log.target_active === false ? <Badge variant="warning">Inactive target</Badge> : null}
+                            {log.target_in_current_schedule === false ? <Badge variant="outline">Old target</Badge> : null}
+                          </div>
+                        </TableCell>
                         <TableCell>
                           <Badge variant={mediaSummary.variant} title={log.media_error || undefined}>
                             {mediaSummary.label}

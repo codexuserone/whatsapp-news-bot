@@ -47,4 +47,50 @@ describe('logs route response helpers', () => {
       media_stored: false
     });
   });
+
+  it('marks inactive targets in log responses', () => {
+    expect(
+      testUtils.finalizeLog({
+        id: 'log-4',
+        target_id: 'target-1',
+        target: { id: 'target-1', active: false }
+      })
+    ).toMatchObject({
+      id: 'log-4',
+      target_active: false,
+      target_in_current_schedule: true
+    });
+  });
+
+  it('marks log targets that are no longer in the schedule', () => {
+    expect(
+      testUtils.finalizeLog({
+        id: 'log-5',
+        schedule_id: 'schedule-1',
+        target_id: 'target-old',
+        schedule: { id: 'schedule-1', target_ids: ['target-current'] },
+        target: { id: 'target-old', active: true }
+      })
+    ).toMatchObject({
+      id: 'log-5',
+      target_active: true,
+      target_in_current_schedule: false
+    });
+  });
+
+  it('marks current schedule targets in log responses', () => {
+    expect(
+      testUtils.finalizeLog({
+        id: 'log-6',
+        schedule_id: 'schedule-1',
+        target_id: 'target-current',
+        schedule: { id: 'schedule-1', target_ids: ['target-current'] },
+        target: { id: 'target-current', active: true }
+      })
+    ).toMatchObject({
+      id: 'log-6',
+      target_active: true,
+      target_in_current_schedule: true
+    });
+  });
 });

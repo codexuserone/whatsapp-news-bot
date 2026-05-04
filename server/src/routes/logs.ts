@@ -15,10 +15,37 @@ const parseLogLimit = (value: unknown) => {
   return Math.min(Math.floor(parsed), MAX_LOG_LIMIT);
 };
 
+const resolveLogTargetState = (row: Record<string, unknown>) => {
+  const target = row.target as { active?: boolean | null } | null | undefined;
+  const schedule = row.schedule as { target_ids?: unknown[] | null } | null | undefined;
+
+  const targetActive = target?.active !== false;
+  if (row.schedule_id == null || row.target_id == null) {
+    return {
+      target_active: targetActive,
+      target_in_current_schedule: true
+    };
+  }
+
+  if (!Array.isArray(schedule?.target_ids)) {
+    return {
+      target_active: targetActive,
+      target_in_current_schedule: null
+    };
+  }
+
+  const targetId = String(row.target_id);
+  return {
+    target_active: targetActive,
+    target_in_current_schedule: schedule.target_ids.some((id) => String(id) === targetId)
+  };
+};
+
 const finalizeLog = (row: Record<string, unknown>) => {
   const rawMediaUrl = row.media_url || null;
   return {
     ...row,
+    ...resolveLogTargetState(row),
     media_url: sanitizeMediaUrlForApi(rawMediaUrl),
     media_stored: isStoredMediaReference(rawMediaUrl)
   };
@@ -40,9 +67,9 @@ const logRoutes = () => {
         .from('message_logs')
         .select(`
           *,
-          schedule:schedules(id, name),
+          schedule:schedules(id, name, target_ids),
           feed_item:feed_items(id, title, link, description, content, author, image_url, media_url, media_kind, media_mime, media_filename, raw_data),
-          target:targets(id, name, phone_number, type),
+          target:targets(id, name, phone_number, type, active),
           template:templates(id, name, content, send_images, send_mode, media_source, sequence_steps, status_background_color, status_font)
         `)
         .order('created_at', { ascending: false })
@@ -98,5 +125,6 @@ const logRoutes = () => {
 module.exports = logRoutes;
 module.exports.__testUtils = {
   parseLogLimit,
+  resolveLogTargetState,
   finalizeLog
 };

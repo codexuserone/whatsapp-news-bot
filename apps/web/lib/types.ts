@@ -90,6 +90,8 @@ export type LogEntry = {
   media_type?: string | null;
   media_sent?: boolean | null;
   media_error?: string | null;
+  target_active?: boolean | null;
+  target_in_current_schedule?: boolean | null;
   sequence_step_index?: number | null;
   sequence_step_label?: string | null;
   sent_at?: string | null;
@@ -104,8 +106,8 @@ export type LogEntry = {
   correction_kind?: string | null;
   correction_error?: string | null;
   created_at: string;
-  target?: { name?: string | null; type?: string | null; phone_number?: string | null } | null;
-  schedule?: { name?: string | null } | null;
+  target?: { name?: string | null; type?: string | null; phone_number?: string | null; active?: boolean | null } | null;
+  schedule?: { name?: string | null; target_ids?: string[] | null } | null;
   feed_item?: { title?: string | null; link?: string | null } | null;
   template?: { name?: string | null } | null;
 };

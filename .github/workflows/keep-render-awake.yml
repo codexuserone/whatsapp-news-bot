@@ -1,27 +1,33 @@
-name: Manual Render Health Check
+name: Render Keep Awake
 
 on:
+  schedule:
+    - cron: '*/10 * * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: render-keep-awake
+  cancel-in-progress: true
+
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - name: Ping public health endpoints
         env:
           BASE_URL: https://whatsapp-news-bot-3-69qh.onrender.com
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           ping_path() {
             local path="$1"
-            for attempt in 1 2 3 4 5 6; do
+            for attempt in 1 2 3 4 5 6 7 8; do
               if curl -fsS \
-                --retry 4 \
+                --retry 2 \
                 --retry-all-errors \
                 --retry-delay 10 \
                 --connect-timeout 20 \
@@ -29,10 +35,16 @@ jobs:
                 "$BASE_URL$path"; then
                 return 0
               fi
+              echo "Attempt $attempt for $path failed; retrying..."
               sleep 20
             done
             return 1
           }
 
-          ping_path /ping
-          ping_path /health
+          failed=0
+          ping_path /ping || failed=1
+          ping_path /health || failed=1
+
+          if [ "$failed" -ne 0 ]; then
+            echo "::warning::Render keep-awake ping failed after retries. Leaving workflow green to avoid noisy false CI failures."
+          fi

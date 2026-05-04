@@ -43,7 +43,7 @@ describe('whatsappConnection recovery helpers', () => {
 
   it('should not keep retrying when WhatsApp requires a fresh manual pairing', async () => {
     const reconnect = jest.fn(async () => {});
-    const takeoverLease = jest.fn(async () => ({ ok: true, supported: true, ownerId: 'me', expiresAt: 'future' }));
+    const takeoverLease: any = jest.fn(async () => ({ ok: true, supported: true, ownerId: 'me', expiresAt: 'future' }));
     const getStatus = jest.fn(() => ({
       status: 'error',
       lastError: 'Fresh pairing required. Automatic recovery could not open a WhatsApp login code.'
@@ -88,7 +88,7 @@ describe('whatsappConnection recovery helpers', () => {
         .mockReturnValue({ status: 'connected' }),
       async takeoverLease(ttlMs?: number) {
         expect(this.ownerId).toBe('lease-owner');
-        expect(ttlMs).toBe(90_000);
+        expect(ttlMs).toBe(60_000);
         return { ok: true, supported: true, ownerId: this.ownerId, expiresAt: 'future' };
       }
     };
@@ -102,5 +102,39 @@ describe('whatsappConnection recovery helpers', () => {
     });
 
     expect(ready).toBe(false);
+  });
+
+  it('should use the configured lease ttl for recovery takeover attempts', async () => {
+    const originalTtl = process.env.WHATSAPP_LEASE_TTL_MS;
+    process.env.WHATSAPP_LEASE_TTL_MS = '45000';
+
+    const takeoverLease = jest.fn(async () => ({ ok: true, supported: true, ownerId: 'me', expiresAt: 'future' }));
+    const client = {
+      reconnect: jest.fn(async () => {}),
+      getStatus: jest
+        .fn()
+        .mockReturnValueOnce({ status: 'conflict' })
+        .mockReturnValue({ status: 'connected' }),
+      takeoverLease
+    };
+
+    try {
+      const ready = await ensureWhatsAppConnected(client, {
+        attempts: 1,
+        delayMs: 10,
+        triggerReconnect: false,
+        triggerTakeover: true,
+        logContext: 'test'
+      });
+
+      expect(ready).toBe(false);
+      expect(takeoverLease as any).toHaveBeenCalledWith(45_000);
+    } finally {
+      if (originalTtl === undefined) {
+        delete process.env.WHATSAPP_LEASE_TTL_MS;
+      } else {
+        process.env.WHATSAPP_LEASE_TTL_MS = originalTtl;
+      }
+    }
   });
 });

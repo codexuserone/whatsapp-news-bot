@@ -29,6 +29,16 @@ const ALLOW_CLEAR_ESTABLISHED_AUTH =
   String(process.env.WHATSAPP_AUTH_ALLOW_CLEAR_ESTABLISHED_SESSION ?? 'false').trim().toLowerCase() === 'true';
 const newsletterMediaPatchContext = new AsyncLocalStorage();
 
+const resolveWhatsAppLeaseTtlMs = () => {
+  const parsed = Number(process.env.WHATSAPP_LEASE_TTL_MS || 60_000);
+  if (!Number.isFinite(parsed)) return 60_000;
+  return Math.max(20_000, Math.min(Math.floor(parsed), 300_000));
+};
+
+const WHATSAPP_LEASE_TTL_MS = resolveWhatsAppLeaseTtlMs();
+const isWhatsAppLeaseAutoTakeoverEnabled = () =>
+  String(process.env.WHATSAPP_LEASE_AUTO_TAKEOVER || '').trim().toLowerCase() === 'true';
+
 const isTruthyEnvFlag = (value: unknown) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 
 const isGroupMetadataStatusAudienceEnabled = (override?: boolean) =>
@@ -989,13 +999,13 @@ class WhatsAppClient {
           try {
             const store = this.authStore;
             if (store?.acquireLease) {
-              const lease = await store.acquireLease(this.instanceId, 90_000);
+              const lease = await store.acquireLease(this.instanceId, WHATSAPP_LEASE_TTL_MS);
               this.leaseSupported = lease.supported;
               this.leaseHeld = lease.ok;
               this.leaseOwnerId = lease.ownerId;
               this.leaseExpiresAt = lease.expiresAt;
               if (lease.supported && lease.ok) {
-                this.startLeaseRenewal(90_000);
+                this.startLeaseRenewal(WHATSAPP_LEASE_TTL_MS);
               }
             } else {
               this.leaseSupported = false;
@@ -1742,7 +1752,7 @@ class WhatsAppClient {
     return baileysLogger;
   }
 
-  startLeaseRenewal(ttlMs = 90_000): void {
+  startLeaseRenewal(ttlMs = WHATSAPP_LEASE_TTL_MS): void {
     const authStore = this.authStore;
     if (!authStore?.renewLease) return;
     if (!this.leaseSupported || !this.leaseHeld) return;
@@ -1825,7 +1835,7 @@ class WhatsAppClient {
     }
   }
 
-  async takeoverLease(ttlMs = 90_000, options?: { manual?: boolean }): Promise<{
+  async takeoverLease(ttlMs = WHATSAPP_LEASE_TTL_MS, options?: { manual?: boolean }): Promise<{
     ok: boolean;
     supported: boolean;
     ownerId: string | null;
@@ -1838,6 +1848,15 @@ class WhatsAppClient {
     const store = this.authStore;
     if (!store?.forceAcquireLease) {
       return { ok: false, supported: false, ownerId: null, expiresAt: null, reason: 'unsupported' };
+    }
+    if (options?.manual !== true && !isWhatsAppLeaseAutoTakeoverEnabled()) {
+      return {
+        ok: false,
+        supported: true,
+        ownerId: this.leaseOwnerId,
+        expiresAt: this.leaseExpiresAt,
+        reason: 'auto_takeover_disabled'
+      };
     }
     if (this.leaseLostToAnotherOwner && options?.manual !== true) {
       return {
@@ -1980,12 +1999,10 @@ class WhatsAppClient {
       // This prevents WhatsApp "conflict/replaced" errors during rolling deploys.
       // Auto-takeover is intentionally opt-in. When enabled, a fresh production
       // instance may claim a stale or overlapping lease instead of leaving the app down.
-      const allowAutoTakeover =
-        String(process.env.WHATSAPP_LEASE_AUTO_TAKEOVER || '').toLowerCase() === 'true' &&
-        !this.leaseLostToAnotherOwner;
+      const allowAutoTakeover = isWhatsAppLeaseAutoTakeoverEnabled() && !this.leaseLostToAnotherOwner;
       if (authStore.acquireLease) {
         try {
-          const lease = await authStore.acquireLease(this.instanceId, 90_000);
+          const lease = await authStore.acquireLease(this.instanceId, WHATSAPP_LEASE_TTL_MS);
           this.leaseSupported = lease.supported;
           this.leaseHeld = lease.ok;
           this.leaseOwnerId = lease.ownerId;
@@ -2037,14 +2054,14 @@ class WhatsAppClient {
 
             try {
               if (authStore.forceAcquireLease) {
-                const takeover = await authStore.forceAcquireLease(this.instanceId, 90_000);
+                const takeover = await authStore.forceAcquireLease(this.instanceId, WHATSAPP_LEASE_TTL_MS);
                 if (takeover.ok) {
                   logger.info('Auto-takeover successful');
                   this.leaseHeld = true;
                   this.leaseOwnerId = takeover.ownerId;
                   this.leaseExpiresAt = takeover.expiresAt;
                   this.leaseLostToAnotherOwner = false;
-                  this.startLeaseRenewal(90_000);
+                  this.startLeaseRenewal(WHATSAPP_LEASE_TTL_MS);
                   // Continue with connection below.
                 } else if (isTransientLeaseFailureReason(takeover.reason)) {
                   logger.warn('WhatsApp lease takeover check is temporarily unavailable; retrying shortly');
@@ -2083,7 +2100,7 @@ class WhatsAppClient {
 
           if (lease.supported && lease.ok) {
             this.leaseLostToAnotherOwner = false;
-            this.startLeaseRenewal(90_000);
+            this.startLeaseRenewal(WHATSAPP_LEASE_TTL_MS);
           }
         } catch (error) {
           logger.warn({ error }, 'Failed to acquire WhatsApp lease; refusing to connect without lock');

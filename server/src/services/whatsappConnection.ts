@@ -47,7 +47,10 @@ const ensureWhatsAppConnected = async (
 
   const attempts = Math.max(Number(options?.attempts || 1), 1);
   const delayMs = Math.max(Number(options?.delayMs || 1000), 250);
-  const takeoverTtlMs = Math.max(Number(options?.takeoverTtlMs || 90_000), 30_000);
+  const requestedTakeoverTtlMs = Number(options?.takeoverTtlMs || process.env.WHATSAPP_LEASE_TTL_MS || 60_000);
+  const takeoverTtlMs = Number.isFinite(requestedTakeoverTtlMs)
+    ? Math.max(Math.floor(requestedTakeoverTtlMs), 20_000)
+    : 60_000;
   const logContext = String(options?.logContext || 'WhatsApp recovery');
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {

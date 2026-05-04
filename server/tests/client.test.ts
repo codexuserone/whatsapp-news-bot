@@ -68,6 +68,7 @@ jest.mock('../src/whatsapp/authStore', () => {
 const WhatsAppClient = require('../src/whatsapp/client');
 const useSupabaseAuthState = require('../src/whatsapp/authStore');
 const { loadBaileys } = require('../src/whatsapp/baileys');
+const DEFAULT_LEASE_TTL_MS = 60_000;
 
 describe('WhatsAppClient', () => {
     let client: any;
@@ -130,7 +131,7 @@ describe('WhatsAppClient', () => {
             ok: true,
             supported: true,
             ownerId: 'new-render-instance',
-            expiresAt: new Date(Date.now() + 90_000).toISOString()
+            expiresAt: new Date(Date.now() + DEFAULT_LEASE_TTL_MS).toISOString()
         }));
         const updateStatus = jest.fn(async () => {});
         const renewLease = jest.fn(async () => ({ ok: true, supported: true, ownerId: 'new-render-instance' }));
@@ -148,8 +149,8 @@ describe('WhatsAppClient', () => {
         try {
             await client.connect();
 
-            expect(acquireLease as any).toHaveBeenCalledWith(client.instanceId, 90_000);
-            expect(forceAcquireLease as any).toHaveBeenCalledWith(client.instanceId, 90_000);
+            expect(acquireLease as any).toHaveBeenCalledWith(client.instanceId, DEFAULT_LEASE_TTL_MS);
+            expect(forceAcquireLease as any).toHaveBeenCalledWith(client.instanceId, DEFAULT_LEASE_TTL_MS);
             expect(client.leaseHeld).toBe(true);
             expect(client.leaseOwnerId).toBe('new-render-instance');
             expect(client.status).not.toBe('conflict');
@@ -179,7 +180,7 @@ describe('WhatsAppClient', () => {
             ok: true,
             supported: true,
             ownerId: 'old-render-instance',
-            expiresAt: new Date(Date.now() + 90_000).toISOString()
+            expiresAt: new Date(Date.now() + DEFAULT_LEASE_TTL_MS).toISOString()
         }));
         const updateStatus = jest.fn(async () => {});
 
@@ -196,7 +197,7 @@ describe('WhatsAppClient', () => {
         try {
             await client.connect();
 
-            expect(acquireLease as any).toHaveBeenCalledWith(client.instanceId, 90_000);
+            expect(acquireLease as any).toHaveBeenCalledWith(client.instanceId, DEFAULT_LEASE_TTL_MS);
             expect(forceAcquireLease as any).not.toHaveBeenCalled();
             expect(client.leaseHeld).toBe(false);
             expect(client.leaseOwnerId).toBe('new-render-instance');
@@ -217,23 +218,65 @@ describe('WhatsAppClient', () => {
     });
 
     it('should reject background takeover after this instance already lost its lease', async () => {
+        const originalAutoTakeover = process.env.WHATSAPP_LEASE_AUTO_TAKEOVER;
+        process.env.WHATSAPP_LEASE_AUTO_TAKEOVER = 'true';
         client.leaseLostToAnotherOwner = true;
         client.isPaused = false;
         const forceAcquireLease = jest.fn(async () => ({
             ok: true,
             supported: true,
             ownerId: client.instanceId,
-            expiresAt: new Date(Date.now() + 90_000).toISOString()
+            expiresAt: new Date(Date.now() + DEFAULT_LEASE_TTL_MS).toISOString()
         }));
         client.authStore = {
             forceAcquireLease
         };
 
-        const lease = await client.takeoverLease();
+        try {
+            const lease = await client.takeoverLease();
 
-        expect(forceAcquireLease as any).not.toHaveBeenCalled();
-        expect(lease.ok).toBe(false);
-        expect(lease.reason).toBe('lost_lease_to_another_owner');
+            expect(forceAcquireLease as any).not.toHaveBeenCalled();
+            expect(lease.ok).toBe(false);
+            expect(lease.reason).toBe('lost_lease_to_another_owner');
+        } finally {
+            if (originalAutoTakeover === undefined) {
+                delete process.env.WHATSAPP_LEASE_AUTO_TAKEOVER;
+            } else {
+                process.env.WHATSAPP_LEASE_AUTO_TAKEOVER = originalAutoTakeover;
+            }
+        }
+    });
+
+    it('should not force-acquire in background when auto-takeover is disabled', async () => {
+        const originalAutoTakeover = process.env.WHATSAPP_LEASE_AUTO_TAKEOVER;
+        process.env.WHATSAPP_LEASE_AUTO_TAKEOVER = 'false';
+
+        const forceAcquireLease = jest.fn(async () => ({
+            ok: true,
+            supported: true,
+            ownerId: client.instanceId,
+            expiresAt: new Date(Date.now() + DEFAULT_LEASE_TTL_MS).toISOString()
+        }));
+        client.authStore = {
+            forceAcquireLease
+        };
+        client.leaseOwnerId = 'existing-render-instance';
+        client.leaseExpiresAt = new Date(Date.now() + DEFAULT_LEASE_TTL_MS).toISOString();
+
+        try {
+            const lease = await client.takeoverLease();
+
+            expect(forceAcquireLease as any).not.toHaveBeenCalled();
+            expect(lease.ok).toBe(false);
+            expect(lease.reason).toBe('auto_takeover_disabled');
+            expect(lease.ownerId).toBe('existing-render-instance');
+        } finally {
+            if (originalAutoTakeover === undefined) {
+                delete process.env.WHATSAPP_LEASE_AUTO_TAKEOVER;
+            } else {
+                process.env.WHATSAPP_LEASE_AUTO_TAKEOVER = originalAutoTakeover;
+            }
+        }
     });
 
     it('should not overwrite global status when an old instance loses its lease', async () => {

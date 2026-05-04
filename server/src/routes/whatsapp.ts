@@ -1716,20 +1716,24 @@ const whatsappRoutes = () => {
           throw new Error('Test message was not assigned a WhatsApp message id');
         }
         if (confirmationRequired && messageId && whatsapp?.confirmSend) {
+          let channelConfirmation: TestSendConfirmation | null = null;
           if (isNewsletterJid(normalizedJid) && typeof whatsapp.confirmNewsletterMessage === 'function') {
-            const channelConfirmation = await whatsapp.confirmNewsletterMessage(normalizedJid, messageId, {
+            channelConfirmation = await whatsapp.confirmNewsletterMessage(normalizedJid, messageId, {
               timeoutMs: requestedMediaType ? 60000 : 30000,
               count: 25
             });
-            if (channelConfirmation?.ok || !channelConfirmation?.unsupported) {
+            if (channelConfirmation?.ok) {
               confirmation = channelConfirmation;
             }
           }
           if (!confirmation) {
-            confirmation = await whatsapp.confirmSend(
+            const ackConfirmation = await whatsapp.confirmSend(
               messageId,
               resolveTestSendConfirmationOptions(normalizedJid, requestedMediaType)
             );
+            confirmation = ackConfirmation?.ok || !channelConfirmation || channelConfirmation.unsupported
+              ? ackConfirmation
+              : channelConfirmation;
           }
           confirmation = normalizeConfirmationForOperator(confirmation, normalizedJid);
         }

@@ -188,7 +188,11 @@ describe('queueService __testUtils', () => {
       error: 'Channel fetch did not include message newsletter-msg-123',
       unsupported: false
     }));
-    const confirmSend: any = jest.fn();
+    const confirmSend: any = jest.fn(async () => ({
+      ok: false,
+      via: 'none',
+      error: 'Server ack not observed'
+    }));
 
     await expect(
       testUtils.confirmSendResult(
@@ -209,7 +213,41 @@ describe('queueService __testUtils', () => {
       timeoutMs: 60000,
       count: 25
     });
-    expect(confirmSend).not.toHaveBeenCalled();
+    expect(confirmSend).toHaveBeenCalled();
+  });
+
+  it('falls back to server ACK when newsletter fetch times out after an accepted channel send', async () => {
+    const confirmNewsletterMessage: any = jest.fn(async () => ({
+      ok: false,
+      via: 'none',
+      error: 'Timed out fetching channel messages',
+      unsupported: false
+    }));
+    const confirmSend: any = jest.fn(async () => ({
+      ok: true,
+      via: 'ack',
+      status: 4,
+      statusLabel: 'server_ack'
+    }));
+
+    await expect(
+      testUtils.confirmSendResult(
+        { confirmNewsletterMessage, confirmSend },
+        'channel',
+        {
+          response: { key: { id: 'newsletter-msg-123', remoteJid: '120363406955649221@newsletter' } },
+          media: { type: null, url: null, sent: false, error: null }
+        }
+      )
+    ).resolves.toEqual({
+      ok: true,
+      via: 'ack',
+      status: 4,
+      statusLabel: 'server_ack'
+    });
+
+    expect(confirmNewsletterMessage).toHaveBeenCalled();
+    expect(confirmSend).toHaveBeenCalled();
   });
 
   it('blocks text fallback after media failure for status and channel targets', () => {

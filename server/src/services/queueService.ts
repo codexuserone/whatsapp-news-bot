@@ -2302,6 +2302,7 @@ const confirmSendResult = async (
 
   if (whatsappClient.confirmSend) {
     const media = isMediaSendResult(sendResult);
+    let channelFetchError: string | null = null;
     if (targetType === 'channel' && whatsappClient.confirmNewsletterMessage) {
       const jid = String(sendResult?.response?.key?.remoteJid || '').trim();
       const channelConfirmation = await whatsappClient.confirmNewsletterMessage(jid, messageId, {
@@ -2317,17 +2318,13 @@ const confirmSendResult = async (
         };
       }
       if (!channelConfirmation.unsupported) {
-        return {
-          ok: false,
-          via: 'none',
-          error: `Message send not confirmed (${channelConfirmation.error || 'channel fetch did not find message'})`
-        };
+        channelFetchError = channelConfirmation.error || 'channel fetch did not find message';
       }
     }
     const requireServerAck = shouldRequireServerAckForSend(targetType, sendResult);
     const isStatus = Boolean(options?.isStatus);
     const failureGraceMs = isStatus ? STATUS_FAILURE_GRACE_MS : targetType === 'channel' ? 3000 : 0;
-    return whatsappClient.confirmSend(
+    const ackConfirmation = await whatsappClient.confirmSend(
       messageId,
       isStatus
         ? {
@@ -2340,6 +2337,12 @@ const confirmSendResult = async (
           ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck, failureGraceMs }
           : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck, failureGraceMs }
     );
+    if (ackConfirmation?.ok || !channelFetchError) return ackConfirmation;
+    return {
+      ok: false,
+      via: 'none',
+      error: `Message send not confirmed (${channelFetchError})`
+    };
   }
 
   if (whatsappClient.waitForMessage) {

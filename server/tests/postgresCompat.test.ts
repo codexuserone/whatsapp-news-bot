@@ -64,4 +64,29 @@ describe('postgresCompat query builder', () => {
       ['feed-1', '2026-04-27T10:00:00.000Z', '2026-04-27T10:00:00.000Z', 'feed-item-1', 200]
     );
   });
+
+  it('serializes template sequence steps as JSON instead of a Postgres array', async () => {
+    const { createPostgresCompatClient } = require('../src/db/postgresCompat');
+    const db = createPostgresCompatClient();
+
+    await db
+      .from('templates')
+      .insert({
+        name: 'Status sequence',
+        content: '{{title}}',
+        sequence_steps: [{ label: 'Image', send_mode: 'media_only' }],
+        send_mode: 'text_preview'
+      })
+      .select();
+
+    expect(fakeQuery).toHaveBeenCalledWith(
+      'INSERT INTO "templates" ("name", "content", "sequence_steps", "send_mode") VALUES ($1, $2, $3, $4) RETURNING *',
+      [
+        'Status sequence',
+        '{{title}}',
+        JSON.stringify([{ label: 'Image', send_mode: 'media_only' }]),
+        'text_preview'
+      ]
+    );
+  });
 });

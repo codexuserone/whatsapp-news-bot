@@ -64,6 +64,10 @@ const RELATION_DEFINITIONS: Record<string, Record<string, RelationDefinition>> =
   }
 };
 
+const JSON_ARRAY_COLUMNS: Record<string, Set<string>> = {
+  templates: new Set(['sequence_steps'])
+};
+
 let pgPool: PgPool | null | undefined;
 let pgPoolErrorHandlerBound = false;
 
@@ -254,6 +258,13 @@ const renumberSqlPlaceholders = (sql: string, offset: number) =>
     const index = Number(indexRaw);
     return Number.isFinite(index) && index > 0 ? `$${offset + index}` : _match;
   });
+
+const prepareMutationValue = (table: string, column: string, value: unknown) => {
+  if (Array.isArray(value) && JSON_ARRAY_COLUMNS[table]?.has(column)) {
+    return JSON.stringify(value);
+  }
+  return value;
+};
 
 class PostgresQueryBuilder {
   private readonly pool: PgPool;
@@ -534,7 +545,7 @@ class PostgresQueryBuilder {
       .map((row, rowIndex) => {
         const placeholders = columns.map((_column, columnIndex) => {
           const column = String(columns[columnIndex] || '');
-          params.push((row as Record<string, unknown>)[column]);
+          params.push(prepareMutationValue(this.table, column, (row as Record<string, unknown>)[column]));
           return `$${rowIndex * columns.length + columnIndex + 1}`;
         });
         return `(${placeholders.join(', ')})`;
@@ -562,7 +573,7 @@ class PostgresQueryBuilder {
     const params: unknown[] = [];
     const setClause = columns
       .map((column, index) => {
-        params.push((payload as Record<string, unknown>)[column]);
+        params.push(prepareMutationValue(this.table, column, (payload as Record<string, unknown>)[column]));
         return `${quoteIdentifier(column)} = $${index + 1}`;
       })
       .join(', ');
@@ -608,7 +619,7 @@ class PostgresQueryBuilder {
       .map((row, rowIndex) => {
         const placeholders = columns.map((_column, columnIndex) => {
           const column = String(columns[columnIndex] || '');
-          params.push((row as Record<string, unknown>)[column]);
+          params.push(prepareMutationValue(this.table, column, (row as Record<string, unknown>)[column]));
           return `$${rowIndex * columns.length + columnIndex + 1}`;
         });
         return `(${placeholders.join(', ')})`;

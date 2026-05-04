@@ -89,6 +89,7 @@ const TargetsPage = () => {
   const [deleteTarget, setDeleteTarget] = useState<Target | null>(null);
   const [editingTargetId, setEditingTargetId] = useState<string | null>(null);
   const [showAdvancedTools, setShowAdvancedTools] = useState(false);
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
   const [delayDraft, setDelayDraft] = useState<{
     message_delay_ms_override: string;
     inter_target_delay_sec_override: string;
@@ -390,12 +391,22 @@ const TargetsPage = () => {
               </CardTitle>
               <CardDescription>{targets.length} target{targets.length !== 1 ? 's' : ''} available</CardDescription>
             </div>
-            <Input
-              placeholder="Search targets..."
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              className="w-full sm:w-56"
-            />
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowTechnicalDetails((current) => !current)}
+              >
+                {showTechnicalDetails ? 'Hide technical details' : 'Technical details'}
+              </Button>
+              <Input
+                placeholder="Search targets..."
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                className="w-full sm:w-56"
+              />
+            </div>
           </div>
 
           <div className="flex flex-wrap gap-1 pt-2">
@@ -432,7 +443,9 @@ const TargetsPage = () => {
                     <TableHeaderCell>Name</TableHeaderCell>
                     <TableHeaderCell>Type</TableHeaderCell>
                     <TableHeaderCell className="hidden lg:table-cell">Feed routing</TableHeaderCell>
-                    <TableHeaderCell className="hidden md:table-cell">Address</TableHeaderCell>
+                    {showTechnicalDetails ? (
+                      <TableHeaderCell className="hidden md:table-cell">Technical address</TableHeaderCell>
+                    ) : null}
                     <TableHeaderCell className="w-20">Actions</TableHeaderCell>
                   </TableRow>
                 </TableHeader>
@@ -538,9 +551,11 @@ const TargetsPage = () => {
                               <span className="text-muted-foreground">Disabled</span>
                             )}
                           </TableCell>
-                          <TableCell className="hidden max-w-[280px] truncate text-xs text-muted-foreground md:table-cell">
-                            {target.phone_number}
-                          </TableCell>
+                          {showTechnicalDetails ? (
+                            <TableCell className="hidden max-w-[280px] truncate text-xs text-muted-foreground md:table-cell">
+                              {target.phone_number}
+                            </TableCell>
+                          ) : null}
                           <TableCell>
                             <div className="flex items-center justify-end gap-1">
                               <Button
@@ -565,7 +580,7 @@ const TargetsPage = () => {
 
                         {isEditing ? (
                           <TableRow>
-                            <TableCell colSpan={6} className="bg-muted/20">
+                            <TableCell colSpan={showTechnicalDetails ? 6 : 5} className="bg-muted/20">
                               <div className="grid gap-3 sm:grid-cols-3">
                                 <div className="space-y-1.5">
                                   <Label htmlFor={`delay_ms_${target.id}`}>Message delay override (ms)</Label>

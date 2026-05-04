@@ -23,6 +23,7 @@ const GROUP_MEDIA_SEND_TIMEOUT_MS = 90000;
 const STATUS_AUDIENCE_REFRESH_TIMEOUT_MS = 15000;
 const STATUS_SEND_TIMEOUT_MS = 90000;
 const STATUS_CONFIRM_TIMEOUT_MS = 95000;
+const STATUS_FAILURE_GRACE_MS = 15000;
 const DEFAULT_USER_AGENT = buildDefaultUserAgent();
 const SUPPORTED_WHATSAPP_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -351,7 +352,7 @@ const resolveSendTestTimeoutMs = (jid: string, mediaType: string | null) => {
 const resolveTestSendConfirmationOptions = (jid: string, mediaType: string | null) => {
   const hasMedia = Boolean(String(mediaType || '').trim());
   const isStatus = String(jid || '').trim() === 'status@broadcast';
-  const failureGraceMs = isStatus ? 5000 : isNewsletterJid(jid) ? 3000 : 0;
+  const failureGraceMs = isStatus ? STATUS_FAILURE_GRACE_MS : isNewsletterJid(jid) ? 3000 : 0;
   const requireServerAck = !isNewsletterJid(jid);
   return hasMedia
     ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck, failureGraceMs }
@@ -1997,8 +1998,8 @@ const whatsappRoutes = () => {
           whatsapp.confirmSend(
             messageId,
             normalizedImageUrl || normalizedImageDataUrl || normalizedVideoUrl || normalizedVideoDataUrl
-              ? { upsertTimeoutMs: 30000, ackTimeoutMs: 90000, failureGraceMs: 15000 }
-              : { upsertTimeoutMs: 5000, ackTimeoutMs: 60000, failureGraceMs: 15000 }
+              ? { upsertTimeoutMs: 30000, ackTimeoutMs: 90000, failureGraceMs: STATUS_FAILURE_GRACE_MS }
+              : { upsertTimeoutMs: 5000, ackTimeoutMs: 60000, failureGraceMs: STATUS_FAILURE_GRACE_MS }
           ),
           STATUS_CONFIRM_TIMEOUT_MS,
           'Timed out confirming status broadcast'

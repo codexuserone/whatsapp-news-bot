@@ -141,6 +141,7 @@ const UNCERTAIN_MATCH_LOOKBACK_MS = 30000;
 const UNCERTAIN_MATCH_GRACE_MS = 30000;
 const MAX_UNCERTAIN_LOGS_PER_PASS = 100;
 const AUTH_ERROR_HINT = 'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
+const STATUS_FAILURE_GRACE_MS = 15000;
 const MANUAL_POST_PAUSE_ERROR = 'Paused for this post';
 const FEED_PAUSED_ERROR = 'Feed paused';
 const NON_REVIVABLE_SKIP_ERRORS = new Set([
@@ -2290,7 +2291,7 @@ const confirmSendResult = async (
     const media = isMediaSendResult(sendResult);
     const requireServerAck = shouldRequireServerAckForSend(targetType, sendResult);
     const isStatus = Boolean(options?.isStatus);
-    const failureGraceMs = isStatus ? 5000 : targetType === 'channel' ? 3000 : 0;
+    const failureGraceMs = isStatus ? STATUS_FAILURE_GRACE_MS : targetType === 'channel' ? 3000 : 0;
     return whatsappClient.confirmSend(
       messageId,
       isStatus
@@ -5194,7 +5195,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       if (activeWhatsappClient.confirmSend) {
         const requireServerAck = false;
         const failureGraceMs = isStatus
-          ? 5000
+          ? STATUS_FAILURE_GRACE_MS
           : targetRow.type === 'channel'
             ? 3000
             : 0;

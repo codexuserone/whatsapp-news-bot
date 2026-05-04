@@ -41,7 +41,7 @@ describe('whatsapp route test-send logging', () => {
       upsertTimeoutMs: 30000,
       ackTimeoutMs: 60000,
       requireServerAck: true,
-      failureGraceMs: 5000
+      failureGraceMs: 15000
     });
   });
 

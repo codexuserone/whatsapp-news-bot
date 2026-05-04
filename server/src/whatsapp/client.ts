@@ -70,6 +70,16 @@ const isGroupMetadataStatusAudienceEnabled = (override?: boolean) =>
 const isNewsletterMediaDirectPathPatchEnabled = () =>
   isTruthyEnvFlag(process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH) ||
   isTruthyEnvFlag(process.env.BAILEYS_NEWSLETTER_MEDIA_PATCH);
+const isNewsletterLiveUpdatesEnabled = () =>
+  !isFalseLikeFlag(process.env.WHATSAPP_NEWSLETTER_LIVE_UPDATES ?? 'true');
+const NEWSLETTER_LIVE_UPDATES_TIMEOUT_MS = Math.max(
+  1000,
+  Math.min(Math.floor(Number(process.env.WHATSAPP_NEWSLETTER_LIVE_UPDATES_TIMEOUT_MS || 5000)), 30000)
+);
+const NEWSLETTER_LIVE_UPDATES_DEFAULT_DURATION_SEC = Math.max(
+  60,
+  Math.min(Math.floor(Number(process.env.WHATSAPP_NEWSLETTER_LIVE_UPDATES_DEFAULT_DURATION_SEC || 300)), 86400)
+);
 
 const resolveBrowserTuple = (Browsers: Record<string, unknown> | null | undefined, browserName: string) => {
   const requestedPlatform = String(
@@ -506,6 +516,15 @@ type ChannelSummary = {
   source?: 'api' | 'cache' | 'metadata' | 'store';
 };
 
+type NewsletterLiveUpdatesResult = {
+  attempted: number;
+  subscribed: number;
+  cached: number;
+  failed: number;
+  unsupported: boolean;
+  failedJids: string[];
+};
+
 type GroupSummary = {
   id: string;
   jid: string;
@@ -551,6 +570,7 @@ type ChannelDiagnostics = {
     failedJids: string[];
   };
   limitation: string | null;
+  liveUpdates: NewsletterLiveUpdatesResult;
 };
 
 type CachedNewsletterChat = {
@@ -558,6 +578,12 @@ type CachedNewsletterChat = {
   name: string;
   subscribers: number;
   updatedAtMs: number;
+};
+
+type CachedNewsletterLiveUpdates = {
+  subscribedAtMs: number;
+  expiresAtMs: number;
+  durationSec: number;
 };
 
 const isTransientLeaseFailureReason = (reason: unknown) =>
@@ -952,6 +978,7 @@ class WhatsAppClient {
   pendingReceiptUpdates: Map<string, MessageStatusSnapshot>;
   pendingReceiptFlushTimer: NodeJS.Timeout | null;
   newsletterChatCache: Map<string, CachedNewsletterChat>;
+  newsletterLiveUpdatesCache: Map<string, CachedNewsletterLiveUpdates>;
   meJid: string | null;
   meName: string | null;
   hasConnectedOnce: boolean;
@@ -1002,6 +1029,7 @@ class WhatsAppClient {
     this.pendingReceiptUpdates = new Map();
     this.pendingReceiptFlushTimer = null;
     this.newsletterChatCache = new Map();
+    this.newsletterLiveUpdatesCache = new Map();
     this.meJid = null;
     this.meName = null;
     this.hasConnectedOnce = false;
@@ -3538,6 +3566,70 @@ class WhatsAppClient {
     }
   }
 
+  private async ensureNewsletterLiveUpdates(
+    jidsLike: unknown[],
+    options?: { force?: boolean }
+  ): Promise<NewsletterLiveUpdatesResult> {
+    const result: NewsletterLiveUpdatesResult = {
+      attempted: 0,
+      subscribed: 0,
+      cached: 0,
+      failed: 0,
+      unsupported: false,
+      failedJids: []
+    };
+    if (!isNewsletterLiveUpdatesEnabled()) return result;
+
+    const normalizedJids = Array.from(
+      new Set(
+        (Array.isArray(jidsLike) ? jidsLike : [])
+          .map((value) => normalizeNewsletterJid(value, { allowNumeric: false }))
+          .filter(Boolean)
+      )
+    );
+    if (!normalizedJids.length) return result;
+
+    const socket = this.socket as any;
+    if (!socket || typeof socket.subscribeNewsletterUpdates !== 'function') {
+      result.unsupported = true;
+      return result;
+    }
+
+    const now = Date.now();
+    for (const jid of normalizedJids) {
+      const cached = this.newsletterLiveUpdatesCache.get(jid);
+      if (!options?.force && cached && cached.expiresAtMs - now > 30_000) {
+        result.cached += 1;
+        continue;
+      }
+
+      result.attempted += 1;
+      try {
+        const response = await withTimeout(
+          socket.subscribeNewsletterUpdates(jid),
+          NEWSLETTER_LIVE_UPDATES_TIMEOUT_MS,
+          'Timed out subscribing to channel live updates'
+        );
+        const rawDuration = Number((response as { duration?: unknown } | null | undefined)?.duration);
+        const durationSec = Number.isFinite(rawDuration) && rawDuration > 0
+          ? Math.max(60, Math.min(Math.floor(rawDuration), 86400))
+          : NEWSLETTER_LIVE_UPDATES_DEFAULT_DURATION_SEC;
+        this.newsletterLiveUpdatesCache.set(jid, {
+          subscribedAtMs: Date.now(),
+          expiresAtMs: Date.now() + durationSec * 1000,
+          durationSec
+        });
+        result.subscribed += 1;
+      } catch (error) {
+        result.failed += 1;
+        result.failedJids.push(jid);
+        logger.warn({ jid, error: getErrorMessage(error) }, 'Failed to subscribe to channel live updates');
+      }
+    }
+
+    return result;
+  }
+
   async getChannelsWithDiagnostics(seedJids: string[] = []): Promise<{ channels: ChannelSummary[]; diagnostics: ChannelDiagnostics }> {
     const socket = this.socket as any;
     const diagnostics: ChannelDiagnostics = {
@@ -3545,7 +3637,8 @@ class WhatsAppClient {
       methodErrors: [],
       sourceCounts: { api: 0, cache: 0, metadata: 0, store: 0 },
       seeded: { provided: 0, verified: 0, failed: 0, failedJids: [] },
-      limitation: null
+      limitation: null,
+      liveUpdates: { attempted: 0, subscribed: 0, cached: 0, failed: 0, unsupported: false, failedJids: [] }
     };
 
     if (!socket) {
@@ -3674,6 +3767,11 @@ class WhatsAppClient {
     }
 
     const channels = Array.from(channelMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+    if (channels.length) {
+      diagnostics.methodsTried.push('live-updates:subscribe');
+      diagnostics.liveUpdates = await this.ensureNewsletterLiveUpdates(channels.map((channel) => channel.jid));
+    }
 
     if (!channels.length) {
       diagnostics.limitation = 'No channels discovered from this session yet. Open/view the channel in WhatsApp, then refresh.';
@@ -4127,6 +4225,9 @@ class WhatsAppClient {
           'Starting group send'
         );
       }
+      const newsletterLiveUpdates = isNewsletter
+        ? await this.ensureNewsletterLiveUpdates([normalizedJid])
+        : null;
       const sendOperation = async () => this.socket!.sendMessage(jid, content, effectiveOptions);
       let msg;
       if (isNewsletter && getNewsletterRelayMediaType(content)) {
@@ -4146,6 +4247,9 @@ class WhatsAppClient {
         msg = isNewsletter
           ? await newsletterMediaPatchContext.run(true, sendOperation)
           : await sendOperation();
+      }
+      if (isNewsletter && newsletterLiveUpdates) {
+        (msg as Record<string, unknown>).newsletterLiveUpdates = newsletterLiveUpdates;
       }
       if (isGroup) {
         logger.info(

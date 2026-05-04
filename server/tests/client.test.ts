@@ -218,6 +218,58 @@ describe('WhatsAppClient', () => {
         });
     });
 
+    it('subscribes to newsletter live updates before sending a channel message', async () => {
+        const subscribeNewsletterUpdates: any = jest.fn(async () => ({ duration: '3600' }));
+        const sendMessage: any = jest.fn(async (..._args: any[]) => ({
+            key: { remoteJid: '120363406955649221@newsletter', id: 'newsletter-msg-123', fromMe: true }
+        }));
+        client.socket = {
+            subscribeNewsletterUpdates,
+            sendMessage,
+            user: { id: '16465527019:58@s.whatsapp.net' }
+        };
+
+        const first = await client.sendMessage('120363406955649221@newsletter', { text: 'hello channel' });
+        const second = await client.sendMessage('120363406955649221@newsletter', { text: 'hello again' });
+
+        expect(subscribeNewsletterUpdates).toHaveBeenCalledTimes(1);
+        expect(subscribeNewsletterUpdates).toHaveBeenCalledWith('120363406955649221@newsletter');
+        expect(sendMessage).toHaveBeenCalledTimes(2);
+        expect(first.newsletterLiveUpdates).toMatchObject({ attempted: 1, subscribed: 1, cached: 0, failed: 0 });
+        expect(second.newsletterLiveUpdates).toMatchObject({ attempted: 0, subscribed: 0, cached: 1, failed: 0 });
+    });
+
+    it('reports newsletter live-update subscription in channel diagnostics', async () => {
+        const subscribeNewsletterUpdates: any = jest.fn(async () => ({ duration: '1800' }));
+        client.socket = {
+            subscribeNewsletterUpdates,
+            newsletterMetadata: jest.fn(async () => ({
+                id: '120363406955649221@newsletter',
+                name: 'test channel',
+                subscribers: 0,
+                viewer_metadata: { role: 'OWNER' }
+            }))
+        };
+
+        const result = await client.getChannelsWithDiagnostics(['120363406955649221@newsletter']);
+
+        expect(result.channels).toHaveLength(1);
+        expect(result.channels[0]).toMatchObject({
+            jid: '120363406955649221@newsletter',
+            name: 'test channel',
+            role: 'OWNER',
+            canPost: true
+        });
+        expect(result.diagnostics.liveUpdates).toEqual({
+            attempted: 1,
+            subscribed: 1,
+            cached: 0,
+            failed: 0,
+            unsupported: false,
+            failedJids: []
+        });
+    });
+
     it('should lazily initialize the auth store during connect', async () => {
         await client.connect();
 

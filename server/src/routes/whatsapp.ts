@@ -860,6 +860,14 @@ type ChannelDiscoveryDiagnostics = {
     failedJids?: string[];
   };
   limitation: string | null;
+  liveUpdates?: {
+    attempted: number;
+    subscribed: number;
+    cached: number;
+    failed: number;
+    unsupported: boolean;
+    failedJids: string[];
+  };
 };
 
 type ChannelDiscoveryResult = {
@@ -888,7 +896,8 @@ const discoverChannelsForSession = async (
     methodErrors: [],
     sourceCounts: { api: 0, cache: 0, metadata: 0, store: 0 },
     seeded: { provided: 0, verified: 0, failed: 0, failedJids: [] },
-    limitation: null
+    limitation: null,
+    liveUpdates: { attempted: 0, subscribed: 0, cached: 0, failed: 0, unsupported: false, failedJids: [] }
   };
   const isConnected = whatsapp?.getStatus?.().status === 'connected';
   if (!isConnected) {
@@ -1111,7 +1120,8 @@ const whatsappRoutes = () => {
           methodErrors: [getErrorMessage(error)],
           sourceCounts: { api: 0, cache: 0, metadata: 0, store: 0 },
           seeded: { provided: 0, verified: 0, failed: 0, failedJids: [] },
-          limitation: 'Channel discovery failed in this session.'
+          limitation: 'Channel discovery failed in this session.',
+          liveUpdates: { attempted: 0, subscribed: 0, cached: 0, failed: 0, unsupported: false, failedJids: [] }
         },
         persisted: { candidates: 0 }
       });

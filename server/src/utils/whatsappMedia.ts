@@ -1,11 +1,4 @@
 const logger = require('./logger');
-const os = require('os');
-const path = require('path');
-const fs = require('fs/promises');
-const { execFile } = require('child_process');
-const { promisify } = require('util');
-
-const execFileAsync = promisify(execFile);
 
 const isNewsletterJid = (jid: string) => String(jid || '').trim().toLowerCase().endsWith('@newsletter');
 
@@ -21,7 +14,6 @@ type PreparedNewsletterImage = {
 type PreparedNewsletterVideo = {
   buffer: Buffer;
   mimetype: string;
-  jpegThumbnail?: string;
   width?: number;
   height?: number;
   seconds?: number;
@@ -303,81 +295,12 @@ const parseMp4Metadata = (buffer: Buffer): { width?: number; height?: number; se
   return result;
 };
 
-const buildPlaceholderVideoThumbnail = async (width: number): Promise<Buffer> => {
-  let sharp: any;
-  try {
-    sharp = require('sharp');
-  } catch {
-    return Buffer.alloc(0);
-  }
-
-  const size = Math.min(Math.max(Math.floor(width), 16), 96);
-  const triangleSvg = `
-<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
-  <rect width="${size}" height="${size}" fill="#000000"/>
-  <polygon points="${Math.round(size * 0.42)},${Math.round(size * 0.3)} ${Math.round(size * 0.72)},${Math.round(
-    size * 0.5
-  )} ${Math.round(size * 0.42)},${Math.round(size * 0.7)}" fill="#ffffff"/>
-</svg>`;
-
-  return await sharp(Buffer.from(triangleSvg))
-    .jpeg({ quality: 60, mozjpeg: true })
-    .toBuffer();
-};
-
-const extractVideoThumbWithFfmpeg = async (videoBuffer: Buffer, width: number): Promise<Buffer> => {
-  let ffmpegPath: string | null = null;
-  try {
-    // Optional dependency; if present we can generate real thumbnails without system ffmpeg.
-    ffmpegPath = require('ffmpeg-static');
-  } catch {
-    ffmpegPath = null;
-  }
-
-  // If ffmpeg-static is not installed, fall back to system ffmpeg (if any).
-  const command = ffmpegPath || (process.env.FFMPEG_PATH ? String(process.env.FFMPEG_PATH) : null);
-  if (!command) {
-    throw new Error('ffmpeg not available');
-  }
-
-  const size = Math.min(Math.max(Math.floor(width), 16), 256);
-  const tmpDir = os.tmpdir();
-  const inputPath = path.join(tmpDir, `wa-newsletter-${Date.now()}-${Math.random().toString(16).slice(2)}.mp4`);
-  const outputPath = path.join(tmpDir, `wa-newsletter-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`);
-
-  try {
-    await fs.writeFile(inputPath, videoBuffer);
-    await execFileAsync(command, [
-      '-loglevel',
-      'error',
-      '-ss',
-      '00:00:00',
-      '-i',
-      inputPath,
-      '-y',
-      '-vf',
-      `scale=${size}:-1`,
-      '-vframes',
-      '1',
-      '-f',
-      'image2',
-      outputPath
-    ]);
-    const out = await fs.readFile(outputPath);
-    return Buffer.isBuffer(out) ? out : Buffer.from(out);
-  } finally {
-    await fs.unlink(inputPath).catch(() => undefined);
-    await fs.unlink(outputPath).catch(() => undefined);
-  }
-};
-
 const prepareNewsletterVideo = async (
   input: Buffer,
   options?: { maxBytes?: number; thumbWidth?: number }
 ): Promise<PreparedNewsletterVideo> => {
   const buffer = Buffer.isBuffer(input) ? input : Buffer.from(input);
   const maxBytes = Math.max(Number(options?.maxBytes ?? 32 * 1024 * 1024), 1);
-  const thumbWidth = Math.min(Math.max(Number(options?.thumbWidth ?? 32), 16), 96);
 
   if (!buffer.length) {
     throw new Error('Empty video buffer');
@@ -393,30 +316,10 @@ const prepareNewsletterVideo = async (
   }
 
   const meta = parseMp4Metadata(buffer);
-
-  let jpegThumbnail: string | undefined;
-  try {
-    const thumbBuf = await extractVideoThumbWithFfmpeg(buffer, thumbWidth);
-    if (thumbBuf.length) {
-      jpegThumbnail = thumbBuf.toString('base64');
-    }
-  } catch (error) {
-    logger.debug({ error }, 'ffmpeg thumbnail generation failed; falling back to placeholder');
-    try {
-      const placeholder = await buildPlaceholderVideoThumbnail(thumbWidth);
-      if (placeholder.length) {
-        jpegThumbnail = placeholder.toString('base64');
-      }
-    } catch (innerError) {
-      logger.warn({ error: innerError }, 'Failed to generate placeholder video thumbnail');
-    }
-  }
-
   const result: PreparedNewsletterVideo = {
     buffer,
     mimetype: 'video/mp4'
   };
-  if (jpegThumbnail) result.jpegThumbnail = jpegThumbnail;
   if (typeof meta.width === 'number') result.width = meta.width;
   if (typeof meta.height === 'number') result.height = meta.height;
   if (typeof meta.seconds === 'number') result.seconds = meta.seconds;

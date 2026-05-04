@@ -34,6 +34,7 @@ type TestSendConfirmation = {
   status?: number | null;
   statusLabel?: string | null;
   error?: string | null;
+  unsupported?: boolean;
 };
 
 type TestSendLogResolution = {
@@ -57,6 +58,20 @@ const buildUncertainSendMessage = (value: unknown) => {
     return 'Send result is uncertain. Verifying delivery before retrying.';
   }
   return `Send result is uncertain. Verifying delivery before retrying. ${message}`.trim();
+};
+
+const normalizeConfirmationForOperator = (
+  confirmation: TestSendConfirmation | null | undefined,
+  jid?: string | null
+): TestSendConfirmation | null => {
+  if (!confirmation) return null;
+  if (String(jid || '').trim() === 'status@broadcast' && confirmation.ok && confirmation.via === 'ack') {
+    return {
+      ...confirmation,
+      statusLabel: 'server_ack'
+    };
+  }
+  return confirmation;
 };
 
 const getStatusAudienceExplicitSourceCount = (snapshot: Record<string, any> | null | undefined) => {
@@ -1715,6 +1730,7 @@ const whatsappRoutes = () => {
               resolveTestSendConfirmationOptions(normalizedJid, requestedMediaType)
             );
           }
+          confirmation = normalizeConfirmationForOperator(confirmation, normalizedJid);
         }
         const held = shouldHoldRejectedChannelMediaTestSend({
           jid: normalizedJid,
@@ -2037,15 +2053,16 @@ const whatsappRoutes = () => {
           'Timed out confirming status broadcast'
         )
       : null;
-    const rejected = isAck479Error(confirmation?.error);
+    const operatorConfirmation = normalizeConfirmationForOperator(confirmation, 'status@broadcast');
+    const rejected = isAck479Error(operatorConfirmation?.error);
     res.json({
-      ok: Boolean(messageId && confirmation?.ok),
+      ok: Boolean(messageId && operatorConfirmation?.ok),
       accepted: Boolean(messageId),
-      confirmed: Boolean(confirmation?.ok),
+      confirmed: Boolean(operatorConfirmation?.ok),
       failed: Boolean(rejected),
-      uncertain: Boolean(messageId && !confirmation?.ok && !rejected),
+      uncertain: Boolean(messageId && !operatorConfirmation?.ok && !rejected),
       messageId,
-      confirmation,
+      confirmation: operatorConfirmation,
       audienceCount: statusSnapshot.recipients.length,
       ...(strippedStatusStyleOptions.length ? { strippedStatusStyleOptions } : {})
     });
@@ -2096,6 +2113,7 @@ module.exports.__testUtils = {
   buildUncertainSendMessage,
   isGroupJid,
   buildTextStatusStyleOptions,
+  normalizeConfirmationForOperator,
   resolveTestSendConfirmationOptions,
   resolveSendTestTimeoutMs,
   resolveTestSendLogResolution

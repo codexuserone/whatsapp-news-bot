@@ -188,4 +188,20 @@ describe('whatsapp route test-send logging', () => {
       sentAt: '2026-03-18T22:00:00.000Z'
     });
   });
+
+  it('does not show status broadcast ACKs as human reads', () => {
+    expect(
+      __testUtils.normalizeConfirmationForOperator(
+        { ok: true, via: 'ack', status: 4, statusLabel: 'read' },
+        'status@broadcast'
+      )
+    ).toEqual({ ok: true, via: 'ack', status: 4, statusLabel: 'server_ack' });
+
+    expect(
+      __testUtils.normalizeConfirmationForOperator(
+        { ok: true, via: 'ack', status: 4, statusLabel: 'read' },
+        '19144477725@s.whatsapp.net'
+      )
+    ).toEqual({ ok: true, via: 'ack', status: 4, statusLabel: 'read' });
+  });
 });

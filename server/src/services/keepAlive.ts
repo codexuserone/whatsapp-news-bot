@@ -5,6 +5,18 @@ const { getErrorMessage } = require('../utils/errorUtils');
 
 let keepAliveInterval: NodeJS.Timeout | null = null;
 
+const resolveKeepAliveIntervalMs = (value: unknown) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 5 * 60 * 1000;
+  return Math.min(Math.max(Math.floor(parsed), 60_000), 10 * 60 * 1000);
+};
+
+const resolveKeepAliveTimeoutMs = (value: unknown) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 20_000;
+  return Math.min(Math.max(Math.floor(parsed), 2_000), 60_000);
+};
+
 const keepAlive = (): void => {
   if (!env.KEEP_ALIVE) {
     return;
@@ -16,14 +28,15 @@ const keepAlive = (): void => {
   }
 
   const url = env.KEEP_ALIVE_URL || `${env.BASE_URL}/ping`;
-  const intervalMs = 10 * 60 * 1000;
+  const intervalMs = resolveKeepAliveIntervalMs(env.KEEP_ALIVE_INTERVAL_MS);
+  const timeoutMs = resolveKeepAliveTimeoutMs(env.KEEP_ALIVE_TIMEOUT_MS);
 
   const ping = async () => {
     try {
-      await axios.get(url);
+      await axios.get(url, { timeout: timeoutMs });
       logger.debug({ url }, 'Keep-alive ping sent');
     } catch (error) {
-      logger.warn({ error: getErrorMessage(error) }, 'Keep-alive ping failed');
+      logger.warn({ error: getErrorMessage(error), url, timeoutMs }, 'Keep-alive ping failed');
     }
   };
 
@@ -39,5 +52,12 @@ const stopKeepAlive = (): void => {
   }
 };
 
-module.exports = { keepAlive, stopKeepAlive };
+module.exports = {
+  keepAlive,
+  stopKeepAlive,
+  __testUtils: {
+    resolveKeepAliveIntervalMs,
+    resolveKeepAliveTimeoutMs
+  }
+};
 export {};

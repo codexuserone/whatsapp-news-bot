@@ -38,6 +38,8 @@ const env = {
   BASE_URL: baseUrl,
   KEEP_ALIVE: process.env.KEEP_ALIVE !== 'false', // Default to true unless explicitly disabled
   KEEP_ALIVE_URL: process.env.KEEP_ALIVE_URL,
+  KEEP_ALIVE_INTERVAL_MS: Number(process.env.KEEP_ALIVE_INTERVAL_MS || 5 * 60 * 1000),
+  KEEP_ALIVE_TIMEOUT_MS: Number(process.env.KEEP_ALIVE_TIMEOUT_MS || 20_000),
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
   RETENTION_DAYS: Number(process.env.RETENTION_DAYS || 14),
   DEFAULT_INTER_TARGET_DELAY_SEC: Number(process.env.DEFAULT_INTER_TARGET_DELAY_SEC || 8),

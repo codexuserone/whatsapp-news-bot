@@ -32,6 +32,10 @@ services:
         value: true
       - key: KEEP_ALIVE_URL
         sync: false
+      - key: KEEP_ALIVE_INTERVAL_MS
+        value: "300000"
+      - key: KEEP_ALIVE_TIMEOUT_MS
+        value: "20000"
       - key: BASE_URL
         sync: false
       - key: BASIC_AUTH_USER

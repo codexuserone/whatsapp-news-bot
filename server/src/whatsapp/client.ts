@@ -3019,13 +3019,22 @@ class WhatsAppClient {
     let sawLocalUpsert = false;
 
     const waitForAckOrFailure = async (timeoutMs: number) => {
+      const startedAt = Date.now();
       const ackPromise = this.waitForMessageStatus(messageId, minStatus, timeoutMs).then((acked) =>
         acked ? ({ type: 'ack' as const, value: acked }) : ({ type: 'none' as const })
       );
       const failurePromise = this.waitForMessageFailure(messageId, timeoutMs).then((failed) =>
         failed ? ({ type: 'failure' as const, value: failed }) : ({ type: 'none' as const })
       );
-      return Promise.race([ackPromise, failurePromise]);
+      const outcome = await Promise.race([ackPromise, failurePromise]);
+      if (outcome.type !== 'failure' || failureGraceMs <= 0) return outcome;
+
+      const elapsedMs = Date.now() - startedAt;
+      const remainingMs = Math.max(Math.min(failureGraceMs, timeoutMs - elapsedMs), 0);
+      if (remainingMs <= 0) return outcome;
+
+      const acked = await this.waitForMessageStatus(messageId, minStatus, remainingMs);
+      return acked ? ({ type: 'ack' as const, value: acked }) : outcome;
     };
 
     try {
@@ -3073,6 +3082,10 @@ class WhatsAppClient {
       if (failureGraceMs > 0) {
         const failed = await this.waitForMessageFailure(messageId, failureGraceMs);
         if (failed) {
+          const acked = await this.waitForMessageStatus(messageId, minStatus, failureGraceMs);
+          if (acked) {
+            return { ok: true, via: 'ack', status: acked.status, statusLabel: acked.statusLabel };
+          }
           return { ok: false, via: 'none', error: failed.errorMessage };
         }
       }

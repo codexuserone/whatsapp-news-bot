@@ -31,6 +31,19 @@ describe('whatsapp route test-send logging resolution', () => {
     });
   });
 
+  it('marks explicit WhatsApp ack rejections as failed', () => {
+    expect(
+      testUtils.resolveTestSendLogResolution({
+        messageId: 'abc123',
+        confirmation: { ok: false, via: 'none', error: 'WhatsApp server rejected message ack 479' }
+      })
+    ).toEqual({
+      status: 'failed',
+      errorMessage: 'WhatsApp server rejected message ack 479',
+      sentAt: null
+    });
+  });
+
   it('keeps channel local-upsert confirmations send-only', () => {
     expect(
       testUtils.resolveTestSendLogResolution({

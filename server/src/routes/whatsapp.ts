@@ -35,7 +35,7 @@ type TestSendConfirmation = {
 };
 
 type TestSendLogResolution = {
-  status: 'sent' | 'delivered' | 'read' | 'played' | 'uncertain' | 'awaiting_approval';
+  status: 'sent' | 'delivered' | 'read' | 'played' | 'failed' | 'uncertain' | 'awaiting_approval';
   errorMessage: string | null;
   sentAt: string | null;
 };
@@ -270,6 +270,14 @@ const resolveTestSendLogResolution = (options: {
   }
 
   const confirmationError = String(confirmation?.error || '').trim();
+  if (isAck479Error(confirmationError)) {
+    return {
+      status: 'failed',
+      errorMessage: confirmationError,
+      sentAt: null
+    } satisfies TestSendLogResolution;
+  }
+
   const statusLabel = String(confirmation?.statusLabel || '').trim();
   const via = String(confirmation?.via || '').trim();
   const detail = confirmationError
@@ -1755,17 +1763,20 @@ const whatsappRoutes = () => {
 
     const confirmedCount = successful.filter((entry) => entry.confirmed === true).length;
     const heldCount = successful.filter((entry) => entry.held === true).length;
-    const uncertainCount = successful.length - confirmedCount - heldCount;
+    const rejectedCount = successful.filter((entry) => isAck479Error(entry.confirmation?.error)).length;
+    const uncertainCount = successful.length - confirmedCount - heldCount - rejectedCount;
+    const failedCount = results.length - successful.length + rejectedCount;
 
     if (normalizedJids.length === 1) {
       const first = successful[0];
       return res.json({
-        ok: results.every((entry) => entry.ok) && uncertainCount === 0 && heldCount === 0,
-        sent: successful.length,
+        ok: results.every((entry) => entry.ok) && uncertainCount === 0 && heldCount === 0 && rejectedCount === 0,
+        accepted: successful.length,
+        sent: confirmedCount,
         confirmed: confirmedCount,
         held: heldCount,
         uncertain: uncertainCount,
-        failed: results.length - successful.length,
+        failed: failedCount,
         messageId: first?.messageId || null,
         confirmation: first?.confirmation || null,
         results
@@ -1773,12 +1784,13 @@ const whatsappRoutes = () => {
     }
 
     res.json({
-      ok: results.every((entry) => entry.ok) && uncertainCount === 0 && heldCount === 0,
-      sent: successful.length,
+      ok: results.every((entry) => entry.ok) && uncertainCount === 0 && heldCount === 0 && rejectedCount === 0,
+      accepted: successful.length,
+      sent: confirmedCount,
       confirmed: confirmedCount,
       held: heldCount,
       uncertain: uncertainCount,
-      failed: results.length - successful.length,
+      failed: failedCount,
       results
     });
   }));
@@ -1992,11 +2004,13 @@ const whatsappRoutes = () => {
           'Timed out confirming status broadcast'
         )
       : null;
+    const rejected = isAck479Error(confirmation?.error);
     res.json({
-      ok: Boolean(messageId),
+      ok: Boolean(messageId && confirmation?.ok),
       accepted: Boolean(messageId),
       confirmed: Boolean(confirmation?.ok),
-      uncertain: Boolean(messageId && !confirmation?.ok),
+      failed: Boolean(rejected),
+      uncertain: Boolean(messageId && !confirmation?.ok && !rejected),
       messageId,
       confirmation,
       audienceCount: statusSnapshot.recipients.length,

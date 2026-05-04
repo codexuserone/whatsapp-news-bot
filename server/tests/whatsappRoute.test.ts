@@ -98,7 +98,7 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
-  it('preserves confirmation errors on uncertain test sends', () => {
+  it('marks WhatsApp ack rejections as failed test sends', () => {
     const result = __testUtils.resolveTestSendLogResolution({
       messageId: 'abc123',
       confirmRequested: true,
@@ -107,8 +107,8 @@ describe('whatsapp route test-send logging', () => {
     });
 
     expect(result).toEqual({
-      status: 'uncertain',
-      errorMessage: 'Send result is uncertain. Verifying delivery before retrying. WhatsApp server rejected message ack 479',
+      status: 'failed',
+      errorMessage: 'WhatsApp server rejected message ack 479',
       sentAt: null
     });
   });

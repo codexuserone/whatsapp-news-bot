@@ -44,6 +44,12 @@ const isWhatsAppLeaseDeployTakeoverEnabled = () =>
 const isTruthyEnvFlag = (value: unknown) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 const isFalseLikeFlag = (value: unknown) => ['0', 'false', 'no', 'off'].includes(String(value || '').trim().toLowerCase());
 const isStatusSelfAudienceEnabled = () => isTruthyEnvFlag(process.env.WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE);
+const isStatusOwnDeviceSyncEnabled = () =>
+  !isFalseLikeFlag(process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES ?? 'true');
+const STATUS_OWN_DEVICE_SYNC_LIMIT = Math.max(
+  0,
+  Math.min(Math.floor(Number(process.env.WHATSAPP_STATUS_OWN_DEVICE_SYNC_LIMIT || 12)), 50)
+);
 
 const shouldIncludeSenderInStatusAudience = (override?: unknown) => {
   if (!isStatusSelfAudienceEnabled()) return false;
@@ -431,6 +437,34 @@ const buildStatusSelfCandidates = (
     socketUser.pn,
     resolvedSelfJid
   ];
+};
+
+const normalizeExactDeviceJid = (value: unknown) => String(value || '').trim().toLowerCase();
+
+const buildCurrentDeviceJidSet = (socket: unknown, meJid: unknown) => {
+  const socketRecord = socket as {
+    user?: Record<string, unknown>;
+    authState?: { creds?: { me?: Record<string, unknown> } };
+  } | null | undefined;
+  const user = socketRecord?.user || {};
+  const credsMe = socketRecord?.authState?.creds?.me || {};
+  return new Set(
+    [
+      meJid,
+      user.id,
+      user.jid,
+      user.lid,
+      user.lidJid,
+      user.lidJID,
+      credsMe.id,
+      credsMe.jid,
+      credsMe.lid,
+      credsMe.lidJid,
+      credsMe.lidJID
+    ]
+      .map(normalizeExactDeviceJid)
+      .filter(Boolean)
+  );
 };
 
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict' | 'paused';
@@ -4189,6 +4223,11 @@ class WhatsAppClient {
       useUserDevicesCache: false
     });
 
+    const ownDeviceFanout = await this.relayStatusToOwnDevices(fullMsg.message, fullMsg.key?.id);
+    if (ownDeviceFanout) {
+      (fullMsg as Record<string, unknown>).ownDeviceFanout = ownDeviceFanout;
+    }
+
     if (socket.ev && typeof socket.ev.emit === 'function') {
       process.nextTick(() => {
         socket.ev.emit('messages.upsert', { messages: [fullMsg], type: 'append' });
@@ -4196,6 +4235,73 @@ class WhatsAppClient {
     }
 
     return fullMsg;
+  }
+
+  private async relayStatusToOwnDevices(message: proto.IMessage | null | undefined, messageId: unknown) {
+    if (!isStatusOwnDeviceSyncEnabled() || STATUS_OWN_DEVICE_SYNC_LIMIT <= 0) return null;
+    const socket = this.socket as any;
+    const id = String(messageId || '').trim();
+    if (!socket || !message || !id) return null;
+    if (typeof socket.getUSyncDevices !== 'function' || typeof socket.relayMessage !== 'function') return null;
+
+    const selfIdentities = Array.from(
+      new Set(
+        buildStatusSelfCandidates(socket, this.meJid, null)
+          .map((candidate) => normalizeStatusAudienceJid(candidate))
+          .filter(Boolean)
+      )
+    );
+    if (!selfIdentities.length) return null;
+
+    try {
+      const devicesRaw = await withTimeout(
+        socket.getUSyncDevices(selfIdentities, false, false),
+        10000,
+        'Timed out resolving sender linked devices'
+      );
+      const currentDeviceJids = buildCurrentDeviceJidSet(socket, this.meJid);
+      const deviceJids = Array.from(
+        new Set(
+          (Array.isArray(devicesRaw) ? devicesRaw : [])
+            .map((device: { jid?: unknown }) => String(device?.jid || '').trim())
+            .filter(Boolean)
+            .filter((jid) => !currentDeviceJids.has(normalizeExactDeviceJid(jid)))
+        )
+      ).slice(0, STATUS_OWN_DEVICE_SYNC_LIMIT);
+
+      if (!deviceJids.length) {
+        return { attempted: 0, sent: 0, failed: 0 };
+      }
+
+      let sent = 0;
+      let failed = 0;
+      for (const jid of deviceJids) {
+        try {
+          await socket.relayMessage('status@broadcast', message, {
+            messageId: id,
+            participant: { jid, count: 0 },
+            useUserDevicesCache: false
+          });
+          sent += 1;
+        } catch (error) {
+          failed += 1;
+          logger.warn({ jid, error: getErrorMessage(error) }, 'Failed to sync Status to sender linked device');
+        }
+      }
+
+      logger.info(
+        {
+          attempted: deviceJids.length,
+          sent,
+          failed
+        },
+        'Synced Status to sender linked devices'
+      );
+      return { attempted: deviceJids.length, sent, failed };
+    } catch (error) {
+      logger.warn({ error: getErrorMessage(error) }, 'Failed to resolve sender linked devices for Status sync');
+      return { attempted: 0, sent: 0, failed: 0, error: getErrorMessage(error) };
+    }
   }
 
   async sendStatusBroadcast(content: AnyMessageContent, options: Record<string, unknown> = {}) {

@@ -21,17 +21,17 @@ describe('whatsapp route test-send logging', () => {
     expect(__testUtils.resolveSendTestTimeoutMs('status@broadcast', 'video')).toBe(90000);
   });
 
-  it('does not require server ACKs for channel test-send confirmation', () => {
+  it('requires server ACKs for channel test-send confirmation', () => {
     expect(__testUtils.resolveTestSendConfirmationOptions('120363406955649221@newsletter', null)).toEqual({
       upsertTimeoutMs: 5000,
       ackTimeoutMs: 15000,
-      requireServerAck: false,
+      requireServerAck: true,
       failureGraceMs: 3000
     });
     expect(__testUtils.resolveTestSendConfirmationOptions('120363406955649221@newsletter', 'image')).toEqual({
       upsertTimeoutMs: 30000,
       ackTimeoutMs: 60000,
-      requireServerAck: false,
+      requireServerAck: true,
       failureGraceMs: 3000
     });
   });

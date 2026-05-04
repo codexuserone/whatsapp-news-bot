@@ -2219,7 +2219,7 @@ const shouldRequireServerAckForSend = (
   sendResult: SendWithMediaResult | null | undefined
 ) => {
   void sendResult;
-  return targetType !== 'channel';
+  return true;
 };
 
 const isChannelMediaAckRejection = (

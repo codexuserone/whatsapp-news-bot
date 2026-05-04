@@ -369,7 +369,7 @@ const resolveTestSendConfirmationOptions = (jid: string, mediaType: string | nul
   const hasMedia = Boolean(String(mediaType || '').trim());
   const isStatus = String(jid || '').trim() === 'status@broadcast';
   const failureGraceMs = isStatus ? STATUS_FAILURE_GRACE_MS : isNewsletterJid(jid) ? 3000 : 0;
-  const requireServerAck = !isNewsletterJid(jid);
+  const requireServerAck = true;
   return hasMedia
     ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck, failureGraceMs }
     : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck, failureGraceMs };

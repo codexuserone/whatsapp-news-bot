@@ -142,8 +142,8 @@ describe('queueService __testUtils', () => {
       media: { type: null, url: null, sent: false, error: null }
     };
 
-    expect(testUtils.shouldRequireServerAckForSend('channel', mediaResult)).toBe(false);
-    expect(testUtils.shouldRequireServerAckForSend('channel', textResult)).toBe(false);
+    expect(testUtils.shouldRequireServerAckForSend('channel', mediaResult)).toBe(true);
+    expect(testUtils.shouldRequireServerAckForSend('channel', textResult)).toBe(true);
     expect(testUtils.shouldRequireServerAckForSend('group', mediaResult)).toBe(true);
     expect(testUtils.shouldRequireServerAckForSend('individual', textResult)).toBe(true);
     expect(testUtils.shouldRequireServerAckForSend('status', mediaResult)).toBe(true);

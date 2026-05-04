@@ -1076,7 +1076,7 @@ describe('WhatsAppClient', () => {
         );
     });
 
-    it('should include the sender account in status delivery by default', async () => {
+    it('should not include the sender account in status delivery by default', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-self' } }));
         client.socket = {
             sendMessage,
@@ -1089,16 +1089,15 @@ describe('WhatsAppClient', () => {
         );
 
         const sentOptions = sendMessage.mock.calls[0]?.[2];
-        expect(sentOptions.statusJidList).toEqual([
-            '19144477725@s.whatsapp.net',
-            '16465527019@s.whatsapp.net'
-        ]);
+        expect(sentOptions.statusJidList).toEqual(['19144477725@s.whatsapp.net']);
         expect(sentOptions.useUserDevicesCache).toBe(false);
         expect(sentOptions).not.toHaveProperty('includeSender');
         expect(sentOptions).not.toHaveProperty('includeSelf');
     });
 
-    it('should include all known sender identities in status delivery by default', async () => {
+    it('should include all known sender identities only when self-audience is explicitly enabled', async () => {
+        const previous = process.env.WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE;
+        process.env.WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE = 'true';
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-self-lid' } }));
         client.socket = {
             sendMessage,
@@ -1108,10 +1107,18 @@ describe('WhatsAppClient', () => {
             }
         };
 
-        await client.sendStatusBroadcast(
-            { text: 'hello' },
-            { statusJidList: ['19144477725@s.whatsapp.net'] }
-        );
+        try {
+            await client.sendStatusBroadcast(
+                { text: 'hello' },
+                { statusJidList: ['19144477725@s.whatsapp.net'] }
+            );
+        } finally {
+            if (previous === undefined) {
+                delete process.env.WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE;
+            } else {
+                process.env.WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE = previous;
+            }
+        }
 
         const sentOptions = sendMessage.mock.calls[0]?.[2];
         expect(sentOptions.statusJidList).toEqual([
@@ -1147,10 +1154,7 @@ describe('WhatsAppClient', () => {
             expect.objectContaining({
                 messageId: 'status-generated-id',
                 useUserDevicesCache: false,
-                statusJidList: [
-                    '19144477725@s.whatsapp.net',
-                    '16465527019@s.whatsapp.net'
-                ]
+                statusJidList: ['19144477725@s.whatsapp.net']
             })
         );
         expect(result.key.id).toBe('status-generated-id');
@@ -1821,7 +1825,7 @@ describe('WhatsAppClient', () => {
         expect(client.connect).toHaveBeenCalled();
     });
 
-    it('should keep self in the final status delivery audience by default', async () => {
+    it('should exclude self from the final status delivery audience by default', async () => {
         const sendMessage = jest.fn(async () => ({
             key: { id: 'status-msg-id', remoteJid: 'status@broadcast', fromMe: true },
             message: { imageMessage: { mimetype: 'image/jpeg', caption: 'caption' } }
@@ -1857,7 +1861,7 @@ describe('WhatsAppClient', () => {
             expect.any(Object),
             expect.objectContaining({
                 broadcast: true,
-                statusJidList: ['15551234567@s.whatsapp.net', '16465527019@s.whatsapp.net']
+                statusJidList: ['15551234567@s.whatsapp.net']
             })
         );
     });

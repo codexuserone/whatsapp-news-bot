@@ -43,8 +43,10 @@ const isWhatsAppLeaseDeployTakeoverEnabled = () =>
 
 const isTruthyEnvFlag = (value: unknown) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 const isFalseLikeFlag = (value: unknown) => ['0', 'false', 'no', 'off'].includes(String(value || '').trim().toLowerCase());
+const isStatusSelfAudienceEnabled = () => isTruthyEnvFlag(process.env.WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE);
 
 const shouldIncludeSenderInStatusAudience = (override?: unknown) => {
+  if (!isStatusSelfAudienceEnabled()) return false;
   if (typeof override === 'boolean') return override;
   if (typeof override === 'string' && override.trim()) return !isFalseLikeFlag(override);
   return !isFalseLikeFlag(process.env.WHATSAPP_STATUS_INCLUDE_SENDER ?? 'true');

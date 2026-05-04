@@ -25,6 +25,35 @@ type ManualPostBody = {
   documentMime?: string | null;
 };
 
+type ManualInsertedRow = {
+  id: string;
+  target_id?: string | null;
+  status?: string | null;
+  created_at?: string | null;
+};
+
+type ManualStoredSendRow = {
+  id: string;
+  status?: string | null;
+  whatsapp_message_id?: string | null;
+  media_sent?: boolean | null;
+  error_message?: string | null;
+  media_error?: string | null;
+};
+
+type ManualSendServiceResult = {
+  ok?: boolean;
+  held?: boolean;
+  status?: string | null;
+  messageId?: string | null;
+  mediaSent?: boolean | null;
+  error?: string | null;
+};
+
+const SUCCESSFUL_MANUAL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
+
+const normalizeManualStatus = (value: unknown) => String(value || '').trim().toLowerCase();
+
 const buildTargetIds = (body: ManualPostBody) => {
   const ids = Array.isArray(body.target_ids) ? body.target_ids : [];
   const single = String(body.target_id || '').trim();
@@ -107,6 +136,64 @@ const buildManualLogRows = (body: ManualPostBody) => {
   }));
 };
 
+const fallbackManualStatus = (result?: ManualSendServiceResult | null) => {
+  if (result?.status) return normalizeManualStatus(result.status);
+  if (result?.held) return 'awaiting_approval';
+  if (result?.ok) return 'sent';
+  return 'uncertain';
+};
+
+const buildManualSendResponse = (
+  inserted: ManualInsertedRow[],
+  storedRows: ManualStoredSendRow[] = [],
+  sendResults: Map<string, ManualSendServiceResult> | Record<string, ManualSendServiceResult> = new Map()
+) => {
+  const storedById = new Map(storedRows.map((row) => [String(row.id), row]));
+  const resultForId =
+    sendResults instanceof Map
+      ? (id: string) => sendResults.get(id)
+      : (id: string) => sendResults[id];
+
+  const results = inserted.map((item) => {
+    const id = String(item.id);
+    const stored = storedById.get(id);
+    const sendResult = resultForId(id) || null;
+    const status = normalizeManualStatus(stored?.status) || fallbackManualStatus(sendResult);
+    const messageId = stored?.whatsapp_message_id || sendResult?.messageId || null;
+    const mediaSent = typeof stored?.media_sent === 'boolean' ? stored.media_sent : Boolean(sendResult?.mediaSent);
+    const error = stored?.error_message || stored?.media_error || sendResult?.error || null;
+    return {
+      id,
+      status,
+      ok: SUCCESSFUL_MANUAL_SEND_STATUSES.has(status),
+      messageId,
+      mediaSent,
+      error
+    };
+  });
+
+  const sent = results.filter((row) => SUCCESSFUL_MANUAL_SEND_STATUSES.has(row.status)).length;
+  const uncertain = results.filter((row) => row.status === 'uncertain').length;
+  const held = results.filter((row) => row.status === 'awaiting_approval').length;
+  const pending = results.filter((row) => row.status === 'pending').length;
+  const processing = results.filter((row) => row.status === 'processing').length;
+  const skipped = results.filter((row) => row.status === 'skipped').length;
+  const failed = results.filter((row) => row.status === 'failed').length;
+
+  return {
+    ok: results.length > 0 && sent === results.length,
+    queued: inserted.length,
+    sent,
+    uncertain,
+    held,
+    pending,
+    processing,
+    skipped,
+    failed,
+    results
+  };
+};
+
 const manualRoutes = () => {
   const router = express.Router();
 
@@ -128,6 +215,17 @@ const manualRoutes = () => {
     return (inserted || []) as Array<{ id: string; target_id: string; status: string; created_at: string }>;
   };
 
+  const loadManualSendRows = async (supabase: ReturnType<typeof getSupabaseClient>, ids: string[]) => {
+    if (!ids.length) return [] as ManualStoredSendRow[];
+    const { data, error } = await supabase
+      .from('message_logs')
+      .select('id,status,whatsapp_message_id,media_sent,error_message,media_error')
+      .in('id', ids);
+
+    if (error) throw error;
+    return (data || []) as ManualStoredSendRow[];
+  };
+
   router.post('/queue', validate(schemas.manualPost), async (req: Request, res: Response) => {
     try {
       const supabase = getDb();
@@ -146,34 +244,16 @@ const manualRoutes = () => {
       const inserted = await insertManualLogs(supabase, body);
 
       const whatsappClient = req.app.locals.whatsapp as unknown;
-      const results: Array<{ id: string; ok: boolean; messageId?: string | null; mediaSent?: boolean; error?: string }> = [];
+      const sendResults = new Map<string, ManualSendServiceResult>();
 
       for (const item of inserted) {
         // eslint-disable-next-line no-await-in-loop
         const sent = await sendQueueLogNow(item.id, whatsappClient as never);
-        if (sent && (sent as { ok?: boolean }).ok) {
-          results.push({
-            id: item.id,
-            ok: true,
-            messageId: (sent as { messageId?: string | null }).messageId || null,
-            mediaSent: Boolean((sent as { mediaSent?: unknown }).mediaSent)
-          });
-        } else {
-          results.push({
-            id: item.id,
-            ok: false,
-            error: (sent as { error?: string | null })?.error || 'Send failed'
-          });
-        }
+        sendResults.set(item.id, (sent || { ok: false, error: 'Send failed' }) as ManualSendServiceResult);
       }
 
-      res.json({
-        ok: results.every((row) => row.ok),
-        queued: inserted.length,
-        sent: results.filter((row) => row.ok).length,
-        failed: results.filter((row) => !row.ok).length,
-        results
-      });
+      const storedRows = await loadManualSendRows(supabase, inserted.map((item) => item.id));
+      res.json(buildManualSendResponse(inserted, storedRows, sendResults));
     } catch (error) {
       res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
     }
@@ -184,6 +264,7 @@ const manualRoutes = () => {
 
 module.exports = manualRoutes;
 module.exports.__testUtils = {
+  buildManualSendResponse,
   buildMediaFields,
   buildManualLogRows,
   buildTargetIds

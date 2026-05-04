@@ -54,6 +54,17 @@ const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has
 const LIVE_QUEUE_STATUSES = new Set(['awaiting_approval', 'pending', 'processing']);
 const HISTORY_STATUSES = new Set(['sent', 'delivered', 'read', 'played', 'failed', 'uncertain', 'skipped', 'superseded']);
 
+type NoticeType = 'success' | 'warning' | 'error';
+
+type QueueSendNowResponse = {
+  ok?: boolean;
+  accepted?: boolean;
+  status?: string | null;
+  messageId?: string | null;
+  mediaSent?: boolean | null;
+  error?: string | null;
+};
+
 const WHATSAPP_SENT_EDIT_MAX_MINUTES = 15;
 
 const normalizeEditWindowMinutes = (value: unknown) => {
@@ -122,7 +133,7 @@ const QueueInner = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftMessage, setDraftMessage] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
-  const [actionNotice, setActionNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [actionNotice, setActionNotice] = useState<{ type: NoticeType; message: string } | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -300,9 +311,23 @@ const QueueInner = () => {
   });
 
   const sendNowItem = useMutation({
-    mutationFn: (id: string) => api.post<{ messageId?: string }>(`/api/queue/${id}/send-now`),
-    onSuccess: (result: { messageId?: string }) => {
-      setActionNotice({ type: 'success', message: result?.messageId ? `Sent now (${result.messageId}).` : 'Sent now.' });
+    mutationFn: (id: string) => api.post<QueueSendNowResponse>(`/api/queue/${id}/send-now`),
+    onSuccess: (result: QueueSendNowResponse) => {
+      const status = String(result?.status || '').toLowerCase();
+      if (result?.ok) {
+        setActionNotice({ type: 'success', message: result?.messageId ? `Sent now (${result.messageId}).` : 'Sent now.' });
+      } else if (status === 'uncertain') {
+        setActionNotice({
+          type: 'warning',
+          message: result?.messageId
+            ? `Accepted by WhatsApp but still needs verification (${result.messageId}).`
+            : 'Accepted by WhatsApp but still needs verification.'
+        });
+      } else if (status === 'awaiting_approval') {
+        setActionNotice({ type: 'warning', message: result?.error || 'Held for review before another send attempt.' });
+      } else {
+        setActionNotice({ type: 'error', message: result?.error || 'Send now did not complete.' });
+      }
       refreshQueueViews();
     },
     onError: (error: unknown) => {
@@ -714,7 +739,9 @@ const QueueInner = () => {
         <div
           className={`rounded-md border px-3 py-2 text-sm ${actionNotice.type === 'success'
               ? 'border-emerald-300/70 bg-emerald-50 text-emerald-900'
-              : 'border-red-300/70 bg-red-50 text-red-900'
+              : actionNotice.type === 'warning'
+                ? 'border-amber-300/70 bg-amber-50 text-amber-900'
+                : 'border-red-300/70 bg-red-50 text-red-900'
             }`}
         >
           {actionNotice.message}

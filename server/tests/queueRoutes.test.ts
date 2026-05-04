@@ -136,4 +136,54 @@ describe('queue route retry safeguards', () => {
     expect(testUtils.sanitizeMediaUrlForApi('data:image/png;base64,AAAA')).toBeNull();
     expect(testUtils.sanitizeMediaUrlForApi('https://example.com/image.jpg')).toBe('https://example.com/image.jpg');
   });
+
+  it('returns an accepted send-now response for uncertain queue outcomes instead of a hard failure', () => {
+    expect(
+      testUtils.buildQueueSendNowResponse(
+        { ok: false, error: 'Server ack was not observed yet' },
+        {
+          id: 'queue-row',
+          status: 'uncertain',
+          whatsapp_message_id: 'msg-1',
+          media_sent: false,
+          error_message: 'Server ack was not observed yet'
+        }
+      )
+    ).toEqual({
+      httpStatus: 202,
+      body: {
+        ok: false,
+        accepted: true,
+        status: 'uncertain',
+        messageId: 'msg-1',
+        mediaSent: false,
+        error: 'Server ack was not observed yet'
+      }
+    });
+  });
+
+  it('keeps failed send-now outcomes as request failures with the stored reason', () => {
+    expect(
+      testUtils.buildQueueSendNowResponse(
+        { ok: false, error: 'Unsupported attachment' },
+        {
+          id: 'queue-row',
+          status: 'failed',
+          whatsapp_message_id: null,
+          media_sent: false,
+          error_message: 'Unsupported attachment'
+        }
+      )
+    ).toEqual({
+      httpStatus: 400,
+      body: {
+        ok: false,
+        accepted: false,
+        status: 'failed',
+        messageId: null,
+        mediaSent: false,
+        error: 'Unsupported attachment'
+      }
+    });
+  });
 });

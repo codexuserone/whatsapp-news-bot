@@ -32,6 +32,52 @@ const NON_RETRYABLE_FAILURE_PATTERNS = [
 
 const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
 
+type QueueSendNowResult = {
+  ok?: boolean;
+  held?: boolean;
+  status?: string | null;
+  messageId?: string | null;
+  mediaSent?: boolean | null;
+  error?: string | null;
+};
+
+type QueueSendNowStoredRow = {
+  id?: string | null;
+  status?: string | null;
+  whatsapp_message_id?: string | null;
+  media_sent?: boolean | null;
+  error_message?: string | null;
+  media_error?: string | null;
+};
+
+const normalizeQueueStatus = (status: unknown) => String(status || '').trim().toLowerCase();
+
+const fallbackSendNowStatus = (result?: QueueSendNowResult | null) => {
+  if (result?.status) return normalizeQueueStatus(result.status);
+  if (result?.held) return 'awaiting_approval';
+  if (result?.ok) return 'sent';
+  return 'failed';
+};
+
+const buildQueueSendNowResponse = (result: QueueSendNowResult | null | undefined, storedRow?: QueueSendNowStoredRow | null) => {
+  const status = normalizeQueueStatus(storedRow?.status) || fallbackSendNowStatus(result);
+  const body = {
+    ok: isSuccessfulSendStatus(status),
+    accepted: status === 'uncertain' || status === 'awaiting_approval' || isSuccessfulSendStatus(status),
+    status,
+    messageId: storedRow?.whatsapp_message_id || result?.messageId || null,
+    mediaSent: typeof storedRow?.media_sent === 'boolean' ? storedRow.media_sent : Boolean(result?.mediaSent),
+    error: storedRow?.error_message || storedRow?.media_error || result?.error || null
+  };
+  const httpStatus =
+    isSuccessfulSendStatus(status)
+      ? 200
+      : status === 'uncertain' || status === 'awaiting_approval'
+        ? 202
+        : 400;
+  return { httpStatus, body };
+};
+
 const normalizeTargetJid = (target: { phone_number?: string | null; type?: string | null }) => {
   return normalizeTargetJidForSend(target);
 };
@@ -1047,11 +1093,16 @@ const queueRoutes = () => {
 
   router.post('/:id/send-now', async (req: Request, res: Response) => {
     try {
+      const supabase = getDb();
       const result = await sendQueueLogNow(req.params.id, req.app.locals.whatsapp);
-      if (!result?.ok) {
-        return res.status(400).json({ error: result?.error || 'Failed to send queue item now' });
-      }
-      return res.json(result);
+      const { data: storedRow, error: storedRowError } = await supabase
+        .from('message_logs')
+        .select('id,status,whatsapp_message_id,media_sent,error_message,media_error')
+        .eq('id', req.params.id)
+        .maybeSingle();
+      if (storedRowError) throw storedRowError;
+      const response = buildQueueSendNowResponse(result as QueueSendNowResult, storedRow as QueueSendNowStoredRow | null);
+      return res.status(response.httpStatus).json(response.body);
     } catch (error) {
       console.error('Error sending queue item now:', error);
       return res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
@@ -1083,6 +1134,7 @@ module.exports.__testUtils = {
   isRetryableQueueRow,
   shouldLimitQueueStatusToRecentHistory,
   buildCombinedQueueFilter,
+  buildQueueSendNowResponse,
   hasEditableQueuePayload,
   isInlineMediaDataUrl,
   isStoredMediaReference,

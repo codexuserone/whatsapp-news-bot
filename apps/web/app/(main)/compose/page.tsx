@@ -16,6 +16,7 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import {
+  AlertTriangle,
   CheckCircle2,
   ClipboardPaste,
   FileText,
@@ -88,6 +89,20 @@ type ManualSendPayload = {
   documentDataUrl?: string | null;
   documentFilename?: string | null;
   documentMime?: string | null;
+};
+
+type NoticeType = 'success' | 'warning' | 'error';
+
+type ManualSendResponse = {
+  ok?: boolean;
+  queued?: number;
+  sent?: number;
+  uncertain?: number;
+  held?: number;
+  pending?: number;
+  processing?: number;
+  skipped?: number;
+  failed?: number;
 };
 
 const MAX_ATTACHMENT_BYTES: Record<AttachmentKind, number> = {
@@ -207,7 +222,7 @@ const ComposeInner = () => {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [notice, setNotice] = useState<{ type: NoticeType; message: string } | null>(null);
   const [targetSearch, setTargetSearch] = useState('');
   const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
@@ -347,12 +362,28 @@ const ComposeInner = () => {
   });
 
   const sendManualNow = useMutation({
-    mutationFn: () => api.post<{ sent?: number; failed?: number; ok?: boolean }>('/api/manual/send', buildManualPayload()),
-    onSuccess: (result: { sent?: number; failed?: number; ok?: boolean }) => {
+    mutationFn: () => api.post<ManualSendResponse>('/api/manual/send', buildManualPayload()),
+    onSuccess: (result: ManualSendResponse) => {
       const sent = Number(result?.sent || 0);
+      const uncertain = Number(result?.uncertain || 0);
+      const held = Number(result?.held || 0);
+      const pending = Number(result?.pending || 0);
+      const processing = Number(result?.processing || 0);
+      const skipped = Number(result?.skipped || 0);
       const failed = Number(result?.failed || 0);
-      if (failed > 0 || result?.ok === false) {
-        setNotice({ type: 'error', message: `Sent ${sent}, failed ${failed}. Open Queue/History for exact records.` });
+      const parts = [
+        sent ? `sent ${sent}` : '',
+        uncertain ? `needs verification ${uncertain}` : '',
+        held ? `held for review ${held}` : '',
+        pending ? `still queued ${pending}` : '',
+        processing ? `still processing ${processing}` : '',
+        skipped ? `skipped ${skipped}` : '',
+        failed ? `failed ${failed}` : ''
+      ].filter(Boolean);
+      if (failed > 0 || skipped > 0) {
+        setNotice({ type: 'error', message: `${parts.join(', ')}. Open Queue for the exact records.` });
+      } else if (uncertain > 0 || held > 0 || pending > 0 || processing > 0 || result?.ok === false) {
+        setNotice({ type: 'warning', message: `${parts.join(', ') || 'Delivery is still being verified'}. Open Queue for the exact records.` });
       } else {
         setNotice({ type: 'success', message: `Sent ${sent} message(s).` });
       }
@@ -581,11 +612,19 @@ const ComposeInner = () => {
         <div
           className={`rounded-md border px-3 py-2 text-sm ${notice.type === 'success'
             ? 'border-emerald-300/70 bg-emerald-50 text-emerald-900'
-            : 'border-red-300/70 bg-red-50 text-red-900'
+            : notice.type === 'warning'
+              ? 'border-amber-300/70 bg-amber-50 text-amber-900'
+              : 'border-red-300/70 bg-red-50 text-red-900'
             }`}
         >
           <div className="flex items-start gap-2">
-            {notice.type === 'success' ? <CheckCircle2 className="mt-0.5 h-4 w-4" /> : <XCircle className="mt-0.5 h-4 w-4" />}
+            {notice.type === 'success' ? (
+              <CheckCircle2 className="mt-0.5 h-4 w-4" />
+            ) : notice.type === 'warning' ? (
+              <AlertTriangle className="mt-0.5 h-4 w-4" />
+            ) : (
+              <XCircle className="mt-0.5 h-4 w-4" />
+            )}
             <span>{notice.message}</span>
           </div>
         </div>

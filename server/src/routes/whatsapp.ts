@@ -25,6 +25,14 @@ const STATUS_AUDIENCE_REFRESH_TIMEOUT_MS = 15000;
 const STATUS_SEND_TIMEOUT_MS = 90000;
 const STATUS_CONFIRM_TIMEOUT_MS = 95000;
 const STATUS_FAILURE_GRACE_MS = 15000;
+const NEWSLETTER_CONFIRM_FETCH_TIMEOUT_TEXT_MS = Math.max(
+  1000,
+  Math.min(Number(process.env.WHATSAPP_NEWSLETTER_CONFIRM_FETCH_TIMEOUT_TEXT_MS || 8000), 30000)
+);
+const NEWSLETTER_CONFIRM_FETCH_TIMEOUT_MEDIA_MS = Math.max(
+  NEWSLETTER_CONFIRM_FETCH_TIMEOUT_TEXT_MS,
+  Math.min(Number(process.env.WHATSAPP_NEWSLETTER_CONFIRM_FETCH_TIMEOUT_MEDIA_MS || 12000), 45000)
+);
 const DEFAULT_USER_AGENT = buildDefaultUserAgent();
 const SUPPORTED_WHATSAPP_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -374,6 +382,9 @@ const resolveTestSendConfirmationOptions = (jid: string, mediaType: string | nul
     ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck, failureGraceMs }
     : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck, failureGraceMs };
 };
+
+const resolveNewsletterConfirmFetchTimeoutMs = (mediaType: string | null) =>
+  mediaType ? NEWSLETTER_CONFIRM_FETCH_TIMEOUT_MEDIA_MS : NEWSLETTER_CONFIRM_FETCH_TIMEOUT_TEXT_MS;
 
 const toOriginOrUndefined = (value?: string | null) => {
   if (!value) return undefined;
@@ -1719,7 +1730,7 @@ const whatsappRoutes = () => {
           let channelConfirmation: TestSendConfirmation | null = null;
           if (isNewsletterJid(normalizedJid) && typeof whatsapp.confirmNewsletterMessage === 'function') {
             channelConfirmation = await whatsapp.confirmNewsletterMessage(normalizedJid, messageId, {
-              timeoutMs: requestedMediaType ? 60000 : 30000,
+              timeoutMs: resolveNewsletterConfirmFetchTimeoutMs(requestedMediaType),
               count: 25
             });
             if (channelConfirmation?.ok) {

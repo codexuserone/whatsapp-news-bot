@@ -154,6 +154,14 @@ const UNCERTAIN_MATCH_GRACE_MS = 30000;
 const MAX_UNCERTAIN_LOGS_PER_PASS = 100;
 const AUTH_ERROR_HINT = 'WhatsApp auth state corrupted. Clear sender keys or re-scan the QR code, then retry.';
 const STATUS_FAILURE_GRACE_MS = 15000;
+const NEWSLETTER_CONFIRM_FETCH_TIMEOUT_TEXT_MS = Math.max(
+  1000,
+  Math.min(Number(process.env.WHATSAPP_NEWSLETTER_CONFIRM_FETCH_TIMEOUT_TEXT_MS || 8000), 30000)
+);
+const NEWSLETTER_CONFIRM_FETCH_TIMEOUT_MEDIA_MS = Math.max(
+  NEWSLETTER_CONFIRM_FETCH_TIMEOUT_TEXT_MS,
+  Math.min(Number(process.env.WHATSAPP_NEWSLETTER_CONFIRM_FETCH_TIMEOUT_MEDIA_MS || 12000), 45000)
+);
 const MANUAL_POST_PAUSE_ERROR = 'Paused for this post';
 const FEED_PAUSED_ERROR = 'Feed paused';
 const NON_REVIVABLE_SKIP_ERRORS = new Set([
@@ -2222,6 +2230,11 @@ const shouldRequireServerAckForSend = (
   return true;
 };
 
+const resolveNewsletterConfirmFetchTimeoutMs = (sendResult: SendWithMediaResult | null | undefined) =>
+  isMediaSendResult(sendResult)
+    ? NEWSLETTER_CONFIRM_FETCH_TIMEOUT_MEDIA_MS
+    : NEWSLETTER_CONFIRM_FETCH_TIMEOUT_TEXT_MS;
+
 const isChannelMediaAckRejection = (
   targetType: Target['type'] | null | undefined,
   sendResult: SendWithMediaResult | null | undefined,
@@ -2306,7 +2319,7 @@ const confirmSendResult = async (
     if (targetType === 'channel' && whatsappClient.confirmNewsletterMessage) {
       const jid = String(sendResult?.response?.key?.remoteJid || '').trim();
       const channelConfirmation = await whatsappClient.confirmNewsletterMessage(jid, messageId, {
-        timeoutMs: media ? 60000 : 30000,
+        timeoutMs: resolveNewsletterConfirmFetchTimeoutMs(sendResult),
         count: 25
       });
       if (channelConfirmation.ok) {

@@ -5755,6 +5755,11 @@ const sendPendingForAllSchedules = async (whatsappClient?: WhatsAppClient) => {
     logger.info('Skipping pending send pass because app is paused');
     return { sent: 0, queued: 0, schedules: 0, skipped: true, reason: 'App is paused' };
   }
+  const whatsappStatus = whatsappClient?.getStatus?.().status || 'unavailable';
+  if (!whatsappClient || whatsappStatus !== 'connected') {
+    logger.info({ whatsappStatus }, 'Skipping pending send pass because WhatsApp is not connected');
+    return { sent: 0, queued: 0, schedules: 0, skipped: true, reason: 'WhatsApp not connected' };
+  }
 
   try {
     const settings = await settingsService.getSettings();

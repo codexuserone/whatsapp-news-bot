@@ -633,6 +633,11 @@ const QueueInner = () => {
   };
 
   const isHistoryItem = (item: QueueItem) => HISTORY_STATUSES.has(String(item.status || '').toLowerCase());
+  const getTargetStateBadge = (item: QueueItem) => {
+    if (item.target_active === false) return <Badge variant="warning">Inactive target</Badge>;
+    if (item.target_in_current_schedule === false) return <Badge variant="outline">Old target</Badge>;
+    return null;
+  };
 
   return (
     <div className="space-y-6">
@@ -806,6 +811,7 @@ const QueueInner = () => {
                   : null;
                 const correctionBadge = getCorrectionBadge(item);
                 const sequenceStepLabel = getSequenceStepLabel(item);
+                const targetStateBadge = getTargetStateBadge(item);
 
                 return (
                   <div key={item.id} className="space-y-3 rounded-lg border p-4">
@@ -823,6 +829,7 @@ const QueueInner = () => {
                           ) : null}
                           {item.target_name ? <Badge variant="outline">{item.target_name}</Badge> : null}
                           {item.target_type ? <Badge variant="secondary">{item.target_type}</Badge> : null}
+                          {targetStateBadge}
                           <span className="text-xs text-muted-foreground">
                             {item.is_manual ? 'Manual' : item.schedule_name || 'Automation'}
                           </span>
@@ -1046,6 +1053,7 @@ const QueueInner = () => {
                   isSafeImageSrc(mediaCandidate) &&
                   (!isSuccessfulSendStatus(item.status) || sentWithImage);
                 const sequenceStepLabel = getSequenceStepLabel(item);
+                const targetStateBadge = getTargetStateBadge(item);
                 return (
                   <div key={item.id} className="relative flex flex-col rounded-lg border bg-card text-card-foreground shadow-sm overflow-hidden h-full">
                     <div className="relative aspect-video bg-muted/30">
@@ -1083,6 +1091,7 @@ const QueueInner = () => {
                       </p>
                       <p className="text-[11px] text-muted-foreground">{deliveryPath.label}</p>
                       {sequenceStepLabel ? <Badge variant="outline" className="w-fit">{sequenceStepLabel}</Badge> : null}
+                      {targetStateBadge ? <div className="flex flex-wrap gap-1">{targetStateBadge}</div> : null}
                       {correctionBadge ? <div className="flex flex-wrap gap-1">{correctionBadge}</div> : null}
                       {item.pub_date ? <p className="text-[11px] text-muted-foreground">Published: {formatPublishedDate(item.pub_date, item.pub_precision)}</p> : null}
                       {item.sent_at ? <p className="text-[11px] text-muted-foreground">Sent: {formatDate(item.sent_at)}</p> : null}

@@ -389,7 +389,8 @@ const queueRoutes = () => {
             id,
             name,
             delivery_mode,
-            batch_times
+            batch_times,
+            target_ids
           ),
           template:templates (
             id,
@@ -404,7 +405,8 @@ const queueRoutes = () => {
           target:targets (
             id,
             name,
-            type
+            type,
+            active
           ),
           feed_items (
             title,
@@ -483,6 +485,7 @@ const queueRoutes = () => {
           name?: string;
           delivery_mode?: string;
           batch_times?: string[];
+          target_ids?: string[];
         } | undefined;
         const template = row.template as {
           id?: string;
@@ -494,8 +497,13 @@ const queueRoutes = () => {
           status_background_color?: string | null;
           status_font?: number | null;
         } | undefined;
-        const target = row.target as { id?: string; name?: string; type?: string } | undefined;
+        const target = row.target as { id?: string; name?: string; type?: string; active?: boolean | null } | undefined;
         const isManual = row.schedule_id == null;
+        const targetInCurrentSchedule = (() => {
+          if (isManual || !row.schedule_id || !row.target_id) return true;
+          if (!Array.isArray(schedule?.target_ids)) return null;
+          return schedule.target_ids.map((id) => String(id)).includes(String(row.target_id));
+        })();
         const rawMessageContent = typeof row.message_content === 'string' ? String(row.message_content) : '';
         const displayMessageContent = String(isManual ? stripManualMeta(rawMessageContent) : rawMessageContent).trim();
         let automationPreview: {
@@ -529,6 +537,8 @@ const queueRoutes = () => {
           batch_times: schedule?.batch_times || null,
           target_name: target?.name || null,
           target_type: target?.type || null,
+          target_active: target?.active !== false,
+          target_in_current_schedule: targetInCurrentSchedule,
           sequence_step_index: row.sequence_step_index ?? 0,
           sequence_step_label: row.sequence_step_label || null,
           title,

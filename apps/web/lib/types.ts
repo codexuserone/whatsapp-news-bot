@@ -162,6 +162,8 @@ export type QueueItem = {
   schedule_name?: string | null;
   target_name?: string | null;
   target_type?: 'individual' | 'group' | 'channel' | 'status' | null;
+  target_active?: boolean | null;
+  target_in_current_schedule?: boolean | null;
   sequence_step_index?: number | null;
   sequence_step_label?: string | null;
   delivery_mode?: 'immediate' | 'batch' | 'batched' | null;

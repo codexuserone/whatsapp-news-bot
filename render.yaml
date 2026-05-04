@@ -92,6 +92,8 @@ services:
         value: "true"
       - key: WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE
         value: "unsafe"
+      - key: WHATSAPP_STATUS_INCLUDE_SENDER
+        value: "true"
       - key: WHATSAPP_ALLOW_POST_SEND_MEDIA_EDITS
         value: "false"
       - key: WHATSAPP_ALLOW_AUTO_REPLACE_CORRECTIONS

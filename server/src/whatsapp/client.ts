@@ -42,6 +42,13 @@ const isWhatsAppLeaseDeployTakeoverEnabled = () =>
   String(process.env.WHATSAPP_LEASE_DEPLOY_TAKEOVER || '').trim().toLowerCase() === 'true';
 
 const isTruthyEnvFlag = (value: unknown) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+const isFalseLikeFlag = (value: unknown) => ['0', 'false', 'no', 'off'].includes(String(value || '').trim().toLowerCase());
+
+const shouldIncludeSenderInStatusAudience = (override?: unknown) => {
+  if (typeof override === 'boolean') return override;
+  if (typeof override === 'string' && override.trim()) return !isFalseLikeFlag(override);
+  return !isFalseLikeFlag(process.env.WHATSAPP_STATUS_INCLUDE_SENDER ?? 'true');
+};
 
 const isGroupMetadataStatusAudienceEnabled = (override?: boolean) =>
   typeof override === 'boolean' ? override :
@@ -240,6 +247,9 @@ const sanitizeStatusBroadcastOptions = (
   const nextOptions = { ...(options || {}) };
   const strippedOptions: string[] = [];
 
+  delete nextOptions.includeSender;
+  delete nextOptions.includeSelf;
+
   if (isStatusMediaContent(content)) {
     for (const key of ['backgroundColor', 'font']) {
       if (Object.prototype.hasOwnProperty.call(nextOptions, key)) {
@@ -275,7 +285,7 @@ const preferDeliverableStatusRecipients = (
   };
 };
 
-const buildStatusDeliveryRecipients = (recipients: string[], selfJid: unknown) => {
+const buildStatusDeliveryRecipients = (recipients: string[], selfJid: unknown, includeSelf: boolean) => {
   const normalizedRecipients = Array.from(
     new Set(
       (Array.isArray(recipients) ? recipients : [])
@@ -286,7 +296,8 @@ const buildStatusDeliveryRecipients = (recipients: string[], selfJid: unknown) =
 
   const normalizedSelf = normalizeStatusAudienceJid(selfJid);
   if (!normalizedSelf) return normalizedRecipients;
-  return normalizedRecipients.filter((recipient) => recipient !== normalizedSelf);
+  const withoutSelf = normalizedRecipients.filter((recipient) => recipient !== normalizedSelf);
+  return includeSelf ? Array.from(new Set([...withoutSelf, normalizedSelf])) : withoutSelf;
 };
 
 type WhatsAppStatus = 'disconnected' | 'connecting' | 'connected' | 'qr' | 'error' | 'conflict' | 'paused';
@@ -3913,6 +3924,10 @@ class WhatsAppClient {
     if (!this.socket) throw new Error('WhatsApp not connected');
     if (this.isAuthCorrupted) throw new Error('Session corrupted. Please scan QR code again.');
     try {
+      const includeSender = shouldIncludeSenderInStatusAudience(
+        (options as { includeSender?: unknown; includeSelf?: unknown }).includeSender ??
+        (options as { includeSelf?: unknown }).includeSelf
+      );
       const sanitized = sanitizeStatusBroadcastOptions(content, options);
       const explicitStatusJids = Array.isArray((options as { statusJidList?: unknown[] }).statusJidList)
         ? ((options as { statusJidList?: unknown[] }).statusJidList || [])
@@ -3939,7 +3954,8 @@ class WhatsAppClient {
       }
       const statusJidList = buildStatusDeliveryRecipients(
         candidateStatusJidList,
-        this.meJid || this.socket?.user?.id || resolvedAudience.selfJid
+        this.meJid || this.socket?.user?.id || resolvedAudience.selfJid,
+        includeSender
       );
 
       options = { ...sanitized.options, broadcast: true, statusJidList };

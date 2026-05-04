@@ -10,6 +10,7 @@ const { getErrorMessage } = require('../utils/errorUtils');
 const { getSupabaseClient } = require('../db/supabase');
 const { normalizeMessageText } = require('../utils/messageText');
 const { ensureWhatsAppConnected, ensureWhatsAppReadyForOutbound } = require('../services/whatsappConnection');
+const settingsService = require('../services/settingsService');
 const { ensureFreshStatusRecipients, getStatusRecipientSnapshot, refreshStatusRecipients } = require('../services/statusAudienceService');
 const { isNewsletterJid, prepareNewsletterImage, prepareNewsletterVideo } = require('../utils/whatsappMedia');
 const { buildDefaultUserAgent } = require('../utils/httpClientIdentity');
@@ -1319,22 +1320,22 @@ const whatsappRoutes = () => {
     const digits = raw.replace(/[^0-9]/g, '');
     return digits.length >= 6 ? `${digits}@s.whatsapp.net` : '';
   };
-  const resolveSelfStatusJid = async (whatsapp: any) => {
-    try {
-      const audience = await Promise.resolve(whatsapp?.getStatusAudience?.({ sampleSize: 1 }) || null);
-      return normalizeStatusAudienceRecipient((audience as { selfJid?: string | null } | null)?.selfJid);
-    } catch {
-      return '';
-    }
-  };
-  const normalizeExplicitStatusAudience = (values: unknown[], selfJid?: string | null) =>
+  const normalizeExplicitStatusAudience = (values: unknown[]) =>
     Array.from(
       new Set(
         values
           .map((value) => normalizeStatusAudienceRecipient(value))
-          .filter((jid) => jid && (!selfJid || jid !== selfJid))
+          .filter(Boolean)
       )
     );
+  const resolveStatusIncludeSender = async () => {
+    try {
+      const settings = await settingsService.getSettings();
+      return settings?.status_include_sender !== false;
+    } catch {
+      return true;
+    }
+  };
 
   // Send a test message
   router.post('/send-test', validate(schemas.testMessage), asyncHandler(async (req: Request, res: Response) => {
@@ -1427,12 +1428,9 @@ const whatsappRoutes = () => {
 	    if (!connected) {
 	      throw badRequest('WhatsApp is not connected');
 	    }
-    const selfStatusJid = normalizedJids.some((jid) => isStatusBroadcast(jid))
-      ? await resolveSelfStatusJid(whatsapp)
-      : '';
-    const explicitStatusJidList = normalizeExplicitStatusAudience(explicitStatusJidListRaw, selfStatusJid);
+    const explicitStatusJidList = normalizeExplicitStatusAudience(explicitStatusJidListRaw);
     if (explicitStatusJidListRaw.length && !explicitStatusJidList.length) {
-      throw badRequest('Status audience must include at least one private recipient other than this account.');
+      throw badRequest('Status audience must include at least one private recipient.');
     }
 
     let content: Record<string, unknown>;
@@ -1644,7 +1642,7 @@ const whatsappRoutes = () => {
               recipients: explicitStatusJidList,
               sources: { env: explicitStatusJidList.length }
             });
-            statusOptions = { statusJidList: explicitStatusJidList };
+            statusOptions = { statusJidList: explicitStatusJidList, includeSender: await resolveStatusIncludeSender() };
           } else {
             const snapshot = await withTimeout(
               ensureFreshStatusRecipients(whatsapp, { maxAgeMinutes: 10, sampleSize: 25 }),
@@ -1652,7 +1650,7 @@ const whatsappRoutes = () => {
               'Timed out refreshing status audience'
             );
             assertUsableStatusAudience(snapshot);
-            statusOptions = { statusJidList: snapshot.recipients };
+            statusOptions = { statusJidList: snapshot.recipients, includeSender: await resolveStatusIncludeSender() };
           }
           if (!requestedMediaType) {
             statusOptions = {
@@ -1955,10 +1953,9 @@ const whatsappRoutes = () => {
     const explicitStatusJidsRaw = Array.isArray(statusJidList)
       ? statusJidList.map((value) => String(value || '').trim()).filter(Boolean)
       : [];
-    const selfStatusJid = explicitStatusJidsRaw.length ? await resolveSelfStatusJid(whatsapp) : '';
-    const explicitStatusJids = normalizeExplicitStatusAudience(explicitStatusJidsRaw, selfStatusJid);
+    const explicitStatusJids = normalizeExplicitStatusAudience(explicitStatusJidsRaw);
     if (explicitStatusJidsRaw.length && !explicitStatusJids.length) {
-      throw badRequest('Status audience must include at least one private recipient other than this account.');
+      throw badRequest('Status audience must include at least one private recipient.');
     }
     const statusSnapshot = explicitStatusJids.length
       ? { recipients: explicitStatusJids, sources: { env: explicitStatusJids.length } }
@@ -1972,6 +1969,7 @@ const whatsappRoutes = () => {
     const strippedStatusStyleOptions: string[] = [];
     const providedStatusFont = parseProvidedStatusFont(font);
     if (statusSnapshot.recipients.length) sendOptions.statusJidList = statusSnapshot.recipients;
+    sendOptions.includeSender = await resolveStatusIncludeSender();
     if (!requestedStatusMediaType && normalizedBackgroundColor) {
       sendOptions.backgroundColor = normalizedBackgroundColor.startsWith('#')
         ? normalizedBackgroundColor

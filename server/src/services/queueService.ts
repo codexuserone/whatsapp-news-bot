@@ -2329,6 +2329,32 @@ const buildTemplateStatusTextOptions = (template: Template) => {
   };
 };
 
+const resolveStatusIncludeSender = async (settings?: Record<string, unknown> | null) => {
+  if (settings && Object.prototype.hasOwnProperty.call(settings, 'status_include_sender')) {
+    return settings.status_include_sender !== false;
+  }
+  try {
+    const currentSettings = await settingsService.getSettings();
+    return currentSettings?.status_include_sender !== false;
+  } catch {
+    return true;
+  }
+};
+
+const buildStatusBroadcastOptions = async (
+  whatsappClient: WhatsAppClient,
+  snapshot?: { recipients?: string[] } | null,
+  settings?: Record<string, unknown> | null
+) => {
+  const statusSnapshot =
+    snapshot || await ensureFreshStatusRecipients(whatsappClient, { maxAgeMinutes: 10, sampleSize: 25 });
+  assertUsableStatusAudience(statusSnapshot);
+  return {
+    statusJidList: statusSnapshot.recipients || [],
+    includeSender: await resolveStatusIncludeSender(settings)
+  };
+};
+
 const sendMessageWithTemplate = async (
   whatsappClient: WhatsAppClient,
   target: Target,
@@ -2359,9 +2385,7 @@ const sendMessageWithTemplate = async (
   const textWithPreview = rendered.textWithPreview;
   const buildStatusOptions = async () => {
     if (target.type !== 'status') return undefined;
-    const snapshot = await ensureFreshStatusRecipients(whatsappClient, { maxAgeMinutes: 10, sampleSize: 25 });
-    assertUsableStatusAudience(snapshot);
-    return { statusJidList: snapshot.recipients };
+    return buildStatusBroadcastOptions(whatsappClient);
   };
 
   const sendText = async (text: string, modeOptions?: { disableLinkPreview?: boolean }) => {
@@ -5175,10 +5199,9 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
     const sendTextManual = async (text: string) => {
       const content: Record<string, unknown> = disableLinkPreview ? { text, linkPreview: null } : { text };
       if (targetRow.type === 'status') {
-        const statusSnapshot = await ensureFreshStatusRecipients(activeWhatsappClient, { maxAgeMinutes: 10, sampleSize: 25 });
-        assertUsableStatusAudience(statusSnapshot);
+        const statusOptions = await buildStatusBroadcastOptions(activeWhatsappClient, null, settings);
         return withTimeout(
-          activeWhatsappClient.sendStatusBroadcast(content, { statusJidList: statusSnapshot.recipients }),
+          activeWhatsappClient.sendStatusBroadcast(content, statusOptions),
           getStatusSendTimeoutMs('text', Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS)),
           'Timed out sending status message'
         );
@@ -5529,7 +5552,10 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             const response =
               targetRow.type === 'status'
                 ? await withTimeout(
-                  activeWhatsappClient.sendStatusBroadcast(content, { statusJidList: statusSnapshot?.recipients || [] }),
+                  activeWhatsappClient.sendStatusBroadcast(
+                    content,
+                    await buildStatusBroadcastOptions(activeWhatsappClient, statusSnapshot, settings)
+                  ),
                   getStatusSendTimeoutMs('media', Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS)),
                   'Timed out sending video status message'
                 )
@@ -5681,7 +5707,10 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           const response =
             targetRow.type === 'status'
               ? await withTimeout(
-                activeWhatsappClient.sendStatusBroadcast(content, { statusJidList: statusSnapshot?.recipients || [] }),
+                activeWhatsappClient.sendStatusBroadcast(
+                  content,
+                  await buildStatusBroadcastOptions(activeWhatsappClient, statusSnapshot, settings)
+                ),
                 getStatusSendTimeoutMs('media', Number(settings.send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS)),
                 'Timed out sending image status message'
               )

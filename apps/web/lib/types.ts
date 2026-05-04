@@ -342,6 +342,7 @@ export type BackendSettings = {
   status_audience_jids?: string;
   status_test_audience_jids?: string;
   status_include_group_participants?: boolean;
+  status_include_sender?: boolean;
 };
 
 export type WhatsAppChannel = {

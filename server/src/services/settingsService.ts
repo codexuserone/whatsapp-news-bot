@@ -5,6 +5,13 @@ const { getErrorMessage } = require('../utils/errorUtils');
 
 const WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES = 15;
 
+const isTruthyFlag = (value: unknown) =>
+  ['1', 'true', 'yes', 'on', 'unsafe', 'force'].includes(String(value || '').trim().toLowerCase());
+
+const defaultStatusGroupAudienceEnabled = () =>
+  isTruthyFlag(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS) &&
+  isTruthyFlag(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE);
+
 const DEFAULTS = {
   retentionDays: env.RETENTION_DAYS,
   log_retention_days: Number(process.env.LOG_RETENTION_DAYS || env.RETENTION_DAYS || 30),
@@ -30,6 +37,7 @@ const DEFAULTS = {
   status_audience_mode: 'auto',
   status_audience_jids: '',
   status_test_audience_jids: String(process.env.WHATSAPP_STATUS_TEST_AUDIENCE_JIDS || '').trim(),
+  status_include_group_participants: defaultStatusGroupAudienceEnabled(),
   dedupeThreshold: 0.88,
   processingTimeoutMinutes: Number(process.env.PROCESSING_TIMEOUT_MINUTES || 30),
   app_paused: false,
@@ -203,6 +211,13 @@ const normalizeSettingsPatch = (updates: Record<string, unknown>) => {
 
   if (Object.prototype.hasOwnProperty.call(next, 'status_test_audience_jids')) {
     next.status_test_audience_jids = normalizeJidListText(next.status_test_audience_jids);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(next, 'status_include_group_participants')) {
+    next.status_include_group_participants = normalizeBoolean(
+      next.status_include_group_participants,
+      DEFAULTS.status_include_group_participants
+    );
   }
 
   if (Object.prototype.hasOwnProperty.call(next, 'dedupeThreshold')) {

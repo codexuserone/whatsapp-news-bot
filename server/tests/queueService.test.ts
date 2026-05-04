@@ -563,6 +563,22 @@ describe('queueService __testUtils', () => {
     }
   });
 
+  it('allows group participant status snapshots when the snapshot says group audience was enabled', () => {
+    expect(() =>
+      testUtils.assertUsableStatusAudience({
+        recipients: ['972501234567@s.whatsapp.net'],
+        groupAudienceAllowed: true,
+        sources: {
+          groupMetadata: 2,
+          env: 0,
+          activeIndividualTargets: 0,
+          recentSuccessfulDirectRecipients: 0,
+          lidMappings: 1
+        }
+      })
+    ).not.toThrow();
+  });
+
   it('allows status snapshots resolved from private contacts', () => {
     expect(() =>
       testUtils.assertUsableStatusAudience({

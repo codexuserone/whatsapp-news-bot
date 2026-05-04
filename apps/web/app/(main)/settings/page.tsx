@@ -48,7 +48,8 @@ const schema = z.object({
   reconcile_queue_lookback_hours: z.coerce.number().min(1).max(168),
   status_audience_mode: z.enum(['auto', 'explicit']).default('auto'),
   status_audience_jids: z.string().max(12000).default(''),
-  status_test_audience_jids: z.string().max(12000).default('')
+  status_test_audience_jids: z.string().max(12000).default(''),
+  status_include_group_participants: z.boolean().default(true)
 }).superRefine((value, ctx) => {
   if (value.post_send_correction_window_minutes < value.post_send_edit_window_minutes) {
     ctx.addIssue({
@@ -113,7 +114,8 @@ const toSettingsFormValues = (settings?: Partial<BackendSettings> | null): Setti
   reconcile_queue_lookback_hours: Number(settings?.reconcile_queue_lookback_hours ?? 12),
   status_audience_mode: settings?.status_audience_mode === 'explicit' ? 'explicit' : 'auto',
   status_audience_jids: String(settings?.status_audience_jids || ''),
-  status_test_audience_jids: String(settings?.status_test_audience_jids || '')
+  status_test_audience_jids: String(settings?.status_test_audience_jids || ''),
+  status_include_group_participants: settings?.status_include_group_participants !== false
 });
 
 const SettingsPage = () => {
@@ -485,6 +487,26 @@ const SettingsPage = () => {
                     {...form.register('status_audience_jids')}
                   />
                   <p className="text-xs text-muted-foreground">One phone number per line, or comma separated.</p>
+                </div>
+              ) : null}
+              {statusAudienceMode === 'auto' ? (
+                <div className="flex items-center justify-between gap-3 rounded-lg border bg-background/40 p-4">
+                  <div>
+                    <p className="text-sm font-medium">Include Synced Group Members</p>
+                    <p className="text-xs text-muted-foreground">
+                      Uses people from synced WhatsApp groups as production Status viewers.
+                    </p>
+                  </div>
+                  <Controller
+                    control={form.control}
+                    name="status_include_group_participants"
+                    render={({ field }) => (
+                      <Switch
+                        checked={field.value === true}
+                        onCheckedChange={(checked) => field.onChange(checked === true)}
+                      />
+                    )}
+                  />
                 </div>
               ) : null}
             </div>

@@ -103,7 +103,8 @@ const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undef
     throw badRequest('No fresh status recipients are available for this status send.');
   }
   const privateSourceCount = getStatusAudiencePrivateSourceCount(snapshot);
-  if (getStatusAudienceGroupSourceCount(snapshot) > 0 && privateSourceCount <= 0 && !isGroupStatusAudienceAllowed()) {
+  const groupAudienceAllowed = snapshot?.groupAudienceAllowed === true || isGroupStatusAudienceAllowed();
+  if (getStatusAudienceGroupSourceCount(snapshot) > 0 && privateSourceCount <= 0 && !groupAudienceAllowed) {
     throw badRequest('WhatsApp Status requires explicit/private recipients; group participant-derived recipients are not safe for Status delivery.');
   }
   const lidCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@lid')).length;

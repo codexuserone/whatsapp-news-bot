@@ -118,4 +118,14 @@ describe('whatsapp route test-send logging resolution', () => {
       else process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE = originalAllow;
     }
   });
+
+  it('allows group-derived status audiences when the snapshot says group audience was enabled', () => {
+    expect(() =>
+      testUtils.assertUsableStatusAudience({
+        recipients: ['972501234567@s.whatsapp.net'],
+        groupAudienceAllowed: true,
+        sources: { groupMetadata: 1, env: 0, activeIndividualTargets: 0, recentSuccessfulDirectRecipients: 0, lidMappings: 1 }
+      })
+    ).not.toThrow();
+  });
 });

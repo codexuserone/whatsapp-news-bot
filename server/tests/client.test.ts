@@ -367,6 +367,50 @@ describe('WhatsAppClient', () => {
         }
     });
 
+    it('uses group metadata for status audience when the caller explicitly enables it', async () => {
+        const originalInclude = process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS;
+        const originalAllow = process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
+        delete process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS;
+        delete process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
+
+        const groupFetchAllParticipating: any = jest.fn(async () => ({
+            '120363407220244757@g.us': {
+                id: '120363407220244757@g.us',
+                subject: 'Test',
+                size: 2,
+                participants: [
+                    { id: '16465527019@s.whatsapp.net' },
+                    { id: '19144477725@s.whatsapp.net' }
+                ]
+            }
+        }));
+
+        client.socket = {
+            user: { id: '16465527019:55@s.whatsapp.net' },
+            groupFetchAllParticipating
+        };
+        client.meJid = '16465527019:55@s.whatsapp.net';
+
+        try {
+            const audience = await client.getStatusAudience({ sampleSize: 10, includeGroupParticipants: true } as any);
+
+            expect(groupFetchAllParticipating).toHaveBeenCalled();
+            expect(audience.sample).toEqual(['19144477725@s.whatsapp.net']);
+            expect(audience.sources.groupMetadata).toBe(1);
+        } finally {
+            if (originalInclude === undefined) {
+                delete process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS;
+            } else {
+                process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS = originalInclude;
+            }
+            if (originalAllow === undefined) {
+                delete process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
+            } else {
+                process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE = originalAllow;
+            }
+        }
+    });
+
     it('should send newsletter image media with media_id and plaintext mediatype attrs', async () => {
         const originalFetch = global.fetch;
         const sendNode: any = jest.fn(async () => undefined);

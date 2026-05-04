@@ -31,7 +31,8 @@ const newsletterMediaPatchContext = new AsyncLocalStorage();
 
 const isTruthyEnvFlag = (value: unknown) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 
-const isGroupMetadataStatusAudienceEnabled = () =>
+const isGroupMetadataStatusAudienceEnabled = (override?: boolean) =>
+  typeof override === 'boolean' ? override :
   isTruthyEnvFlag(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS) &&
   ['unsafe', 'force'].includes(
     String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || '')
@@ -1233,7 +1234,7 @@ class WhatsAppClient {
    * without it, the status may only be visible to a random subset of contacts or
    * silently fail for most recipients.
    */
-  private resolveStatusAudience(): {
+  private resolveStatusAudience(options?: { includeGroupParticipants?: boolean }): {
     participants: string[];
     sources: StatusAudienceSources;
     warnings: string[];
@@ -1289,7 +1290,7 @@ class WhatsAppClient {
         addCandidate(chat?.id || chat?.jid, 'storeChats');
       }
 
-      if (isGroupMetadataStatusAudienceEnabled()) {
+      if (isGroupMetadataStatusAudienceEnabled(options?.includeGroupParticipants)) {
         for (const raw of this.groupMetadataCache.values()) {
           const participantsRaw = Array.isArray((raw as { participants?: unknown[] })?.participants)
             ? (raw as { participants?: unknown[] }).participants || []
@@ -1337,13 +1338,13 @@ class WhatsAppClient {
     return { participants: resolved.filter((participant) => participant !== selfJid), sources, warnings, selfJid };
   }
 
-  private async resolveStatusAudienceWithLidMappings(): Promise<{
+  private async resolveStatusAudienceWithLidMappings(options?: { includeGroupParticipants?: boolean }): Promise<{
     participants: string[];
     sources: StatusAudienceSources;
     warnings: string[];
     selfJid: string | null;
   }> {
-    if (isGroupMetadataStatusAudienceEnabled() && this.socket) {
+    if (isGroupMetadataStatusAudienceEnabled(options?.includeGroupParticipants) && this.socket) {
       try {
         const groups = await this.getGroups();
         const hasParticipantMetadata = Array.from(this.groupMetadataCache.values()).some((raw) =>
@@ -1367,7 +1368,7 @@ class WhatsAppClient {
       }
     }
 
-    const audience = this.resolveStatusAudience();
+    const audience = this.resolveStatusAudience(options);
     const participants = new Set(audience.participants);
     const lidRecipients = audience.participants.filter((participant) => participant.endsWith('@lid'));
     const lidMapping = (this.socket as any)?.signalRepository?.lidMapping;
@@ -1419,8 +1420,8 @@ class WhatsAppClient {
     };
   }
 
-  async getStatusParticipants(): Promise<string[]> {
-    const audience = await this.resolveStatusAudienceWithLidMappings();
+  async getStatusParticipants(options?: { includeGroupParticipants?: boolean }): Promise<string[]> {
+    const audience = await this.resolveStatusAudienceWithLidMappings(options);
     logger.debug(
       {
         participantCount: audience.participants.length,
@@ -1432,8 +1433,8 @@ class WhatsAppClient {
     return audience.participants;
   }
 
-  async getStatusAudience(options?: { sampleSize?: number }) {
-    const audience = await this.resolveStatusAudienceWithLidMappings();
+  async getStatusAudience(options?: { sampleSize?: number; includeGroupParticipants?: boolean }) {
+    const audience = await this.resolveStatusAudienceWithLidMappings(options);
     const sampleSize = Math.max(1, Math.min(Number(options?.sampleSize || 25), 200));
     return {
       participantCount: audience.participants.length,

@@ -23,6 +23,7 @@ type StatusAudienceSnapshot = {
   };
   warnings: string[];
   stale?: boolean;
+  groupAudienceAllowed?: boolean;
 };
 
 type StatusAudienceSources = StatusAudienceSnapshot['sources'];
@@ -33,8 +34,8 @@ type RefreshResult = StatusAudienceSnapshot & {
 
 type StatusAudienceClient = {
   getStatus?: () => { status?: string };
-  getStatusParticipants?: () => string[] | Promise<string[]>;
-  getStatusAudience?: (options?: { sampleSize?: number }) => Promise<{
+  getStatusParticipants?: (options?: { includeGroupParticipants?: boolean }) => string[] | Promise<string[]>;
+  getStatusAudience?: (options?: { sampleSize?: number; includeGroupParticipants?: boolean }) => Promise<{
     participantCount?: number;
     sample?: string[];
     selfJid?: string | null;
@@ -122,6 +123,18 @@ const isGroupMetadataStatusAudienceEnabled = () =>
       .toLowerCase()
   );
 
+const getGroupParticipantAudienceSetting = async () => {
+  try {
+    const settings = await settingsService.getSettings();
+    if (Object.prototype.hasOwnProperty.call(settings || {}, 'status_include_group_participants')) {
+      return settings?.status_include_group_participants === true;
+    }
+  } catch (error) {
+    logger.warn({ error: getErrorMessage(error) }, 'Failed to read Status group audience setting');
+  }
+  return isGroupMetadataStatusAudienceEnabled();
+};
+
 const getExplicitEnvAudienceRecipients = () =>
   Array.from(
     new Set(
@@ -188,14 +201,17 @@ const mergeSources = (...sourceSets: Array<Partial<StatusAudienceSources> | null
   return merged;
 };
 
-const getTrustedAudienceSignalCount = (sources: Partial<StatusAudienceSources> | null | undefined) =>
+const getTrustedAudienceSignalCount = (
+  sources: Partial<StatusAudienceSources> | null | undefined,
+  options?: { includeGroupParticipants?: boolean }
+) =>
   Math.max(0, Math.floor(Number(sources?.contactsCache || 0))) +
   Math.max(0, Math.floor(Number(sources?.storeContacts || 0))) +
   Math.max(0, Math.floor(Number(sources?.storeChats || 0))) +
   Math.max(0, Math.floor(Number(sources?.env || 0))) +
   Math.max(0, Math.floor(Number(sources?.activeIndividualTargets || 0))) +
   Math.max(0, Math.floor(Number(sources?.recentSuccessfulDirectRecipients || 0))) +
-  (isGroupMetadataStatusAudienceEnabled()
+  (options?.includeGroupParticipants === true || isGroupMetadataStatusAudienceEnabled()
     ? Math.max(0, Math.floor(Number(sources?.groupMetadata || 0)))
     : 0);
 
@@ -212,12 +228,18 @@ const getExplicitAudienceSignalCount = (sources: Partial<StatusAudienceSources> 
   Math.max(0, Math.floor(Number(sources?.activeIndividualTargets || 0))) +
   Math.max(0, Math.floor(Number(sources?.recentSuccessfulDirectRecipients || 0)));
 
-const getNonEnvTrustedAudienceSignalCount = (sources: Partial<StatusAudienceSources> | null | undefined) =>
-  Math.max(0, getTrustedAudienceSignalCount(sources) - Math.max(0, Math.floor(Number(sources?.env || 0))));
+const getNonEnvTrustedAudienceSignalCount = (
+  sources: Partial<StatusAudienceSources> | null | undefined,
+  options?: { includeGroupParticipants?: boolean }
+) =>
+  Math.max(
+    0,
+    getTrustedAudienceSignalCount(sources, options) - Math.max(0, Math.floor(Number(sources?.env || 0)))
+  );
 
-const isEnvLimitedSnapshot = (snapshot: RefreshResult) =>
+const isEnvLimitedSnapshot = (snapshot: RefreshResult, options?: { includeGroupParticipants?: boolean }) =>
   Math.max(0, Math.floor(Number(snapshot.sources?.env || 0))) > 0 &&
-  getNonEnvTrustedAudienceSignalCount(snapshot.sources) <= 0;
+  getNonEnvTrustedAudienceSignalCount(snapshot.sources, options) <= 0;
 
 const ALLOW_UNMAPPED_LID_STATUS_AUDIENCE =
   String(process.env.WHATSAPP_STATUS_ALLOW_UNMAPPED_LID_AUDIENCE || '').trim().toLowerCase() === 'true';
@@ -258,13 +280,21 @@ const isLidHeavySnapshot = (snapshot: RefreshResult) => {
 
 const shouldTrustStoredSnapshot = (
   snapshot: RefreshResult,
-  options?: { allowEnvLimited?: boolean }
+  options?: { allowEnvLimited?: boolean; includeGroupParticipants?: boolean }
 ) => {
+  const includeGroupParticipants = options?.includeGroupParticipants === true;
   if (snapshot.participantCount <= 0) return false;
-  if (options?.allowEnvLimited === false && isEnvLimitedSnapshot(snapshot)) return false;
-  if (getTrustedAudienceSignalCount(snapshot.sources) <= 0) return false;
-  if (snapshot.participantCount <= 1 && getExplicitAudienceSignalCount(snapshot.sources) <= 0) return false;
+  if (options?.allowEnvLimited === false && isEnvLimitedSnapshot(snapshot, options)) return false;
+  if (getTrustedAudienceSignalCount(snapshot.sources, options) <= 0) return false;
   if (
+    snapshot.participantCount <= 1 &&
+    getExplicitAudienceSignalCount(snapshot.sources) <= 0 &&
+    !includeGroupParticipants
+  ) {
+    return false;
+  }
+  if (
+    !includeGroupParticipants &&
     !isGroupMetadataStatusAudienceEnabled() &&
     Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0))) > 0 &&
     getDirectAudienceSignalCount(snapshot.sources) <= 0
@@ -272,15 +302,16 @@ const shouldTrustStoredSnapshot = (
     return false;
   }
   if (
+    !includeGroupParticipants &&
     !isGroupMetadataStatusAudienceEnabled() &&
     Math.max(0, Math.floor(Number(snapshot.sources?.groupMetadata || 0))) > 0 &&
     getExplicitAudienceSignalCount(snapshot.sources) <= 0
   ) {
     return false;
   }
-  if (!isGroupMetadataStatusAudienceEnabled() && isGroupMetadataOnlySnapshot(snapshot)) return false;
+  if (!includeGroupParticipants && !isGroupMetadataStatusAudienceEnabled() && isGroupMetadataOnlySnapshot(snapshot)) return false;
   if (isGroupMetadataDominatedSnapshot(snapshot) && isLidHeavySnapshot(snapshot)) return false;
-  if (isLidHeavySnapshot(snapshot) && getTrustedAudienceSignalCount(snapshot.sources) === 0) return false;
+  if (isLidHeavySnapshot(snapshot) && getTrustedAudienceSignalCount(snapshot.sources, options) === 0) return false;
   return true;
 };
 
@@ -356,13 +387,13 @@ const shouldPreserveStoredSnapshot = (
   stored: RefreshResult,
   freshParticipantCount: number,
   freshSources: Partial<StatusAudienceSources> | null | undefined,
-  options?: { allowEnvLimited?: boolean }
+  options?: { allowEnvLimited?: boolean; includeGroupParticipants?: boolean }
 ) => {
   if (!stored.recipients.length) return false;
   if (!shouldTrustStoredSnapshot(stored, options)) return false;
   if (
     stored.participantCount < MIN_PRESERVED_SNAPSHOT_PARTICIPANTS &&
-    getTrustedAudienceSignalCount(stored.sources) <= 0
+    getTrustedAudienceSignalCount(stored.sources, options) <= 0
   ) {
     return false;
   }
@@ -371,7 +402,7 @@ const shouldPreserveStoredSnapshot = (
   const snapshotAgeMs = Date.now() - storedRefreshedAtMs;
   if (snapshotAgeMs < 0 || snapshotAgeMs > MAX_PRESERVED_SNAPSHOT_AGE_MS) return false;
 
-  const warmSignals = getTrustedAudienceSignalCount(freshSources);
+  const warmSignals = getTrustedAudienceSignalCount(freshSources, options);
   if (warmSignals > 0) return false;
 
   const maxColdStartParticipants = Math.max(
@@ -523,6 +554,7 @@ const refreshStatusRecipients = async (
 ): Promise<RefreshResult> => {
   const supabase = getSupabaseClient();
   const explicitAudience = await getConfiguredExplicitAudienceRecipients();
+  const includeGroupParticipants = await getGroupParticipantAudienceSetting();
   const explicitAudienceRecipients = explicitAudience.recipients;
   if (!supabase) {
     if (explicitAudienceRecipients.length) {
@@ -535,7 +567,8 @@ const refreshStatusRecipients = async (
           ...emptySources(),
           env: explicitAudienceRecipients.length
         },
-        warnings: [`Status audience is limited by ${explicitAudience.source}.`]
+        warnings: [`Status audience is limited by ${explicitAudience.source}.`],
+        groupAudienceAllowed: includeGroupParticipants
       };
       cacheSnapshot(result);
       return result;
@@ -554,7 +587,8 @@ const refreshStatusRecipients = async (
       sample: [],
       refreshedAt: null,
       sources: emptySources(),
-      warnings: ['Database not available']
+      warnings: ['Database not available'],
+      groupAudienceAllowed: includeGroupParticipants
     };
   }
 
@@ -582,7 +616,8 @@ const refreshStatusRecipients = async (
       sample: buildSample(explicitAudienceRecipients, options?.sampleSize),
       refreshedAt,
       sources,
-      warnings
+      warnings,
+      groupAudienceAllowed: includeGroupParticipants
     };
     cacheSnapshot(result);
     return result;
@@ -609,14 +644,19 @@ const refreshStatusRecipients = async (
       sample: [],
       refreshedAt: null,
       sources: emptySources(),
-      warnings: [`Database read failed: ${getErrorMessage(dbError)}`]
+      warnings: [`Database read failed: ${getErrorMessage(dbError)}`],
+      groupAudienceAllowed: includeGroupParticipants
     };
   }
+  stored.groupAudienceAllowed = includeGroupParticipants;
 
   const connectionStatus = String(whatsappClient?.getStatus?.()?.status || '').trim().toLowerCase();
   if (!whatsappClient || connectionStatus !== 'connected') {
     const warnings = [...stored.warnings];
-    if (!shouldTrustStoredSnapshot(stored, { allowEnvLimited: explicitAudience.source !== 'auto' })) {
+    if (!shouldTrustStoredSnapshot(stored, {
+      allowEnvLimited: explicitAudience.source !== 'auto',
+      includeGroupParticipants
+    })) {
       return {
         participantCount: 0,
         recipients: [],
@@ -627,7 +667,8 @@ const refreshStatusRecipients = async (
           ...warnings,
           'WhatsApp is not connected and the stored Status audience is not safe to use.'
         ]),
-        stale: true
+        stale: true,
+        groupAudienceAllowed: includeGroupParticipants
       };
     }
     warnings.push('WhatsApp is not connected, using the last stored status audience snapshot.');
@@ -639,10 +680,10 @@ const refreshStatusRecipients = async (
   }
 
   const audienceOptions = Number.isFinite(options?.sampleSize)
-    ? { sampleSize: Number(options?.sampleSize) }
-    : undefined;
+    ? { sampleSize: Number(options?.sampleSize), includeGroupParticipants }
+    : { includeGroupParticipants };
   const [participantsRaw, audienceRaw, recentDirectRecipients, activeIndividualTargetRecipients] = await Promise.all([
-    Promise.resolve(whatsappClient.getStatusParticipants?.() || []),
+    Promise.resolve(whatsappClient.getStatusParticipants?.({ includeGroupParticipants }) || []),
     Promise.resolve(whatsappClient.getStatusAudience?.(audienceOptions) || null),
     USE_RECENT_DIRECT_RECIPIENTS ? getRecentSuccessfulDirectRecipients(supabase).catch(() => []) : Promise.resolve([]),
     getActiveIndividualTargetRecipients(supabase).catch(() => [])
@@ -688,6 +729,7 @@ const refreshStatusRecipients = async (
     warnings.push('Recent direct recipients are ignored unless WHATSAPP_STATUS_USE_RECENT_DIRECT_RECIPIENTS=true.');
   }
   if (
+    !includeGroupParticipants &&
     !isGroupMetadataStatusAudienceEnabled() &&
     Math.max(0, Math.floor(Number(sources.groupMetadata || 0))) > 0 &&
     getDirectAudienceSignalCount(sources) <= 0
@@ -715,7 +757,10 @@ const refreshStatusRecipients = async (
   }
   const finalWarnings = cleanLidMappingWarningsForFinalAudience(warnings, participants);
 
-  if (shouldPreserveStoredSnapshot(stored, participants.length, sources, { allowEnvLimited: explicitAudience.source !== 'auto' })) {
+  if (shouldPreserveStoredSnapshot(stored, participants.length, sources, {
+    allowEnvLimited: explicitAudience.source !== 'auto',
+    includeGroupParticipants
+  })) {
     const preservedRecipients = Array.from(new Set([...stored.recipients, ...participants])).sort();
     const preservedSources = mergeSources(stored.sources, sources);
     const preservedWarnings = uniqueStrings([
@@ -742,7 +787,8 @@ const refreshStatusRecipients = async (
       sample: buildSample(preservedRecipients, options?.sampleSize),
       refreshedAt,
       sources: preservedSources,
-      warnings: preservedWarnings
+      warnings: preservedWarnings,
+      groupAudienceAllowed: includeGroupParticipants
     };
     cacheSnapshot(result);
     return result;
@@ -765,7 +811,8 @@ const refreshStatusRecipients = async (
     sample: buildSample(participants, options?.sampleSize),
     refreshedAt,
     sources,
-    warnings: participants.length ? finalWarnings : [...finalWarnings, 'No status recipients resolved from the current audience sources.']
+    warnings: participants.length ? finalWarnings : [...finalWarnings, 'No status recipients resolved from the current audience sources.'],
+    groupAudienceAllowed: includeGroupParticipants
   };
   if (result.recipients.length) {
     cacheSnapshot(result);
@@ -800,6 +847,7 @@ const ensureFreshStatusRecipients = async (
   options?: { maxAgeMinutes?: number; sampleSize?: number }
 ): Promise<RefreshResult> => {
   const explicitAudience = await getConfiguredExplicitAudienceRecipients();
+  const includeGroupParticipants = await getGroupParticipantAudienceSetting();
   if (explicitAudience.recipients.length) {
     return refreshStatusRecipients(whatsappClient, options);
   }
@@ -821,12 +869,16 @@ const ensureFreshStatusRecipients = async (
     if (fallback) return fallback;
     return refreshStatusRecipients(whatsappClient, options);
   }
+  stored.groupAudienceAllowed = includeGroupParticipants;
 
   const maxAgeMinutes = Math.max(1, Math.min(Math.floor(Number(options?.maxAgeMinutes || 10)), 120));
   const refreshedAtMs = stored.refreshedAt ? Date.parse(stored.refreshedAt) : Number.NaN;
   const isFresh = Number.isFinite(refreshedAtMs) && Date.now() - refreshedAtMs <= maxAgeMinutes * 60 * 1000;
 
-  if (isFresh && shouldTrustStoredSnapshot(stored, { allowEnvLimited: explicitAudience.source !== 'auto' })) {
+  if (isFresh && shouldTrustStoredSnapshot(stored, {
+    allowEnvLimited: explicitAudience.source !== 'auto',
+    includeGroupParticipants
+  })) {
     cacheSnapshot(stored);
     return stored;
   }
@@ -844,7 +896,7 @@ const ensureFreshStatusRecipients = async (
     // Accept stale DB snapshot (up to 60 min) when refresh fails
     const extendedMaxAgeMs = MAX_IN_MEMORY_SNAPSHOT_AGE_MS;
     const isExtendedFresh = Number.isFinite(refreshedAtMs) && Date.now() - refreshedAtMs <= extendedMaxAgeMs;
-    if (isExtendedFresh && stored.recipients.length && shouldTrustStoredSnapshot(stored)) {
+    if (isExtendedFresh && stored.recipients.length && shouldTrustStoredSnapshot(stored, { includeGroupParticipants })) {
       logger.info(
         { snapshotAgeMinutes: Math.round((Date.now() - refreshedAtMs) / 60000), recipientCount: stored.recipients.length },
         'Using stale database audience snapshot after refresh failure'
@@ -865,20 +917,26 @@ const ensureFreshStatusRecipients = async (
 
 const getStatusRecipientSnapshot = async (options?: { sampleSize?: number }): Promise<StatusAudienceSnapshot> => {
   const supabase = getSupabaseClient();
+  const includeGroupParticipants = await getGroupParticipantAudienceSetting();
   if (!supabase) {
     return {
       participantCount: 0,
       sample: [],
       refreshedAt: null,
       sources: emptySources(),
-      warnings: ['Database not available']
+      warnings: ['Database not available'],
+      groupAudienceAllowed: includeGroupParticipants
     };
   }
 
   try {
     const explicitAudience = await getConfiguredExplicitAudienceRecipients();
     const stored = await getStoredRecipients(supabase, options?.sampleSize, { includeRecipients: false });
-    if (!shouldTrustStoredSnapshot(stored as RefreshResult, { allowEnvLimited: explicitAudience.source !== 'auto' })) {
+    stored.groupAudienceAllowed = includeGroupParticipants;
+    if (!shouldTrustStoredSnapshot(stored as RefreshResult, {
+      allowEnvLimited: explicitAudience.source !== 'auto',
+      includeGroupParticipants
+    })) {
       return {
         participantCount: 0,
         sample: [],
@@ -888,7 +946,8 @@ const getStatusRecipientSnapshot = async (options?: { sampleSize?: number }): Pr
           ...stored.warnings,
           'Stored Status viewers are not safe to use. Reconnect WhatsApp or add private Status recipient phone numbers in Settings.'
         ]),
-        stale: true
+        stale: true,
+        groupAudienceAllowed: includeGroupParticipants
       };
     }
     return {
@@ -896,7 +955,8 @@ const getStatusRecipientSnapshot = async (options?: { sampleSize?: number }): Pr
       sample: stored.sample,
       refreshedAt: stored.refreshedAt,
       sources: stored.sources,
-      warnings: stored.warnings
+      warnings: stored.warnings,
+      groupAudienceAllowed: includeGroupParticipants
     };
   } catch (error) {
     const fallback = getInMemoryFallback(`Database read failed (${getErrorMessage(error)})`);
@@ -907,7 +967,8 @@ const getStatusRecipientSnapshot = async (options?: { sampleSize?: number }): Pr
         refreshedAt: fallback.refreshedAt,
         sources: fallback.sources,
         warnings: fallback.warnings,
-        stale: true
+        stale: true,
+        groupAudienceAllowed: fallback.groupAudienceAllowed ?? includeGroupParticipants
       };
     }
     return {
@@ -916,7 +977,8 @@ const getStatusRecipientSnapshot = async (options?: { sampleSize?: number }): Pr
       refreshedAt: null,
       sources: emptySources(),
       warnings: [`Database read failed: ${getErrorMessage(error)}`],
-      stale: true
+      stale: true,
+      groupAudienceAllowed: includeGroupParticipants
     };
   }
 };

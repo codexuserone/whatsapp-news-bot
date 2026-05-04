@@ -311,6 +311,7 @@ export type WhatsAppStatusAudience = {
   };
   warnings?: string[];
   stale?: boolean;
+  groupAudienceAllowed?: boolean;
 };
 
 export type BackendSettings = {
@@ -337,6 +338,7 @@ export type BackendSettings = {
   status_audience_mode?: 'auto' | 'explicit' | string;
   status_audience_jids?: string;
   status_test_audience_jids?: string;
+  status_include_group_participants?: boolean;
 };
 
 export type WhatsAppChannel = {

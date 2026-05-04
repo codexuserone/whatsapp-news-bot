@@ -196,7 +196,8 @@ describe('statusAudienceService', () => {
         __testUtils.clearInMemoryStatusAudienceCache();
         getSettingsMock.mockResolvedValue({
             status_audience_mode: 'auto',
-            status_audience_jids: ''
+            status_audience_jids: '',
+            status_include_group_participants: false
         });
         delete process.env.WHATSAPP_STATUS_AUDIENCE_JIDS;
         delete process.env.WHATSAPP_STATUS_JID_LIST;
@@ -821,6 +822,48 @@ describe('statusAudienceService', () => {
         expect(result.sources.lidMappings).toBe(1);
         expect(result.warnings.some((warning: string) => warning.includes('resolved only from group participants'))).toBe(true);
         expect(tables.status_recipients).toHaveLength(0);
+    });
+
+    it('uses saved group-audience setting when refreshing production status recipients', async () => {
+        const { supabase, tables } = buildSupabaseMock();
+        getSupabaseClientMock.mockReturnValue(supabase);
+        getSettingsMock.mockResolvedValue({
+            status_audience_mode: 'auto',
+            status_audience_jids: '',
+            status_include_group_participants: true
+        });
+
+        const getStatusParticipants = jest.fn(() => ['972501234567@s.whatsapp.net']);
+        const getStatusAudience = jest.fn(() => ({
+            participantCount: 1,
+            sample: ['972501234567@s.whatsapp.net'],
+            selfJid: '16465527019@s.whatsapp.net',
+            sources: {
+                contactsCache: 0,
+                storeContacts: 0,
+                storeChats: 0,
+                groupMetadata: 1,
+                env: 0,
+                me: 1,
+                lidMappings: 0
+            },
+            warnings: []
+        }));
+
+        const result = await refreshStatusRecipients(
+            {
+                getStatus: () => ({ status: 'connected' }),
+                getStatusParticipants,
+                getStatusAudience
+            },
+            { sampleSize: 10 }
+        );
+
+        expect(getStatusParticipants as any).toHaveBeenCalledWith({ includeGroupParticipants: true });
+        expect(getStatusAudience as any).toHaveBeenCalledWith({ sampleSize: 10, includeGroupParticipants: true });
+        expect(result.groupAudienceAllowed).toBe(true);
+        expect(result.recipients).toEqual(['972501234567@s.whatsapp.net']);
+        expect(tables.status_recipients.map((row) => row.recipient_jid)).toEqual(['972501234567@s.whatsapp.net']);
     });
 
     it('reuses a fresh stored snapshot without refreshing again', async () => {

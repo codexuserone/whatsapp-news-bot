@@ -102,6 +102,16 @@ describe('whatsapp route test-send logging resolution', () => {
     ).toThrow('explicit/private recipients');
   });
 
+  it('allows all-LID status audiences when production group audience is enabled', () => {
+    expect(() =>
+      testUtils.assertUsableStatusAudience({
+        recipients: ['103140015788103@lid', '103140015788104@lid'],
+        groupAudienceAllowed: true,
+        sources: { groupMetadata: 2, env: 0, activeIndividualTargets: 0, recentSuccessfulDirectRecipients: 0, lidMappings: 0 }
+      })
+    ).not.toThrow();
+  });
+
   it('blocks group-derived status audiences even after LID phone mappings', () => {
     expect(() =>
       testUtils.assertUsableStatusAudience({

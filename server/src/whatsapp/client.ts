@@ -375,6 +375,7 @@ const sanitizeStatusBroadcastOptions = (
 
   delete nextOptions.includeSender;
   delete nextOptions.includeSelf;
+  delete nextOptions.allowUnmappedLidRecipients;
 
   if (isStatusMediaContent(content)) {
     for (const key of ['backgroundColor', 'font']) {
@@ -389,15 +390,20 @@ const sanitizeStatusBroadcastOptions = (
 };
 
 const preferDeliverableStatusRecipients = (
-  recipients: string[]
+  recipients: string[],
+  options: { allowLidRecipients?: boolean } = {}
 ): { recipients: string[]; droppedLidCount: number } => {
   const normalizedRecipients = Array.from(
     new Set(
       (Array.isArray(recipients) ? recipients : [])
         .map((recipient) => normalizeStatusAudienceJid(recipient))
         .filter(Boolean)
-    )
+      )
   );
+
+  if (options.allowLidRecipients) {
+    return { recipients: normalizedRecipients, droppedLidCount: 0 };
+  }
 
   const phoneRecipients = normalizedRecipients.filter((recipient) => recipient.endsWith('@s.whatsapp.net'));
   if (!phoneRecipients.length) {
@@ -4484,8 +4490,16 @@ class WhatsAppClient {
       const dedupedExplicit = Array.from(new Set(explicitStatusJids));
 
       const resolvedAudience = await this.resolveStatusAudienceWithLidMappings();
+      const allowLidRecipients =
+        (options as { allowUnmappedLidRecipients?: unknown }).allowUnmappedLidRecipients === true ||
+        (
+          !dedupedExplicit.length &&
+          isGroupMetadataStatusAudienceEnabled() &&
+          Math.max(0, Math.floor(Number(resolvedAudience.sources?.groupMetadata || 0))) > 0
+        );
       const preferredAudience = preferDeliverableStatusRecipients(
-        dedupedExplicit.length ? dedupedExplicit : resolvedAudience.participants
+        dedupedExplicit.length ? dedupedExplicit : resolvedAudience.participants,
+        { allowLidRecipients }
       );
       const candidateStatusJidList = preferredAudience.recipients;
 

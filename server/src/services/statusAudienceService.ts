@@ -244,8 +244,12 @@ const isEnvLimitedSnapshot = (snapshot: RefreshResult, options?: { includeGroupP
 const ALLOW_UNMAPPED_LID_STATUS_AUDIENCE =
   String(process.env.WHATSAPP_STATUS_ALLOW_UNMAPPED_LID_AUDIENCE || '').trim().toLowerCase() === 'true';
 
-const shouldDropImplicitLidRecipients = (sources: Partial<StatusAudienceSources> | null | undefined) => {
+const shouldDropImplicitLidRecipients = (
+  sources: Partial<StatusAudienceSources> | null | undefined,
+  options?: { includeGroupParticipants?: boolean }
+) => {
   if (ALLOW_UNMAPPED_LID_STATUS_AUDIENCE) return false;
+  if (options?.includeGroupParticipants === true || isGroupMetadataStatusAudienceEnabled()) return false;
   const groupSignals = Math.max(0, Math.floor(Number(sources?.groupMetadata || 0)));
   if (groupSignals <= 0) return false;
   return getExplicitAudienceSignalCount(sources) <= 0;
@@ -310,7 +314,7 @@ const shouldTrustStoredSnapshot = (
     return false;
   }
   if (!includeGroupParticipants && !isGroupMetadataStatusAudienceEnabled() && isGroupMetadataOnlySnapshot(snapshot)) return false;
-  if (isGroupMetadataDominatedSnapshot(snapshot) && isLidHeavySnapshot(snapshot)) return false;
+  if (!includeGroupParticipants && isGroupMetadataDominatedSnapshot(snapshot) && isLidHeavySnapshot(snapshot)) return false;
   if (isLidHeavySnapshot(snapshot) && getTrustedAudienceSignalCount(snapshot.sources, options) === 0) return false;
   return true;
 };
@@ -742,7 +746,7 @@ const refreshStatusRecipients = async (
       );
     }
   }
-  if (shouldDropImplicitLidRecipients(sources)) {
+  if (shouldDropImplicitLidRecipients(sources, { includeGroupParticipants })) {
     const beforeDrop = participants.length;
     participants = participants.filter((recipient) => !recipient.endsWith('@lid'));
     const dropped = beforeDrop - participants.length;

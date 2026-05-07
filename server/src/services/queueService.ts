@@ -261,10 +261,10 @@ const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undef
   }
   const lidCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@lid')).length;
   const phoneCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@s.whatsapp.net')).length;
-  if (lidCount > 0 && phoneCount === 0 && getStatusAudienceExplicitSourceCount(snapshot) <= 0) {
+  if (lidCount > 0 && phoneCount === 0 && getStatusAudienceExplicitSourceCount(snapshot) <= 0 && !groupAudienceAllowed) {
     throw new Error('Status audience only contains implicit LID recipients; refusing to mark a Status send as sent.');
   }
-  if (recipients.length <= 1 && privateSourceCount <= 0 && getStatusAudienceMappedSourceCount(snapshot) <= 0) {
+  if (recipients.length <= 1 && privateSourceCount <= 0 && getStatusAudienceMappedSourceCount(snapshot) <= 0 && !groupAudienceAllowed) {
     throw new Error('Status audience has no private viewers yet; refusing to mark a self-only Status send as sent.');
   }
 };
@@ -2394,16 +2394,20 @@ const resolveStatusIncludeSender = async (settings?: Record<string, unknown> | n
 
 const buildStatusBroadcastOptions = async (
   whatsappClient: WhatsAppClient,
-  snapshot?: { recipients?: string[] } | null,
+  snapshot?: { recipients?: string[]; groupAudienceAllowed?: boolean } | null,
   settings?: Record<string, unknown> | null
 ) => {
   const statusSnapshot =
     snapshot || await ensureFreshStatusRecipients(whatsappClient, { maxAgeMinutes: 10, sampleSize: 25 });
   assertUsableStatusAudience(statusSnapshot);
-  return {
+  const options: Record<string, unknown> = {
     statusJidList: statusSnapshot.recipients || [],
     includeSender: await resolveStatusIncludeSender(settings)
   };
+  if (statusSnapshot.groupAudienceAllowed === true || isGroupStatusAudienceAllowed()) {
+    options.allowUnmappedLidRecipients = true;
+  }
+  return options;
 };
 
 const sendMessageWithTemplate = async (

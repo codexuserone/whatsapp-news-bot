@@ -1392,6 +1392,28 @@ describe('WhatsAppClient', () => {
         );
     });
 
+    it('should preserve LID recipients for an automatic production status audience', async () => {
+        const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-auto-status' } }));
+        client.socket = { sendMessage };
+
+        await client.sendStatusBroadcast(
+            { text: 'hello' },
+            {
+                statusJidList: ['103140015788103@lid', '972501234567@s.whatsapp.net'],
+                allowUnmappedLidRecipients: true
+            }
+        );
+
+        expect(sendMessage).toHaveBeenCalledWith(
+            'status@broadcast',
+            { text: 'hello' },
+            expect.objectContaining({
+                statusJidList: ['103140015788103@lid', '972501234567@s.whatsapp.net']
+            })
+        );
+        expect(sendMessage.mock.calls[0]?.[2]).not.toHaveProperty('allowUnmappedLidRecipients');
+    });
+
     it('should preserve numeric @lid recipients in explicit statusJidList', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-4' } }));
         client.socket = { sendMessage };

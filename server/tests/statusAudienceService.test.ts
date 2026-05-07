@@ -549,7 +549,7 @@ describe('statusAudienceService', () => {
         expect(result.sources.activeIndividualTargets).toBe(1);
     });
 
-    it('uses group participant phone recipients only with an explicit unsafe override', async () => {
+    it('keeps group participant LID recipients with an explicit production override', async () => {
         process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS = 'true';
         process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE = 'unsafe';
         const { supabase, tables } = buildSupabaseMock();
@@ -578,11 +578,11 @@ describe('statusAudienceService', () => {
             { sampleSize: 10 }
         );
 
-        expect(result.recipients).toEqual(['15551234567@s.whatsapp.net', '19144477725@s.whatsapp.net']);
+        expect(result.recipients).toEqual(['103140015788103@lid', '15551234567@s.whatsapp.net', '19144477725@s.whatsapp.net']);
         expect(result.sources.groupMetadata).toBe(3);
         expect(result.warnings.some((warning: string) => warning.includes('resolved only from group participants'))).toBe(false);
-        expect(result.warnings.some((warning: string) => warning.includes('without phone-number mappings'))).toBe(false);
-        expect(result.warnings.some((warning: string) => warning.includes('Ignored 1 unresolved group-participant LID'))).toBe(true);
+        expect(result.warnings.some((warning: string) => warning.includes('without phone-number mappings'))).toBe(true);
+        expect(result.warnings.some((warning: string) => warning.includes('Ignored 1 unresolved group-participant LID'))).toBe(false);
         expect(tables.status_recipients.map((row) => row.recipient_jid).sort()).toEqual(result.recipients);
     });
 

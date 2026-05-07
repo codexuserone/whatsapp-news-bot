@@ -745,6 +745,22 @@ describe('queueService __testUtils', () => {
     ).toThrow('explicit/private recipients');
   });
 
+  it('allows all-LID status snapshots when production group audience is enabled', () => {
+    expect(() =>
+      testUtils.assertUsableStatusAudience({
+        recipients: ['103140015788103@lid', '103140015788104@lid'],
+        groupAudienceAllowed: true,
+        sources: {
+          groupMetadata: 2,
+          env: 0,
+          activeIndividualTargets: 0,
+          recentSuccessfulDirectRecipients: 0,
+          lidMappings: 0
+        }
+      })
+    ).not.toThrow();
+  });
+
   it('allows group participant status snapshots when production group audience is enabled', () => {
     const originalInclude = process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS;
     const originalAllow = process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;

@@ -135,20 +135,25 @@ const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undef
   const lidCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@lid')).length;
   const phoneCount = recipients.filter((recipient: unknown) => String(recipient || '').endsWith('@s.whatsapp.net')).length;
   if (
-    lidCount > 0 &&
-    phoneCount === 0 &&
-    getStatusAudienceExplicitSourceCount(snapshot) <= 0
-  ) {
+      lidCount > 0 &&
+      phoneCount === 0 &&
+      getStatusAudienceExplicitSourceCount(snapshot) <= 0 &&
+      !groupAudienceAllowed
+    ) {
     throw badRequest('Status viewers only contain unresolved linked-device identities. Add private Status recipient phone numbers in Settings or wait for WhatsApp sync to finish.');
   }
   if (
     recipients.length <= 1 &&
     privateSourceCount <= 0 &&
-    getStatusAudienceMappedSourceCount(snapshot) <= 0
+    getStatusAudienceMappedSourceCount(snapshot) <= 0 &&
+    !groupAudienceAllowed
   ) {
     throw badRequest('Status audience has no private viewers yet. Add or sync at least one private WhatsApp contact before sending Status.');
   }
 };
+
+const shouldAllowUnmappedStatusLids = (snapshot: Record<string, any> | null | undefined) =>
+  snapshot?.groupAudienceAllowed === true || isGroupStatusAudienceAllowed();
 
 const buildStatusAudienceResponse = (
   audience: Record<string, unknown>,
@@ -1710,7 +1715,13 @@ const whatsappRoutes = () => {
               'Timed out refreshing status audience'
             );
             assertUsableStatusAudience(snapshot);
-            statusOptions = { statusJidList: snapshot.recipients, includeSender: await resolveStatusIncludeSender() };
+            statusOptions = {
+              statusJidList: snapshot.recipients,
+              includeSender: await resolveStatusIncludeSender()
+            };
+            if (shouldAllowUnmappedStatusLids(snapshot)) {
+              statusOptions.allowUnmappedLidRecipients = true;
+            }
           }
           if (!requestedMediaType) {
             statusOptions = {
@@ -2046,6 +2057,9 @@ const whatsappRoutes = () => {
     const providedStatusFont = parseProvidedStatusFont(font);
     if (statusSnapshot.recipients.length) sendOptions.statusJidList = statusSnapshot.recipients;
     sendOptions.includeSender = await resolveStatusIncludeSender();
+    if (shouldAllowUnmappedStatusLids(statusSnapshot)) {
+      sendOptions.allowUnmappedLidRecipients = true;
+    }
     if (!requestedStatusMediaType && normalizedBackgroundColor) {
       sendOptions.backgroundColor = normalizedBackgroundColor.startsWith('#')
         ? normalizedBackgroundColor

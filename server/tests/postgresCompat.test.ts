@@ -91,6 +91,25 @@ describe('postgresCompat query builder', () => {
     expect(result.data).toEqual([{ id: 'item-1', feed: { id: 'feed-1', name: 'Main Feed' } }]);
   });
 
+  it('opens a short circuit after Neon quota errors', async () => {
+    fakeQuery.mockRejectedValueOnce(
+      Object.assign(new Error('Your project has exceeded the data transfer quota. Upgrade your plan to increase limits.'), {
+        code: 'XX000'
+      })
+    );
+
+    const { createPostgresCompatClient } = require('../src/db/postgresCompat');
+    const db = createPostgresCompatClient();
+
+    const first = await db.from('feeds').select('id');
+    const second = await db.from('feeds').select('id');
+
+    expect(first.error?.status).toBe(503);
+    expect(second.error?.status).toBe(503);
+    expect(String(second.error?.message || '')).toContain('Postgres temporarily unavailable');
+    expect(fakeQuery).toHaveBeenCalledTimes(1);
+  });
+
   it('serializes template sequence steps as JSON instead of a Postgres array', async () => {
     const { createPostgresCompatClient } = require('../src/db/postgresCompat');
     const db = createPostgresCompatClient();

@@ -68,7 +68,7 @@ const logRoutes = () => {
         .select(`
           *,
           schedule:schedules(id, name, target_ids),
-          feed_item:feed_items(id, title, link, description, content, author, image_url, media_url, media_kind, media_mime, media_filename, raw_data),
+          feed_item:feed_items(id, title, link, description, content, author, image_url, media_url, media_kind, media_mime, media_filename),
           target:targets(id, name, phone_number, type, active),
           template:templates(id, name, content, send_images, send_mode, media_source, sequence_steps, status_background_color, status_font)
         `)

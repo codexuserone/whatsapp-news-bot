@@ -76,6 +76,9 @@ const isServiceUnavailableErrorText = (value: string) => {
     lower.includes('supabase database is temporarily unreachable') ||
     lower.includes('supabase request timed out') ||
     lower.includes('supabase temporarily unavailable') ||
+    lower.includes('postgres temporarily unavailable') ||
+    lower.includes('data transfer quota') ||
+    lower.includes('quota exceeded') ||
     lower.includes('cloudflare 522') ||
     lower.includes('522: connection timed out') ||
     lower.includes('circuit breaker open')

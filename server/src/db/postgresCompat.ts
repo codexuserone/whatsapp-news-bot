@@ -70,6 +70,14 @@ const JSON_ARRAY_COLUMNS: Record<string, Set<string>> = {
 
 let pgPool: PgPool | null | undefined;
 let pgPoolErrorHandlerBound = false;
+let pgCircuitOpenUntil = 0;
+let pgLastFailureAt = 0;
+let pgLastFailureMessage: string | null = null;
+
+const POSTGRES_CIRCUIT_BREAKER_MS = Math.max(
+  5000,
+  Math.floor(Number(process.env.POSTGRES_CIRCUIT_BREAKER_MS || process.env.SUPABASE_CIRCUIT_BREAKER_MS || 45_000))
+);
 
 const preferIpv4 = () => {
   try {
@@ -150,6 +158,48 @@ const uniqueStrings = (values: unknown[]) =>
         .filter(Boolean)
     )
   );
+
+const getPostgresCircuitRetryAfterMs = () => Math.max(pgCircuitOpenUntil - Date.now(), 0);
+
+const isPostgresCircuitOpen = () => getPostgresCircuitRetryAfterMs() > 0;
+
+const isPostgresAvailabilityError = (error: unknown) => {
+  const message = getErrorMessage(error, '').toLowerCase();
+  const code = String((error as { code?: unknown } | null)?.code || '').trim().toUpperCase();
+  return (
+    message.includes('data transfer quota') ||
+    message.includes('quota exceeded') ||
+    message.includes('temporarily unavailable') ||
+    message.includes('connection failed') ||
+    message.includes('connection terminated') ||
+    message.includes('timeout') ||
+    code.startsWith('ECONN') ||
+    code === 'ETIMEDOUT'
+  );
+};
+
+const markPostgresSuccess = () => {
+  pgCircuitOpenUntil = 0;
+  pgLastFailureAt = 0;
+  pgLastFailureMessage = null;
+};
+
+const markPostgresFailure = (error: unknown) => {
+  if (!isPostgresAvailabilityError(error)) return;
+  pgLastFailureAt = Date.now();
+  pgLastFailureMessage = getErrorMessage(error, 'Postgres request failed');
+  pgCircuitOpenUntil = Math.max(pgCircuitOpenUntil, pgLastFailureAt + POSTGRES_CIRCUIT_BREAKER_MS);
+};
+
+const buildPostgresCircuitError = () => ({
+  message: `Postgres temporarily unavailable: ${pgLastFailureMessage || 'recent database failure'}; retry in ${Math.ceil(
+    getPostgresCircuitRetryAfterMs() / 1000
+  )}s`,
+  code: 'service_unavailable',
+  details: null,
+  hint: null,
+  status: 503
+});
 
 const splitTopLevel = (value: string, separator = ',') => {
   const output: string[] = [];
@@ -254,11 +304,7 @@ const normalizeDbError = (error: any) => ({
   code: String(error?.code || '').trim() || null,
   details: String(error?.detail || error?.details || '').trim() || null,
   hint: String(error?.hint || '').trim() || null,
-  status:
-    String(error?.code || '').trim().toUpperCase().startsWith('ECONN') ||
-    String(error?.code || '').trim().toUpperCase() === 'ETIMEDOUT'
-      ? 503
-      : 500
+  status: isPostgresAvailabilityError(error) ? 503 : 500
 });
 
 const isIsoNullComparison = (value: unknown) => value === null || String(value || '').trim().toLowerCase() === 'null';
@@ -506,23 +552,41 @@ class PostgresQueryBuilder {
   }
 
   private async execute() {
+    if (isPostgresCircuitOpen()) {
+      return { data: null, error: buildPostgresCircuitError(), count: null };
+    }
+
     try {
+      let response: QueryResponse;
       switch (this.operation) {
         case 'select':
-          return await this.executeSelect();
+          response = await this.executeSelect();
+          break;
         case 'insert':
-          return await this.executeInsert();
+          response = await this.executeInsert();
+          break;
         case 'update':
-          return await this.executeUpdate();
+          response = await this.executeUpdate();
+          break;
         case 'delete':
-          return await this.executeDelete();
+          response = await this.executeDelete();
+          break;
         case 'upsert':
-          return await this.executeUpsert();
+          response = await this.executeUpsert();
+          break;
         default:
           return { data: null, error: { message: 'Unsupported database operation' } };
       }
+      if (!response.error || Number((response.error as { status?: unknown }).status || 0) < 500) {
+        markPostgresSuccess();
+      }
+      return response;
     } catch (error) {
-      return { data: null, error: normalizeDbError(error), count: null };
+      const normalized = normalizeDbError(error);
+      if (normalized.status === 503) {
+        markPostgresFailure(error);
+      }
+      return { data: null, error: normalized, count: null };
     }
   }
 
@@ -886,8 +950,10 @@ const testPostgresConnection = async () => {
   if (!pool) return false;
   try {
     await pool.query('SELECT 1');
+    markPostgresSuccess();
     return true;
   } catch (error) {
+    markPostgresFailure(error);
     console.error('Postgres connection failed:', getErrorMessage(error));
     return false;
   }

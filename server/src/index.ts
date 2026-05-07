@@ -237,6 +237,7 @@ const start = async () => {
   const basicAuthRealm = String(process.env.BASIC_AUTH_REALM || 'WhatsApp News Bot')
     .replace(/"/g, '')
     .trim() || 'WhatsApp News Bot';
+  let basicAuthConfigError: string | null = null;
   const requireHttpsForAuth = toBoolean(
     process.env.BASIC_AUTH_REQUIRE_HTTPS,
     process.env.NODE_ENV === 'production'
@@ -260,7 +261,8 @@ const start = async () => {
     'admin'
   ]);
   if (requireBasicAuth && (!basicUser || !basicPass)) {
-    throw new Error('BASIC_AUTH_USER and BASIC_AUTH_PASS are required when basic auth is enabled');
+    basicAuthConfigError = 'Basic auth is enabled but BASIC_AUTH_USER or BASIC_AUTH_PASS is missing';
+    logger.error({ requireBasicAuth }, basicAuthConfigError);
   }
   if (
     requireBasicAuth &&
@@ -271,17 +273,21 @@ const start = async () => {
     const normalizedPass = String(basicPass).trim().toLowerCase();
     const looksWeak = normalizedPass.length < 12 || weakPasswords.has(normalizedPass);
     if (looksWeak) {
-      throw new Error(
-        'BASIC_AUTH_PASS is too weak for production. Use 12+ chars or set ALLOW_WEAK_BASIC_AUTH=true (not recommended).'
-      );
+      basicAuthConfigError =
+        'BASIC_AUTH_PASS is too weak for production. Use 12+ chars or set ALLOW_WEAK_BASIC_AUTH=true.';
+      logger.error({ allowWeakBasicAuth }, basicAuthConfigError);
     }
   }
-  if (requireBasicAuth && basicUser && basicPass) {
+  if (requireBasicAuth) {
     app.use((req: Request, res: Response, next) => {
       if (isPublicProbeRequest(req)) return next();
 
       res.setHeader('Vary', 'Authorization');
       res.setHeader('Cache-Control', 'no-store');
+      if (basicAuthConfigError || !basicUser || !basicPass) {
+        return res.status(503).send('Authentication is not configured');
+      }
+
       if (requireHttpsForAuth && !isSecureRequest(req)) {
         return res.status(403).send('HTTPS is required');
       }
@@ -399,30 +405,6 @@ const start = async () => {
   
   app.use(express.static(publicPath));
 
-  // Optional: apply SQL migrations before touching tables.
-  if (process.env.RUN_MIGRATIONS_ON_START === 'true') {
-    try {
-      logger.info('Running database migrations');
-      await runMigrations();
-      logger.info('Database migrations complete');
-    } catch (error) {
-      logger.error({ error }, 'Database migrations failed');
-      if (shouldFailStartupForMigrationError(error)) {
-        throw error;
-      }
-      logger.warn('Continuing startup after a non-fatal migration failure');
-    }
-  }
-
-  // Test Supabase connection
-  const connected = await testConnection();
-  if (!connected) {
-    logger.warn(
-      { supabase: getSupabaseHealthState?.() },
-      'Failed to connect to Supabase database; database-backed features are temporarily unavailable'
-    );
-  }
-
   const disableWhatsApp = process.env.DISABLE_WHATSAPP === 'true';
   const disableSchedulers = process.env.DISABLE_SCHEDULERS === 'true';
 
@@ -469,6 +451,29 @@ const start = async () => {
   app.listen(env.PORT, () => {
     logger.info({ port: env.PORT }, 'Server listening');
   });
+
+  // Keep Render health probes responsive even when database startup work is slow.
+  if (process.env.RUN_MIGRATIONS_ON_START === 'true') {
+    try {
+      logger.info('Running database migrations');
+      await runMigrations();
+      logger.info('Database migrations complete');
+    } catch (error) {
+      logger.error({ error }, 'Database migrations failed');
+      if (shouldFailStartupForMigrationError(error)) {
+        throw error;
+      }
+      logger.warn('Continuing startup after a non-fatal migration failure');
+    }
+  }
+
+  const connected = await testConnection();
+  if (!connected) {
+    logger.warn(
+      { supabase: getSupabaseHealthState?.() },
+      'Failed to connect to Supabase database; database-backed features are temporarily unavailable'
+    );
+  }
 
   keepAlive();
   runStartupTask('reset stuck processing logs', async () => {

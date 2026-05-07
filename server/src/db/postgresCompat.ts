@@ -491,6 +491,20 @@ class PostgresQueryBuilder {
     };
   }
 
+  private buildSelectClause() {
+    if (this.selectSpec.baseAll) {
+      return '*';
+    }
+
+    const relationJoinColumns = this.selectSpec.relations
+      .map((relation) => RELATION_DEFINITIONS[this.table]?.[relation.alias] || RELATION_DEFINITIONS[this.table]?.[relation.table])
+      .filter((definition): definition is RelationDefinition => Boolean(definition))
+      .map((definition) => definition.localColumn);
+    const fields = uniqueStrings([...this.selectSpec.baseFields, ...relationJoinColumns]);
+
+    return fields.length ? fields.map(quoteIdentifier).join(', ') : '*';
+  }
+
   private async execute() {
     try {
       switch (this.operation) {
@@ -530,7 +544,7 @@ class PostgresQueryBuilder {
     }
 
     const result = await this.pool.query(
-      `SELECT * FROM ${quoteIdentifier(this.table)}${where.sql}${orderClause}${limitClause.sql}`,
+      `SELECT ${this.buildSelectClause()} FROM ${quoteIdentifier(this.table)}${where.sql}${orderClause}${limitClause.sql}`,
       [...where.params, ...limitClause.params]
     );
     let rows = result.rows.map((row: Record<string, unknown>) => ({ ...row }));

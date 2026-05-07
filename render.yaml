@@ -25,11 +25,11 @@ services:
       - key: SUPABASE_DB_URL
         sync: false
       - key: RUN_MIGRATIONS_ON_START
-        value: "true"
+        value: "false"
       - key: MIGRATIONS_STRICT
         value: "false"
       - key: KEEP_ALIVE
-        value: true
+        value: "true"
       - key: KEEP_ALIVE_URL
         sync: false
       - key: KEEP_ALIVE_INTERVAL_MS

@@ -60,9 +60,35 @@ describe('postgresCompat query builder', () => {
       .limit(200);
 
     expect(fakeQuery).toHaveBeenCalledWith(
-      'SELECT * FROM "feed_items" WHERE "feed_id" = $1 AND ("created_at" > $2 OR ("created_at" = $3 AND "id" > $4)) ORDER BY "created_at" ASC, "id" ASC LIMIT $5',
+      'SELECT "id", "created_at" FROM "feed_items" WHERE "feed_id" = $1 AND ("created_at" > $2 OR ("created_at" = $3 AND "id" > $4)) ORDER BY "created_at" ASC, "id" ASC LIMIT $5',
       ['feed-1', '2026-04-27T10:00:00.000Z', '2026-04-27T10:00:00.000Z', 'feed-item-1', 200]
     );
+  });
+
+  it('selects only requested base columns and relation join keys', async () => {
+    fakeQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'item-1', feed_id: 'feed-1' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'feed-1', name: 'Main Feed' }] });
+
+    const { createPostgresCompatClient } = require('../src/db/postgresCompat');
+    const db = createPostgresCompatClient();
+
+    const result = await db
+      .from('feed_items')
+      .select('id,feed:feeds(id,name)')
+      .limit(1);
+
+    expect(fakeQuery).toHaveBeenNthCalledWith(
+      1,
+      'SELECT "id", "feed_id" FROM "feed_items" LIMIT $1',
+      [1]
+    );
+    expect(fakeQuery).toHaveBeenNthCalledWith(
+      2,
+      'SELECT "id", "name" FROM "feeds" WHERE "id" IN ($1)',
+      ['feed-1']
+    );
+    expect(result.data).toEqual([{ id: 'item-1', feed: { id: 'feed-1', name: 'Main Feed' } }]);
   });
 
   it('serializes template sequence steps as JSON instead of a Postgres array', async () => {

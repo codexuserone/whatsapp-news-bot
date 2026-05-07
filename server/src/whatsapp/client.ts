@@ -496,6 +496,12 @@ type MessageFailureSnapshot = {
   updatedAtMs: number;
 };
 
+type NewsletterMessageSnapshot = {
+  id: string;
+  remoteJid: string;
+  updatedAtMs: number;
+};
+
 type NewsletterMessageSummary = {
   id: string | null;
   serverId: string | null;
@@ -975,6 +981,7 @@ class WhatsAppClient {
   recentSentMessages: Map<string, proto.IWebMessageInfo>;
   recentMessageStatuses: Map<string, MessageStatusSnapshot>;
   recentMessageFailures: Map<string, MessageFailureSnapshot>;
+  recentNewsletterMessages: Map<string, NewsletterMessageSnapshot>;
   pendingReceiptUpdates: Map<string, MessageStatusSnapshot>;
   pendingReceiptFlushTimer: NodeJS.Timeout | null;
   newsletterChatCache: Map<string, CachedNewsletterChat>;
@@ -1026,6 +1033,7 @@ class WhatsAppClient {
     this.recentSentMessages = new Map();
     this.recentMessageStatuses = new Map();
     this.recentMessageFailures = new Map();
+    this.recentNewsletterMessages = new Map();
     this.pendingReceiptUpdates = new Map();
     this.pendingReceiptFlushTimer = null;
     this.newsletterChatCache = new Map();
@@ -1158,6 +1166,30 @@ class WhatsAppClient {
         this.recentMessageStatuses.delete(oldest);
       }
     }
+  }
+
+  rememberNewsletterMessage(messageLike: unknown): NewsletterMessageSnapshot | null {
+    const message = messageLike as { key?: { id?: unknown; remoteJid?: unknown; fromMe?: unknown }; remoteJid?: unknown; id?: unknown };
+    if (message?.key?.fromMe) return null;
+    const remoteJid =
+      normalizeNewsletterJid(message?.key?.remoteJid, { allowNumeric: false }) ||
+      normalizeNewsletterJid(message?.remoteJid, { allowNumeric: false });
+    const id = String(message?.key?.id || message?.id || '').trim();
+    if (!remoteJid || !id) return null;
+
+    const snapshot: NewsletterMessageSnapshot = {
+      id,
+      remoteJid,
+      updatedAtMs: Date.now()
+    };
+    this.recentNewsletterMessages.set(id, snapshot);
+    if (this.recentNewsletterMessages.size > 1000) {
+      const oldest = this.recentNewsletterMessages.keys().next().value;
+      if (oldest) {
+        this.recentNewsletterMessages.delete(oldest);
+      }
+    }
+    return snapshot;
   }
 
   rememberMessageFailure(messageId: string, snapshot: MessageFailureSnapshot): void {
@@ -2732,6 +2764,7 @@ class WhatsAppClient {
           }
 
           this.cacheNewsletterFromMessageLike(message);
+          this.rememberNewsletterMessage(message);
         }
 
         const toSave =
@@ -3370,12 +3403,14 @@ class WhatsAppClient {
     options?: { timeoutMs?: number; pollMs?: number; count?: number }
   ): Promise<{
     ok: boolean;
-    via: 'fetch' | 'none';
+    via: 'fetch' | 'live_update' | 'none';
     status?: number | null;
     statusLabel?: string | null;
     error?: string | null;
     unsupported?: boolean;
   }> {
+    const normalizedJid = normalizeNewsletterJid(jid, { allowNumeric: false });
+    if (!normalizedJid) return { ok: false, via: 'none', error: 'Channel JID invalid' };
     const expectedId = String(messageId || '').trim();
     if (!expectedId) return { ok: false, via: 'none', error: 'Message id is required for channel verification' };
 
@@ -3384,13 +3419,35 @@ class WhatsAppClient {
     const startedAt = Date.now();
     let lastError: string | null = null;
     let unsupported = false;
+    await this.ensureNewsletterLiveUpdates([normalizedJid]);
+    const liveUpdatePromise = this.waitForNewsletterMessage(normalizedJid, expectedId, timeoutMs);
+    const liveConfirmation = (snapshot: NewsletterMessageSnapshot | null | undefined) =>
+      snapshot?.id === expectedId && snapshot.remoteJid === normalizedJid
+        ? { ok: true as const, via: 'live_update' as const, status: 2, statusLabel: 'published' }
+        : null;
 
     do {
-      const result = await this.fetchNewsletterMessages(jid, {
-        count: options?.count || 25,
-        timeoutMs: Math.min(timeoutMs, Math.max(1000, pollMs + 2500))
-      });
+      const cachedLive = liveConfirmation(this.recentNewsletterMessages.get(expectedId));
+      if (cachedLive) return cachedLive;
+
+      const fetchPromise = this.fetchNewsletterMessages(normalizedJid, {
+          count: options?.count || 25,
+          timeoutMs: Math.min(timeoutMs, Math.max(1000, pollMs + 2500))
+        })
+        .then((result) => ({ type: 'fetch' as const, result }));
+      const livePromise = liveUpdatePromise.then((snapshot) => ({ type: 'live' as const, snapshot }));
+      const first = await Promise.race([fetchPromise, livePromise]);
+      if (first.type === 'live') {
+        const confirmation = liveConfirmation(first.snapshot);
+        if (confirmation) return confirmation;
+        break;
+      }
+
+      const result = first.result;
       if (result.unsupported) {
+        const liveSnapshot = await liveUpdatePromise;
+        const confirmation = liveConfirmation(liveSnapshot) || liveConfirmation(this.recentNewsletterMessages.get(expectedId));
+        if (confirmation) return confirmation;
         return {
           ok: false,
           via: 'none',
@@ -3401,6 +3458,8 @@ class WhatsAppClient {
       if (result.ok && result.messages.some((summary) => newsletterSummaryMatchesId(summary, expectedId))) {
         return { ok: true, via: 'fetch', status: 2, statusLabel: 'published' };
       }
+      const confirmation = liveConfirmation(this.recentNewsletterMessages.get(expectedId));
+      if (confirmation) return confirmation;
       lastError = result.error || `Channel fetch did not include message ${expectedId}`;
       unsupported = Boolean(result.unsupported);
       if (Date.now() - startedAt >= timeoutMs) break;
@@ -4651,6 +4710,67 @@ class WhatsAppClient {
       // Avoid race: message may be cached between the first check and listener attach.
       const cachedAfter = this.recentSentMessages.get(messageId);
       if (cachedAfter) {
+        finish(cachedAfter);
+      }
+    });
+  }
+
+  async waitForNewsletterMessage(
+    jid: string,
+    messageId: string,
+    timeoutMs = 30000
+  ): Promise<NewsletterMessageSnapshot | null> {
+    const socket = this.socket as any;
+    const waitForNoLiveEvents = () =>
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), Math.max(1, timeoutMs)));
+    if (!socket) return waitForNoLiveEvents();
+    const ev = socket.ev;
+    if (!ev || typeof ev.on !== 'function') return waitForNoLiveEvents();
+    const normalizedJid = normalizeNewsletterJid(jid, { allowNumeric: false });
+    const expectedId = String(messageId || '').trim();
+    if (!normalizedJid || !expectedId) return null;
+
+    const cached = this.recentNewsletterMessages.get(expectedId);
+    if (cached?.remoteJid === normalizedJid) {
+      return cached;
+    }
+
+    return new Promise((resolve) => {
+      let handler:
+        | ((event: { messages: proto.IWebMessageInfo[] }) => void)
+        | null = null;
+      let settled = false;
+
+      const finish = (value: NewsletterMessageSnapshot | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        if (handler) {
+          if (typeof ev.off === 'function') {
+            ev.off('messages.upsert', handler);
+          } else if (typeof ev.removeListener === 'function') {
+            ev.removeListener('messages.upsert', handler);
+          }
+        }
+        resolve(value);
+      };
+
+      const timeout = setTimeout(() => finish(null), Math.max(1, timeoutMs));
+
+      handler = ({ messages }: { messages: proto.IWebMessageInfo[] }) => {
+        for (const message of Array.isArray(messages) ? messages : []) {
+          const snapshot = this.rememberNewsletterMessage(message);
+          if (snapshot?.id === expectedId && snapshot.remoteJid === normalizedJid) {
+            finish(snapshot);
+            return;
+          }
+        }
+      };
+
+      ev.on('messages.upsert', handler);
+
+      const cachedAfter = this.recentNewsletterMessages.get(expectedId);
+      if (cachedAfter?.remoteJid === normalizedJid) {
         finish(cachedAfter);
       }
     });

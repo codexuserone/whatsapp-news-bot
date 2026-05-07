@@ -1,4 +1,5 @@
 import { describe, it, expect, jest, beforeEach, afterEach, afterAll } from '@jest/globals';
+import { EventEmitter } from 'events';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -201,6 +202,42 @@ describe('WhatsAppClient', () => {
         });
     });
 
+    it('confirms a channel message from live updates when fetch verification is unavailable', async () => {
+        const ev = new EventEmitter();
+        client.socket = {
+            ev,
+            subscribeNewsletterUpdates: jest.fn(async () => ({ duration: '3600' }))
+        };
+
+        const confirmation = client.confirmNewsletterMessage('120363406955649221@newsletter', 'live-without-fetch', {
+            timeoutMs: 500,
+            pollMs: 100
+        });
+
+        setTimeout(() => {
+            ev.emit('messages.upsert', {
+                type: 'notify',
+                messages: [
+                    {
+                        key: {
+                            remoteJid: '120363406955649221@newsletter',
+                            id: 'live-without-fetch',
+                            fromMe: false
+                        },
+                        messageTimestamp: 1770000000
+                    }
+                ]
+            });
+        }, 25);
+
+        await expect(confirmation).resolves.toEqual({
+            ok: true,
+            via: 'live_update',
+            status: 2,
+            statusLabel: 'published'
+        });
+    });
+
     it('times out channel fetch verification instead of hanging the route', async () => {
         client.socket = {
             newsletterFetchMessages: jest.fn(() => new Promise(() => {}))
@@ -267,6 +304,43 @@ describe('WhatsAppClient', () => {
             failed: 0,
             unsupported: false,
             failedJids: []
+        });
+    });
+
+    it('confirms a channel message from a subscribed live newsletter update', async () => {
+        const ev = new EventEmitter();
+        client.socket = {
+            ev,
+            subscribeNewsletterUpdates: jest.fn(async () => ({ duration: '3600' })),
+            newsletterFetchMessages: jest.fn(() => new Promise(() => {}))
+        };
+
+        const confirmation = client.confirmNewsletterMessage('120363406955649221@newsletter', 'live-newsletter-msg', {
+            timeoutMs: 500,
+            pollMs: 100
+        });
+
+        setTimeout(() => {
+            ev.emit('messages.upsert', {
+                type: 'notify',
+                messages: [
+                    {
+                        key: {
+                            remoteJid: '120363406955649221@newsletter',
+                            id: 'live-newsletter-msg',
+                            fromMe: false
+                        },
+                        messageTimestamp: 1770000000
+                    }
+                ]
+            });
+        }, 25);
+
+        await expect(confirmation).resolves.toEqual({
+            ok: true,
+            via: 'live_update',
+            status: 2,
+            statusLabel: 'published'
         });
     });
 

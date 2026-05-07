@@ -126,7 +126,7 @@ type WhatsAppClient = {
     options?: { timeoutMs?: number; pollMs?: number; count?: number }
   ) => Promise<{
     ok: boolean;
-    via: 'fetch' | 'none';
+    via: 'fetch' | 'live_update' | 'none';
     status?: number | null;
     statusLabel?: string | null;
     error?: string | null;
@@ -2213,7 +2213,7 @@ type SendWithMediaResult = {
 
 type SendConfirmation = {
   ok: boolean;
-  via: 'upsert' | 'ack' | 'fetch' | 'none';
+  via: 'upsert' | 'ack' | 'fetch' | 'live_update' | 'none';
   status?: number | null;
   statusLabel?: string | null;
   error?: string | null;
@@ -2325,7 +2325,7 @@ const confirmSendResult = async (
       if (channelConfirmation.ok) {
         return {
           ok: true,
-          via: 'fetch',
+          via: channelConfirmation.via || 'fetch',
           status: channelConfirmation.status ?? 2,
           statusLabel: channelConfirmation.statusLabel || 'published'
         };

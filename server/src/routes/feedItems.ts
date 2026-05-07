@@ -9,6 +9,24 @@ const { normalizeFeedMedia } = require('../utils/feedMedia');
 const MANUAL_POST_PAUSE_REASON = 'Paused for this post';
 const MANUAL_POST_PAUSABLE_STATUSES = ['awaiting_approval', 'pending', 'processing', 'failed', 'uncertain'];
 const SUCCESSFUL_CORRECTION_KINDS = new Set(['pending_refresh', 'edit', 'replacement', 'manual_edit']);
+const FEED_ITEM_LIST_COLUMNS = [
+  'id',
+  'feed_id',
+  'title',
+  'description',
+  'content',
+  'link',
+  'author',
+  'pub_date',
+  'image_url',
+  'media_url',
+  'media_kind',
+  'media_mime',
+  'media_filename',
+  'categories',
+  'sent',
+  'created_at'
+];
 
 type DeliveryLogRow = {
   id?: string | null;
@@ -138,6 +156,17 @@ const summarizeDeliveryRows = (rows: DeliveryLogRow[]) => {
   return deliveryByItem;
 };
 
+const truthyQueryValue = (value: unknown) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
+};
+
+const buildFeedItemListSelect = (includeRawData: boolean) =>
+  `
+          ${[...FEED_ITEM_LIST_COLUMNS, ...(includeRawData ? ['raw_data'] : [])].join(',')},
+          feed:feeds(id, name, url, type)
+        `;
+
 const resolveManualPostResumeStatus = (row: { approved_at?: unknown; schedule?: { approval_required?: boolean | null } | null }) => {
   const approvedAt = String(row?.approved_at || '').trim();
   if (approvedAt) return 'pending';
@@ -161,6 +190,7 @@ const feedItemRoutes = () => {
       const scope = String(req.query.scope || 'automation').toLowerCase();
       const includeAllFeeds = scope === 'all';
       const dedupe = String(req.query.dedupe || 'true').toLowerCase() !== 'false';
+      const includeRawData = truthyQueryValue(req.query.include_raw_data);
 
       const { data: schedules, error: schedulesError } = await supabase
         .from('schedules')
@@ -207,10 +237,7 @@ const feedItemRoutes = () => {
 
       let itemsQuery = supabase
         .from('feed_items')
-        .select(`
-          *,
-          feed:feeds(id, name, url, type)
-        `)
+        .select(buildFeedItemListSelect(includeRawData))
         .order('pub_date', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false })
         .limit(200);

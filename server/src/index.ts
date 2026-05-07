@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from 'express';
+require('./utils/logRedaction').installConsoleRedaction();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');

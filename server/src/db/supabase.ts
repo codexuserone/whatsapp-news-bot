@@ -169,6 +169,14 @@ function handleSupabaseError(error: { message?: string } | null, context = ''): 
 async function testConnection(): Promise<boolean> {
   try {
     if (resolveDbProvider() === 'postgres') {
+      if (isSupabaseCircuitOpen()) {
+        console.error(
+          'Postgres connection skipped:',
+          `circuit open for ${Math.ceil(getCircuitRetryAfterMs() / 1000)}s`
+        );
+        return false;
+      }
+
       const connected = await testPostgresConnection();
       if (connected) {
         markSupabaseSuccess();

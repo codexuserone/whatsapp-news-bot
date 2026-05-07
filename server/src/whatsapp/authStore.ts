@@ -279,7 +279,16 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     return input;
   };
 
-  const normalizeKeyValue = (value: unknown): unknown => deepNormalize(value, 0);
+  const normalizeKeyValue = (value: unknown): unknown => {
+    try {
+      if (value == null) return value;
+      if (Buffer.isBuffer(value)) return value;
+      if (typeof value === 'string') return normalizeStoredString(value, 0);
+      return deepNormalize(JSON.parse(JSON.stringify(value), BufferJSON.reviver), 0);
+    } catch {
+      return deepNormalize(value, 0);
+    }
+  };
 
   const toStorableJson = (data: unknown): unknown => {
     try {
@@ -306,6 +315,19 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
       console.error('Deserialize error:', e);
       return deepNormalize(data, 0);
     }
+  };
+
+  const fromStoredKeys = (data: unknown | null): KeyStoreData => {
+    if (data == null) return {};
+    if (typeof data === 'string') {
+      try {
+        const parsed = JSON.parse(data, BufferJSON.reviver);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as KeyStoreData : {};
+      } catch {
+        return {};
+      }
+    }
+    return data && typeof data === 'object' && !Array.isArray(data) ? data as KeyStoreData : {};
   };
 
   const supabase = getSupabaseClient();
@@ -421,6 +443,30 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
          set ${updates.join(', ')}`,
       params
     );
+  };
+
+  const patchAuthKeysViaPg = async (data: KeyStoreData) => {
+    for (const [category, entries] of Object.entries(data || {})) {
+      if (!entries || typeof entries !== 'object') continue;
+      for (const [id, value] of Object.entries(entries)) {
+        if (value === null || value === undefined) {
+          await runPgQuery(
+            `update auth_state
+                set keys = coalesce(keys, '{}'::jsonb) #- ARRAY[$2, $3]::text[]
+              where session_id = $1`,
+            [sessionId, category, id]
+          );
+          continue;
+        }
+
+        await runPgQuery(
+          `update auth_state
+              set keys = jsonb_set(coalesce(keys, '{}'::jsonb), ARRAY[$2, $3]::text[], $4::jsonb, true)
+            where session_id = $1`,
+          [sessionId, category, id, JSON.stringify(value)]
+        );
+      }
+    }
   };
 
   const clearAuthStateViaPg = async (freshCreds: unknown) => {
@@ -678,7 +724,7 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
 
   let state: { creds: AuthData; keys: KeyStoreData } = {
     creds: (fromStored(doc.creds) as AuthData) || initAuthCreds(),
-    keys: (fromStored(doc.keys) as KeyStoreData) || {}
+    keys: fromStoredKeys(doc.keys)
   };
 
   let saveChain: Promise<void> = Promise.resolve();
@@ -1115,35 +1161,6 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     return { ok: true, supported: true, ownerId: null, expiresAt: null };
   };
 
-  // Opportunistically repair legacy/double-encoded auth values on load.
-  try {
-    let repaired = false;
-
-    const normalizedCreds = normalizeKeyValue(state.creds);
-    if (normalizedCreds && normalizedCreds !== state.creds && typeof normalizedCreds === 'object') {
-      state.creds = normalizedCreds as AuthData;
-      repaired = true;
-    }
-
-    for (const type of Object.keys(state.keys || {})) {
-      const typeStore = state.keys[type] || {};
-      for (const id of Object.keys(typeStore)) {
-        const current = typeStore[id];
-        const normalized = normalizeKeyValue(current);
-        if (normalized !== current) {
-          typeStore[id] = normalized as never;
-          repaired = true;
-        }
-      }
-      state.keys[type] = typeStore;
-    }
-    if (repaired) {
-      await saveState();
-    }
-  } catch (e) {
-    console.warn('Auth key repair skipped:', e);
-  }
-
   const keys = {
     get: async (type: string, ids: string[]) => {
       const data: Record<string, unknown> = {};
@@ -1166,6 +1183,15 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
           }
         });
       });
+      if (authStatePool) {
+        try {
+          await patchAuthKeysViaPg(toStorableJson(data) as KeyStoreData);
+          return;
+        } catch (pgError) {
+          console.error('Error patching auth keys via Postgres:', pgError);
+          if (!supabase) throw pgError;
+        }
+      }
       await saveState();
     }
   };

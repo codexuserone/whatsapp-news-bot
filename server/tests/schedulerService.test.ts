@@ -174,6 +174,19 @@ describe('schedulerService dispatch entry points', () => {
         );
     });
 
+    it('does not start background schedulers before WhatsApp is connected', async () => {
+        const whatsappClient = {
+            getStatus: () => ({ status: 'disconnected', lease: { supported: false, held: false } })
+        };
+        mockGetSupabaseClient.mockReturnValue(createSchedulesSupabase([]));
+
+        await schedulerService.initSchedulers(whatsappClient);
+
+        expect(mockCleanupStaleLocks).not.toHaveBeenCalled();
+        expect(mockFetchAndProcessFeed).not.toHaveBeenCalled();
+        expect(mockCronSchedule).not.toHaveBeenCalled();
+    });
+
     it('queues only active batched schedules after a feed refresh', async () => {
         const whatsappClient = {
             getStatus: () => ({ status: 'connected' })

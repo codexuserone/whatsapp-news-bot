@@ -900,6 +900,19 @@ const initSchedulers = async (whatsappClient?: WhatsAppClient) => {
     return;
   }
 
+  const whatsappStatus = whatsappClient?.getStatus?.();
+  if (whatsappClient && whatsappStatus?.status !== 'connected') {
+    logger.warn(
+      {
+        whatsappStatus: whatsappStatus?.status || 'unknown',
+        instanceId: whatsappStatus?.instanceId,
+        lease: whatsappStatus?.lease
+      },
+      'Skipping scheduler initialization until WhatsApp is connected'
+    );
+    return;
+  }
+
   if (!canRunSchedulers(whatsappClient)) {
     return;
   }

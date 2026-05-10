@@ -694,7 +694,7 @@ const QueueInner = () => {
               databaseActionsBlocked
                 ? 'Database unavailable; retry is paused'
                 : retryableIssueCount
-                  ? 'Retry recent failed or uncertain sends from the last 24 hours'
+                  ? 'Retry recent failed sends and accepted sends with no receipt from the last 24 hours'
                   : 'No recent failed sends to retry'
             }
           >

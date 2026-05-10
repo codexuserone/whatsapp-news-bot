@@ -293,7 +293,7 @@ const isUnknownDeliveryTimeout = (message: unknown) =>
   /timed out sending|message send not confirmed/i.test(String(message || ''));
 
 const buildUncertainErrorMessage = (message: string) =>
-  `Send result is uncertain. Verifying delivery before retrying. ${String(message || '').trim()}`.trim();
+  `WhatsApp accepted the send, but no delivery receipt has arrived yet. ${String(message || '').trim()}`.trim();
 
 const normalizeComparableText = (value: unknown) =>
   String(value || '')
@@ -705,7 +705,7 @@ const recoverStaleProcessingLogs = async (
       .update({
         status: 'uncertain',
         processing_started_at: null,
-        error_message: 'Recovered stale in-progress send after reconnect/redeploy. Delivery status is uncertain because another send record already exists.'
+        error_message: 'Recovered a stale in-progress send after reconnect/redeploy. WhatsApp accepted a related send record, but no final delivery receipt has arrived yet.'
       })
       .in('id', toFailed);
   }
@@ -913,7 +913,7 @@ const reconcileUncertainMessageLogs = async (supabase: SupabaseClient, settings:
         .update({
           status: 'pending',
           processing_started_at: null,
-          error_message: `Retry ${currentRetry + 1}/${maxRetries}: delivery was not observed locally after the uncertain-send verification window`,
+          error_message: `Retry ${currentRetry + 1}/${maxRetries}: delivery was not observed locally after the no-receipt verification window`,
           retry_count: currentRetry + 1
         })
         .eq('id', id);
@@ -927,7 +927,7 @@ const reconcileUncertainMessageLogs = async (supabase: SupabaseClient, settings:
         status: 'failed',
         processing_started_at: null,
         error_message: canAutoRetry
-          ? `Max retries (${maxRetries}) exceeded after uncertain send verification`
+          ? `Max retries (${maxRetries}) exceeded after no-receipt verification`
           : 'Delivery was not observed locally after the uncertain-send verification window'
       })
       .eq('id', id);

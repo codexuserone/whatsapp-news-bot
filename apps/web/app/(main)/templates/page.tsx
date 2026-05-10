@@ -591,7 +591,7 @@ const TemplatesPage = () => {
       const uncertain = Number(result?.uncertain || 0);
       const suffix = messageId ? ` (${messageId})` : '';
       if (confirmed > 0 && uncertain > 0) {
-        setPreviewSendNotice(`Recorded locally${suffix}. Confirmed ${confirmed}, awaiting confirmation ${uncertain}.`);
+        setPreviewSendNotice(`Recorded locally${suffix}. Confirmed ${confirmed}, accepted with no receipt yet ${uncertain}.`);
         return;
       }
       if (confirmed > 0) {
@@ -599,7 +599,7 @@ const TemplatesPage = () => {
         return;
       }
       if (uncertain > 0) {
-        setPreviewSendNotice(`Recorded locally${suffix}. Awaiting confirmation ${uncertain}.`);
+        setPreviewSendNotice(`Recorded locally${suffix}. Accepted with no receipt yet ${uncertain}.`);
         return;
       }
       setPreviewSendNotice(messageId ? `Recorded locally (${messageId})` : 'Recorded locally');

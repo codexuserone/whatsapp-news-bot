@@ -78,7 +78,7 @@ describe('whatsapp route test-send logging', () => {
 
     expect(result).toEqual({
       status: 'uncertain',
-      errorMessage: 'Send result is uncertain. Verifying delivery before retrying. Missing WhatsApp message id',
+      errorMessage: 'WhatsApp accepted the send, but no delivery receipt has arrived yet. Missing WhatsApp message id',
       sentAt: null
     });
   });
@@ -93,7 +93,7 @@ describe('whatsapp route test-send logging', () => {
 
     expect(result).toEqual({
       status: 'uncertain',
-      errorMessage: 'Send result is uncertain. Verifying delivery before retrying. No confirmation yet',
+      errorMessage: 'WhatsApp accepted the send, but no delivery receipt has arrived yet. No confirmation yet',
       sentAt: null
     });
   });
@@ -154,7 +154,7 @@ describe('whatsapp route test-send logging', () => {
 
     expect(result).toEqual({
       status: 'uncertain',
-      errorMessage: 'Send result is uncertain. Verifying delivery before retrying. Confirmation check was skipped',
+      errorMessage: 'WhatsApp accepted the send, but no delivery receipt has arrived yet. Confirmation check was skipped',
       sentAt: null
     });
   });

@@ -213,6 +213,7 @@ const renderLoginPage = (options: {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Sign in - WhatsApp News Bot</title>
+    <link rel="icon" href="data:,">
     <style>
       :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #111827; color: #f9fafb; }
@@ -234,14 +235,14 @@ const renderLoginPage = (options: {
   <body>
     <main>
       <h1>Sign in</h1>
-      <p>Use the app username and password.</p>
+      <p>Use the current app username and password. Type them manually if your browser fills an old password.</p>
       ${message ? `<div class="error">${escapeHtml(message)}</div>` : ''}
-      <form method="post" action="/login">
+      <form method="post" action="/login" autocomplete="off">
         <input type="hidden" name="next" value="${escapeHtml(nextPath)}">
-        <label for="username">Username</label>
-        <input id="username" name="username" autocomplete="username" required autofocus>
-        <label for="password">Password</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <label for="login_user">Username</label>
+        <input id="login_user" name="login_user" autocomplete="off" autocapitalize="none" spellcheck="false" required autofocus>
+        <label for="login_pass">Password</label>
+        <input id="login_pass" name="login_pass" type="password" autocomplete="new-password" required>
         <button type="submit">Sign in</button>
       </form>
     </main>
@@ -453,9 +454,15 @@ const start = async () => {
         }).toString()}`);
       }
 
-      const body = req.body as { username?: unknown; password?: unknown; next?: unknown };
-      const username = String(body.username || '');
-      const password = String(body.password || '');
+      const body = req.body as {
+        username?: unknown;
+        password?: unknown;
+        login_user?: unknown;
+        login_pass?: unknown;
+        next?: unknown;
+      };
+      const username = String(body.username || body.login_user || '');
+      const password = String(body.password || body.login_pass || '');
       if (safeEquals(username, String(basicUser)) && safeEquals(password, String(basicPass))) {
         authAttemptsByIp.delete(clientIp);
         writeSessionCookie(req, res);

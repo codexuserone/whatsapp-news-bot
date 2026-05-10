@@ -718,6 +718,29 @@ describe('WhatsAppClient', () => {
         }
     });
 
+    it('backs off database reconnect attempts to avoid hammering Neon quota failures', () => {
+        const originalRetryMs = process.env.WHATSAPP_DATABASE_RETRY_MS;
+        const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0);
+
+        try {
+            delete process.env.WHATSAPP_DATABASE_RETRY_MS;
+            expect(WhatsAppClient.resolveDatabaseRetryDelayMs()).toBe(5 * 60_000);
+
+            process.env.WHATSAPP_DATABASE_RETRY_MS = '1000';
+            expect(WhatsAppClient.resolveDatabaseRetryDelayMs()).toBe(60_000);
+
+            process.env.WHATSAPP_DATABASE_RETRY_MS = String(20 * 60_000);
+            expect(WhatsAppClient.resolveDatabaseRetryDelayMs()).toBe(10 * 60_000);
+        } finally {
+            randomSpy.mockRestore();
+            if (originalRetryMs === undefined) {
+                delete process.env.WHATSAPP_DATABASE_RETRY_MS;
+            } else {
+                process.env.WHATSAPP_DATABASE_RETRY_MS = originalRetryMs;
+            }
+        }
+    });
+
     it('should leave newsletter media direct paths unchanged unless explicitly enabled', () => {
         const originalFlag = process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH;
         const originalAliasFlag = process.env.BAILEYS_NEWSLETTER_MEDIA_PATCH;

@@ -40,6 +40,11 @@ const isWhatsAppLeaseAutoTakeoverEnabled = () =>
   String(process.env.WHATSAPP_LEASE_AUTO_TAKEOVER || '').trim().toLowerCase() === 'true';
 const isWhatsAppLeaseDeployTakeoverEnabled = () =>
   String(process.env.WHATSAPP_LEASE_DEPLOY_TAKEOVER || '').trim().toLowerCase() === 'true';
+const resolveDatabaseRetryDelayMs = () => {
+  const parsed = Number(process.env.WHATSAPP_DATABASE_RETRY_MS || 5 * 60_000);
+  const base = Number.isFinite(parsed) && parsed > 0 ? parsed : 5 * 60_000;
+  return Math.min(Math.max(Math.floor(base), 60_000), 10 * 60_000) + Math.random() * 15_000;
+};
 
 const isTruthyEnvFlag = (value: unknown) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 const isFalseLikeFlag = (value: unknown) => ['0', 'false', 'no', 'off'].includes(String(value || '').trim().toLowerCase());
@@ -1249,7 +1254,7 @@ class WhatsAppClient {
 
   markDatabaseUnavailable(
     message = 'Database temporarily unavailable. Retrying WhatsApp connection...',
-    retryDelayMs = 60_000 + Math.random() * 15_000
+    retryDelayMs = resolveDatabaseRetryDelayMs()
   ): void {
     this.status = 'connecting';
     this.lastError = message;
@@ -2402,7 +2407,7 @@ class WhatsAppClient {
           this.isConnecting = false;
           this.scheduleReconnect(
             isTemporaryDatabaseError(error)
-              ? 60_000 + Math.random() * 15_000
+              ? resolveDatabaseRetryDelayMs()
               : 15_000 + Math.random() * 5000
           );
           return;
@@ -5027,6 +5032,7 @@ const createWhatsAppClient = () => new WhatsAppClient();
 
 module.exports = Object.assign(createWhatsAppClient, {
   resolveBrowserTuple,
+  resolveDatabaseRetryDelayMs,
   patchNewsletterMediaDirectPaths,
   buildStatusDeliveryRecipients
 });

@@ -1,6 +1,8 @@
 name: Render Keep Awake
 
 on:
+  schedule:
+    - cron: '*/10 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -16,8 +18,10 @@ jobs:
     timeout-minutes: 12
     steps:
       - name: Ping public health endpoints
+        continue-on-error: true
         env:
           BASE_URL: https://whatsapp-news-bot-3-69qh.onrender.com
+        shell: bash
         run: |
           set -uo pipefail
 
@@ -46,3 +50,5 @@ jobs:
           if [ "$failed" -ne 0 ]; then
             echo "::warning::Render keep-awake ping failed after retries. Leaving workflow green to avoid noisy false CI failures."
           fi
+
+          exit 0

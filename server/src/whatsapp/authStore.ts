@@ -175,6 +175,12 @@ const isMissingLeaseColumn = (error: unknown) => {
   return msg.includes('does not exist') && (msg.includes('lease_owner') || msg.includes('lease_expires_at'));
 };
 
+const isMissingAuthKeysTable = (error: unknown) => {
+  const code = String((error as { code?: unknown })?.code || '');
+  const msg = String((error as { message?: unknown })?.message || error || '').toLowerCase();
+  return code === '42P01' || (msg.includes('does not exist') && msg.includes('auth_keys'));
+};
+
 const isTransientLeaseTransportError = (error: unknown) => {
   const raw = String((error as { message?: unknown; code?: unknown })?.message || error || '');
   const code = String((error as { code?: unknown })?.code || '').toUpperCase();
@@ -361,7 +367,7 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
 
   const getAuthStateRowViaPg = async (): Promise<AuthStateRow | null> => {
     const rows = await runPgQuery<AuthStateRow>(
-      `select creds, keys, lease_owner, lease_expires_at
+      `select creds, lease_owner, lease_expires_at
          from auth_state
         where session_id = $1
         limit 1`,
@@ -446,6 +452,54 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
   };
 
   const patchAuthKeysViaPg = async (data: KeyStoreData) => {
+    const upserts: Array<[string, string, unknown]> = [];
+    const deletes: Array<[string, string]> = [];
+
+    for (const [category, entries] of Object.entries(data || {})) {
+      if (!entries || typeof entries !== 'object') continue;
+      for (const [id, value] of Object.entries(entries)) {
+        if (value === null || value === undefined) {
+          deletes.push([category, id]);
+        } else {
+          upserts.push([category, id, value]);
+        }
+      }
+    }
+
+    try {
+      if (deletes.length) {
+        await runPgQuery(
+          `delete from auth_keys
+            where session_id = $1
+              and (category, key_id) in (
+                select category, key_id
+                from jsonb_to_recordset($2::jsonb) as x(category text, key_id text)
+              )`,
+          [sessionId, JSON.stringify(deletes.map(([category, id]) => ({ category, key_id: id })))]
+        );
+      }
+
+      if (upserts.length) {
+        await runPgQuery(
+          `insert into auth_keys (session_id, category, key_id, value, updated_at)
+           select $1, category, key_id, value, now()
+           from jsonb_to_recordset($2::jsonb) as x(category text, key_id text, value jsonb)
+           on conflict (session_id, category, key_id)
+           do update set value = excluded.value, updated_at = now()`,
+          [
+            sessionId,
+            JSON.stringify(upserts.map(([category, id, value]) => ({ category, key_id: id, value })))
+          ]
+        );
+      }
+
+      return;
+    } catch (error) {
+      if (!isMissingAuthKeysTable(error)) {
+        throw error;
+      }
+    }
+
     for (const [category, entries] of Object.entries(data || {})) {
       if (!entries || typeof entries !== 'object') continue;
       for (const [id, value] of Object.entries(entries)) {
@@ -469,7 +523,112 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     }
   };
 
+  const getAuthKeysViaPg = async (type: string, ids: string[]) => {
+    const values: Record<string, unknown> = {};
+    const category = String(type || '').trim();
+    const requestedIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
+    if (!category || !requestedIds.length) return values;
+
+    let authKeysTableMissing = false;
+    try {
+      const rows = await runPgQuery<{ key_id?: string; value?: unknown }>(
+        `select key_id, value
+           from auth_keys
+          where session_id = $1
+            and category = $2
+            and key_id = any($3::text[])`,
+        [sessionId, category, requestedIds]
+      );
+      for (const row of rows) {
+        const id = String(row.key_id || '').trim();
+        if (id && row.value !== null && row.value !== undefined) {
+          values[id] = row.value;
+        }
+      }
+    } catch (error) {
+      if (!isMissingAuthKeysTable(error)) {
+        throw error;
+      }
+      authKeysTableMissing = true;
+    }
+
+    if (!authKeysTableMissing) return values;
+
+    const missingLegacyIds = requestedIds.filter((id) => values[id] === undefined);
+    if (!missingLegacyIds.length) return values;
+
+    const legacyRows = await runPgQuery<{ key_id?: string; value?: unknown }>(
+      `select requested.key_id, auth_state.keys #> ARRAY[$2, requested.key_id]::text[] as value
+         from auth_state
+         cross join unnest($3::text[]) as requested(key_id)
+        where auth_state.session_id = $1`,
+      [sessionId, category, missingLegacyIds]
+    );
+    for (const row of legacyRows) {
+      const id = String(row.key_id || '').trim();
+      if (id && row.value !== null && row.value !== undefined) {
+        values[id] = row.value;
+      }
+    }
+
+    return values;
+  };
+
+  const clearLegacyKeysViaPg = async (types?: string[]) => {
+    if (!types?.length) {
+      await runPgQuery(
+        `update auth_state
+            set keys = '{}'::jsonb
+          where session_id = $1`,
+        [sessionId]
+      );
+      return;
+    }
+
+    for (const type of types) {
+      const category = String(type || '').trim();
+      if (!category) continue;
+      await runPgQuery(
+        `update auth_state
+            set keys = coalesce(keys, '{}'::jsonb) - $2
+          where session_id = $1`,
+        [sessionId, category]
+      );
+    }
+  };
+
+  const clearKeysViaPg = async (types?: string[]) => {
+    try {
+      if (!types?.length) {
+        await runPgQuery(`delete from auth_keys where session_id = $1`, [sessionId]);
+      } else {
+        const categories = Array.from(new Set(types.map((type) => String(type || '').trim()).filter(Boolean)));
+        if (categories.length) {
+          await runPgQuery(
+            `delete from auth_keys
+              where session_id = $1
+                and category = any($2::text[])`,
+            [sessionId, categories]
+          );
+        }
+      }
+    } catch (error) {
+      if (!isMissingAuthKeysTable(error)) {
+        throw error;
+      }
+    }
+
+    await clearLegacyKeysViaPg(types);
+  };
+
   const clearAuthStateViaPg = async (freshCreds: unknown) => {
+    try {
+      await runPgQuery(`delete from auth_keys where session_id = $1`, [sessionId]);
+    } catch (error) {
+      if (!isMissingAuthKeysTable(error)) {
+        throw error;
+      }
+    }
     await runPgQuery(`delete from auth_state where session_id = $1`, [sessionId]);
     await upsertAuthStateViaPg({
       creds: freshCreds,
@@ -747,13 +906,11 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     try {
       await withSaveLock(async () => {
         const storedCreds = toStorableJson(state.creds);
-        const storedKeys = toStorableJson(state.keys);
 
         if (authStatePool) {
           try {
             await upsertAuthStateViaPg({
-              creds: storedCreds,
-              keys: storedKeys
+              creds: storedCreds
             });
             return;
           } catch (pgError) {
@@ -768,7 +925,7 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
             .upsert({
               session_id: sessionId,
               creds: storedCreds,
-              keys: storedKeys
+              keys: toStorableJson(state.keys)
             }, { onConflict: 'session_id' });
         }
       });
@@ -1165,8 +1322,27 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     get: async (type: string, ids: string[]) => {
       const data: Record<string, unknown> = {};
       const store = state.keys[type] || {};
+      const missing: string[] = [];
       for (const id of ids) {
-        if (store[id] !== undefined) data[id] = normalizeKeyValue(store[id]);
+        if (store[id] !== undefined) {
+          data[id] = normalizeKeyValue(store[id]);
+        } else {
+          missing.push(id);
+        }
+      }
+
+      if (missing.length && authStatePool) {
+        try {
+          const loaded = await getAuthKeysViaPg(type, missing);
+          const bucket = state.keys[type] || (state.keys[type] = {});
+          for (const [id, value] of Object.entries(loaded)) {
+            bucket[id] = value as never;
+            data[id] = normalizeKeyValue(value);
+          }
+        } catch (pgError) {
+          console.error('Error loading auth keys via Postgres:', pgError);
+          if (!supabase) throw pgError;
+        }
       }
       return data;
     },
@@ -1202,6 +1378,15 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     } else {
       for (const type of types) {
         if (state.keys?.[type]) delete state.keys[type];
+      }
+    }
+    if (authStatePool) {
+      try {
+        await clearKeysViaPg(types);
+        return;
+      } catch (pgError) {
+        console.error('Failed to clear auth keys via Postgres:', pgError);
+        if (!supabase) throw pgError;
       }
     }
     await saveState();

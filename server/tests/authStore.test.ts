@@ -2,9 +2,18 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 const mockSingle: any = jest.fn();
 const mockGetSupabaseClient: any = jest.fn();
+const mockPgQuery: any = jest.fn();
+const mockPgOn: any = jest.fn();
 
 jest.mock('../src/db/supabase', () => ({
     getSupabaseClient: () => mockGetSupabaseClient()
+}));
+
+jest.mock('pg', () => ({
+    Pool: jest.fn(() => ({
+        query: mockPgQuery,
+        on: mockPgOn
+    }))
 }));
 
 jest.mock('../src/whatsapp/baileys', () => ({
@@ -59,6 +68,8 @@ describe('authStore', () => {
         delete process.env.POSTGRES_URL;
         delete process.env.SUPABASE_DB_URL;
         delete process.env.DATABASE_URL;
+        mockPgQuery.mockReset();
+        mockPgOn.mockReset();
         mockGetSupabaseClient.mockReturnValue(createSupabase());
     });
 
@@ -90,5 +101,86 @@ describe('authStore', () => {
 
         expect(Buffer.isBuffer(keys.requested)).toBe(true);
         expect(Array.from((keys.requested as Buffer).values())).toEqual([1, 2, 3]);
+    });
+
+    it('loads WhatsApp keys lazily from Postgres instead of selecting the full key blob at startup', async () => {
+        process.env.DB_PROVIDER = 'neon';
+        process.env.NEON_DATABASE_URL = 'postgresql://user:pass@example.com/db';
+        mockGetSupabaseClient.mockReturnValue(null);
+        mockPgQuery.mockImplementation(async (query: string, params: unknown[]) => {
+            if (/select creds, lease_owner, lease_expires_at/i.test(query)) {
+                expect(query).not.toContain('keys,');
+                return {
+                    rows: [
+                        {
+                            creds: { registered: true },
+                            lease_owner: null,
+                            lease_expires_at: null
+                        }
+                    ]
+                };
+            }
+            if (/from auth_keys/i.test(query)) {
+                expect(params).toEqual(['primary', 'session', ['abc']]);
+                return {
+                    rows: [
+                        {
+                            key_id: 'abc',
+                            value: { type: 'Buffer', data: [4, 5, 6] }
+                        }
+                    ]
+                };
+            }
+            throw new Error(`Unexpected query: ${query}`);
+        });
+
+        const useSupabaseAuthState = require('../src/whatsapp/authStore');
+        const store = await useSupabaseAuthState('primary');
+
+        expect(mockPgQuery).toHaveBeenCalledTimes(1);
+        const keys = await store.state.keys.get('session', ['abc']);
+
+        expect(mockPgQuery).toHaveBeenCalledTimes(2);
+        expect(Buffer.isBuffer(keys.abc)).toBe(true);
+        expect(Array.from((keys.abc as Buffer).values())).toEqual([4, 5, 6]);
+    });
+
+    it('stores WhatsApp key updates in per-key Postgres rows', async () => {
+        process.env.DB_PROVIDER = 'neon';
+        process.env.NEON_DATABASE_URL = 'postgresql://user:pass@example.com/db';
+        mockGetSupabaseClient.mockReturnValue(null);
+        mockPgQuery.mockImplementation(async (query: string, params: unknown[]) => {
+            if (/select creds, lease_owner, lease_expires_at/i.test(query)) {
+                return {
+                    rows: [
+                        {
+                            creds: { registered: true },
+                            lease_owner: null,
+                            lease_expires_at: null
+                        }
+                    ]
+                };
+            }
+            if (/insert into auth_keys/i.test(query)) {
+                expect(params[0]).toBe('primary');
+                expect(JSON.parse(String(params[1]))).toEqual([
+                    { category: 'session', key_id: 'a', value: { type: 'Buffer', data: [7, 8] } },
+                    { category: 'sender-key', key_id: 'b', value: { ok: true } }
+                ]);
+                expect(query).not.toMatch(/jsonb_set/i);
+                return { rows: [] };
+            }
+            throw new Error(`Unexpected query: ${query}`);
+        });
+
+        const useSupabaseAuthState = require('../src/whatsapp/authStore');
+        const store = await useSupabaseAuthState('primary');
+
+        await store.state.keys.set({
+            session: { a: Buffer.from([7, 8]) },
+            'sender-key': { b: { ok: true } }
+        });
+
+        expect(mockPgQuery).toHaveBeenCalledTimes(2);
     });
 });

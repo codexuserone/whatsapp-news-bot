@@ -1856,7 +1856,7 @@ const whatsappRoutes = () => {
     if (normalizedJids.length === 1) {
       const first = successful[0];
       return res.json({
-        ok: results.every((entry) => entry.ok) && uncertainCount === 0 && heldCount === 0 && rejectedCount === 0,
+        ok: results.every((entry) => entry.ok) && heldCount === 0 && failedCount === 0,
         accepted: successful.length,
         sent: confirmedCount,
         confirmed: confirmedCount,
@@ -1870,7 +1870,7 @@ const whatsappRoutes = () => {
     }
 
     res.json({
-      ok: results.every((entry) => entry.ok) && uncertainCount === 0 && heldCount === 0 && rejectedCount === 0,
+      ok: results.every((entry) => entry.ok) && heldCount === 0 && failedCount === 0,
       accepted: successful.length,
       sent: confirmedCount,
       confirmed: confirmedCount,
@@ -2096,7 +2096,7 @@ const whatsappRoutes = () => {
     const operatorConfirmation = normalizeConfirmationForOperator(confirmation, 'status@broadcast');
     const rejected = isAck479Error(operatorConfirmation?.error);
     res.json({
-      ok: Boolean(messageId && operatorConfirmation?.ok),
+      ok: Boolean(messageId && !rejected),
       accepted: Boolean(messageId),
       confirmed: Boolean(operatorConfirmation?.ok),
       failed: Boolean(rejected),

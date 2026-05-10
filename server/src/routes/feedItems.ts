@@ -172,6 +172,38 @@ const resolveManualPostResumeStatus = (row: { approved_at?: unknown; schedule?: 
   return row?.schedule?.approval_required === true ? 'awaiting_approval' : 'pending';
 };
 
+const resolveDeliveryStatus = (
+  delivery: DeliverySummary,
+  options: {
+    hasManualPause: boolean;
+    dispatchableAutomationCount: number;
+    activeAutomationCount: number;
+    outsideCursorWindow: boolean;
+  }
+) => {
+  const held = delivery.awaiting_approval || 0;
+  const queued = held + delivery.pending + delivery.processing;
+  const unresolved = delivery.failed + delivery.uncertain;
+  const hasQueued = queued > 0;
+  const hasSent = delivery.sent > 0;
+
+  if (options.hasManualPause && hasQueued) return 'paused_with_queue';
+  if (options.hasManualPause) return 'paused';
+  if (hasQueued && hasSent && unresolved > 0) return 'mixed';
+  if (hasQueued && hasSent) return 'partially_sent';
+  if (hasQueued && unresolved > 0) return 'retrying';
+  if (hasQueued) return held > 0 ? 'awaiting_approval' : 'queued';
+  if (hasSent && unresolved > 0) return 'partially_sent';
+  if (hasSent) return 'sent';
+  if (unresolved > 0) return 'failed';
+  if (delivery.superseded > 0) return 'superseded';
+  if (options.dispatchableAutomationCount > 0) {
+    return options.outsideCursorWindow ? 'not_queued_old' : 'not_queued';
+  }
+  if (options.activeAutomationCount > 0) return 'automation_incomplete';
+  return 'no_automation';
+};
+
 const feedItemRoutes = () => {
   const router = express.Router();
   
@@ -302,8 +334,8 @@ const feedItemRoutes = () => {
           corrected_after_send: 0
         };
         const held = delivery.awaiting_approval || 0;
-        const queued = delivery.pending + delivery.processing;
-        const unresolved = delivery.failed + delivery.uncertain + held;
+        const queued = held + delivery.pending + delivery.processing;
+        const unresolved = delivery.failed + delivery.uncertain;
         const total =
           delivery.awaiting_approval +
           delivery.pending +
@@ -334,34 +366,12 @@ const feedItemRoutes = () => {
           Number.isFinite(itemCreatedMs) &&
           queueCursorMs > 0 &&
           itemCreatedMs < queueCursorMs;
-        const delivery_status =
-          hasManualPause && hasQueued
-            ? 'paused_with_queue'
-            : hasManualPause
-              ? 'paused'
-            : hasQueued && hasSent && unresolved > 0
-            ? 'mixed'
-            : hasQueued && hasSent
-              ? 'partially_sent'
-              : hasQueued && unresolved > 0
-                ? 'retrying'
-                : hasQueued
-                  ? 'queued'
-                  : hasSent && unresolved > 0
-                    ? 'partially_sent'
-                  : hasSent
-                    ? 'sent'
-                    : unresolved > 0
-                        ? 'failed'
-                        : delivery.superseded > 0
-                          ? 'superseded'
-                        : dispatchableAutomationCount > 0
-                          ? outsideCursorWindow
-                            ? 'not_queued_old'
-                            : 'not_queued'
-                          : activeAutomationCount > 0
-                            ? 'automation_incomplete'
-                          : 'no_automation';
+        const delivery_status = resolveDeliveryStatus(delivery, {
+          hasManualPause,
+          dispatchableAutomationCount,
+          activeAutomationCount,
+          outsideCursorWindow
+        });
         return {
           ...item,
           image_url: normalizedMedia.imageUrl || null,
@@ -631,6 +641,7 @@ module.exports.__testUtils = {
   buildFeedItemListSelect,
   selectRelevantDeliveryRows,
   summarizeDeliveryRows,
+  resolveDeliveryStatus,
   resolveManualPostResumeStatus,
   MANUAL_POST_PAUSABLE_STATUSES
 };

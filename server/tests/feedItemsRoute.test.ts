@@ -145,6 +145,33 @@ describe('feed item delivery summaries', () => {
     })).toBe('pending');
   });
 
+  it('does not report approval-held feed items as failed', () => {
+    const status = testUtils.resolveDeliveryStatus(
+      {
+        awaiting_approval: 4,
+        pending: 0,
+        processing: 0,
+        sent: 0,
+        failed: 0,
+        uncertain: 0,
+        skipped: 0,
+        superseded: 0,
+        manual_paused: 0,
+        corrected: 0,
+        corrected_before_send: 0,
+        corrected_after_send: 0
+      },
+      {
+        hasManualPause: false,
+        dispatchableAutomationCount: 2,
+        activeAutomationCount: 2,
+        outsideCursorWindow: false
+      }
+    );
+
+    expect(status).toBe('awaiting_approval');
+  });
+
   it('keeps the default feed item list query slim for polling views', () => {
     const slimSelect = testUtils.buildFeedItemListSelect(false);
 

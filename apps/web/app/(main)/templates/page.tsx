@@ -591,15 +591,15 @@ const TemplatesPage = () => {
       const uncertain = Number(result?.uncertain || 0);
       const suffix = messageId ? ` (${messageId})` : '';
       if (confirmed > 0 && uncertain > 0) {
-        setPreviewSendNotice(`Sent${suffix}. Confirmed ${confirmed}, accepted ${uncertain}.`);
+        setPreviewSendNotice(`Sent${suffix}. ${confirmed} confirmed, ${uncertain} not confirmed.`);
         return;
       }
       if (confirmed > 0) {
-        setPreviewSendNotice(`Sent${suffix}. Confirmed ${confirmed}.`);
+        setPreviewSendNotice(`Sent${suffix}. ${confirmed} confirmed.`);
         return;
       }
       if (uncertain > 0) {
-        setPreviewSendNotice(`Sent${suffix}.`);
+        setPreviewSendNotice(`Not confirmed${suffix}.`);
         return;
       }
       setPreviewSendNotice(messageId ? `Sent (${messageId})` : 'Sent');

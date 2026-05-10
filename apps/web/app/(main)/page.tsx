@@ -25,9 +25,6 @@ type DeliveryAnalytics = {
   played_rate: number;
 };
 
-const formatCountLabel = (count: number, singular: string, plural: string = `${singular}s`) =>
-  `${count} ${count === 1 ? singular : plural}`;
-
 const OverviewPage = () => {
   const queryClient = useQueryClient();
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
@@ -81,9 +78,6 @@ const OverviewPage = () => {
   const recentFailedCount = Number(queueStats?.failed ?? 0);
   const recentUncertainCount = Number(queueStats?.uncertain ?? 0);
   const recentSkippedCount = Number(queueStats?.skipped ?? 0);
-  const recentReceiptCount = Number(deliveryAnalytics?.delivered ?? 0);
-  const recentReadCount = Number(deliveryAnalytics?.read ?? 0);
-  const recentPlayedCount = Number(deliveryAnalytics?.played ?? 0);
 
   return (
     <div className="space-y-6">
@@ -128,7 +122,6 @@ const OverviewPage = () => {
         <Card>
           <CardHeader>
             <CardTitle>Quick Actions</CardTitle>
-            <CardDescription>Common tasks and shortcuts</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
             <label className="flex items-center justify-between rounded-lg border p-3 text-sm">
@@ -197,38 +190,16 @@ const OverviewPage = () => {
             </div>
             <div className="border-t pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Last {queueStats?.window_hours ?? 24} hours</div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Recorded by app</span>
+              <span className="text-muted-foreground">Sent with WhatsApp id</span>
               <span className="font-medium">{recentRecordedCount}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Need review</span>
+              <span className="text-muted-foreground">Failed or not confirmed</span>
               <span className="font-medium">{recentFailedCount + recentUncertainCount}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Skipped</span>
               <span className="font-medium">{recentSkippedCount}</span>
-            </div>
-
-            <div className="pt-2 border-t space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Receipt confirmations</span>
-                <span className="font-medium">{recentReceiptCount}</span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Read confirmations</span>
-                <span className="font-medium">{recentReadCount}</span>
-              </div>
-              {recentPlayedCount > 0 ? (
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Played confirmations</span>
-                  <span className="font-medium">{recentPlayedCount}</span>
-                </div>
-              ) : null}
-              <div className="text-[11px] text-muted-foreground">
-                {deliveryAnalytics
-                  ? `${formatCountLabel(recentRecordedCount, 'target')} recorded by the app. Receipt confirmations are tracked separately and may arrive later or not at all.`
-                  : 'Loading delivery analytics...'}
-              </div>
             </div>
             <div className="text-xs text-muted-foreground">
               {feedErrors > 0
@@ -271,7 +242,7 @@ const OverviewPage = () => {
                               : 'warning'
                         }
                       >
-                        {log.status === 'sent' ? 'Sent' : log.status}
+                        {['sent', 'delivered', 'read', 'played'].includes(String(log.status || '').toLowerCase()) ? 'Sent' : log.status}
                       </Badge>
                     </TableCell>
                     <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>

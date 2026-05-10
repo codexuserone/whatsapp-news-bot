@@ -1,12 +1,12 @@
 'use client';
 
-import React, { Suspense, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import Image from 'next/image';
 import { useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useRuntimeStatus } from '@/lib/runtimeStatus';
-import type { QueueItem, QueueStats, ShabbosStatus, WhatsAppOutbox, WhatsAppOutboxStatus } from '@/lib/types';
+import type { QueueItem, QueueStats, ShabbosStatus } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -30,26 +30,6 @@ import {
   Clock
 } from 'lucide-react';
 
-const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | null) => {
-  if (statusLabel) return statusLabel;
-  switch (status) {
-    case 0:
-      return 'error';
-    case 1:
-      return 'pending';
-    case 2:
-      return 'server';
-    case 3:
-      return 'delivered';
-    case 4:
-      return 'read';
-    case 5:
-      return 'played';
-    default:
-      return null;
-  }
-};
-
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
 const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
 const LIVE_QUEUE_STATUSES = new Set(['awaiting_approval', 'pending', 'processing']);
@@ -59,7 +39,6 @@ type NoticeType = 'success' | 'warning' | 'error';
 
 type QueueSendNowResponse = {
   ok?: boolean;
-  accepted?: boolean;
   status?: string | null;
   messageId?: string | null;
   mediaSent?: boolean | null;
@@ -175,15 +154,10 @@ const QueueInner = () => {
       ? 'Recent delivery results'
       : 'Live queue and recent results';
   const queueCardDescription = showingLiveQueueOnly
-    ? 'Only destinations that are still waiting, paused for approval, or being attempted right now.'
+    ? 'Waiting and sending items.'
     : showingHistoryOnly
-      ? 'Recent delivery history, not items that are still waiting to send.'
-      : 'This combined view mixes live queue rows with recent delivery history.';
-  const filterHelpText = showingLiveQueueOnly
-    ? 'Showing only live queue rows.'
-    : showingHistoryOnly
-      ? 'Showing only recent result history.'
-      : 'Showing live queue rows and recent history together. Use a status filter for a narrower view.';
+      ? 'Recent results.'
+      : 'Queue and recent results.';
 
   const { data: queueItems = [], isLoading, error: queueError } = useQuery<QueueItem[]>({
     queryKey: ['queue', statusFilter, includeManual],
@@ -202,21 +176,6 @@ const QueueInner = () => {
     queryFn: () => api.get('/api/shabbos/status'),
     refetchInterval: 60000
   });
-
-  const { data: outbox } = useQuery<WhatsAppOutbox>({
-    queryKey: ['whatsapp-outbox'],
-    queryFn: () => api.get('/api/whatsapp/outbox'),
-    refetchInterval: 5000
-  });
-
-  const statusByMessageId = useMemo(() => {
-    const map = new Map<string, WhatsAppOutboxStatus>();
-    for (const status of outbox?.statuses || []) {
-      if (!status?.id) continue;
-      map.set(String(status.id), status);
-    }
-    return map;
-  }, [outbox?.statuses]);
 
   const deleteItem = useMutation({
     mutationFn: (id: string) => api.delete(`/api/queue/${id}`),
@@ -320,7 +279,7 @@ const QueueInner = () => {
       if (status === 'uncertain') {
         setActionNotice({
           type: 'error',
-          message: result?.error || 'Send did not return a WhatsApp message id. It stayed in review.'
+          message: result?.error || 'Send did not return a WhatsApp message id.'
         });
       } else if (result?.ok) {
         setActionNotice({ type: 'success', message: result?.messageId ? `Sent now (${result.messageId}).` : 'Sent now.' });
@@ -511,57 +470,25 @@ const QueueInner = () => {
 
     switch (item.status) {
       case 'awaiting_approval':
-        return <Badge variant="warning">Needs review</Badge>;
+        return <Badge variant="warning">Held</Badge>;
       case 'pending':
         return <Badge variant="secondary">Queued</Badge>;
       case 'processing':
         return <Badge variant="warning">Sending</Badge>;
       case 'sent':
-        return <Badge variant="success">Sent</Badge>;
       case 'delivered':
-        return <Badge variant="success">Delivered</Badge>;
       case 'read':
-        return <Badge variant="success">Read</Badge>;
       case 'played':
-        return <Badge variant="success">Played</Badge>;
+        return <Badge variant="success">Sent</Badge>;
       case 'failed':
         return <Badge variant="destructive">Failed</Badge>;
       case 'uncertain':
-        return <Badge variant="warning">Needs review</Badge>;
+        return <Badge variant="warning">Not confirmed</Badge>;
       case 'skipped':
         return <Badge variant="warning">Skipped</Badge>;
       default:
         return <Badge variant="secondary">{item.status}</Badge>;
     }
-  };
-
-  const getReceiptBadge = (item: QueueItem) => {
-    const messageId = String(item.whatsapp_message_id || '').trim();
-    if (!messageId) {
-      return null;
-    }
-
-    const snapshot = statusByMessageId.get(messageId);
-    if (!snapshot) {
-      return null;
-    }
-
-    const label = mapMessageStatusLabel(snapshot.status, snapshot.statusLabel);
-    if (!label) {
-      return null;
-    }
-
-    const lower = label.toLowerCase();
-    if (lower === 'error') {
-      return <Badge variant="destructive">Failed</Badge>;
-    }
-    if (lower === 'delivered' || lower === 'read' || lower === 'played') {
-      return <Badge variant="success">Delivered</Badge>;
-    }
-    if (lower === 'pending' || lower === 'server') {
-      return <Badge variant="warning">Receipt pending</Badge>;
-    }
-    return null;
   };
 
   const getCorrectionBadge = (item: QueueItem) => {
@@ -625,8 +552,8 @@ const QueueInner = () => {
 
     if (item.status === 'awaiting_approval') {
       return hasRequestedMedia
-        ? { label: 'Needs review - not posted', tone: 'warning' as const }
-        : { label: 'Needs review', tone: 'warning' as const };
+        ? { label: 'Held with media', tone: 'warning' as const }
+        : { label: 'Held', tone: 'warning' as const };
     }
 
     if (item.status === 'uncertain') {
@@ -652,7 +579,6 @@ const QueueInner = () => {
     return { label: 'Queued text-only', tone: 'secondary' as const };
   };
 
-  const isHistoryItem = (item: QueueItem) => HISTORY_STATUSES.has(String(item.status || '').toLowerCase());
   const getTargetStateBadge = (item: QueueItem) => {
     if (item.target_active === false) return <Badge variant="warning">Inactive target</Badge>;
     if (item.target_in_current_schedule === false) return <Badge variant="outline">Old target</Badge>;
@@ -664,9 +590,7 @@ const QueueInner = () => {
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Outgoing Queue</h1>
-          <p className="text-muted-foreground">Review what is waiting to send, fix items, or send one right away.</p>
-          <p className="text-xs text-muted-foreground">Queued items are shown in the order the dispatcher will inspect them.</p>
-          <p className="mt-1 text-xs text-muted-foreground">Stories appear in Feed Items first. This page shows only the sendable queue and recent delivery results.</p>
+          <p className="text-muted-foreground">Review, edit, pause, retry, or send queued items.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -697,7 +621,7 @@ const QueueInner = () => {
             }
           >
             <RefreshCw className={`mr-2 h-4 w-4 ${retryFailed.isPending ? 'animate-spin' : ''}`} />
-            Retry Recent Issues
+            Retry failed
           </Button>
           <Button
             variant="destructive"
@@ -773,9 +697,9 @@ const QueueInner = () => {
               <SelectItem value="processing">Attempting send ({queueStats?.processing ?? 0})</SelectItem>
               <SelectItem value="sent">Sent ({queueStats?.sent ?? 0})</SelectItem>
               <SelectItem value="failed">Failed ({queueStats?.failed ?? 0})</SelectItem>
-              <SelectItem value="uncertain">Needs review ({queueStats?.uncertain ?? 0})</SelectItem>
+              <SelectItem value="uncertain">Not confirmed ({queueStats?.uncertain ?? 0})</SelectItem>
               <SelectItem value="skipped">Skipped ({queueStats?.skipped ?? 0})</SelectItem>
-              <SelectItem value="all">All visible rows ({queueStats?.total ?? 0})</SelectItem>
+              <SelectItem value="all">All ({queueStats?.total ?? 0})</SelectItem>
             </SelectContent>
         </Select>
         <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
@@ -788,8 +712,6 @@ const QueueInner = () => {
           {queueItems.length} item{queueItems.length !== 1 ? 's' : ''}
         </span>
       </div>
-
-      <p className="text-sm text-muted-foreground">{filterHelpText}</p>
 
       {actionNotice ? (
         <div
@@ -844,7 +766,6 @@ const QueueInner = () => {
                     ? mediaCandidate
                     : null;
                 const editing = editingId === item.id;
-                const receiptBadge = getReceiptBadge(item);
                 const deliveryPath = getDeliveryPath(item);
                 const editRemainingMs = (() => {
                   if (!canEditSentInPlace(item, editWindowMinutes, nowMs)) return null;
@@ -870,7 +791,6 @@ const QueueInner = () => {
                       <div className="min-w-0 flex-1">
                         <div className="mb-1 flex flex-wrap items-center gap-2">
                           {getStatusBadge(item)}
-                          <Badge variant="outline">{isHistoryItem(item) ? 'History' : 'Live queue'}</Badge>
                           {item.delivery_mode === 'batch' || item.delivery_mode === 'batched' ? (
                             <Badge variant="outline">Scheduled time</Badge>
                           ) : null}
@@ -879,7 +799,6 @@ const QueueInner = () => {
                             <Badge variant="outline">#{index + 1} in queue view</Badge>
                           ) : null}
                           {item.target_name ? <Badge variant="outline">{item.target_name}</Badge> : null}
-                          {item.target_type ? <Badge variant="secondary">{item.target_type}</Badge> : null}
                           {targetStateBadge}
                           <span className="text-xs text-muted-foreground">
                             {item.is_manual ? 'Manual' : item.schedule_name || 'Automation'}
@@ -1056,12 +975,6 @@ const QueueInner = () => {
                         </Button>
                       ) : null}
                     </div>
-                    {(canToggleItemPause(item) || canTogglePostPause(item)) ? (
-                      <p className="text-[11px] text-muted-foreground">
-                        Target pause changes one destination only. Story pause changes every destination for this story.
-                      </p>
-                    ) : null}
-
                     <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
                       {item.pub_date ? <span>Published: {formatPublishedDate(item.pub_date, item.pub_precision)}</span> : null}
                       <span>Created: {formatDate(item.created_at)}</span>
@@ -1070,15 +983,6 @@ const QueueInner = () => {
                       {item.sent_at ? <span>Sent: {formatDate(item.sent_at)}</span> : null}
                       {item.corrected_at ? <span>Corrected: {formatDate(item.corrected_at)}</span> : null}
                       {editCountdown ? <span>Editable: {editCountdown} left</span> : null}
-                      {item.delivered_at ? <span>Delivered: {formatDate(item.delivered_at)}</span> : null}
-                      {item.read_at ? <span>Read: {formatDate(item.read_at)}</span> : null}
-                      {item.played_at ? <span>Played: {formatDate(item.played_at)}</span> : null}
-                      {item.sent_at && receiptBadge ? (
-                        <span className="inline-flex items-center gap-1">
-                          <span>Receipt:</span>
-                          {receiptBadge}
-                        </span>
-                      ) : null}
                       {item.error_message ? <span className="text-destructive">Error: {item.error_message}</span> : null}
                       {item.correction_error ? <span className="text-warning-foreground">Correction: {item.correction_error}</span> : null}
                       {isSuccessfulSendStatus(item.status) && item.media_type === 'image' && !item.media_sent && item.media_error ? (
@@ -1148,9 +1052,6 @@ const QueueInner = () => {
                       {item.pub_date ? <p className="text-[11px] text-muted-foreground">Published: {formatPublishedDate(item.pub_date, item.pub_precision)}</p> : null}
                       {item.sent_at ? <p className="text-[11px] text-muted-foreground">Sent: {formatDate(item.sent_at)}</p> : null}
                       {item.corrected_at ? <p className="text-[11px] text-muted-foreground">Corrected: {formatDate(item.corrected_at)}</p> : null}
-                      {item.delivered_at ? <p className="text-[11px] text-muted-foreground">Delivered: {formatDate(item.delivered_at)}</p> : null}
-                      {item.read_at ? <p className="text-[11px] text-muted-foreground">Read: {formatDate(item.read_at)}</p> : null}
-                      {item.played_at ? <p className="text-[11px] text-muted-foreground">Played: {formatDate(item.played_at)}</p> : null}
                       {item.correction_error ? <p className="text-[11px] text-warning-foreground">Correction: {item.correction_error}</p> : null}
                       {editing ? (
                         <div className="rounded-md border bg-muted/30 p-2 space-y-2">

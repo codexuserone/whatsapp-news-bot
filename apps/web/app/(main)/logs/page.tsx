@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { LogEntry, WhatsAppOutbox, WhatsAppOutboxStatus } from '@/lib/types';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
+import type { LogEntry } from '@/lib/types';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '@/components/ui/table';
@@ -26,13 +26,13 @@ const STATUS_COLORS: Record<string, 'success' | 'destructive' | 'warning' | 'sec
 
 const LOG_FILTERS = [
   { value: 'all', label: 'All activity' },
-  { value: 'awaiting_approval', label: 'Needs review' },
+  { value: 'awaiting_approval', label: 'Held' },
   { value: 'pending', label: 'Queued' },
   { value: 'processing', label: 'Sending' },
   { value: 'sent', label: 'Sent' },
   { value: 'failed', label: 'Failed' },
   { value: 'skipped', label: 'Skipped' },
-  { value: 'uncertain', label: 'Needs review' },
+  { value: 'uncertain', label: 'Not confirmed' },
   { value: 'superseded', label: 'Superseded' }
 ];
 
@@ -47,15 +47,13 @@ const getStatusLabel = (status: string) => {
     case 'processing':
       return 'Sending';
     case 'awaiting_approval':
-      return 'Needs review';
+      return 'Held';
     case 'uncertain':
-      return 'Needs review';
+      return 'Not confirmed';
     case 'delivered':
-      return 'Delivered';
     case 'read':
-      return 'Read';
     case 'played':
-      return 'Played';
+      return 'Sent';
     case 'skipped':
       return 'Skipped';
     case 'superseded':
@@ -82,26 +80,6 @@ const getSequenceStepLabel = (log: LogEntry) => {
   return '';
 };
 
-const mapMessageStatusLabel = (status?: number | null, statusLabel?: string | null) => {
-  if (statusLabel) return statusLabel;
-  switch (status) {
-    case 0:
-      return 'error';
-    case 1:
-      return 'pending';
-    case 2:
-      return 'server';
-    case 3:
-      return 'delivered';
-    case 4:
-      return 'read';
-    case 5:
-      return 'played';
-    default:
-      return null;
-  }
-};
-
 const getMediaSummary = (log: LogEntry) => {
   const mediaType = String(log.media_type || '').trim().toLowerCase();
   const hasMedia = Boolean(mediaType || String(log.media_url || '').trim());
@@ -124,54 +102,11 @@ const LogsPage = () => {
   });
   const logsErrorMessage = error instanceof Error ? error.message : null;
 
-  const { data: outbox } = useQuery<WhatsAppOutbox>({
-    queryKey: ['whatsapp-outbox'],
-    queryFn: () => api.get('/api/whatsapp/outbox'),
-    refetchInterval: 5000
-  });
-
-  const statusByMessageId = useMemo(() => {
-    const map = new Map<string, WhatsAppOutboxStatus>();
-    for (const snap of outbox?.statuses || []) {
-      if (!snap?.id) continue;
-      map.set(String(snap.id), snap);
-    }
-    return map;
-  }, [outbox?.statuses]);
-
-  const getReceiptBadge = (log: LogEntry) => {
-    const messageId = String(log.whatsapp_message_id || '').trim();
-    if (!messageId) {
-      return null;
-    }
-
-    const snap = statusByMessageId.get(messageId);
-    if (!snap) {
-      return null;
-    }
-
-    const label = mapMessageStatusLabel(snap.status, snap.statusLabel);
-    if (!label) {
-      return null;
-    }
-
-    const lower = label.toLowerCase();
-    if (lower === 'delivered' || lower === 'read' || lower === 'played') {
-      return <Badge variant="success">Delivered</Badge>;
-    }
-    if (lower === 'error') {
-      return <Badge variant="destructive">Failed</Badge>;
-    }
-    return null;
-  };
-
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">History</h1>
-        <p className="text-muted-foreground">
-          Truthful dispatch records for queued, sending, sent, failed, and corrected messages.
-        </p>
+        <p className="text-muted-foreground">Dispatch records for queued, sent, failed, and corrected messages.</p>
       </div>
 
       <Card>
@@ -182,7 +117,7 @@ const LogsPage = () => {
                 <Activity className="h-5 w-5" />
                 Dispatch Records
               </CardTitle>
-              <CardDescription>{logs.length} message{logs.length !== 1 ? 's' : ''}</CardDescription>
+              <p className="text-sm text-muted-foreground">{logs.length} message{logs.length !== 1 ? 's' : ''}</p>
             </div>
             <Select value={status} onValueChange={setStatus}>
               <SelectTrigger className="w-52">
@@ -237,7 +172,6 @@ const LogsPage = () => {
                           >
                             {getStatusLabel(log.status)}
                           </Badge>
-                          {getReceiptBadge(log)}
                           {getSequenceStepLabel(log) ? (
                             <Badge variant="outline" className="ml-1">
                               {getSequenceStepLabel(log)}

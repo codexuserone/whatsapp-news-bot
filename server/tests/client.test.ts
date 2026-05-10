@@ -1369,6 +1369,54 @@ describe('WhatsAppClient', () => {
         expect(result.key.id).toBe('status-generated-id');
     });
 
+    it('should preserve generated status message ids when Baileys status relay hangs', async () => {
+        const previousTimeout = process.env.WHATSAPP_STATUS_RELAY_TIMEOUT_MS;
+        process.env.WHATSAPP_STATUS_RELAY_TIMEOUT_MS = '5000';
+        jest.useFakeTimers();
+
+        const relayMessage: any = jest.fn(() => new Promise(() => undefined));
+        const sendMessage: any = jest.fn();
+        client.socket = {
+            relayMessage,
+            sendMessage,
+            ev: { emit: jest.fn() },
+            user: { id: '16465527019:58@s.whatsapp.net' }
+        };
+
+        try {
+            const resultPromise = client.sendStatusBroadcast(
+                { text: 'hello' },
+                { statusJidList: ['19144477725@s.whatsapp.net'] }
+            );
+
+            await jest.advanceTimersByTimeAsync(5000);
+
+            const result = await resultPromise;
+
+            expect(sendMessage).not.toHaveBeenCalled();
+            expect(relayMessage).toHaveBeenCalledWith(
+                'status@broadcast',
+                expect.objectContaining({
+                    extendedTextMessage: expect.objectContaining({ text: 'hello' })
+                }),
+                expect.objectContaining({
+                    messageId: 'status-generated-id',
+                    useUserDevicesCache: false,
+                    statusJidList: ['19144477725@s.whatsapp.net']
+                })
+            );
+            expect(result.key.id).toBe('status-generated-id');
+            expect(result.relayTimedOut).toBe(true);
+        } finally {
+            jest.useRealTimers();
+            if (previousTimeout === undefined) {
+                delete process.env.WHATSAPP_STATUS_RELAY_TIMEOUT_MS;
+            } else {
+                process.env.WHATSAPP_STATUS_RELAY_TIMEOUT_MS = previousTimeout;
+            }
+        }
+    });
+
     it('should sync status sends to the sender linked devices without adding self to the Status audience', async () => {
         const previous = process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES;
         process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES = 'true';

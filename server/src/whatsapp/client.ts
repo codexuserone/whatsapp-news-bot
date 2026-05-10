@@ -80,6 +80,7 @@ const isNewsletterLiveUpdatesEnabled = () =>
   !isFalseLikeFlag(process.env.WHATSAPP_NEWSLETTER_LIVE_UPDATES ?? 'true');
 const DEFAULT_NEWSLETTER_MEDIA_PREP_TIMEOUT_MS = 30_000;
 const DEFAULT_NEWSLETTER_MEDIA_RELAY_TIMEOUT_MS = 15_000;
+const DEFAULT_STATUS_RELAY_TIMEOUT_MS = 30_000;
 const NEWSLETTER_LIVE_UPDATES_TIMEOUT_MS = Math.max(
   1000,
   Math.min(Math.floor(Number(process.env.WHATSAPP_NEWSLETTER_LIVE_UPDATES_TIMEOUT_MS || 5000)), 30000)
@@ -4487,15 +4488,38 @@ class WhatsAppClient {
       options: socket.options
     });
 
-    await socket.relayMessage('status@broadcast', fullMsg.message, {
-      messageId: fullMsg.key?.id,
-      statusJidList: options.statusJidList,
-      useUserDevicesCache: false
-    });
+    const statusRelayTimeoutMs = Math.max(
+      5000,
+      Math.min(Number(process.env.WHATSAPP_STATUS_RELAY_TIMEOUT_MS || DEFAULT_STATUS_RELAY_TIMEOUT_MS), 90000)
+    );
+    let relayTimedOut = false;
+    try {
+      await withTimeout(
+        socket.relayMessage('status@broadcast', fullMsg.message, {
+          messageId: fullMsg.key?.id,
+          statusJidList: options.statusJidList,
+          useUserDevicesCache: false
+        }),
+        statusRelayTimeoutMs,
+        'Timed out relaying status broadcast'
+      );
+    } catch (error) {
+      if (!/timed out relaying status broadcast/i.test(getErrorMessage(error))) {
+        throw error;
+      }
+      relayTimedOut = true;
+      logger.warn(
+        { messageId: fullMsg.key?.id || null, timeoutMs: statusRelayTimeoutMs },
+        'Status relay did not resolve before timeout; preserving generated message id'
+      );
+    }
 
     const ownDeviceFanout = await this.relayStatusToOwnDevices(fullMsg.message, fullMsg.key?.id);
     if (ownDeviceFanout) {
       (fullMsg as Record<string, unknown>).ownDeviceFanout = ownDeviceFanout;
+    }
+    if (relayTimedOut) {
+      (fullMsg as Record<string, unknown>).relayTimedOut = true;
     }
 
     if (socket.ev && typeof socket.ev.emit === 'function') {

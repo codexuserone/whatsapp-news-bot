@@ -144,4 +144,19 @@ describe('feed item delivery summaries', () => {
       schedule: { approval_required: false }
     })).toBe('pending');
   });
+
+  it('keeps the default feed item list query slim for polling views', () => {
+    const slimSelect = testUtils.buildFeedItemListSelect(false);
+
+    expect(slimSelect).toContain('title');
+    expect(slimSelect).toContain('media_url');
+    expect(slimSelect).not.toContain('raw_data');
+    expect(slimSelect).not.toContain('description');
+    expect(slimSelect).not.toContain('content');
+
+    const wideSelect = testUtils.buildFeedItemListSelect(true);
+    expect(wideSelect).toContain('raw_data');
+    expect(wideSelect).toContain('description');
+    expect(wideSelect).toContain('content');
+  });
 });

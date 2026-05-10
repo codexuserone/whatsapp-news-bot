@@ -416,8 +416,7 @@ const queueRoutes = () => {
             media_kind,
             media_mime,
             media_filename,
-            pub_date,
-            raw_data
+            pub_date
           )
         `);
 
@@ -466,19 +465,13 @@ const queueRoutes = () => {
           media_mime?: string | null;
           media_filename?: string | null;
           pub_date?: string;
-          raw_data?: Record<string, unknown> | null;
         } | undefined;
-        const rawData =
-          feedItems?.raw_data && typeof feedItems.raw_data === 'object'
-            ? (feedItems.raw_data as Record<string, unknown>)
-            : null;
         const normalizedMedia = normalizeFeedMedia({
           mediaUrl: feedItems?.media_url,
           mediaKind: feedItems?.media_kind,
           mediaMime: feedItems?.media_mime,
           mediaFilename: feedItems?.media_filename,
-          imageUrl: feedItems?.image_url,
-          rawData
+          imageUrl: feedItems?.image_url
         });
         const schedule = row.schedule as {
           id?: string;
@@ -546,7 +539,7 @@ const queueRoutes = () => {
           image_url: normalizedMedia.imageUrl || null,
           media_kind: normalizedMedia.mediaKind || null,
           pub_date: feedItems?.pub_date || null,
-          pub_precision: rawData ? String(rawData.published_precision || '') || null : null,
+          pub_precision: null,
           rendered_content: isManual ? displayMessageContent : displayMessageContent || automationPreview?.text || null,
           status: row.status,
           error_message: row.error_message,

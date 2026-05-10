@@ -13,8 +13,6 @@ const FEED_ITEM_LIST_COLUMNS = [
   'id',
   'feed_id',
   'title',
-  'description',
-  'content',
   'link',
   'author',
   'pub_date',
@@ -27,6 +25,7 @@ const FEED_ITEM_LIST_COLUMNS = [
   'sent',
   'created_at'
 ];
+const FEED_ITEM_WIDE_COLUMNS = ['description', 'content', 'raw_data'];
 
 type DeliveryLogRow = {
   id?: string | null;
@@ -163,7 +162,7 @@ const truthyQueryValue = (value: unknown) => {
 
 const buildFeedItemListSelect = (includeRawData: boolean) =>
   `
-          ${[...FEED_ITEM_LIST_COLUMNS, ...(includeRawData ? ['raw_data'] : [])].join(',')},
+          ${[...FEED_ITEM_LIST_COLUMNS, ...(includeRawData ? FEED_ITEM_WIDE_COLUMNS : [])].join(',')},
           feed:feeds(id, name, url, type)
         `;
 
@@ -629,6 +628,7 @@ const feedItemRoutes = () => {
 
 module.exports = feedItemRoutes;
 module.exports.__testUtils = {
+  buildFeedItemListSelect,
   selectRelevantDeliveryRows,
   summarizeDeliveryRows,
   resolveManualPostResumeStatus,

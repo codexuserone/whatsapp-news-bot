@@ -1370,6 +1370,8 @@ describe('WhatsAppClient', () => {
     });
 
     it('should sync status sends to the sender linked devices without adding self to the Status audience', async () => {
+        const previous = process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES;
+        process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES = 'true';
         const relayMessage: any = jest.fn(async () => 'status-generated-id');
         const sendMessage: any = jest.fn();
         const getUSyncDevices: any = jest.fn(async () => [
@@ -1387,54 +1389,62 @@ describe('WhatsAppClient', () => {
         };
         client.meJid = '16465527019:58@s.whatsapp.net';
 
-        const result = await client.sendStatusBroadcast(
-            { text: 'hello' },
-            { statusJidList: ['19144477725@s.whatsapp.net'] }
-        );
+        try {
+            const result = await client.sendStatusBroadcast(
+                { text: 'hello' },
+                { statusJidList: ['19144477725@s.whatsapp.net'] }
+            );
 
-        expect(sendMessage).not.toHaveBeenCalled();
-        expect(getUSyncDevices).toHaveBeenCalledWith(
-            ['16465527019@s.whatsapp.net'],
-            false,
-            false
-        );
-        expect(relayMessage).toHaveBeenNthCalledWith(
-            1,
-            'status@broadcast',
-            expect.objectContaining({
-                extendedTextMessage: expect.objectContaining({ text: 'hello' })
-            }),
-            expect.objectContaining({
-                messageId: 'status-generated-id',
-                useUserDevicesCache: false,
-                statusJidList: ['19144477725@s.whatsapp.net']
-            })
-        );
-        expect(relayMessage).toHaveBeenNthCalledWith(
-            2,
-            'status@broadcast',
-            expect.objectContaining({
-                extendedTextMessage: expect.objectContaining({ text: 'hello' })
-            }),
-            expect.objectContaining({
-                messageId: 'status-generated-id',
-                useUserDevicesCache: false,
-                participant: { jid: '16465527019:0@s.whatsapp.net', count: 0 }
-            })
-        );
-        expect(relayMessage).toHaveBeenNthCalledWith(
-            3,
-            'status@broadcast',
-            expect.objectContaining({
-                extendedTextMessage: expect.objectContaining({ text: 'hello' })
-            }),
-            expect.objectContaining({
-                messageId: 'status-generated-id',
-                useUserDevicesCache: false,
-                participant: { jid: '16465527019:24@s.whatsapp.net', count: 0 }
-            })
-        );
-        expect(result.ownDeviceFanout).toEqual({ attempted: 2, sent: 2, failed: 0 });
+            expect(sendMessage).not.toHaveBeenCalled();
+            expect(getUSyncDevices).toHaveBeenCalledWith(
+                ['16465527019@s.whatsapp.net'],
+                false,
+                false
+            );
+            expect(relayMessage).toHaveBeenNthCalledWith(
+                1,
+                'status@broadcast',
+                expect.objectContaining({
+                    extendedTextMessage: expect.objectContaining({ text: 'hello' })
+                }),
+                expect.objectContaining({
+                    messageId: 'status-generated-id',
+                    useUserDevicesCache: false,
+                    statusJidList: ['19144477725@s.whatsapp.net']
+                })
+            );
+            expect(relayMessage).toHaveBeenNthCalledWith(
+                2,
+                'status@broadcast',
+                expect.objectContaining({
+                    extendedTextMessage: expect.objectContaining({ text: 'hello' })
+                }),
+                expect.objectContaining({
+                    messageId: 'status-generated-id',
+                    useUserDevicesCache: false,
+                    participant: { jid: '16465527019:0@s.whatsapp.net', count: 0 }
+                })
+            );
+            expect(relayMessage).toHaveBeenNthCalledWith(
+                3,
+                'status@broadcast',
+                expect.objectContaining({
+                    extendedTextMessage: expect.objectContaining({ text: 'hello' })
+                }),
+                expect.objectContaining({
+                    messageId: 'status-generated-id',
+                    useUserDevicesCache: false,
+                    participant: { jid: '16465527019:24@s.whatsapp.net', count: 0 }
+                })
+            );
+            expect(result.ownDeviceFanout).toEqual({ attempted: 2, sent: 2, failed: 0 });
+        } finally {
+            if (previous === undefined) {
+                delete process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES;
+            } else {
+                process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES = previous;
+            }
+        }
     });
 
     it('should allow sender account status delivery to be disabled explicitly', async () => {

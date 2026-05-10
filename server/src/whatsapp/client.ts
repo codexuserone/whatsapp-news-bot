@@ -51,7 +51,7 @@ const isTruthyEnvFlag = (value: unknown) => ['1', 'true', 'yes', 'on'].includes(
 const isFalseLikeFlag = (value: unknown) => ['0', 'false', 'no', 'off'].includes(String(value || '').trim().toLowerCase());
 const isStatusSelfAudienceEnabled = () => isTruthyEnvFlag(process.env.WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE);
 const isStatusOwnDeviceSyncEnabled = () =>
-  !isFalseLikeFlag(process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES ?? 'true');
+  isTruthyEnvFlag(process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES);
 const STATUS_OWN_DEVICE_SYNC_LIMIT = Math.max(
   0,
   Math.min(Math.floor(Number(process.env.WHATSAPP_STATUS_OWN_DEVICE_SYNC_LIMIT || 12)), 50)

@@ -317,15 +317,15 @@ const QueueInner = () => {
     mutationFn: (id: string) => api.post<QueueSendNowResponse>(`/api/queue/${id}/send-now`),
     onSuccess: (result: QueueSendNowResponse) => {
       const status = String(result?.status || '').toLowerCase();
-      if (result?.ok) {
-        setActionNotice({ type: 'success', message: result?.messageId ? `Sent now (${result.messageId}).` : 'Sent now.' });
-      } else if (status === 'uncertain') {
+      if (status === 'uncertain') {
         setActionNotice({
           type: 'warning',
           message: result?.messageId
-            ? `Accepted by WhatsApp but still needs verification (${result.messageId}).`
-            : 'Accepted by WhatsApp but still needs verification.'
+            ? `WhatsApp accepted it, but no delivery receipt came back yet (${result.messageId}).`
+            : 'WhatsApp accepted it, but no delivery receipt came back yet.'
         });
+      } else if (result?.ok) {
+        setActionNotice({ type: 'success', message: result?.messageId ? `Sent now (${result.messageId}).` : 'Sent now.' });
       } else if (status === 'awaiting_approval') {
         setActionNotice({ type: 'warning', message: result?.error || 'Held for review before another send attempt.' });
       } else {
@@ -529,7 +529,7 @@ const QueueInner = () => {
       case 'failed':
         return <Badge variant="destructive">Failed</Badge>;
       case 'uncertain':
-        return <Badge variant="warning">Uncertain</Badge>;
+        return <Badge variant="warning">No receipt yet</Badge>;
       case 'skipped':
         return <Badge variant="warning">Skipped</Badge>;
       default:
@@ -633,8 +633,8 @@ const QueueInner = () => {
 
     if (item.status === 'uncertain') {
       return hasRequestedMedia
-        ? { label: 'Uncertain - verify media', tone: 'warning' as const }
-        : { label: 'Uncertain', tone: 'warning' as const };
+        ? { label: 'Accepted; no media receipt yet', tone: 'warning' as const }
+        : { label: 'Accepted; no receipt yet', tone: 'warning' as const };
     }
 
     const plannedKind = String(item.media_kind || item.media_type || '').toLowerCase();
@@ -774,8 +774,8 @@ const QueueInner = () => {
               <SelectItem value="pending">Queued ({queueStats?.pending ?? 0})</SelectItem>
               <SelectItem value="processing">Attempting send ({queueStats?.processing ?? 0})</SelectItem>
               <SelectItem value="sent">Accepted by WhatsApp ({queueStats?.sent ?? 0})</SelectItem>
-              <SelectItem value="failed">Needs review ({queueStats?.failed ?? 0})</SelectItem>
-              <SelectItem value="uncertain">Checking possible send ({queueStats?.uncertain ?? 0})</SelectItem>
+              <SelectItem value="failed">Failed ({queueStats?.failed ?? 0})</SelectItem>
+              <SelectItem value="uncertain">Accepted, no receipt yet ({queueStats?.uncertain ?? 0})</SelectItem>
               <SelectItem value="skipped">Skipped ({queueStats?.skipped ?? 0})</SelectItem>
               <SelectItem value="all">All visible rows ({queueStats?.total ?? 0})</SelectItem>
             </SelectContent>

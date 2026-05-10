@@ -83,6 +83,7 @@ const fetchWithTimeout = (url: string, options: RequestInit = {}, timeoutMs = 30
   const headers = mergeHeaders(options.headers, { 'Cache-Control': 'no-cache' });
   const requestInit: RequestInit = {
     cache: 'no-store',
+    credentials: 'include',
     ...options,
     signal: controller.signal
   };

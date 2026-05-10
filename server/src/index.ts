@@ -1,9 +1,16 @@
 import type { Express, Request, Response } from 'express';
+import type { AuthAttemptState } from './utils/basicAuthAttempts';
 require('./utils/logRedaction').installConsoleRedaction();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const { timingSafeEqual } = require('crypto');
+const {
+  getBasicAuthFailureSignature,
+  isBasicAuthAttemptStale,
+  isBasicAuthBlocked,
+  recordBasicAuthFailure
+} = require('./utils/basicAuthAttempts');
 const env = require('./config/env');
 const logger = require('./utils/logger');
 const { getSupabaseHealthState, testConnection } = require('./db/supabase');
@@ -86,12 +93,6 @@ const safeEquals = (left: string, right: string) => {
   }
 };
 
-type AuthAttemptState = {
-  failures: number;
-  firstFailureAtMs: number;
-  blockedUntilMs: number;
-};
-
 const authAttemptsByIp = new Map<string, AuthAttemptState>();
 let authAttemptCleanupAtMs = 0;
 
@@ -163,10 +164,7 @@ const cleanupAuthAttempts = (nowMs: number) => {
   if (nowMs - authAttemptCleanupAtMs < 5 * 60 * 1000) return;
   authAttemptCleanupAtMs = nowMs;
   for (const [ip, state] of authAttemptsByIp.entries()) {
-    const stale =
-      state.blockedUntilMs <= nowMs &&
-      (state.failures <= 0 || nowMs - state.firstFailureAtMs > 60 * 60 * 1000);
-    if (stale) {
+    if (isBasicAuthAttemptStale(state, nowMs)) {
       authAttemptsByIp.delete(ip);
     }
   }
@@ -257,6 +255,8 @@ const start = async () => {
     .filter(Boolean);
   const authMaxAttempts = Math.max(Number(process.env.BASIC_AUTH_MAX_ATTEMPTS || 20), 1);
   const authBlockWindowMs = Math.max(Number(process.env.BASIC_AUTH_BLOCK_MINUTES || 15), 1) * 60 * 1000;
+  const authRepeatFailureWindowMs =
+    Math.max(Number(process.env.BASIC_AUTH_REPEAT_FAILURE_WINDOW_SECONDS || 60), 5) * 1000;
   const weakPasswords = new Set([
     'change-me',
     'changeme',
@@ -289,6 +289,7 @@ const start = async () => {
   if (requireBasicAuth) {
     app.use((req: Request, res: Response, next) => {
       if (isPublicProbeRequest(req)) return next();
+      if (req.method === 'OPTIONS') return next();
 
       res.setHeader('Vary', 'Authorization');
       res.setHeader('Cache-Control', 'no-store');
@@ -308,11 +309,6 @@ const start = async () => {
       const nowMs = Date.now();
       cleanupAuthAttempts(nowMs);
       const currentAttempt = authAttemptsByIp.get(clientIp);
-      if (currentAttempt && currentAttempt.blockedUntilMs > nowMs) {
-        const retryAfterSec = Math.max(Math.ceil((currentAttempt.blockedUntilMs - nowMs) / 1000), 1);
-        res.setHeader('Retry-After', String(retryAfterSec));
-        return res.status(429).send('Too many authentication attempts');
-      }
 
       const header = String(req.headers.authorization || '');
       if (!header.startsWith('Basic ')) {
@@ -332,18 +328,19 @@ const start = async () => {
         // ignore
       }
 
-      const nextAttempt: AuthAttemptState = currentAttempt
-        ? { ...currentAttempt }
-        : { failures: 0, firstFailureAtMs: nowMs, blockedUntilMs: 0 };
-      if (nowMs - nextAttempt.firstFailureAtMs > authBlockWindowMs) {
-        nextAttempt.failures = 0;
-        nextAttempt.firstFailureAtMs = nowMs;
-        nextAttempt.blockedUntilMs = 0;
+      if (isBasicAuthBlocked(currentAttempt, nowMs)) {
+        const retryAfterSec = Math.max(Math.ceil(((currentAttempt?.blockedUntilMs || nowMs) - nowMs) / 1000), 1);
+        res.setHeader('Retry-After', String(retryAfterSec));
+        return res.status(429).send('Too many authentication attempts');
       }
-      nextAttempt.failures += 1;
-      if (nextAttempt.failures >= authMaxAttempts) {
-        nextAttempt.blockedUntilMs = nowMs + authBlockWindowMs;
-      }
+      const nextAttempt = recordBasicAuthFailure({
+        currentAttempt,
+        nowMs,
+        blockWindowMs: authBlockWindowMs,
+        maxAttempts: authMaxAttempts,
+        signature: getBasicAuthFailureSignature(header),
+        repeatSignatureWindowMs: authRepeatFailureWindowMs
+      });
       authAttemptsByIp.set(clientIp, nextAttempt);
 
       res.setHeader('WWW-Authenticate', `Basic realm="${basicAuthRealm}"`);

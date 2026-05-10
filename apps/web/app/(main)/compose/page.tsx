@@ -375,7 +375,7 @@ const ComposeInner = () => {
       const failed = Number(result?.failed || 0);
       const parts = [
         sent ? `sent ${sent}` : '',
-        uncertain ? `needs verification ${uncertain}` : '',
+        uncertain ? `accepted with no receipt yet ${uncertain}` : '',
         held ? `held for review ${held}` : '',
         pending ? `still queued ${pending}` : '',
         processing ? `still processing ${processing}` : '',
@@ -385,7 +385,7 @@ const ComposeInner = () => {
       if (failed > 0 || skipped > 0) {
         setNotice({ type: 'error', message: `${parts.join(', ')}. Open Queue for the exact records.` });
       } else if (uncertain > 0 || held > 0 || pending > 0 || processing > 0 || result?.ok === false) {
-        setNotice({ type: 'warning', message: `${parts.join(', ') || 'Delivery is still being verified'}. Open Queue for the exact records.` });
+        setNotice({ type: 'warning', message: `${parts.join(', ') || 'WhatsApp accepted it, but receipts are still pending'}. Open Queue for the exact records.` });
       } else {
         setNotice({ type: 'success', message: `Sent ${sent} message(s).` });
       }

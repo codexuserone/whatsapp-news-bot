@@ -25,6 +25,7 @@ const notFoundHandler = require('./middleware/notFound');
 const requestLogger = require('./middleware/requestLogger');
 const securityHeaders = require('./middleware/securityHeaders');
 const { isPublicProbeRequest } = require('./middleware/publicProbePaths');
+const { shouldStartDatabaseBackedWorkers } = require('./startup/databaseWorkers');
 
 // Global error handlers to prevent crashes
 process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
@@ -477,18 +478,25 @@ const start = async () => {
   }
 
   keepAlive();
-  runStartupTask('reset stuck processing logs', async () => {
-    await resetStuckProcessingLogs();
-  });
+  const startDatabaseWorkers = shouldStartDatabaseBackedWorkers(connected);
 
-  if (connected) {
+  if (startDatabaseWorkers) {
+    runStartupTask('reset stuck processing logs', async () => {
+      await resetStuckProcessingLogs();
+    });
+
     runStartupTask('ensure default settings', async () => {
       await settingsService.ensureDefaults();
     });
+  } else {
+    logger.warn('Skipping database-backed startup workers until database connectivity recovers');
+  }
+
+  if (whatsappClient && startDatabaseWorkers) {
+    startTargetAutoSync(whatsappClient);
   }
 
   if (whatsappClient) {
-    startTargetAutoSync(whatsappClient);
     runStartupTask('initialize WhatsApp client', async () => {
       await whatsappClient.init();
     });
@@ -496,7 +504,7 @@ const start = async () => {
 
   if (disableSchedulers) {
     logger.warn('Schedulers are disabled via DISABLE_SCHEDULERS');
-  } else {
+  } else if (startDatabaseWorkers) {
     scheduleRetentionCleanup();
     scheduleProcessingWatchdog();
     scheduleStatusAudienceRefresh(whatsappClient);
@@ -519,6 +527,8 @@ const start = async () => {
 
       await initSchedulers(whatsappClient);
     });
+  } else {
+    logger.warn('Skipping database-backed schedulers until database connectivity recovers');
   }
 };
 

@@ -11,6 +11,7 @@ const {
   isBasicAuthBlocked,
   recordBasicAuthFailure
 } = require('./utils/basicAuthAttempts');
+const { sendBasicAuthFailure } = require('./utils/basicAuthChallenge');
 const env = require('./config/env');
 const logger = require('./utils/logger');
 const { getSupabaseHealthState, testConnection } = require('./db/supabase');
@@ -312,8 +313,11 @@ const start = async () => {
 
       const header = String(req.headers.authorization || '');
       if (!header.startsWith('Basic ')) {
-        res.setHeader('WWW-Authenticate', `Basic realm="${basicAuthRealm}"`);
-        return res.status(401).send('Authentication required');
+        return sendBasicAuthFailure(req, res, {
+          status: 401,
+          message: 'Authentication required',
+          realm: basicAuthRealm
+        });
       }
       try {
         const raw = Buffer.from(header.slice(6), 'base64').toString('utf8');
@@ -331,7 +335,11 @@ const start = async () => {
       if (isBasicAuthBlocked(currentAttempt, nowMs)) {
         const retryAfterSec = Math.max(Math.ceil(((currentAttempt?.blockedUntilMs || nowMs) - nowMs) / 1000), 1);
         res.setHeader('Retry-After', String(retryAfterSec));
-        return res.status(429).send('Too many authentication attempts');
+        return sendBasicAuthFailure(req, res, {
+          status: 429,
+          message: 'Too many authentication attempts',
+          realm: basicAuthRealm
+        });
       }
       const nextAttempt = recordBasicAuthFailure({
         currentAttempt,
@@ -343,12 +351,15 @@ const start = async () => {
       });
       authAttemptsByIp.set(clientIp, nextAttempt);
 
-      res.setHeader('WWW-Authenticate', `Basic realm="${basicAuthRealm}"`);
       if (nextAttempt.blockedUntilMs > nowMs) {
         const retryAfterSec = Math.max(Math.ceil((nextAttempt.blockedUntilMs - nowMs) / 1000), 1);
         res.setHeader('Retry-After', String(retryAfterSec));
       }
-      return res.status(401).send('Invalid credentials');
+      return sendBasicAuthFailure(req, res, {
+        status: 401,
+        message: 'Invalid credentials',
+        realm: basicAuthRealm
+      });
     });
   }
 

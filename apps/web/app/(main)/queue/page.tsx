@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { useRuntimeStatus } from '@/lib/runtimeStatus';
 import type { QueueItem, QueueStats, ShabbosStatus, WhatsAppOutbox, WhatsAppOutboxStatus } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -135,6 +136,8 @@ const QueueInner = () => {
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [actionNotice, setActionNotice] = useState<{ type: NoticeType; message: string } | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const { databaseUnavailable, databaseUnavailableMessage } = useRuntimeStatus();
+  const databaseActionsBlocked = databaseUnavailable;
 
   useEffect(() => {
     const timer = setInterval(() => setNowMs(Date.now()), 1000);
@@ -385,6 +388,13 @@ const QueueInner = () => {
   };
 
   const requestEdit = (item: QueueItem) => {
+    if (databaseActionsBlocked) {
+      setActionNotice({
+        type: 'error',
+        message: databaseUnavailableMessage || 'Database is unavailable. Queue edits are paused.'
+      });
+      return;
+    }
     if (!canEdit(item)) {
       const blockedStatus = String(item.status || 'unknown');
       setActionNotice({
@@ -403,6 +413,13 @@ const QueueInner = () => {
 
   const saveEdit = () => {
     if (!editingId) return;
+    if (databaseActionsBlocked) {
+      setActionNotice({
+        type: 'error',
+        message: databaseUnavailableMessage || 'Database is unavailable. Queue edits are paused.'
+      });
+      return;
+    }
     updateItem.mutate({
       id: editingId,
       payload: { message_content: draftMessage }
@@ -420,19 +437,22 @@ const QueueInner = () => {
   const isPaused = (item: QueueItem) => isItemPaused(item) || isPostPaused(item);
 
   const canEdit = (item: QueueItem) => {
+    if (databaseActionsBlocked) return false;
     if (item.status === 'processing') return false;
     if (isSuccessfulSendStatus(item.status)) return canEditSentInPlace(item, editWindowMinutes, nowMs);
     return true;
   };
 
   const canPause = (item: QueueItem) =>
-    item.status === 'awaiting_approval' || item.status === 'pending' || item.status === 'failed' || item.status === 'uncertain';
+    !databaseActionsBlocked &&
+    (item.status === 'awaiting_approval' || item.status === 'pending' || item.status === 'failed' || item.status === 'uncertain');
 
-  const canResume = (item: QueueItem) => isPaused(item) || item.status === 'failed' || item.status === 'uncertain';
+  const canResume = (item: QueueItem) =>
+    !databaseActionsBlocked && (isPaused(item) || item.status === 'failed' || item.status === 'uncertain');
 
-  const canPausePost = (item: QueueItem) => Boolean(item.feed_item_id) && !isPostPaused(item);
+  const canPausePost = (item: QueueItem) => !databaseActionsBlocked && Boolean(item.feed_item_id) && !isPostPaused(item);
 
-  const canResumePost = (item: QueueItem) => Boolean(item.feed_item_id) && isPostPaused(item);
+  const canResumePost = (item: QueueItem) => !databaseActionsBlocked && Boolean(item.feed_item_id) && isPostPaused(item);
 
   const canToggleItemPause = (item: QueueItem) => canPause(item) || canResume(item);
 
@@ -460,6 +480,7 @@ const QueueInner = () => {
   };
 
   const canSendNow = (item: QueueItem) =>
+    !databaseActionsBlocked &&
     !isSuccessfulSendStatus(item.status) &&
     item.status !== 'processing' &&
     item.status !== 'skipped' &&
@@ -467,6 +488,7 @@ const QueueInner = () => {
     !isPostPaused(item);
 
   const canReschedule = (item: QueueItem) =>
+    !databaseActionsBlocked &&
     ['awaiting_approval', 'pending', 'failed', 'uncertain'].includes(String(item.status || '').toLowerCase()) &&
     !isPaused(item) &&
     !isPostPaused(item);
@@ -652,8 +674,14 @@ const QueueInner = () => {
           <Button
             variant="outline"
             onClick={() => resetProcessing.mutate()}
-            disabled={resetProcessing.isPending || !(queueStats?.processing ?? 0)}
-            title={(queueStats?.processing ?? 0) > 0 ? 'Reset stuck processing items' : 'No processing items'}
+            disabled={databaseActionsBlocked || resetProcessing.isPending || !(queueStats?.processing ?? 0)}
+            title={
+              databaseActionsBlocked
+                ? 'Database unavailable; queue actions are paused'
+                : (queueStats?.processing ?? 0) > 0
+                  ? 'Reset stuck processing items'
+                  : 'No processing items'
+            }
           >
             <RefreshCw className={`mr-2 h-4 w-4 ${resetProcessing.isPending ? 'animate-spin' : ''}`} />
             Fix stuck sends
@@ -661,18 +689,43 @@ const QueueInner = () => {
           <Button
             variant="outline"
             onClick={() => retryFailed.mutate()}
-            disabled={retryFailed.isPending || !retryableIssueCount}
-            title={retryableIssueCount ? 'Retry recent failed or uncertain sends from the last 24 hours' : 'No recent failed sends to retry'}
+            disabled={databaseActionsBlocked || retryFailed.isPending || !retryableIssueCount}
+            title={
+              databaseActionsBlocked
+                ? 'Database unavailable; retry is paused'
+                : retryableIssueCount
+                  ? 'Retry recent failed or uncertain sends from the last 24 hours'
+                  : 'No recent failed sends to retry'
+            }
           >
             <RefreshCw className={`mr-2 h-4 w-4 ${retryFailed.isPending ? 'animate-spin' : ''}`} />
             Retry Recent Issues
           </Button>
-          <Button variant="destructive" onClick={() => clearPending.mutate()} disabled={clearPending.isPending}>
+          <Button
+            variant="destructive"
+            onClick={() => clearPending.mutate()}
+            disabled={databaseActionsBlocked || clearPending.isPending}
+            title={databaseActionsBlocked ? 'Database unavailable; queue actions are paused' : undefined}
+          >
             <Trash2 className="mr-2 h-4 w-4" />
             Clear queued
           </Button>
         </div>
       </div>
+
+      {databaseActionsBlocked ? (
+        <Card className="border-destructive/40 bg-destructive/5">
+          <CardContent className="flex items-start gap-3 pt-6">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+            <div>
+              <p className="font-medium text-destructive">Queue actions are paused</p>
+              <p className="text-sm text-muted-foreground">
+                {databaseUnavailableMessage || 'The database is unavailable, so queue edits and send-now actions are paused.'}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {shabbosStatus?.isShabbos && (
         <Card className="border-warning/50 bg-warning/5">
@@ -865,7 +918,7 @@ const QueueInner = () => {
                         size="sm"
                         variant="ghost"
                         onClick={() => deleteItem.mutate(item.id)}
-                        disabled={deleteItem.isPending}
+                        disabled={databaseActionsBlocked || deleteItem.isPending}
                         className="text-destructive hover:text-destructive"
                       >
                         <Trash2 className="h-4 w-4" />
@@ -898,7 +951,7 @@ const QueueInner = () => {
                           className="min-h-[96px]"
                         />
                         <div className="flex flex-wrap gap-2">
-                          <Button size="sm" onClick={saveEdit} disabled={updateItem.isPending}>
+                          <Button size="sm" onClick={saveEdit} disabled={databaseActionsBlocked || updateItem.isPending}>
                             {updateItem.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Save className="mr-1 h-3 w-3" />}
                             Save
                           </Button>
@@ -931,7 +984,7 @@ const QueueInner = () => {
                             size="sm"
                             variant="outline"
                             onClick={() => approveItem.mutate(item.id)}
-                            disabled={approveItem.isPending}
+                            disabled={databaseActionsBlocked || approveItem.isPending}
                           >
                             <PlayCircle className="mr-1 h-3 w-3" /> Approve
                           </Button>
@@ -939,7 +992,7 @@ const QueueInner = () => {
                             size="sm"
                             variant="outline"
                             onClick={() => rejectItem.mutate(item.id)}
-                            disabled={rejectItem.isPending}
+                            disabled={databaseActionsBlocked || rejectItem.isPending}
                           >
                             <X className="mr-1 h-3 w-3" /> Reject
                           </Button>
@@ -951,7 +1004,7 @@ const QueueInner = () => {
                           size="sm"
                           variant="outline"
                           onClick={() => toggleItemPause(item)}
-                          disabled={pauseItem.isPending || resumeItem.isPending}
+                          disabled={databaseActionsBlocked || pauseItem.isPending || resumeItem.isPending}
                         >
                           {canResume(item) ? (
                             <PlayCircle className="mr-1 h-3 w-3" />
@@ -967,7 +1020,7 @@ const QueueInner = () => {
                           size="sm"
                           variant="outline"
                           onClick={() => togglePostPause(item)}
-                          disabled={pausePost.isPending || resumePost.isPending}
+                          disabled={databaseActionsBlocked || pausePost.isPending || resumePost.isPending}
                         >
                           {canResumePost(item) ? (
                             <PlayCircle className="mr-1 h-3 w-3" />
@@ -988,7 +1041,7 @@ const QueueInner = () => {
                           size="sm"
                           variant="outline"
                           onClick={() => delayItem(item, 10)}
-                          disabled={rescheduleItem.isPending}
+                          disabled={databaseActionsBlocked || rescheduleItem.isPending}
                         >
                           <Clock className="mr-1 h-3 w-3" /> Delay 10m
                         </Button>
@@ -999,7 +1052,7 @@ const QueueInner = () => {
                           size="sm"
                           variant="outline"
                           onClick={() => clearDelay(item)}
-                          disabled={rescheduleItem.isPending}
+                          disabled={databaseActionsBlocked || rescheduleItem.isPending}
                         >
                           <Clock className="mr-1 h-3 w-3" /> Clear delay
                         </Button>
@@ -1082,6 +1135,7 @@ const QueueInner = () => {
                           variant="ghost"
                           className="h-6 w-6 text-destructive hover:text-destructive shrink-0"
                           onClick={() => deleteItem.mutate(item.id)}
+                          disabled={databaseActionsBlocked || deleteItem.isPending}
                         >
                           <Trash2 className="h-3 w-3" />
                         </Button>
@@ -1109,7 +1163,7 @@ const QueueInner = () => {
                             className="min-h-[88px] text-xs"
                           />
                           <div className="flex flex-wrap gap-1">
-                            <Button size="sm" className="h-7 text-xs px-2" onClick={saveEdit} disabled={updateItem.isPending}>
+                            <Button size="sm" className="h-7 text-xs px-2" onClick={saveEdit} disabled={databaseActionsBlocked || updateItem.isPending}>
                               {updateItem.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Save className="mr-1 h-3 w-3" />}
                               Save
                             </Button>
@@ -1140,7 +1194,7 @@ const QueueInner = () => {
                               variant="outline"
                               className="h-7 text-xs px-2"
                               onClick={() => approveItem.mutate(item.id)}
-                              disabled={approveItem.isPending}
+                              disabled={databaseActionsBlocked || approveItem.isPending}
                             >
                               <PlayCircle className="mr-1 h-3 w-3" />
                               Approve
@@ -1150,7 +1204,7 @@ const QueueInner = () => {
                               variant="outline"
                               className="h-7 text-xs px-2"
                               onClick={() => rejectItem.mutate(item.id)}
-                              disabled={rejectItem.isPending}
+                              disabled={databaseActionsBlocked || rejectItem.isPending}
                             >
                               <X className="mr-1 h-3 w-3" />
                               Reject
@@ -1163,7 +1217,7 @@ const QueueInner = () => {
                             variant="outline"
                             className="h-7 text-xs px-2"
                             onClick={() => toggleItemPause(item)}
-                            disabled={pauseItem.isPending || resumeItem.isPending}
+                            disabled={databaseActionsBlocked || pauseItem.isPending || resumeItem.isPending}
                           >
                             {canResume(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
                             {canResume(item) ? 'Resume target' : 'Pause target'}
@@ -1175,14 +1229,14 @@ const QueueInner = () => {
                             variant="outline"
                             className="h-7 text-xs px-2"
                             onClick={() => togglePostPause(item)}
-                            disabled={pausePost.isPending || resumePost.isPending}
+                            disabled={databaseActionsBlocked || pausePost.isPending || resumePost.isPending}
                             title={canResumePost(item) ? 'Resume this story for all targets' : 'Pause this story for all targets'}
                           >
                             {canResumePost(item) ? <PlayCircle className="mr-1 h-3 w-3" /> : <PauseCircle className="mr-1 h-3 w-3" />}
                             {canResumePost(item) ? 'Resume story (all)' : 'Pause story (all)'}
                           </Button>
                         )}
-                        <Button size="sm" variant="outline" className="h-7 text-xs px-2 ml-auto" onClick={() => sendNowItem.mutate(item.id)} disabled={!canSendNow(item)}>
+                        <Button size="sm" variant="outline" className="h-7 text-xs px-2 ml-auto" onClick={() => sendNowItem.mutate(item.id)} disabled={!canSendNow(item) || sendNowItem.isPending}>
                           <Send className="h-3 w-3" />
                         </Button>
                         {canReschedule(item) ? (
@@ -1191,7 +1245,7 @@ const QueueInner = () => {
                             variant="outline"
                             className="h-7 text-xs px-2"
                             onClick={() => item.scheduled_for ? clearDelay(item) : delayItem(item, 10)}
-                            disabled={rescheduleItem.isPending}
+                            disabled={databaseActionsBlocked || rescheduleItem.isPending}
                           >
                             <Clock className="h-3 w-3" />
                           </Button>

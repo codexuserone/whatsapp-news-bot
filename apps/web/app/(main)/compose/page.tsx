@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { useRuntimeStatus } from '@/lib/runtimeStatus';
 import type { Target } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -259,6 +260,7 @@ const ComposeInner = () => {
   const [includeCaption, setIncludeCaption] = useState(true);
   const [blockName, setBlockName] = useState('');
   const [blockContent, setBlockContent] = useState('');
+  const { databaseUnavailable, databaseUnavailableMessage } = useRuntimeStatus();
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
     queryKey: ['targets'],
@@ -426,6 +428,13 @@ const ComposeInner = () => {
   };
 
   const validateBeforeDispatch = () => {
+    if (databaseUnavailable) {
+      setNotice({
+        type: 'error',
+        message: databaseUnavailableMessage || 'Database is unavailable. Sending and queueing are paused.'
+      });
+      return false;
+    }
     if (!selectedTargetIds.length) {
       setNotice({ type: 'error', message: 'Select at least one destination.' });
       return false;
@@ -475,6 +484,14 @@ const ComposeInner = () => {
   };
 
   const saveDraft = async () => {
+    if (databaseUnavailable) {
+      setNotice({
+        type: 'error',
+        message: databaseUnavailableMessage || 'Database is unavailable. Draft saves are paused.'
+      });
+      return;
+    }
+
     const draft = buildDraftPayload();
     const next = (() => {
       const existing = drafts.slice();
@@ -525,6 +542,14 @@ const ComposeInner = () => {
   };
 
   const deleteDraft = async (id: string) => {
+    if (databaseUnavailable) {
+      setNotice({
+        type: 'error',
+        message: databaseUnavailableMessage || 'Database is unavailable. Draft deletes are paused.'
+      });
+      return;
+    }
+
     try {
       await updateDrafts.mutateAsync(drafts.filter((draft) => draft.id !== id));
       if (activeDraftId === id) clearComposer();
@@ -535,6 +560,14 @@ const ComposeInner = () => {
   };
 
   const saveBlock = async () => {
+    if (databaseUnavailable) {
+      setNotice({
+        type: 'error',
+        message: databaseUnavailableMessage || 'Database is unavailable. Block saves are paused.'
+      });
+      return;
+    }
+
     const name = blockName.trim();
     const content = blockContent.trim();
     if (!name || !content) {
@@ -554,6 +587,14 @@ const ComposeInner = () => {
   };
 
   const deleteBlock = async (id: string) => {
+    if (databaseUnavailable) {
+      setNotice({
+        type: 'error',
+        message: databaseUnavailableMessage || 'Database is unavailable. Block deletes are paused.'
+      });
+      return;
+    }
+
     try {
       await updateBlocks.mutateAsync(blocks.filter((block) => block.id !== id));
       setNotice({ type: 'success', message: 'Block deleted.' });
@@ -597,7 +638,13 @@ const ComposeInner = () => {
           <p className="text-muted-foreground">Send or queue a normal WhatsApp message with optional attachment.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={saveDraft} disabled={updateDrafts.isPending}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={saveDraft}
+            disabled={databaseUnavailable || updateDrafts.isPending}
+            title={databaseUnavailable ? 'Database unavailable; draft saves are paused' : undefined}
+          >
             <Save className="mr-2 h-4 w-4" />
             Save draft
           </Button>
@@ -607,6 +654,20 @@ const ComposeInner = () => {
           </Button>
         </div>
       </div>
+
+      {databaseUnavailable ? (
+        <Card className="border-destructive/40 bg-destructive/5">
+          <CardContent className="flex items-start gap-3 pt-6">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+            <div>
+              <p className="font-medium text-destructive">Sending and queueing are paused</p>
+              <p className="text-sm text-muted-foreground">
+                {databaseUnavailableMessage || 'The database is unavailable, so new messages cannot be queued or sent right now.'}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {notice ? (
         <div
@@ -757,7 +818,8 @@ const ComposeInner = () => {
                     if (!validateBeforeDispatch()) return;
                     queueManual.mutate();
                   }}
-                  disabled={queueManual.isPending}
+                  disabled={databaseUnavailable || queueManual.isPending}
+                  title={databaseUnavailable ? 'Database unavailable; queueing is paused' : undefined}
                 >
                   <ClipboardPaste className="mr-2 h-4 w-4" />
                   Queue
@@ -769,7 +831,8 @@ const ComposeInner = () => {
                     if (!validateBeforeDispatch()) return;
                     sendManualNow.mutate();
                   }}
-                  disabled={sendManualNow.isPending}
+                  disabled={databaseUnavailable || sendManualNow.isPending}
+                  title={databaseUnavailable ? 'Database unavailable; sending is paused' : undefined}
                 >
                   <Send className="mr-2 h-4 w-4" />
                   Send now
@@ -907,6 +970,8 @@ const ComposeInner = () => {
                           variant="ghost"
                           className="text-destructive hover:text-destructive"
                           onClick={() => deleteDraft(draft.id)}
+                          disabled={databaseUnavailable || updateDrafts.isPending}
+                          title={databaseUnavailable ? 'Database unavailable; draft deletes are paused' : undefined}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -942,7 +1007,13 @@ const ComposeInner = () => {
                     className="min-h-[96px]"
                   />
                 </div>
-                <Button type="button" size="sm" onClick={saveBlock} disabled={updateBlocks.isPending}>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={saveBlock}
+                  disabled={databaseUnavailable || updateBlocks.isPending}
+                  title={databaseUnavailable ? 'Database unavailable; block saves are paused' : undefined}
+                >
                   <Save className="mr-2 h-4 w-4" />
                   Save block
                 </Button>
@@ -970,6 +1041,8 @@ const ComposeInner = () => {
                             variant="ghost"
                             className="text-destructive hover:text-destructive"
                             onClick={() => deleteBlock(block.id)}
+                            disabled={databaseUnavailable || updateBlocks.isPending}
+                            title={databaseUnavailable ? 'Database unavailable; block deletes are paused' : undefined}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>

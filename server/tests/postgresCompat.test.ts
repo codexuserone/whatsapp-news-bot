@@ -44,6 +44,27 @@ describe('postgresCompat query builder', () => {
     );
   });
 
+  it('prefers POSTGRES_URL over Neon when DB_PROVIDER is postgres', () => {
+    process.env.DB_PROVIDER = 'postgres';
+    process.env.POSTGRES_URL = 'postgresql://render-postgres/db';
+    process.env.DATABASE_URL = 'postgresql://legacy-database/db';
+    process.env.NEON_DATABASE_URL = 'postgresql://neon/db';
+
+    const { resolvePostgresConnectionString } = require('../src/db/postgresCompat');
+
+    expect(resolvePostgresConnectionString()).toBe('postgresql://render-postgres/db');
+  });
+
+  it('prefers Neon over POSTGRES_URL when DB_PROVIDER is neon', () => {
+    process.env.DB_PROVIDER = 'neon';
+    process.env.POSTGRES_URL = 'postgresql://render-postgres/db';
+    process.env.NEON_DATABASE_URL = 'postgresql://neon/db';
+
+    const { resolvePostgresConnectionString } = require('../src/db/postgresCompat');
+
+    expect(resolvePostgresConnectionString()).toBe('postgresql://neon/db');
+  });
+
   it('keeps nested or placeholders aligned with their own values', async () => {
     const { createPostgresCompatClient } = require('../src/db/postgresCompat');
     const db = createPostgresCompatClient();

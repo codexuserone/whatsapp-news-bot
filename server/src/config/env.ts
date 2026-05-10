@@ -27,10 +27,20 @@ const hasSupabaseCredentials = Boolean(
   String(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || '').trim()
 );
 
+const resolveActiveDatabaseUrl = () => {
+  if (dbProvider === 'neon') {
+    return process.env.NEON_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
+  }
+  if (dbProvider === 'postgres') {
+    return process.env.POSTGRES_URL || process.env.DATABASE_URL || process.env.NEON_DATABASE_URL || process.env.SUPABASE_DB_URL;
+  }
+  return process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.NEON_DATABASE_URL || process.env.SUPABASE_DB_URL;
+};
+
 const env = {
   PORT: process.env.PORT || 10000,
   DB_PROVIDER: dbProvider || (hasPostgresUrl ? 'postgres' : 'supabase'),
-  DATABASE_URL: process.env.DATABASE_URL || process.env.NEON_DATABASE_URL || process.env.POSTGRES_URL || process.env.SUPABASE_DB_URL,
+  DATABASE_URL: resolveActiveDatabaseUrl(),
   // Supabase configuration
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,

@@ -145,6 +145,29 @@ describe('authStore', () => {
         expect(Array.from((keys.abc as Buffer).values())).toEqual([4, 5, 6]);
     });
 
+    it('uses POSTGRES_URL for auth state when DB_PROVIDER is postgres', async () => {
+        process.env.DB_PROVIDER = 'postgres';
+        process.env.POSTGRES_URL = 'postgresql://render-postgres/db';
+        process.env.DATABASE_URL = 'postgresql://legacy-database/db';
+        process.env.NEON_DATABASE_URL = 'postgresql://neon/db';
+        mockGetSupabaseClient.mockReturnValue(null);
+        mockPgQuery.mockResolvedValue({
+            rows: [
+                {
+                    creds: { registered: true },
+                    lease_owner: null,
+                    lease_expires_at: null
+                }
+            ]
+        });
+
+        const useSupabaseAuthState = require('../src/whatsapp/authStore');
+        await useSupabaseAuthState('primary');
+        const { Pool } = require('pg');
+
+        expect(Pool).toHaveBeenCalledWith(expect.objectContaining({ connectionString: 'postgresql://render-postgres/db' }));
+    });
+
     it('stores WhatsApp key updates in per-key Postgres rows', async () => {
         process.env.DB_PROVIDER = 'neon';
         process.env.NEON_DATABASE_URL = 'postgresql://user:pass@example.com/db';

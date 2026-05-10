@@ -93,7 +93,7 @@ const preferIpv4 = () => {
 const resolvePostgresConnectionString = () => {
   const provider = String(process.env.DB_PROVIDER || '').trim().toLowerCase();
   const candidates =
-    provider === 'neon' || provider === 'postgres'
+    provider === 'neon'
       ? [
           process.env.NEON_DATABASE_URL,
           process.env.POSTGRES_URL,
@@ -101,10 +101,18 @@ const resolvePostgresConnectionString = () => {
           process.env.SUPABASE_POOLER_URL,
           process.env.SUPABASE_DB_URL
         ]
+      : provider === 'postgres'
+        ? [
+            process.env.POSTGRES_URL,
+            process.env.DATABASE_URL,
+            process.env.NEON_DATABASE_URL,
+            process.env.SUPABASE_POOLER_URL,
+            process.env.SUPABASE_DB_URL
+          ]
       : [
           process.env.DATABASE_URL,
-          process.env.NEON_DATABASE_URL,
           process.env.POSTGRES_URL,
+          process.env.NEON_DATABASE_URL,
           process.env.SUPABASE_POOLER_URL,
           process.env.SUPABASE_DB_URL
         ];

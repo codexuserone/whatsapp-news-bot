@@ -310,18 +310,34 @@ const runMigrations = async () => {
   preferIpv4();
   loadEnv();
 
-  // Prefer explicit Postgres pooler URLs, then the active Neon URL, then legacy DATABASE_URL.
-  const databaseUrl = process.env.SUPABASE_DB_URL || process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
-  const databaseUrlSource = process.env.SUPABASE_DB_URL
-    ? 'SUPABASE_DB_URL'
-    : process.env.NEON_DATABASE_URL
-      ? 'NEON_DATABASE_URL'
-      : process.env.DATABASE_URL
-        ? 'DATABASE_URL'
-        : null;
+  const provider = String(process.env.DB_PROVIDER || '').trim().toLowerCase();
+  const databaseUrlCandidates =
+    provider === 'neon'
+      ? [
+          ['NEON_DATABASE_URL', process.env.NEON_DATABASE_URL],
+          ['POSTGRES_URL', process.env.POSTGRES_URL],
+          ['DATABASE_URL', process.env.DATABASE_URL],
+          ['SUPABASE_DB_URL', process.env.SUPABASE_DB_URL]
+        ]
+      : provider === 'postgres'
+        ? [
+            ['POSTGRES_URL', process.env.POSTGRES_URL],
+            ['DATABASE_URL', process.env.DATABASE_URL],
+            ['NEON_DATABASE_URL', process.env.NEON_DATABASE_URL],
+            ['SUPABASE_DB_URL', process.env.SUPABASE_DB_URL]
+          ]
+        : [
+            ['SUPABASE_DB_URL', process.env.SUPABASE_DB_URL],
+            ['DATABASE_URL', process.env.DATABASE_URL],
+            ['POSTGRES_URL', process.env.POSTGRES_URL],
+            ['NEON_DATABASE_URL', process.env.NEON_DATABASE_URL]
+          ];
+  const selectedDatabaseUrl = databaseUrlCandidates.find(([, value]) => String(value || '').trim());
+  const databaseUrlSource = selectedDatabaseUrl?.[0] || null;
+  const databaseUrl = selectedDatabaseUrl?.[1] || '';
   if (!databaseUrl) {
     throw new Error(
-      'Missing DATABASE_URL, NEON_DATABASE_URL, or SUPABASE_DB_URL. Add a Postgres connection string to server/.env (local) or Render env vars (prod) before running migrations.'
+      'Missing DATABASE_URL, POSTGRES_URL, NEON_DATABASE_URL, or SUPABASE_DB_URL. Add a Postgres connection string to server/.env (local) or Render env vars (prod) before running migrations.'
     );
   }
 

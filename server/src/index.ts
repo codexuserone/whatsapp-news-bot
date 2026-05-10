@@ -11,7 +11,15 @@ const {
   isBasicAuthBlocked,
   recordBasicAuthFailure
 } = require('./utils/basicAuthAttempts');
-const { sendBasicAuthFailure } = require('./utils/basicAuthChallenge');
+const { shouldUseBasicAuthChallenge } = require('./utils/basicAuthChallenge');
+const {
+  APP_SESSION_COOKIE,
+  clearAppSessionCookie,
+  createAppSessionToken,
+  readCookie,
+  setAppSessionCookie,
+  verifyAppSessionToken
+} = require('./utils/appSessionAuth');
 const env = require('./config/env');
 const logger = require('./utils/logger');
 const { getSupabaseHealthState, testConnection } = require('./db/supabase');
@@ -161,6 +169,86 @@ const ipMatchesAllowlistEntry = (clientIp: string, rawEntry: string) => {
 const ipMatchesAllowlist = (clientIp: string, allowlist: string[]) =>
   allowlist.some((entry) => ipMatchesAllowlistEntry(clientIp, entry));
 
+const escapeHtml = (value: unknown) =>
+  String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const isSafeRelativePath = (value: string) =>
+  value.startsWith('/') && !value.startsWith('//') && !value.includes('\\');
+
+const normalizeLoginNextPath = (value: unknown) => {
+  const raw = String(value || '').trim();
+  return isSafeRelativePath(raw) ? raw : '/';
+};
+
+const redirectToLogin = (req: Request, res: Response, reason?: string) => {
+  const nextPath = normalizeLoginNextPath(req.originalUrl || req.url || '/');
+  const params = new URLSearchParams({ next: nextPath });
+  if (reason) params.set('reason', reason);
+  return res.redirect(303, `/login?${params.toString()}`);
+};
+
+const renderLoginPage = (options: {
+  nextPath: string;
+  reason?: string;
+}) => {
+  const nextPath = normalizeLoginNextPath(options.nextPath);
+  const reason = String(options.reason || '').trim();
+  const message =
+    reason === 'invalid'
+      ? 'The username or password was not accepted.'
+      : reason === 'blocked'
+        ? 'Too many failed attempts. Wait a few minutes and try again.'
+        : reason === 'expired'
+          ? 'Please sign in again.'
+          : '';
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Sign in - WhatsApp News Bot</title>
+    <style>
+      :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #111827; color: #f9fafb; }
+      main { width: min(420px, calc(100vw - 32px)); background: #ffffff; color: #111827; border-radius: 12px; padding: 28px; box-shadow: 0 24px 80px rgba(0,0,0,.35); }
+      h1 { margin: 0 0 8px; font-size: 24px; line-height: 1.2; }
+      p { margin: 0 0 20px; color: #4b5563; }
+      label { display: block; margin-top: 14px; font-weight: 650; font-size: 14px; }
+      input { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 12px 14px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; }
+      button { width: 100%; margin-top: 22px; border: 0; border-radius: 8px; padding: 12px 14px; background: #2563eb; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+      .error { margin: 14px 0 0; color: #991b1b; background: #fee2e2; border-radius: 8px; padding: 10px 12px; }
+      @media (prefers-color-scheme: dark) {
+        main { background: #1f2937; color: #f9fafb; }
+        p { color: #d1d5db; }
+        input { background: #111827; border-color: #4b5563; color: #f9fafb; }
+        .error { color: #fecaca; background: #7f1d1d; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Sign in</h1>
+      <p>Use the app username and password.</p>
+      ${message ? `<div class="error">${escapeHtml(message)}</div>` : ''}
+      <form method="post" action="/login">
+        <input type="hidden" name="next" value="${escapeHtml(nextPath)}">
+        <label for="username">Username</label>
+        <input id="username" name="username" autocomplete="username" required autofocus>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button type="submit">Sign in</button>
+      </form>
+    </main>
+  </body>
+</html>`;
+};
+
 const cleanupAuthAttempts = (nowMs: number) => {
   if (nowMs - authAttemptCleanupAtMs < 5 * 60 * 1000) return;
   authAttemptCleanupAtMs = nowMs;
@@ -241,9 +329,6 @@ const start = async () => {
       String(process.env.REQUIRE_BASIC_AUTH || '').toLowerCase() !== 'false');
   const basicUser = process.env.BASIC_AUTH_USER;
   const basicPass = process.env.BASIC_AUTH_PASS;
-  const basicAuthRealm = String(process.env.BASIC_AUTH_REALM || 'WhatsApp News Bot')
-    .replace(/"/g, '')
-    .trim() || 'WhatsApp News Bot';
   let basicAuthConfigError: string | null = null;
   const requireHttpsForAuth = toBoolean(
     process.env.BASIC_AUTH_REQUIRE_HTTPS,
@@ -287,7 +372,118 @@ const start = async () => {
       logger.error({ allowWeakBasicAuth }, basicAuthConfigError);
     }
   }
+
+  app.use(express.urlencoded({ extended: false, limit: '32kb' }));
+
   if (requireBasicAuth) {
+    const sessionTtlSeconds = Math.max(Number(process.env.APP_SESSION_TTL_SECONDS || 7 * 24 * 60 * 60), 60);
+    const appSessionSecret = process.env.APP_SESSION_SECRET || null;
+    const hasValidSession = (req: Request) =>
+      Boolean(
+        basicUser &&
+          basicPass &&
+          verifyAppSessionToken(readCookie(req, APP_SESSION_COOKIE), {
+            basicUser: String(basicUser),
+            basicPass: String(basicPass),
+            explicitSecret: appSessionSecret
+          })
+      );
+    const writeSessionCookie = (req: Request, res: Response) => {
+      if (!basicUser || !basicPass) return;
+      const token = createAppSessionToken({
+        username: String(basicUser),
+        basicUser: String(basicUser),
+        basicPass: String(basicPass),
+        explicitSecret: appSessionSecret,
+        ttlSeconds: sessionTtlSeconds
+      });
+      setAppSessionCookie(res, token, {
+        secure: isSecureRequest(req) || process.env.NODE_ENV === 'production',
+        ttlSeconds: sessionTtlSeconds
+      });
+    };
+    const validateBasicHeader = (header: string) => {
+      if (!basicUser || !basicPass || !header.startsWith('Basic ')) return false;
+      try {
+        const raw = Buffer.from(header.slice(6), 'base64').toString('utf8');
+        const idx = raw.indexOf(':');
+        const user = idx >= 0 ? raw.slice(0, idx) : raw;
+        const pass = idx >= 0 ? raw.slice(idx + 1) : '';
+        return safeEquals(user, String(basicUser)) && safeEquals(pass, String(basicPass));
+      } catch {
+        return false;
+      }
+    };
+    const sendAuthFailure = (req: Request, res: Response, options: { status: number; message: string; reason: string }) => {
+      if (shouldUseBasicAuthChallenge(req)) {
+        return redirectToLogin(req, res, options.reason);
+      }
+      return res.status(options.status).json({ error: options.message });
+    };
+
+    app.get('/login', (req: Request, res: Response) => {
+      if (hasValidSession(req)) {
+        return res.redirect(303, normalizeLoginNextPath(req.query.next || '/'));
+      }
+      return res
+        .status(200)
+        .type('html')
+        .send(renderLoginPage({
+          nextPath: normalizeLoginNextPath(req.query.next || '/'),
+          reason: String(req.query.reason || '')
+        }));
+    });
+
+    app.post('/login', (req: Request, res: Response) => {
+      if (basicAuthConfigError || !basicUser || !basicPass) {
+        return res.status(503).send('Authentication is not configured');
+      }
+      if (requireHttpsForAuth && !isSecureRequest(req)) {
+        return res.status(403).send('HTTPS is required');
+      }
+
+      const clientIp = normalizeClientIp(req);
+      const nowMs = Date.now();
+      cleanupAuthAttempts(nowMs);
+      const currentAttempt = authAttemptsByIp.get(clientIp);
+      if (isBasicAuthBlocked(currentAttempt, nowMs)) {
+        return res.redirect(303, `/login?${new URLSearchParams({
+          next: normalizeLoginNextPath((req.body as { next?: unknown })?.next || '/'),
+          reason: 'blocked'
+        }).toString()}`);
+      }
+
+      const body = req.body as { username?: unknown; password?: unknown; next?: unknown };
+      const username = String(body.username || '');
+      const password = String(body.password || '');
+      if (safeEquals(username, String(basicUser)) && safeEquals(password, String(basicPass))) {
+        authAttemptsByIp.delete(clientIp);
+        writeSessionCookie(req, res);
+        return res.redirect(303, normalizeLoginNextPath(body.next || '/'));
+      }
+
+      const signature = getBasicAuthFailureSignature(`${username}:${password}`);
+      const nextAttempt = recordBasicAuthFailure({
+        currentAttempt,
+        nowMs,
+        blockWindowMs: authBlockWindowMs,
+        maxAttempts: authMaxAttempts,
+        signature,
+        repeatSignatureWindowMs: authRepeatFailureWindowMs
+      });
+      authAttemptsByIp.set(clientIp, nextAttempt);
+      const reason = nextAttempt.blockedUntilMs > nowMs ? 'blocked' : 'invalid';
+      return res.redirect(303, `/login?${new URLSearchParams({
+        next: normalizeLoginNextPath(body.next || '/'),
+        reason
+      }).toString()}`);
+    });
+
+    app.post('/logout', (req: Request, res: Response) => {
+      clearAppSessionCookie(res, isSecureRequest(req) || process.env.NODE_ENV === 'production');
+      return res.redirect(303, '/login');
+    });
+
     app.use((req: Request, res: Response, next) => {
       if (isPublicProbeRequest(req)) return next();
       if (req.method === 'OPTIONS') return next();
@@ -311,34 +507,32 @@ const start = async () => {
       cleanupAuthAttempts(nowMs);
       const currentAttempt = authAttemptsByIp.get(clientIp);
 
+      if (hasValidSession(req)) {
+        return next();
+      }
+
       const header = String(req.headers.authorization || '');
       if (!header.startsWith('Basic ')) {
-        return sendBasicAuthFailure(req, res, {
+        return sendAuthFailure(req, res, {
           status: 401,
           message: 'Authentication required',
-          realm: basicAuthRealm
+          reason: 'expired'
         });
       }
-      try {
-        const raw = Buffer.from(header.slice(6), 'base64').toString('utf8');
-        const idx = raw.indexOf(':');
-        const user = idx >= 0 ? raw.slice(0, idx) : raw;
-        const pass = idx >= 0 ? raw.slice(idx + 1) : '';
-        if (safeEquals(user, String(basicUser)) && safeEquals(pass, String(basicPass))) {
-          authAttemptsByIp.delete(clientIp);
-          return next();
-        }
-      } catch {
-        // ignore
+
+      if (validateBasicHeader(header)) {
+        authAttemptsByIp.delete(clientIp);
+        writeSessionCookie(req, res);
+        return next();
       }
 
       if (isBasicAuthBlocked(currentAttempt, nowMs)) {
         const retryAfterSec = Math.max(Math.ceil(((currentAttempt?.blockedUntilMs || nowMs) - nowMs) / 1000), 1);
         res.setHeader('Retry-After', String(retryAfterSec));
-        return sendBasicAuthFailure(req, res, {
+        return sendAuthFailure(req, res, {
           status: 429,
           message: 'Too many authentication attempts',
-          realm: basicAuthRealm
+          reason: 'blocked'
         });
       }
       const nextAttempt = recordBasicAuthFailure({
@@ -355,10 +549,10 @@ const start = async () => {
         const retryAfterSec = Math.max(Math.ceil((nextAttempt.blockedUntilMs - nowMs) / 1000), 1);
         res.setHeader('Retry-After', String(retryAfterSec));
       }
-      return sendBasicAuthFailure(req, res, {
+      return sendAuthFailure(req, res, {
         status: 401,
         message: 'Invalid credentials',
-        realm: basicAuthRealm
+        reason: 'invalid'
       });
     });
   }

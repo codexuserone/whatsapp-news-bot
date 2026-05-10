@@ -447,6 +447,7 @@ const queueRoutes = () => {
         query = query.order('sent_at', { ascending: order.ascending, nullsFirst: false });
       }
       query = query
+        .order('scheduled_for', { ascending: order.ascending, nullsFirst: true })
         .order('created_at', { ascending: order.ascending })
         .order('id', { ascending: order.ascending })
         .limit(useCursorPagination ? limit + 1 : limit);

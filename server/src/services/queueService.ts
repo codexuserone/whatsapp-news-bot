@@ -1959,9 +1959,7 @@ const buildDispatchRowsForSteps = (options: {
     if (position > 0) {
       cumulativeDelaySeconds += step.delaySeconds;
     }
-    const scheduledFor = cumulativeDelaySeconds > 0
-      ? new Date(baseTimeMs + cumulativeDelaySeconds * 1000).toISOString()
-      : null;
+    const scheduledFor = new Date(baseTimeMs + cumulativeDelaySeconds * 1000).toISOString();
     return {
       feed_item_id: options.feedItemId,
       target_id: options.targetId,
@@ -3687,6 +3685,8 @@ const queueSinceLastRunForSchedule = async (
   let totalQueued = 0;
   let totalFeedItems = 0;
   let pageCount = 0;
+  let dispatchOrdinal = 0;
+  const dispatchBaseTimeMs = Date.now();
   const MAX_FEED_QUEUE_PAGES = 1000;
 
   // Pre-fetch existing combinations to avoid duplicates in batch
@@ -3826,8 +3826,10 @@ const queueSinceLastRunForSchedule = async (
           targetId,
           schedule,
           steps: templateSteps,
-          status: queuedStatus
+          status: queuedStatus,
+          baseTimeMs: dispatchBaseTimeMs + dispatchOrdinal * 1000
         }));
+        dispatchOrdinal += 1;
         if (batch.length >= LOG_BATCH_SIZE) {
           totalQueued += await flushBatch(batch);
           batch = [];

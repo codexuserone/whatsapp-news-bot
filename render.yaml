@@ -12,8 +12,12 @@ services:
         value: 10000
       - key: NODE_VERSION
         value: "22"
+      - key: NPM_CONFIG_PRODUCTION
+        value: "false"
       - key: DB_PROVIDER
-        value: neon
+        value: postgres
+      - key: POSTGRES_URL
+        sync: false
       - key: NEON_DATABASE_URL
         sync: false
       - key: DATABASE_URL
@@ -25,7 +29,7 @@ services:
       - key: SUPABASE_DB_URL
         sync: false
       - key: RUN_MIGRATIONS_ON_START
-        value: "false"
+        value: "true"
       - key: MIGRATIONS_STRICT
         value: "false"
       - key: KEEP_ALIVE
@@ -93,7 +97,11 @@ services:
       - key: WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE
         value: "unsafe"
       - key: WHATSAPP_STATUS_INCLUDE_SENDER
-        value: "true"
+        value: "false"
+      - key: WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE
+        value: "false"
+      - key: WHATSAPP_STATUS_SYNC_OWN_DEVICES
+        value: "false"
       - key: WHATSAPP_ALLOW_POST_SEND_MEDIA_EDITS
         value: "false"
       - key: WHATSAPP_ALLOW_AUTO_REPLACE_CORRECTIONS

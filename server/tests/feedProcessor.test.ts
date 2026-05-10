@@ -168,7 +168,7 @@ describe('queueFeedItemsForSchedules', () => {
                 template_id: 'template-1',
                 sequence_step_index: 0,
                 sequence_step_label: null,
-                scheduled_for: null,
+                scheduled_for: expect.any(String),
                 status: 'awaiting_approval',
                 approved_at: null,
                 approved_by: null
@@ -180,7 +180,7 @@ describe('queueFeedItemsForSchedules', () => {
                 template_id: 'template-1',
                 sequence_step_index: 0,
                 sequence_step_label: null,
-                scheduled_for: null,
+                scheduled_for: expect.any(String),
                 status: 'awaiting_approval',
                 approved_at: null,
                 approved_by: null
@@ -192,7 +192,7 @@ describe('queueFeedItemsForSchedules', () => {
                 template_id: 'template-1',
                 sequence_step_index: 0,
                 sequence_step_label: null,
-                scheduled_for: null,
+                scheduled_for: expect.any(String),
                 status: 'awaiting_approval',
                 approved_at: null,
                 approved_by: null
@@ -273,7 +273,7 @@ describe('queueFeedItemsForSchedules', () => {
             template_id: 'template-sequence',
             sequence_step_index: 0,
             sequence_step_label: 'Text first',
-            scheduled_for: null,
+            scheduled_for: expect.any(String),
             status: 'pending'
         });
         expect(queued[1]).toMatchObject({

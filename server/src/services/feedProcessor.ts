@@ -90,6 +90,18 @@ const isFeedItemFreshEnoughForAutoQueue = (
   return nowMs - timestampMs <= maxAgeMs;
 };
 
+const compareFeedDispatchOrder = (left: Record<string, unknown>, right: Record<string, unknown>) => {
+  const leftPub = left?.pub_date ? Date.parse(String(left.pub_date)) : Number.NaN;
+  const rightPub = right?.pub_date ? Date.parse(String(right.pub_date)) : Number.NaN;
+  const leftCreated = left?.created_at ? Date.parse(String(left.created_at)) : Number.NaN;
+  const rightCreated = right?.created_at ? Date.parse(String(right.created_at)) : Number.NaN;
+  const leftPrimary = Number.isFinite(leftPub) ? leftPub : Number.isFinite(leftCreated) ? leftCreated : 0;
+  const rightPrimary = Number.isFinite(rightPub) ? rightPub : Number.isFinite(rightCreated) ? rightCreated : 0;
+  if (leftPrimary !== rightPrimary) return leftPrimary - rightPrimary;
+  if (leftCreated !== rightCreated) return leftCreated - rightCreated;
+  return String(left?.id || '').localeCompare(String(right?.id || ''));
+};
+
 const extractWordpressNumericId = (value?: string) => {
   if (!value) return null;
   const text = String(value);
@@ -209,10 +221,7 @@ const buildDispatchRowsForSteps = (options: {
       template_id: options.schedule.template_id,
       sequence_step_index: step.index,
       sequence_step_label: step.label,
-      scheduled_for:
-        cumulativeDelaySeconds > 0
-          ? new Date(options.baseTimeMs + cumulativeDelaySeconds * 1000).toISOString()
-          : null,
+      scheduled_for: new Date(options.baseTimeMs + cumulativeDelaySeconds * 1000).toISOString(),
       status: options.status,
       approved_at: null,
       approved_by: null
@@ -562,7 +571,9 @@ const queueFeedItemsForSchedules = async (feedId: string, items: FeedItemRecord[
   const supabase = getSupabaseClient();
   if (!supabase || !items.length) return [];
 
-  const queueableItems = items.filter((item) => isFeedItemFreshEnoughForAutoQueue(item));
+  const queueableItems = items
+    .filter((item) => isFeedItemFreshEnoughForAutoQueue(item))
+    .sort(compareFeedDispatchOrder);
   if (!queueableItems.length) return [];
 
   const feedItemIds = queueableItems.map((item) => item.id).filter(Boolean) as string[];
@@ -637,6 +648,7 @@ const queueFeedItemsForSchedules = async (feedId: string, items: FeedItemRecord[
           .filter(Boolean) as string[]
       );
 
+      let dispatchOrdinal = 0;
       for (const item of queueableItems) {
         const feedItemId = String(item.id || '').trim();
         if (!feedItemId) continue;
@@ -647,8 +659,9 @@ const queueFeedItemsForSchedules = async (feedId: string, items: FeedItemRecord[
             schedule,
             steps: templateSteps,
             status: queuedStatus,
-            baseTimeMs
+            baseTimeMs: baseTimeMs + dispatchOrdinal * 1000
           });
+          dispatchOrdinal += 1;
           for (const row of rows) {
             const key = buildDispatchKey(feedItemId, targetId, row.sequence_step_index);
             if (key && existingKeys.has(key)) continue;

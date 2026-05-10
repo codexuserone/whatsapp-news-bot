@@ -601,6 +601,17 @@ type CachedNewsletterLiveUpdates = {
 const isTransientLeaseFailureReason = (reason: unknown) =>
   String(reason || '').trim().toLowerCase() === 'transient_error';
 
+const isTemporaryDatabaseError = (error: unknown) => {
+  const message = getErrorMessage(error, '').toLowerCase();
+  return (
+    message.includes('auth state temporarily unavailable') ||
+    message.includes('postgres temporarily unavailable') ||
+    message.includes('data transfer quota') ||
+    message.includes('quota exceeded') ||
+    message.includes('database-backed features are temporarily unavailable')
+  );
+};
+
 const HARD_REFRESH_RECENT_CONNECTION_GRACE_MS = 2 * 60 * 1000;
 const CONTACTS_CACHE_MAX_SIZE = Math.max(Number(process.env.WHATSAPP_CONTACTS_CACHE_MAX_SIZE || 1000), 100);
 
@@ -1283,6 +1294,13 @@ class WhatsAppClient {
       logger.error({ error }, 'Failed to initialize WhatsApp client');
       const message = error instanceof Error ? error.message : String(error);
       this.lastError = message;
+      if (isTemporaryDatabaseError(error)) {
+        this.status = 'connecting';
+        this.lastError = 'Database temporarily unavailable. Retrying WhatsApp connection...';
+        this.isConnecting = false;
+        this.scheduleReconnect(60_000 + Math.random() * 15_000);
+        return;
+      }
       this.status = 'error';
     }
   }
@@ -2367,11 +2385,19 @@ class WhatsAppClient {
           }
         } catch (error) {
           logger.warn({ error }, 'Failed to acquire WhatsApp lease; refusing to connect without lock');
-          this.status = 'conflict';
-          this.lastError = 'Unable to acquire WhatsApp lease; retrying.';
-          await authStore.updateStatus('conflict');
+          this.status = isTemporaryDatabaseError(error) ? 'connecting' : 'conflict';
+          this.lastError = isTemporaryDatabaseError(error)
+            ? 'Database temporarily unavailable. Retrying WhatsApp lease...'
+            : 'Unable to acquire WhatsApp lease; retrying.';
+          if (!isTemporaryDatabaseError(error)) {
+            await authStore.updateStatus('conflict');
+          }
           this.isConnecting = false;
-          this.scheduleReconnect(15000 + Math.random() * 5000);
+          this.scheduleReconnect(
+            isTemporaryDatabaseError(error)
+              ? 60_000 + Math.random() * 15_000
+              : 15_000 + Math.random() * 5000
+          );
           return;
         }
       } else {

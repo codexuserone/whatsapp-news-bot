@@ -204,7 +204,9 @@ const isTransientLeaseTransportError = (error: unknown) => {
     'connection reset',
     'connection refused',
     'network is unreachable',
-    'could not connect'
+    'could not connect',
+    'data transfer quota',
+    'quota exceeded'
   ].some((needle) => normalized.includes(needle));
 };
 

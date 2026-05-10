@@ -152,7 +152,7 @@ describe('queue route retry safeguards', () => {
     ).toEqual({
       httpStatus: 202,
       body: {
-        ok: false,
+        ok: true,
         accepted: true,
         status: 'uncertain',
         messageId: 'msg-1',

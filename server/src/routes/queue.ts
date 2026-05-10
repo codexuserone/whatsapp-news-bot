@@ -61,9 +61,10 @@ const fallbackSendNowStatus = (result?: QueueSendNowResult | null) => {
 
 const buildQueueSendNowResponse = (result: QueueSendNowResult | null | undefined, storedRow?: QueueSendNowStoredRow | null) => {
   const status = normalizeQueueStatus(storedRow?.status) || fallbackSendNowStatus(result);
+  const accepted = status === 'uncertain' || status === 'awaiting_approval' || isSuccessfulSendStatus(status);
   const body = {
-    ok: isSuccessfulSendStatus(status),
-    accepted: status === 'uncertain' || status === 'awaiting_approval' || isSuccessfulSendStatus(status),
+    ok: accepted,
+    accepted,
     status,
     messageId: storedRow?.whatsapp_message_id || result?.messageId || null,
     mediaSent: typeof storedRow?.media_sent === 'boolean' ? storedRow.media_sent : Boolean(result?.mediaSent),

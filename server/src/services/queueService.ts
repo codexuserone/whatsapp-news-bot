@@ -4929,7 +4929,7 @@ const sendQueuedForSchedule = async (
                 whatsapp_message_id: attemptedMessageId,
                 media_url: expectedMedia.url || null,
                 media_type: expectedMedia.kind || null,
-                media_sent: false,
+                media_sent: Boolean(attemptedMessageId && expectedMedia.url && expectedMedia.kind),
                 media_error: errorMessage
               })
               .eq('id', log.id);
@@ -5867,6 +5867,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       const terminalStatus = timedOut ? 'uncertain' : connectionStateError ? originalStatus : 'failed';
 
       const keepMedia = !isAutomationBacked && Boolean(String(log.media_url || '').trim());
+      const acceptedMedia = Boolean(timedOut && uncertainWhatsAppMessageId && uncertainMediaUrl && uncertainMediaType);
       const failurePatch: Record<string, unknown> = {
         status: terminalStatus,
         processing_started_at: timedOut ? log.processing_started_at || new Date().toISOString() : null,
@@ -5879,7 +5880,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
         whatsapp_message_id: timedOut ? uncertainWhatsAppMessageId : null,
         media_url: timedOut ? uncertainMediaUrl : keepMedia ? log.media_url || null : null,
         media_type: timedOut ? uncertainMediaType : keepMedia ? log.media_type || null : null,
-        media_sent: false,
+        media_sent: acceptedMedia,
         media_error: timedOut || keepMedia ? errorMessage : null
       };
       if (connectionStateError) {

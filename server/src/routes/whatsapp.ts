@@ -2126,8 +2126,12 @@ const whatsappRoutes = () => {
         fromMe: key?.fromMe ?? null,
         timestamp: m.messageTimestamp ?? null,
         hasImage: Boolean(message?.imageMessage),
+        hasVideo: Boolean(message?.videoMessage),
         hasText: Boolean(message?.conversation || message?.extendedTextMessage),
-        hasCaption: Boolean((message?.imageMessage as Record<string,unknown>)?.caption)
+        hasCaption: Boolean(
+          (message?.imageMessage as Record<string,unknown>)?.caption ||
+          (message?.videoMessage as Record<string,unknown>)?.caption
+        )
       };
     });
     const statuses = Array.from(recentStatuses.entries()).map(([id, snap]) => {

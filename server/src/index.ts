@@ -25,7 +25,10 @@ const notFoundHandler = require('./middleware/notFound');
 const requestLogger = require('./middleware/requestLogger');
 const securityHeaders = require('./middleware/securityHeaders');
 const { isPublicProbeRequest } = require('./middleware/publicProbePaths');
-const { shouldStartDatabaseBackedWorkers } = require('./startup/databaseWorkers');
+const {
+  shouldInitializeWhatsAppImmediately,
+  shouldStartDatabaseBackedWorkers
+} = require('./startup/databaseWorkers');
 
 // Global error handlers to prevent crashes
 process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
@@ -496,10 +499,12 @@ const start = async () => {
     startTargetAutoSync(whatsappClient);
   }
 
-  if (whatsappClient) {
+  if (whatsappClient && shouldInitializeWhatsAppImmediately(connected)) {
     runStartupTask('initialize WhatsApp client', async () => {
       await whatsappClient.init();
     });
+  } else if (whatsappClient) {
+    whatsappClient.markDatabaseUnavailable?.('Database temporarily unavailable. Retrying WhatsApp connection...');
   }
 
   if (disableSchedulers) {

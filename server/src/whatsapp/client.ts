@@ -1247,6 +1247,16 @@ class WhatsAppClient {
     }
   }
 
+  markDatabaseUnavailable(
+    message = 'Database temporarily unavailable. Retrying WhatsApp connection...',
+    retryDelayMs = 60_000 + Math.random() * 15_000
+  ): void {
+    this.status = 'connecting';
+    this.lastError = message;
+    this.isConnecting = false;
+    this.scheduleReconnect(retryDelayMs);
+  }
+
   async init(): Promise<void> {
     try {
       await this.ensureAuthStoreInitialized();
@@ -1295,10 +1305,7 @@ class WhatsAppClient {
       const message = error instanceof Error ? error.message : String(error);
       this.lastError = message;
       if (isTemporaryDatabaseError(error)) {
-        this.status = 'connecting';
-        this.lastError = 'Database temporarily unavailable. Retrying WhatsApp connection...';
-        this.isConnecting = false;
-        this.scheduleReconnect(60_000 + Math.random() * 15_000);
+        this.markDatabaseUnavailable();
         return;
       }
       this.status = 'error';
@@ -2898,6 +2905,12 @@ class WhatsAppClient {
       logger.error({ error }, 'Error connecting to WhatsApp');
       const message = error instanceof Error ? error.message : String(error);
       this.lastError = message;
+
+      if (isTemporaryDatabaseError(error)) {
+        this.markDatabaseUnavailable();
+        return;
+      }
+
       this.status = 'error';
 
       // If it's a crypto/auth error, block sends and require explicit recovery.

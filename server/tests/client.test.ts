@@ -351,6 +351,31 @@ describe('WhatsAppClient', () => {
         expect(client.authStore).toBeTruthy();
     });
 
+    it('keeps WhatsApp in retry mode when auth state storage is temporarily unavailable', async () => {
+        client.ensureAuthStoreInitialized = jest.fn(async () => {
+            throw new Error('Auth state temporarily unavailable: Your project has exceeded the data transfer quota.');
+        });
+        client.scheduleReconnect = jest.fn();
+
+        await client.connect();
+
+        expect(client.status).toBe('connecting');
+        expect(client.lastError).toBe('Database temporarily unavailable. Retrying WhatsApp connection...');
+        expect(client.isConnecting).toBe(false);
+        expect(client.scheduleReconnect).toHaveBeenCalled();
+    });
+
+    it('can be parked in database-unavailable retry mode before opening a socket', () => {
+        client.scheduleReconnect = jest.fn();
+
+        client.markDatabaseUnavailable('Database temporarily unavailable. Retrying WhatsApp connection...', 60000);
+
+        expect(client.status).toBe('connecting');
+        expect(client.lastError).toBe('Database temporarily unavailable. Retrying WhatsApp connection...');
+        expect(client.isConnecting).toBe(false);
+        expect(client.scheduleReconnect).toHaveBeenCalledWith(60000);
+    });
+
     it('should force-acquire a still-valid lease when auto-takeover is enabled', async () => {
         const originalAutoTakeover = process.env.WHATSAPP_LEASE_AUTO_TAKEOVER;
         process.env.WHATSAPP_LEASE_AUTO_TAKEOVER = 'true';

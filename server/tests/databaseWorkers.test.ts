@@ -12,4 +12,16 @@ describe('database-backed startup workers', () => {
 
     expect(shouldStartDatabaseBackedWorkers(true)).toBe(true);
   });
+
+  it('does not initialize WhatsApp immediately when the startup database check failed', () => {
+    const { shouldInitializeWhatsAppImmediately } = require('../src/startup/databaseWorkers');
+
+    expect(shouldInitializeWhatsAppImmediately(false)).toBe(false);
+  });
+
+  it('initializes WhatsApp immediately after a successful startup database check', () => {
+    const { shouldInitializeWhatsAppImmediately } = require('../src/startup/databaseWorkers');
+
+    expect(shouldInitializeWhatsAppImmediately(true)).toBe(true);
+  });
 });

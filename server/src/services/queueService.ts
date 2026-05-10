@@ -295,6 +295,9 @@ const isUnknownDeliveryTimeout = (message: unknown) =>
 const buildUncertainErrorMessage = (message: string) =>
   `WhatsApp accepted the send, but no delivery receipt has arrived yet. ${String(message || '').trim()}`.trim();
 
+const shouldTreatAcceptedMessageIdAsSent = () =>
+  String(process.env.WHATSAPP_REQUIRE_RECEIPT_TO_MARK_SENT || '').trim().toLowerCase() !== 'true';
+
 const normalizeComparableText = (value: unknown) =>
   String(value || '')
     .replace(/\s+/g, ' ')
@@ -798,6 +801,32 @@ const reconcileUncertainMessageLogs = async (supabase: SupabaseClient, settings:
   }>) {
     const id = String(row?.id || '').trim();
     if (!id) continue;
+
+    if (shouldTreatAcceptedMessageIdAsSent() && isUnconfirmedSendWithMessageId(row)) {
+      const sentAtIso = new Date().toISOString();
+      await supabase
+        .from('message_logs')
+        .update({
+          status: 'sent',
+          sent_at: sentAtIso,
+          processing_started_at: null,
+          error_message: null,
+          media_error: null
+        })
+        .eq('id', id);
+
+      const feedItemId = String(row?.feed_item_id || '').trim();
+      if (feedItemId) {
+        await supabase
+          .from('feed_items')
+          .update({ sent: true, sent_at: sentAtIso })
+          .eq('id', feedItemId)
+          .eq('sent', false);
+      }
+
+      resolvedSent += 1;
+      continue;
+    }
 
     if (isNonRevivableFailureMessage(row.error_message, row.media_error)) {
       const terminalMessage = String(row.error_message || row.media_error || 'Permanent send failure').trim();
@@ -4828,7 +4857,16 @@ const sendQueuedForSchedule = async (
                   .eq('id', log.id);
                 continue;
               } else {
-                throw new Error(`Message send not confirmed (${confirmationError})`);
+                logger.warn(
+                  {
+                    scheduleId,
+                    feedItemId: feedItem.id,
+                    targetId: target.id,
+                    messageId,
+                    confirmationError
+                  },
+                  'WhatsApp returned a message id but no receipt confirmation; marking sent'
+                );
               }
             }
           }
@@ -5298,14 +5336,25 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
                 }
         );
         if (!confirmation?.ok) {
-          throw new Error(`Message send not confirmed (${confirmation?.error || 'no upsert/ack'})`);
+          logger.warn(
+            {
+              logId: log.id,
+              targetId: targetRow.id,
+              messageId,
+              confirmationError: confirmation?.error || 'no upsert/ack'
+            },
+            'WhatsApp returned a message id but no receipt confirmation; marking sent'
+          );
         }
         return;
       }
       if (activeWhatsappClient.waitForMessage) {
         const observed = await activeWhatsappClient.waitForMessage(messageId, 15000);
         if (!observed) {
-          throw new Error('Message send not confirmed (no local upsert)');
+          logger.warn(
+            { logId: log.id, targetId: targetRow.id, messageId },
+            'WhatsApp returned a message id but no local upsert was observed; marking sent'
+          );
         }
       }
     };
@@ -5459,7 +5508,15 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             await supabase.from('message_logs').update(holdUpdate).eq('id', log.id);
             return { ok: false, held: true, error: String(holdUpdate.error_message || 'Channel media held') };
           } else {
-            throw new Error(`Message send not confirmed (${confirmationError})`);
+            logger.warn(
+              {
+                logId: log.id,
+                targetId: targetRow.id,
+                messageId,
+                confirmationError
+              },
+              'WhatsApp returned a message id but no receipt confirmation; marking sent'
+            );
           }
         }
 

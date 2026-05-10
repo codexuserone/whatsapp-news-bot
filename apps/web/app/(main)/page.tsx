@@ -271,7 +271,7 @@ const OverviewPage = () => {
                               : 'warning'
                         }
                       >
-                        {log.status === 'sent' ? 'Recorded locally' : log.status}
+                        {log.status === 'sent' ? 'Sent' : log.status}
                       </Badge>
                     </TableCell>
                     <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>

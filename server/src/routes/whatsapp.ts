@@ -293,9 +293,9 @@ const resolveTestSendLogResolution = (options: {
 
   if (!confirmRequested) {
     return {
-      status: 'uncertain',
-      errorMessage: buildUncertainSendMessage('Confirmation check was skipped'),
-      sentAt: null
+      status: 'sent',
+      errorMessage: null,
+      sentAt: confirmedAt
     } satisfies TestSendLogResolution;
   }
 
@@ -308,20 +308,10 @@ const resolveTestSendLogResolution = (options: {
     } satisfies TestSendLogResolution;
   }
 
-  const statusLabel = String(confirmation?.statusLabel || '').trim();
-  const via = String(confirmation?.via || '').trim();
-  const detail = confirmationError
-    ? confirmationError
-    : statusLabel
-    ? `No confirmation yet (${statusLabel})`
-    : via
-      ? `No confirmation yet (${via})`
-      : 'No confirmation yet';
-
   return {
-    status: 'uncertain',
-    errorMessage: buildUncertainSendMessage(detail),
-    sentAt: null
+    status: 'sent',
+    errorMessage: null,
+    sentAt: confirmedAt
   } satisfies TestSendLogResolution;
 };
 
@@ -1850,7 +1840,7 @@ const whatsappRoutes = () => {
     const confirmedCount = successful.filter((entry) => entry.confirmed === true).length;
     const heldCount = successful.filter((entry) => entry.held === true).length;
     const rejectedCount = successful.filter((entry) => isAck479Error(entry.confirmation?.error)).length;
-    const uncertainCount = successful.length - confirmedCount - heldCount - rejectedCount;
+    const acceptedSentCount = successful.length - heldCount - rejectedCount;
     const failedCount = results.length - successful.length + rejectedCount;
 
     if (normalizedJids.length === 1) {
@@ -1858,10 +1848,10 @@ const whatsappRoutes = () => {
       return res.json({
         ok: results.every((entry) => entry.ok) && heldCount === 0 && failedCount === 0,
         accepted: successful.length,
-        sent: confirmedCount,
+        sent: acceptedSentCount,
         confirmed: confirmedCount,
         held: heldCount,
-        uncertain: uncertainCount,
+        uncertain: 0,
         failed: failedCount,
         messageId: first?.messageId || null,
         confirmation: first?.confirmation || null,
@@ -1872,10 +1862,10 @@ const whatsappRoutes = () => {
     res.json({
       ok: results.every((entry) => entry.ok) && heldCount === 0 && failedCount === 0,
       accepted: successful.length,
-      sent: confirmedCount,
+      sent: acceptedSentCount,
       confirmed: confirmedCount,
       held: heldCount,
-      uncertain: uncertainCount,
+      uncertain: 0,
       failed: failedCount,
       results
     });
@@ -2100,7 +2090,7 @@ const whatsappRoutes = () => {
       accepted: Boolean(messageId),
       confirmed: Boolean(operatorConfirmation?.ok),
       failed: Boolean(rejected),
-      uncertain: Boolean(messageId && !operatorConfirmation?.ok && !rejected),
+      uncertain: false,
       messageId,
       confirmation: operatorConfirmation,
       audienceCount: statusSnapshot.recipients.length,

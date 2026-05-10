@@ -452,7 +452,7 @@ const SettingsPage = () => {
               <div>
                 <Label>Production Audience</Label>
                 <p className="text-xs text-muted-foreground">
-                  Auto uses the private viewers WhatsApp can resolve from this connected account. Specific recipients limits production Status to the people below.
+                  Use all available viewers for production Status, or limit Status to the phone numbers below.
                 </p>
               </div>
               <Controller
@@ -465,7 +465,7 @@ const SettingsPage = () => {
                       variant={field.value === 'auto' ? 'default' : 'outline'}
                       onClick={() => field.onChange('auto')}
                     >
-                      Auto audience
+                      All available viewers
                     </Button>
                     <Button
                       type="button"

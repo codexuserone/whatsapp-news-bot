@@ -90,7 +90,8 @@ const FeedItemsPage = () => {
     const uncertain = delivery.uncertain || 0;
     const held = delivery.awaiting_approval || 0;
     const superseded = delivery.superseded || 0;
-    const unresolved = failed + uncertain + held;
+    const unresolved = failed + held;
+    const review = uncertain;
     const manualPaused = delivery.manual_paused || 0;
     const correctedBeforeSend = delivery.corrected_before_send || 0;
     const correctedAfterSend = delivery.corrected_after_send || 0;
@@ -117,12 +118,12 @@ const FeedItemsPage = () => {
       };
     }
 
-    if (queued > 0 && sent > 0 && unresolved > 0) {
+    if (queued > 0 && sent > 0 && (unresolved > 0 || review > 0)) {
       return {
         label: joinStatusSummary([
-          formatTargetSummary(sent, 'accepted by WhatsApp'),
+          formatTargetSummary(sent + review, 'sent'),
           formatTargetSummary(queued, 'queued'),
-          formatTargetSummary(unresolved, 'failed or no receipt'),
+          unresolved > 0 ? formatTargetSummary(unresolved, 'need attention') : '',
           ...correctionParts
         ]),
         variant: 'warning' as const
@@ -131,18 +132,19 @@ const FeedItemsPage = () => {
     if (queued > 0 && sent > 0) {
       return {
         label: joinStatusSummary([
-          formatTargetSummary(sent, 'accepted by WhatsApp'),
+          formatTargetSummary(sent, 'sent'),
           formatTargetSummary(queued, 'queued'),
           ...correctionParts
         ]),
         variant: 'warning' as const
       };
     }
-    if (queued > 0 && unresolved > 0) {
+    if (queued > 0 && (unresolved > 0 || review > 0)) {
       return {
         label: joinStatusSummary([
           formatTargetSummary(queued, 'queued'),
-          formatTargetSummary(unresolved, 'failed or no receipt'),
+          review > 0 ? formatTargetSummary(review, 'under review') : '',
+          unresolved > 0 ? formatTargetSummary(unresolved, 'need attention') : '',
           ...correctionParts
         ]),
         variant: 'warning' as const
@@ -154,20 +156,24 @@ const FeedItemsPage = () => {
         variant: 'warning' as const
       };
     }
-    if (sent > 0 && unresolved > 0) {
+    if (sent > 0 && (unresolved > 0 || review > 0)) {
       return {
         label: joinStatusSummary([
-          formatTargetSummary(sent, 'accepted by WhatsApp'),
-          formatTargetSummary(unresolved, 'failed or no receipt'),
+          formatTargetSummary(sent + review, 'sent'),
+          unresolved > 0 ? formatTargetSummary(unresolved, 'need attention') : '',
           ...correctionParts
         ]),
         variant: 'warning' as const
       };
     }
-    if (unresolved > 0) {
+    if (unresolved > 0 || review > 0) {
       return {
-        label: joinStatusSummary([formatTargetSummary(unresolved, 'failed or no receipt'), ...correctionParts]),
-        variant: 'destructive' as const
+        label: joinStatusSummary([
+          review > 0 ? formatTargetSummary(review, 'under review') : '',
+          unresolved > 0 ? formatTargetSummary(unresolved, 'need attention') : '',
+          ...correctionParts
+        ]),
+        variant: unresolved > 0 ? 'destructive' as const : 'warning' as const
       };
     }
     if (superseded > 0) {
@@ -178,7 +184,7 @@ const FeedItemsPage = () => {
     }
     if (sent > 0) {
       return {
-        label: joinStatusSummary([formatTargetSummary(sent, 'sent'), ...correctionParts]),
+        label: joinStatusSummary([formatTargetSummary(sent + review, 'sent'), ...correctionParts]),
         variant: 'success' as const
       };
     }

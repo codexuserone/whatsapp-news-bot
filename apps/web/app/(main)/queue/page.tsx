@@ -166,7 +166,7 @@ const QueueInner = () => {
     refetchInterval: 10000
   });
 
-  const retryableIssueCount = Number(queueStats?.failed || 0) + Number(queueStats?.uncertain || 0);
+  const retryableIssueCount = Number(queueStats?.failed || 0);
   const showingLiveQueueOnly = LIVE_QUEUE_STATUSES.has(statusFilter);
   const showingHistoryOnly = HISTORY_STATUSES.has(statusFilter);
   const queueCardTitle = showingLiveQueueOnly
@@ -319,10 +319,8 @@ const QueueInner = () => {
       const status = String(result?.status || '').toLowerCase();
       if (status === 'uncertain') {
         setActionNotice({
-          type: 'warning',
-          message: result?.messageId
-            ? `WhatsApp accepted it, but no delivery receipt came back yet (${result.messageId}).`
-            : 'WhatsApp accepted it, but no delivery receipt came back yet.'
+          type: 'error',
+          message: result?.error || 'Send did not return a WhatsApp message id. It stayed in review.'
         });
       } else if (result?.ok) {
         setActionNotice({ type: 'success', message: result?.messageId ? `Sent now (${result.messageId}).` : 'Sent now.' });
@@ -529,7 +527,7 @@ const QueueInner = () => {
       case 'failed':
         return <Badge variant="destructive">Failed</Badge>;
       case 'uncertain':
-        return <Badge variant="warning">No receipt yet</Badge>;
+        return <Badge variant="warning">Needs review</Badge>;
       case 'skipped':
         return <Badge variant="warning">Skipped</Badge>;
       default:
@@ -633,8 +631,8 @@ const QueueInner = () => {
 
     if (item.status === 'uncertain') {
       return hasRequestedMedia
-        ? { label: 'Accepted; no media receipt yet', tone: 'warning' as const }
-        : { label: 'Accepted; no receipt yet', tone: 'warning' as const };
+        ? { label: 'Not confirmed; check media', tone: 'warning' as const }
+        : { label: 'Not confirmed', tone: 'warning' as const };
     }
 
     const plannedKind = String(item.media_kind || item.media_type || '').toLowerCase();
@@ -694,7 +692,7 @@ const QueueInner = () => {
               databaseActionsBlocked
                 ? 'Database unavailable; retry is paused'
                 : retryableIssueCount
-                  ? 'Retry recent failed sends and accepted sends with no receipt from the last 24 hours'
+                  ? 'Retry recent failed sends from the last 24 hours'
                   : 'No recent failed sends to retry'
             }
           >
@@ -773,9 +771,9 @@ const QueueInner = () => {
               <SelectItem value="awaiting_approval">Awaiting approval ({queueStats?.awaiting_approval ?? 0})</SelectItem>
               <SelectItem value="pending">Queued ({queueStats?.pending ?? 0})</SelectItem>
               <SelectItem value="processing">Attempting send ({queueStats?.processing ?? 0})</SelectItem>
-              <SelectItem value="sent">Accepted by WhatsApp ({queueStats?.sent ?? 0})</SelectItem>
+              <SelectItem value="sent">Sent ({queueStats?.sent ?? 0})</SelectItem>
               <SelectItem value="failed">Failed ({queueStats?.failed ?? 0})</SelectItem>
-              <SelectItem value="uncertain">Accepted, no receipt yet ({queueStats?.uncertain ?? 0})</SelectItem>
+              <SelectItem value="uncertain">Needs review ({queueStats?.uncertain ?? 0})</SelectItem>
               <SelectItem value="skipped">Skipped ({queueStats?.skipped ?? 0})</SelectItem>
               <SelectItem value="all">All visible rows ({queueStats?.total ?? 0})</SelectItem>
             </SelectContent>

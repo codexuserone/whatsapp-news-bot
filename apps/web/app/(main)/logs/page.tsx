@@ -29,17 +29,17 @@ const LOG_FILTERS = [
   { value: 'awaiting_approval', label: 'Needs review' },
   { value: 'pending', label: 'Queued' },
   { value: 'processing', label: 'Sending' },
-  { value: 'sent', label: 'Accepted by WhatsApp' },
+  { value: 'sent', label: 'Sent' },
   { value: 'failed', label: 'Failed' },
   { value: 'skipped', label: 'Skipped' },
-  { value: 'uncertain', label: 'Accepted, no receipt yet' },
+  { value: 'uncertain', label: 'Needs review' },
   { value: 'superseded', label: 'Superseded' }
 ];
 
 const getStatusLabel = (status: string) => {
   switch (status) {
     case 'sent':
-      return 'Accepted';
+      return 'Sent';
     case 'failed':
       return 'Failed';
     case 'pending':
@@ -49,7 +49,7 @@ const getStatusLabel = (status: string) => {
     case 'awaiting_approval':
       return 'Needs review';
     case 'uncertain':
-      return 'No receipt yet';
+      return 'Needs review';
     case 'delivered':
       return 'Delivered';
     case 'read':

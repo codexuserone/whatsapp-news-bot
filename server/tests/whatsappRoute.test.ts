@@ -83,7 +83,7 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
-  it('marks test sends uncertain when confirmation is absent', () => {
+  it('marks test sends sent when WhatsApp returned a message id even if confirmation is absent', () => {
     const result = __testUtils.resolveTestSendLogResolution({
       messageId: 'abc123',
       confirmRequested: true,
@@ -92,9 +92,9 @@ describe('whatsapp route test-send logging', () => {
     });
 
     expect(result).toEqual({
-      status: 'uncertain',
-      errorMessage: 'WhatsApp accepted the send, but no delivery receipt has arrived yet. No confirmation yet',
-      sentAt: null
+      status: 'sent',
+      errorMessage: null,
+      sentAt: '2026-03-18T22:00:00.000Z'
     });
   });
 
@@ -144,7 +144,7 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
-  it('marks test sends uncertain when confirmation was skipped', () => {
+  it('marks test sends sent when confirmation was skipped after WhatsApp returned a message id', () => {
     const result = __testUtils.resolveTestSendLogResolution({
       messageId: 'abc123',
       confirmRequested: false,
@@ -153,13 +153,13 @@ describe('whatsapp route test-send logging', () => {
     });
 
     expect(result).toEqual({
-      status: 'uncertain',
-      errorMessage: 'WhatsApp accepted the send, but no delivery receipt has arrived yet. Confirmation check was skipped',
-      sentAt: null
+      status: 'sent',
+      errorMessage: null,
+      sentAt: '2026-03-18T22:00:00.000Z'
     });
   });
 
-  it('marks test sends sent only after confirmation', () => {
+  it('marks confirmed test sends sent', () => {
     const result = __testUtils.resolveTestSendLogResolution({
       messageId: 'abc123',
       confirmRequested: true,

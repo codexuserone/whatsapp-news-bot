@@ -19,15 +19,15 @@ describe('whatsapp route test-send logging resolution', () => {
     });
   });
 
-  it('marks unconfirmed sends as uncertain instead of sent', () => {
+  it('marks unconfirmed sends as sent when WhatsApp returned a message id', () => {
     expect(
       testUtils.resolveTestSendLogResolution({
         messageId: 'abc123',
         confirmation: { ok: false, via: 'upsert', status: 1, statusLabel: 'pending' }
       })
     ).toMatchObject({
-      status: 'uncertain',
-      sentAt: null
+      status: 'sent',
+      errorMessage: null
     });
   });
 

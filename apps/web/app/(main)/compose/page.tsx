@@ -374,8 +374,7 @@ const ComposeInner = () => {
       const skipped = Number(result?.skipped || 0);
       const failed = Number(result?.failed || 0);
       const parts = [
-        sent ? `sent ${sent}` : '',
-        uncertain ? `accepted with no receipt yet ${uncertain}` : '',
+        sent || uncertain ? `sent ${sent + uncertain}` : '',
         held ? `held for review ${held}` : '',
         pending ? `still queued ${pending}` : '',
         processing ? `still processing ${processing}` : '',
@@ -384,10 +383,10 @@ const ComposeInner = () => {
       ].filter(Boolean);
       if (failed > 0 || skipped > 0) {
         setNotice({ type: 'error', message: `${parts.join(', ')}. Open Queue for the exact records.` });
-      } else if (uncertain > 0 || held > 0 || pending > 0 || processing > 0 || result?.ok === false) {
-        setNotice({ type: 'warning', message: `${parts.join(', ') || 'WhatsApp accepted it, but receipts are still pending'}. Open Queue for the exact records.` });
+      } else if (held > 0 || pending > 0 || processing > 0 || result?.ok === false) {
+        setNotice({ type: 'warning', message: `${parts.join(', ') || 'Some messages still need attention'}. Open Queue for the exact records.` });
       } else {
-        setNotice({ type: 'success', message: `Sent ${sent} message(s).` });
+        setNotice({ type: 'success', message: `Sent ${sent + uncertain} message(s).` });
       }
       queryClient.invalidateQueries({ queryKey: ['queue'] });
       queryClient.invalidateQueries({ queryKey: ['queue-stats'] });

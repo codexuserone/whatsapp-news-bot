@@ -142,7 +142,7 @@ const getTemplateModeLabel = (mode?: Template['send_mode'] | null) => {
       return 'Text only';
     case 'auto_media':
     default:
-      return 'Auto media';
+      return 'Media + text';
   }
 };
 
@@ -216,7 +216,7 @@ const getTemplateMediaSourceLabel = (source: unknown) => {
       return 'Story video';
     case 'auto':
     default:
-      return 'Auto media';
+      return 'Story media';
   }
 };
 
@@ -591,18 +591,18 @@ const TemplatesPage = () => {
       const uncertain = Number(result?.uncertain || 0);
       const suffix = messageId ? ` (${messageId})` : '';
       if (confirmed > 0 && uncertain > 0) {
-        setPreviewSendNotice(`Recorded locally${suffix}. Confirmed ${confirmed}, accepted with no receipt yet ${uncertain}.`);
+        setPreviewSendNotice(`Sent${suffix}. Confirmed ${confirmed}, accepted ${uncertain}.`);
         return;
       }
       if (confirmed > 0) {
-        setPreviewSendNotice(`Recorded locally${suffix}. Confirmed ${confirmed}.`);
+        setPreviewSendNotice(`Sent${suffix}. Confirmed ${confirmed}.`);
         return;
       }
       if (uncertain > 0) {
-        setPreviewSendNotice(`Recorded locally${suffix}. Accepted with no receipt yet ${uncertain}.`);
+        setPreviewSendNotice(`Sent${suffix}.`);
         return;
       }
-      setPreviewSendNotice(messageId ? `Recorded locally (${messageId})` : 'Recorded locally');
+      setPreviewSendNotice(messageId ? `Sent (${messageId})` : 'Sent');
     },
     onError: (error: unknown) => {
       setPreviewSendNotice(`Failed: ${getErrorMessage(error)}`);
@@ -925,7 +925,7 @@ const TemplatesPage = () => {
                   <Label>Message format</Label>
                   <div className="grid gap-2 sm:grid-cols-2">
                     {([
-                      { value: 'auto_media', label: 'Auto media' },
+                      { value: 'auto_media', label: 'Media + text' },
                       { value: 'media_only', label: 'Media only' },
                       { value: 'text_preview', label: 'Text + preview' },
                       { value: 'text_only', label: 'Text only' }
@@ -951,7 +951,7 @@ const TemplatesPage = () => {
                       <Label>Media source</Label>
                       <div className="grid gap-2 sm:grid-cols-3">
                         {([
-                          { value: 'auto', label: 'Auto' },
+                          { value: 'auto', label: 'Story media' },
                           { value: 'image', label: 'Featured image' },
                           { value: 'video', label: 'Story video' }
                         ] as const).map((option) => (
@@ -1083,7 +1083,7 @@ const TemplatesPage = () => {
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
-                                <SelectItem value="auto">Auto media</SelectItem>
+                                <SelectItem value="auto">Story media</SelectItem>
                                 <SelectItem value="image">Featured image</SelectItem>
                                 <SelectItem value="video">Story video</SelectItem>
                               </SelectContent>
@@ -1248,7 +1248,7 @@ const TemplatesPage = () => {
                 {selectedPreviewTarget?.type === 'status' ? (
                   <>
                     <br />
-                    Status preview audience: <span className="font-medium text-foreground">{statusPreviewAudience.length || 'not set'}</span>
+                    Status preview audience: <span className="font-medium text-foreground">{statusPreviewAudience.length || 'Use Settings to choose preview recipients'}</span>
                   </>
                 ) : null}
               </div>

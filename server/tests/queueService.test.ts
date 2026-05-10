@@ -250,9 +250,9 @@ describe('queueService __testUtils', () => {
     expect(confirmSend).toHaveBeenCalled();
   });
 
-  it('blocks text fallback after media failure for status and channel targets', () => {
+  it('blocks text fallback after media failure for status targets', () => {
     expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('status')).toBe(true);
-    expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('channel')).toBe(true);
+    expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('channel')).toBe(false);
     expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('group')).toBe(false);
     expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('individual')).toBe(false);
   });

@@ -139,7 +139,7 @@ type WhatsAppClient = {
 };
 
 const shouldBlockTextFallbackAfterMediaFailure = (targetType: Target['type'] | null | undefined) =>
-  targetType === 'status' || targetType === 'channel';
+  targetType === 'status';
 const shouldBlockManualTextFallbackAfterMediaFailure = () => true;
 
 const DEFAULT_SEND_TIMEOUT_MS = 45000;

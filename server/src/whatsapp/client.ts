@@ -78,6 +78,8 @@ const isNewsletterMediaDirectPathPatchEnabled = () =>
   isTruthyEnvFlag(process.env.BAILEYS_NEWSLETTER_MEDIA_PATCH);
 const isNewsletterLiveUpdatesEnabled = () =>
   !isFalseLikeFlag(process.env.WHATSAPP_NEWSLETTER_LIVE_UPDATES ?? 'true');
+const DEFAULT_NEWSLETTER_MEDIA_PREP_TIMEOUT_MS = 30_000;
+const DEFAULT_NEWSLETTER_MEDIA_RELAY_TIMEOUT_MS = 15_000;
 const NEWSLETTER_LIVE_UPDATES_TIMEOUT_MS = Math.max(
   1000,
   Math.min(Math.floor(Number(process.env.WHATSAPP_NEWSLETTER_LIVE_UPDATES_TIMEOUT_MS || 5000)), 30000)
@@ -4284,14 +4286,33 @@ class WhatsAppClient {
       };
     };
 
-    const preparedMessage = await prepareWAMessageMedia(content as Record<string, unknown>, {
-      ...options,
-      jid,
-      upload,
-      logger,
-      mediaCache: socket.mediaCache,
-      options: socket.options || { headers: { Origin: DEFAULT_ORIGIN } }
-    });
+    const prepTimeoutMs = Math.max(
+      5000,
+      Math.min(
+        Number(process.env.WHATSAPP_NEWSLETTER_MEDIA_PREP_TIMEOUT_MS || DEFAULT_NEWSLETTER_MEDIA_PREP_TIMEOUT_MS),
+        90000
+      )
+    );
+    const relayTimeoutMs = Math.max(
+      5000,
+      Math.min(
+        Number(process.env.WHATSAPP_NEWSLETTER_MEDIA_RELAY_TIMEOUT_MS || DEFAULT_NEWSLETTER_MEDIA_RELAY_TIMEOUT_MS),
+        60000
+      )
+    );
+
+    const preparedMessage = await withTimeout(
+      prepareWAMessageMedia(content as Record<string, unknown>, {
+        ...options,
+        jid,
+        upload,
+        logger,
+        mediaCache: socket.mediaCache,
+        options: socket.options || { headers: { Origin: DEFAULT_ORIGIN } }
+      }),
+      prepTimeoutMs,
+      'Timed out preparing newsletter media'
+    );
     const uploadState = uploadMetadata as NewsletterUploadMetadata | null;
     const appliedUploadMetadata: Pick<
       NewsletterUploadMetadata,
@@ -4329,11 +4350,15 @@ class WhatsAppClient {
       stanzaAttrs.media_id = mediaHandle;
     }
 
-    await socket.sendNode({
-      tag: 'message',
-      attrs: stanzaAttrs,
-      content: [plaintextNode]
-    });
+    await withTimeout(
+      socket.sendNode({
+        tag: 'message',
+        attrs: stanzaAttrs,
+        content: [plaintextNode]
+      }),
+      relayTimeoutMs,
+      'Timed out relaying newsletter media'
+    );
 
     return {
       key: {

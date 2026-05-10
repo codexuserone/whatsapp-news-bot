@@ -29,6 +29,7 @@ const {
   shouldInitializeWhatsAppImmediately,
   shouldStartDatabaseBackedWorkers
 } = require('./startup/databaseWorkers');
+const { startDatabaseRecoveryPoller } = require('./startup/databaseRecovery');
 
 // Global error handlers to prevent crashes
 process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
@@ -49,6 +50,7 @@ const gracefulShutdown = async (
     stopTargetAutoSync();
     stopStatusAudienceRefresh();
     stopKeepAlive();
+    databaseRecoveryPollerRef?.stop();
     
     // Disconnect WhatsApp
     if (whatsappClient) {
@@ -64,6 +66,7 @@ const gracefulShutdown = async (
 };
 
 let whatsappClientRef: { disconnect: () => Promise<void> } | null = null;
+let databaseRecoveryPollerRef: { stop: () => void } | null = null;
 
 const handleSignal = (signal: string) => {
   void gracefulShutdown(signal, whatsappClientRef || undefined);
@@ -457,11 +460,14 @@ const start = async () => {
     logger.info({ port: env.PORT }, 'Server listening');
   });
 
+  let startupMigrationsComplete = process.env.RUN_MIGRATIONS_ON_START !== 'true';
+
   // Keep Render health probes responsive even when database startup work is slow.
   if (process.env.RUN_MIGRATIONS_ON_START === 'true') {
     try {
       logger.info('Running database migrations');
       await runMigrations();
+      startupMigrationsComplete = true;
       logger.info('Database migrations complete');
     } catch (error) {
       logger.error({ error }, 'Database migrations failed');
@@ -482,59 +488,93 @@ const start = async () => {
 
   keepAlive();
   const startDatabaseWorkers = shouldStartDatabaseBackedWorkers(connected);
+  let databaseBackedRuntimeStarted = false;
+  let databaseBackedRuntimeStarting = false;
+
+  const ensureStartupMigrationsComplete = async () => {
+    if (startupMigrationsComplete) return;
+    logger.info('Retrying database migrations after database connectivity recovered');
+    await runMigrations();
+    startupMigrationsComplete = true;
+    logger.info('Database migrations complete after database recovery');
+  };
+
+  const startDatabaseBackedRuntime = async () => {
+    if (databaseBackedRuntimeStarted || databaseBackedRuntimeStarting) return;
+    databaseBackedRuntimeStarting = true;
+    try {
+      await ensureStartupMigrationsComplete();
+
+      runStartupTask('reset stuck processing logs', async () => {
+        await resetStuckProcessingLogs();
+      });
+
+      runStartupTask('ensure default settings', async () => {
+        await settingsService.ensureDefaults();
+      });
+
+      if (whatsappClient) {
+        startTargetAutoSync(whatsappClient);
+      }
+
+      if (whatsappClient && shouldInitializeWhatsAppImmediately(true)) {
+        runStartupTask('initialize WhatsApp client', async () => {
+          await whatsappClient.init();
+        });
+      }
+
+      if (disableSchedulers) {
+        logger.warn('Schedulers are disabled via DISABLE_SCHEDULERS');
+      } else {
+        scheduleRetentionCleanup();
+        scheduleProcessingWatchdog();
+        scheduleStatusAudienceRefresh(whatsappClient);
+        runStartupTask('initialize schedulers', async () => {
+          const status = whatsappClient?.getStatus?.();
+          const lease = status?.lease;
+          const leaseSupported = Boolean(lease && typeof lease.supported === 'boolean' ? lease.supported : false);
+          const leaseHeld = Boolean(lease && typeof lease.held === 'boolean' ? lease.held : false);
+          if (whatsappClient && leaseSupported && !leaseHeld) {
+            logger.warn(
+              {
+                whatsappStatus: status?.status,
+                instanceId: status?.instanceId,
+                lease
+              },
+              'Skipping schedulers: WhatsApp lease not held (another instance is active)'
+            );
+            return;
+          }
+
+          await initSchedulers(whatsappClient);
+        });
+      }
+
+      databaseBackedRuntimeStarted = true;
+    } finally {
+      databaseBackedRuntimeStarting = false;
+    }
+  };
 
   if (startDatabaseWorkers) {
-    runStartupTask('reset stuck processing logs', async () => {
-      await resetStuckProcessingLogs();
-    });
-
-    runStartupTask('ensure default settings', async () => {
-      await settingsService.ensureDefaults();
-    });
+    runStartupTask('start database-backed runtime', startDatabaseBackedRuntime);
   } else {
     logger.warn('Skipping database-backed startup workers until database connectivity recovers');
   }
 
-  if (whatsappClient && startDatabaseWorkers) {
-    startTargetAutoSync(whatsappClient);
+  if (!startDatabaseWorkers) {
+    if (whatsappClient) {
+      whatsappClient.markDatabaseUnavailable?.('Database temporarily unavailable. Retrying WhatsApp connection...');
+    }
+    if (!databaseRecoveryPollerRef) {
+      databaseRecoveryPollerRef = startDatabaseRecoveryPoller({
+        testConnection,
+        onRecovered: startDatabaseBackedRuntime,
+        logger
+      });
+    }
   }
 
-  if (whatsappClient && shouldInitializeWhatsAppImmediately(connected)) {
-    runStartupTask('initialize WhatsApp client', async () => {
-      await whatsappClient.init();
-    });
-  } else if (whatsappClient) {
-    whatsappClient.markDatabaseUnavailable?.('Database temporarily unavailable. Retrying WhatsApp connection...');
-  }
-
-  if (disableSchedulers) {
-    logger.warn('Schedulers are disabled via DISABLE_SCHEDULERS');
-  } else if (startDatabaseWorkers) {
-    scheduleRetentionCleanup();
-    scheduleProcessingWatchdog();
-    scheduleStatusAudienceRefresh(whatsappClient);
-    runStartupTask('initialize schedulers', async () => {
-      const status = whatsappClient?.getStatus?.();
-      const lease = status?.lease;
-      const leaseSupported = Boolean(lease && typeof lease.supported === 'boolean' ? lease.supported : false);
-      const leaseHeld = Boolean(lease && typeof lease.held === 'boolean' ? lease.held : false);
-      if (whatsappClient && leaseSupported && !leaseHeld) {
-        logger.warn(
-          {
-            whatsappStatus: status?.status,
-            instanceId: status?.instanceId,
-            lease
-          },
-          'Skipping schedulers: WhatsApp lease not held (another instance is active)'
-        );
-        return;
-      }
-
-      await initSchedulers(whatsappClient);
-    });
-  } else {
-    logger.warn('Skipping database-backed schedulers until database connectivity recovers');
-  }
 };
 
 start().catch((error) => {

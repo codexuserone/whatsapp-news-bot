@@ -741,6 +741,41 @@ describe('WhatsAppClient', () => {
         }
     });
 
+    it('does not fetch Status link previews for private or loopback URLs', async () => {
+        const getUrlInfo: any = jest.fn(async () => ({ title: 'private' }));
+
+        await expect(
+            WhatsAppClient.getSafeStatusUrlInfo('Internal check http://127.0.0.1:5432/admin', getUrlInfo)
+        ).resolves.toBeUndefined();
+
+        expect(getUrlInfo).not.toHaveBeenCalled();
+    });
+
+    it('allows Status link preview fetching when private URLs are explicitly allowed', async () => {
+        const previous = process.env.ALLOW_PRIVATE_URLS;
+        process.env.ALLOW_PRIVATE_URLS = 'true';
+        const getUrlInfo: any = jest.fn(async () => ({ title: 'allowed' }));
+
+        try {
+            await expect(
+                WhatsAppClient.getSafeStatusUrlInfo('Allowed check http://127.0.0.1:5432/admin', getUrlInfo)
+            ).resolves.toEqual({ title: 'allowed' });
+        } finally {
+            if (previous === undefined) {
+                delete process.env.ALLOW_PRIVATE_URLS;
+            } else {
+                process.env.ALLOW_PRIVATE_URLS = previous;
+            }
+        }
+
+        expect(getUrlInfo).toHaveBeenCalledWith(
+            'Allowed check http://127.0.0.1:5432/admin',
+            expect.objectContaining({
+                fetchOpts: { timeout: 3000 }
+            })
+        );
+    });
+
     it('should leave newsletter media direct paths unchanged unless explicitly enabled', () => {
         const originalFlag = process.env.WHATSAPP_NEWSLETTER_MEDIA_DIRECT_PATH_PATCH;
         const originalAliasFlag = process.env.BAILEYS_NEWSLETTER_MEDIA_PATCH;

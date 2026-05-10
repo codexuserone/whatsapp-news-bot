@@ -8,6 +8,7 @@ const qrcode = require('qrcode');
 const logger = require('../utils/logger');
 const withTimeout = require('../utils/withTimeout');
 const { getErrorMessage } = require('../utils/errorUtils');
+const { assertSafeOutboundUrl } = require('../utils/outboundUrl');
 const useSupabaseAuthState = require('./authStore');
 const { saveIncomingMessages } = require('../services/messageService');
 const { initSchedulers } = require('../services/schedulerService');
@@ -85,6 +86,37 @@ const NEWSLETTER_LIVE_UPDATES_DEFAULT_DURATION_SEC = Math.max(
   60,
   Math.min(Math.floor(Number(process.env.WHATSAPP_NEWSLETTER_LIVE_UPDATES_DEFAULT_DURATION_SEC || 300)), 86400)
 );
+
+const extractHttpUrls = (text: string): string[] =>
+  Array.from(String(text || '').matchAll(/https?:\/\/[^\s<>"'`]+/gi))
+    .map((match) => String(match[0] || '').replace(/[),.;!?]+$/g, ''))
+    .filter(Boolean);
+
+const getSafeStatusUrlInfo = async (
+  text: string,
+  getUrlInfo: ((text: string, options?: Record<string, unknown>) => Promise<unknown> | unknown) | undefined
+) => {
+  if (typeof getUrlInfo !== 'function') return undefined;
+  const urls = extractHttpUrls(text);
+  if (urls.length === 0) return undefined;
+
+  for (const candidate of urls) {
+    try {
+      await assertSafeOutboundUrl(candidate);
+    } catch (error) {
+      let hostname: string | null = null;
+      try {
+        hostname = new URL(candidate).hostname;
+      } catch {
+        hostname = null;
+      }
+      logger.warn({ error: getErrorMessage(error), hostname }, 'Skipped unsafe Status link preview URL');
+      return undefined;
+    }
+  }
+
+  return getUrlInfo(text, { fetchOpts: { timeout: 3000 }, logger });
+};
 
 const resolveBrowserTuple = (Browsers: Record<string, unknown> | null | undefined, browserName: string) => {
   const requestedPlatform = String(
@@ -4417,7 +4449,7 @@ class WhatsAppClient {
       logger,
       userJid: socket.user?.id,
       getUrlInfo: typeof getUrlInfo === 'function'
-        ? (text: string) => getUrlInfo(text, { fetchOpts: { timeout: 3000 }, logger })
+        ? (text: string) => getSafeStatusUrlInfo(text, getUrlInfo)
         : undefined,
       getProfilePicUrl: typeof socket.profilePictureUrl === 'function'
         ? socket.profilePictureUrl.bind(socket)
@@ -5033,6 +5065,7 @@ const createWhatsAppClient = () => new WhatsAppClient();
 module.exports = Object.assign(createWhatsAppClient, {
   resolveBrowserTuple,
   resolveDatabaseRetryDelayMs,
+  getSafeStatusUrlInfo,
   patchNewsletterMediaDirectPaths,
   buildStatusDeliveryRecipients
 });

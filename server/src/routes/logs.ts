@@ -4,6 +4,7 @@ const { getSupabaseClient } = require('../db/supabase');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const { buildQueuedAutomationPreview } = require('../services/queueService');
 const { isStoredMediaReference, sanitizeMediaUrlForApi } = require('../utils/mediaUrlPresentation');
+const { sanitizeSendErrorForApi } = require('../utils/sendErrorPresentation');
 
 const SUCCESSFUL_SEND_STATUSES = ['sent', 'delivered', 'read', 'played'];
 const DEFAULT_LOG_LIMIT = 200;
@@ -46,6 +47,8 @@ const finalizeLog = (row: Record<string, unknown>) => {
   return {
     ...row,
     ...resolveLogTargetState(row),
+    error_message: sanitizeSendErrorForApi(row.error_message),
+    media_error: sanitizeSendErrorForApi(row.media_error),
     media_url: sanitizeMediaUrlForApi(rawMediaUrl),
     media_stored: isStoredMediaReference(rawMediaUrl)
   };

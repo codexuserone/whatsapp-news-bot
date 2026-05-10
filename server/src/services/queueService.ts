@@ -292,11 +292,14 @@ const computeUncertainRetryDelayMs = (sendTimeoutMs: number) =>
 const isUnknownDeliveryTimeout = (message: unknown) =>
   /timed out sending|message send not confirmed/i.test(String(message || ''));
 
+const stripFalseAcceptedPrefix = (message: string) =>
+  String(message || '').replace(/WhatsApp accepted the send, but no delivery receipt has arrived yet\.\s*/gi, '').trim();
+
 const buildUncertainErrorMessage = (message: string) =>
-  `WhatsApp did not confirm this send. ${String(message || '').trim()}`.trim();
+  `WhatsApp did not confirm this send. ${stripFalseAcceptedPrefix(message)}`.trim();
 
 const buildUnconfirmedTimeoutErrorMessage = (message: string) =>
-  `WhatsApp did not return a message id before timeout. ${String(message || '').trim()}`.trim();
+  `WhatsApp did not return a message id before timeout. ${stripFalseAcceptedPrefix(message)}`.trim();
 
 const isTimedOutWithoutMessageId = (row: { whatsapp_message_id?: unknown; error_message?: unknown; media_error?: unknown }) => {
   if (String(row?.whatsapp_message_id || '').trim()) return false;

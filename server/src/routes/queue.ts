@@ -17,6 +17,7 @@ const { stripManualMeta } = require('../utils/manualMeta');
 const { normalizeTargetJidForSend } = require('../utils/targetJid');
 const { normalizeFeedMedia } = require('../utils/feedMedia');
 const { isInlineMediaDataUrl, isStoredMediaReference, sanitizeMediaUrlForApi } = require('../utils/mediaUrlPresentation');
+const { sanitizeSendErrorForApi } = require('../utils/sendErrorPresentation');
 
 const WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES = 15;
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
@@ -544,12 +545,12 @@ const queueRoutes = () => {
           pub_precision: null,
           rendered_content: isManual ? displayMessageContent : displayMessageContent || automationPreview?.text || null,
           status: row.status,
-          error_message: row.error_message,
+          error_message: sanitizeSendErrorForApi(row.error_message),
           media_url: sanitizeMediaUrlForApi(rawMediaUrl),
           media_stored: isStoredMediaReference(rawMediaUrl),
           media_type: row.media_type || automationPreview?.mediaType || normalizedMedia.mediaKind || null,
           media_sent: Boolean(row.media_sent),
-          media_error: row.media_error || null,
+          media_error: sanitizeSendErrorForApi(row.media_error),
           disable_link_preview: row.disable_link_preview === true,
           include_caption: row.include_caption !== false,
           approved_at: row.approved_at || null,

@@ -181,6 +181,11 @@ const isMissingAuthKeysTable = (error: unknown) => {
   return code === '42P01' || (msg.includes('does not exist') && msg.includes('auth_keys'));
 };
 
+const isQuotaLimitError = (error: unknown) => {
+  const msg = String((error as { message?: unknown })?.message || error || '').toLowerCase();
+  return msg.includes('data transfer quota') || msg.includes('quota exceeded');
+};
+
 const isTransientLeaseTransportError = (error: unknown) => {
   const raw = String((error as { message?: unknown; code?: unknown })?.message || error || '');
   const code = String((error as { code?: unknown })?.code || '').toUpperCase();
@@ -354,7 +359,7 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
         return result.rows as T[];
       } catch (error) {
         const transient = isTransientLeaseTransportError(error);
-        if (!transient || attempt >= maxAttempts) {
+        if (isQuotaLimitError(error) || !transient || attempt >= maxAttempts) {
           throw error;
         }
         console.warn(

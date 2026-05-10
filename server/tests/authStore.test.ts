@@ -183,4 +183,16 @@ describe('authStore', () => {
 
         expect(mockPgQuery).toHaveBeenCalledTimes(2);
     });
+
+    it('does not retry Neon quota failures when loading auth state', async () => {
+        process.env.DB_PROVIDER = 'neon';
+        process.env.NEON_DATABASE_URL = 'postgresql://user:pass@example.com/db';
+        mockGetSupabaseClient.mockReturnValue(null);
+        mockPgQuery.mockRejectedValue(new Error('Your project has exceeded the data transfer quota. Upgrade your plan to increase limits.'));
+
+        const useSupabaseAuthState = require('../src/whatsapp/authStore');
+
+        await expect(useSupabaseAuthState('primary')).rejects.toThrow(/Auth state temporarily unavailable/);
+        expect(mockPgQuery).toHaveBeenCalledTimes(1);
+    });
 });

@@ -163,6 +163,13 @@ const getPostgresCircuitRetryAfterMs = () => Math.max(pgCircuitOpenUntil - Date.
 
 const isPostgresCircuitOpen = () => getPostgresCircuitRetryAfterMs() > 0;
 
+const getPostgresHealthState = () => ({
+  circuitOpen: isPostgresCircuitOpen(),
+  retryAfterMs: getPostgresCircuitRetryAfterMs(),
+  lastFailureAt: pgLastFailureAt ? new Date(pgLastFailureAt).toISOString() : null,
+  lastFailureMessage: pgLastFailureMessage
+});
+
 const isPostgresAvailabilityError = (error: unknown) => {
   const message = getErrorMessage(error, '').toLowerCase();
   const code = String((error as { code?: unknown } | null)?.code || '').trim().toUpperCase();
@@ -961,6 +968,7 @@ const testPostgresConnection = async () => {
 
 module.exports = {
   createPostgresCompatClient,
+  getPostgresHealthState,
   getPostgresPool,
   resolvePostgresConnectionString,
   testPostgresConnection

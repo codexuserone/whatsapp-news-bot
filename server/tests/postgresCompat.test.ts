@@ -110,6 +110,22 @@ describe('postgresCompat query builder', () => {
     expect(fakeQuery).toHaveBeenCalledTimes(1);
   });
 
+  it('exposes the last Postgres availability failure for readiness checks', async () => {
+    fakeQuery.mockRejectedValueOnce(
+      Object.assign(new Error('Your project has exceeded the data transfer quota. Upgrade your plan to increase limits.'), {
+        code: 'XX000'
+      })
+    );
+
+    const { getPostgresHealthState, testPostgresConnection } = require('../src/db/postgresCompat');
+
+    await expect(testPostgresConnection()).resolves.toBe(false);
+
+    const state = getPostgresHealthState();
+    expect(state.circuitOpen).toBe(true);
+    expect(state.lastFailureMessage).toContain('data transfer quota');
+  });
+
   it('serializes template sequence steps as JSON instead of a Postgres array', async () => {
     const { createPostgresCompatClient } = require('../src/db/postgresCompat');
     const db = createPostgresCompatClient();

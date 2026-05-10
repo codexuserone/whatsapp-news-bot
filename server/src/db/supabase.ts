@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 const { createClient } = require('@supabase/supabase-js');
 const {
   createPostgresCompatClient,
+  getPostgresHealthState,
   resolvePostgresConnectionString,
   testPostgresConnection
 } = require('./postgresCompat');
@@ -181,7 +182,8 @@ async function testConnection(): Promise<boolean> {
       if (connected) {
         markSupabaseSuccess();
       } else {
-        markSupabaseFailure(new Error('Postgres connection failed'));
+        const postgresState = typeof getPostgresHealthState === 'function' ? getPostgresHealthState() : null;
+        markSupabaseFailure(new Error(postgresState?.lastFailureMessage || 'Postgres connection failed'));
       }
       return connected;
     }

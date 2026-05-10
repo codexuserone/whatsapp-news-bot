@@ -85,4 +85,28 @@ describe('server Supabase client configuration', () => {
       })
     ]);
   });
+
+  it('preserves Postgres failure detail in health state', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.DB_PROVIDER = 'postgres';
+    process.env.DATABASE_URL = 'postgresql://example.com/test';
+
+    jest.doMock('../src/db/postgresCompat', () => ({
+      createPostgresCompatClient: jest.fn(),
+      resolvePostgresConnectionString: jest.fn(() => 'postgresql://example.com/test'),
+      testPostgresConnection: jest.fn(async () => false),
+      getPostgresHealthState: jest.fn(() => ({
+        circuitOpen: true,
+        retryAfterMs: 45_000,
+        lastFailureAt: '2026-05-10T03:00:00.000Z',
+        lastFailureMessage: 'Your project has exceeded the data transfer quota. Upgrade your plan to increase limits.'
+      }))
+    }));
+
+    const { getSupabaseHealthState, testConnection } = require('../src/db/supabase');
+
+    await expect(testConnection()).resolves.toBe(false);
+
+    expect(getSupabaseHealthState().lastFailureMessage).toContain('data transfer quota');
+  });
 });

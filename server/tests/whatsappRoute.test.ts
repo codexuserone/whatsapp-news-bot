@@ -78,7 +78,7 @@ describe('whatsapp route test-send logging', () => {
 
     expect(result).toEqual({
       status: 'uncertain',
-      errorMessage: 'WhatsApp accepted the send, but no delivery receipt has arrived yet. Missing WhatsApp message id',
+      errorMessage: 'WhatsApp did not confirm this send. Missing WhatsApp message id',
       sentAt: null
     });
   });

@@ -293,7 +293,15 @@ const isUnknownDeliveryTimeout = (message: unknown) =>
   /timed out sending|message send not confirmed/i.test(String(message || ''));
 
 const buildUncertainErrorMessage = (message: string) =>
-  `WhatsApp accepted the send, but no delivery receipt has arrived yet. ${String(message || '').trim()}`.trim();
+  `WhatsApp did not confirm this send. ${String(message || '').trim()}`.trim();
+
+const buildUnconfirmedTimeoutErrorMessage = (message: string) =>
+  `WhatsApp did not return a message id before timeout. ${String(message || '').trim()}`.trim();
+
+const isTimedOutWithoutMessageId = (row: { whatsapp_message_id?: unknown; error_message?: unknown; media_error?: unknown }) => {
+  if (String(row?.whatsapp_message_id || '').trim()) return false;
+  return isUnknownDeliveryTimeout([row?.error_message, row?.media_error].filter(Boolean).join(' '));
+};
 
 const shouldTreatAcceptedMessageIdAsSent = () =>
   String(process.env.WHATSAPP_REQUIRE_RECEIPT_TO_MARK_SENT || '').trim().toLowerCase() !== 'true';
@@ -825,6 +833,23 @@ const reconcileUncertainMessageLogs = async (supabase: SupabaseClient, settings:
       }
 
       resolvedSent += 1;
+      continue;
+    }
+
+    if (isTimedOutWithoutMessageId(row)) {
+      const message = String(row?.error_message || row?.media_error || 'Timed out before WhatsApp returned a message id').trim();
+      await supabase
+        .from('message_logs')
+        .update({
+          status: 'failed',
+          processing_started_at: null,
+          error_message: buildUnconfirmedTimeoutErrorMessage(message),
+          whatsapp_message_id: null,
+          media_sent: false,
+          media_error: message
+        })
+        .eq('id', id);
+      terminalFailed += 1;
       continue;
     }
 
@@ -4958,16 +4983,20 @@ const sendQueuedForSchedule = async (
           }
 
           if (timeoutUnknownDelivery) {
+            const hasAttemptedMessageId = Boolean(attemptedMessageId);
             await supabase
               .from('message_logs')
               .update({
-                status: 'uncertain',
-                error_message: buildUncertainErrorMessage(errorMessage),
+                status: hasAttemptedMessageId ? 'uncertain' : 'failed',
+                processing_started_at: null,
+                error_message: hasAttemptedMessageId
+                  ? buildUncertainErrorMessage(errorMessage)
+                  : buildUnconfirmedTimeoutErrorMessage(errorMessage),
                 message_content: expectedRender?.outboundText || null,
                 whatsapp_message_id: attemptedMessageId,
                 media_url: expectedMedia.url || null,
                 media_type: expectedMedia.kind || null,
-                media_sent: Boolean(attemptedMessageId && expectedMedia.url && expectedMedia.kind),
+                media_sent: Boolean(hasAttemptedMessageId && expectedMedia.url && expectedMedia.kind),
                 media_error: errorMessage
               })
               .eq('id', log.id);
@@ -5921,20 +5950,23 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           .eq('id', log.id);
         return { ok: false, held: true, error: holdError };
       }
-      const terminalStatus = timedOut ? 'uncertain' : connectionStateError ? originalStatus : 'failed';
+      const timedOutWithMessageId = Boolean(timedOut && uncertainWhatsAppMessageId);
+      const terminalStatus = timedOutWithMessageId ? 'uncertain' : connectionStateError ? originalStatus : 'failed';
 
       const keepMedia = !isAutomationBacked && Boolean(String(log.media_url || '').trim());
-      const acceptedMedia = Boolean(timedOut && uncertainWhatsAppMessageId && uncertainMediaUrl && uncertainMediaType);
+      const acceptedMedia = Boolean(timedOutWithMessageId && uncertainMediaUrl && uncertainMediaType);
       const failurePatch: Record<string, unknown> = {
         status: terminalStatus,
-        processing_started_at: timedOut ? log.processing_started_at || new Date().toISOString() : null,
-        error_message: timedOut
+        processing_started_at: timedOutWithMessageId ? log.processing_started_at || new Date().toISOString() : null,
+        error_message: timedOutWithMessageId
           ? buildUncertainErrorMessage(errorMessage)
+          : timedOut
+            ? buildUnconfirmedTimeoutErrorMessage(errorMessage)
           : connectionStateError
             ? buildConnectionWaitErrorMessage(errorMessage)
             : errorMessage,
         message_content: timedOut ? uncertainMessageContent : log.message_content || null,
-        whatsapp_message_id: timedOut ? uncertainWhatsAppMessageId : null,
+        whatsapp_message_id: timedOutWithMessageId ? uncertainWhatsAppMessageId : null,
         media_url: timedOut ? uncertainMediaUrl : keepMedia ? log.media_url || null : null,
         media_type: timedOut ? uncertainMediaType : keepMedia ? log.media_type || null : null,
         media_sent: acceptedMedia,

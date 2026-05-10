@@ -63,9 +63,9 @@ const setNoStoreHeaders = (res: Response) => {
 const buildUncertainSendMessage = (value: unknown) => {
   const message = String(value || '').trim();
   if (!message) {
-    return 'WhatsApp accepted the send, but no delivery receipt has arrived yet.';
+    return 'WhatsApp did not confirm this send.';
   }
-  return `WhatsApp accepted the send, but no delivery receipt has arrived yet. ${message}`.trim();
+  return `WhatsApp did not confirm this send. ${message}`.trim();
 };
 
 const normalizeConfirmationForOperator = (

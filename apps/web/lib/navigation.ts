@@ -34,12 +34,12 @@ export const navSections: NavSection[] = [
     ]
   },
   {
-    title: 'Automation',
+    title: 'Publishing',
     items: [
       { label: 'Feeds', to: '/feeds', icon: Rss },
       { label: 'Templates', to: '/templates', icon: Layers },
-      { label: 'Targets', to: '/targets', icon: Target },
-      { label: 'Automations', to: '/schedules', icon: CalendarClock },
+      { label: 'Destinations', to: '/targets', icon: Target },
+      { label: 'Schedules', to: '/schedules', icon: CalendarClock },
       { label: 'Send Queue', to: '/queue', icon: ListOrdered }
     ]
   },

@@ -257,8 +257,6 @@ const ComposeInner = () => {
   const [attachment, setAttachment] = useState<ComposerAttachment | null>(() => prefill.attachment);
   const [disableLinkPreview, setDisableLinkPreview] = useState(false);
   const [includeCaption, setIncludeCaption] = useState(true);
-  const [blockName, setBlockName] = useState('');
-  const [blockContent, setBlockContent] = useState('');
   const { databaseUnavailable, databaseUnavailableMessage } = useRuntimeStatus();
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
@@ -553,33 +551,6 @@ const ComposeInner = () => {
       setNotice({ type: 'success', message: 'Draft deleted.' });
     } catch (error: unknown) {
       setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Draft delete failed' });
-    }
-  };
-
-  const saveBlock = async () => {
-    if (databaseUnavailable) {
-      setNotice({
-        type: 'error',
-        message: databaseUnavailableMessage || 'Database is unavailable. Block saves are paused.'
-      });
-      return;
-    }
-
-    const name = blockName.trim();
-    const content = blockContent.trim();
-    if (!name || !content) {
-      setNotice({ type: 'error', message: 'Block name and content are required.' });
-      return;
-    }
-
-    const block: ManualBlock = { id: makeId(), name, content, updated_at: new Date().toISOString() };
-    try {
-      await updateBlocks.mutateAsync([block, ...blocks].slice(0, 80));
-      setBlockName('');
-      setBlockContent('');
-      setNotice({ type: 'success', message: 'Block saved.' });
-    } catch (error: unknown) {
-      setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Block save failed' });
     }
   };
 
@@ -935,16 +906,14 @@ const ComposeInner = () => {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Drafts</CardTitle>
-              <CardDescription>{drafts.length} saved draft{drafts.length !== 1 ? 's' : ''}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {drafts.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No drafts yet.</p>
-              ) : (
-                drafts.map((draft) => (
+          {drafts.length > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Drafts</CardTitle>
+                <CardDescription>{drafts.length} saved draft{drafts.length !== 1 ? 's' : ''}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {drafts.map((draft) => (
                   <div key={draft.id} className="rounded-md border p-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
@@ -978,47 +947,18 @@ const ComposeInner = () => {
                       <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{draft.data.message}</p>
                     ) : null}
                   </div>
-                ))
-              )}
-            </CardContent>
-          </Card>
+                ))}
+              </CardContent>
+            </Card>
+          ) : null}
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Reusable Blocks</CardTitle>
-              <CardDescription>Save snippets and insert them into the text box.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="blockName">Block name</Label>
-                  <Input id="blockName" value={blockName} onChange={(event) => setBlockName(event.target.value)} placeholder="Subscribe line" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="blockContent">Block text</Label>
-                  <Textarea
-                    id="blockContent"
-                    value={blockContent}
-                    onChange={(event) => setBlockContent(event.target.value)}
-                    placeholder="Text to insert..."
-                    className="min-h-[96px]"
-                  />
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={saveBlock}
-                  disabled={databaseUnavailable || updateBlocks.isPending}
-                  title={databaseUnavailable ? 'Database unavailable; block saves are paused' : undefined}
-                >
-                  <Save className="mr-2 h-4 w-4" />
-                  Save block
-                </Button>
-              </div>
-
-              {blocks.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No blocks yet.</p>
-              ) : (
+          {blocks.length > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Reusable Blocks</CardTitle>
+                <CardDescription>Insert saved snippets into the text box.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
                 <div className="space-y-2">
                   {blocks.map((block) => (
                     <div key={block.id} className="rounded-md border p-3">
@@ -1049,9 +989,9 @@ const ComposeInner = () => {
                     </div>
                   ))}
                 </div>
-              )}
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          ) : null}
         </div>
       </div>
     </div>

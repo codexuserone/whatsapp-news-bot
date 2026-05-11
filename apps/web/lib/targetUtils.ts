@@ -229,3 +229,12 @@ export const formatTargetLabel = (target: Pick<Target, 'name' | 'type'>) => {
     (type === 'status' ? 'My Status' : 'Destination');
   return `${baseName} (${type})`;
 };
+
+export const isTestTarget = (target: Pick<Target, 'name' | 'phone_number' | 'type'>) => {
+  const name = normalizeDisplayText(target?.name).toLowerCase();
+  const phone = normalizeDisplayText(target?.phone_number).toLowerCase();
+  if (/\btest\b/.test(name)) return true;
+  if (name === 'feed for anash whatsapp') return true;
+  if (phone.includes('19144477725')) return true;
+  return false;
+};

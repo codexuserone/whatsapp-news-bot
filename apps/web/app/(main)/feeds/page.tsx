@@ -301,7 +301,7 @@ const FeedsPage = () => {
     });
   };
 
-  const activeAutomationCountByFeedId = React.useMemo(() => {
+  const activeScheduleCountByFeedId = React.useMemo(() => {
     const map = new Map<string, number>();
     for (const schedule of schedules) {
       const isRunning = schedule?.state ? schedule.state === 'active' : Boolean(schedule?.active);
@@ -317,7 +317,7 @@ const FeedsPage = () => {
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Feeds</h1>
-          <p className="text-muted-foreground">Add feed URLs. Running automations check these feeds automatically.</p>
+          <p className="text-muted-foreground">Add feed URLs. Running schedules check these feeds automatically.</p>
         </div>
       </div>
 
@@ -490,7 +490,7 @@ const FeedsPage = () => {
                 </details>
 
                 <p className="text-xs text-muted-foreground">
-                  Feed polling only runs when at least one running automation uses this feed.
+                  Feed polling only runs when at least one running schedule uses this feed.
                 </p>
 
                 <input type="hidden" {...form.register('fetch_interval')} value={900} />
@@ -594,8 +594,8 @@ const FeedsPage = () => {
               {feeds.map((feed) => (
                 <div key={feed.id} className="rounded-lg border p-3">
                   {(() => {
-                    const runningAutomationCount = activeAutomationCountByFeedId.get(feed.id) || 0;
-                    const pollingEnabled = Boolean(feed.active) && runningAutomationCount > 0;
+                    const runningScheduleCount = activeScheduleCountByFeedId.get(feed.id) || 0;
+                    const pollingEnabled = Boolean(feed.active) && runningScheduleCount > 0;
                     const badgeLabel = !feed.active ? 'Disabled' : pollingEnabled ? 'Polling' : 'Idle';
                     const badgeVariant = pollingEnabled ? 'success' : 'secondary';
                     return (
@@ -606,7 +606,7 @@ const FeedsPage = () => {
                       <p className="text-xs text-muted-foreground truncate">{feed.url}</p>
                       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                         <span>
-                          Active automations: {activeAutomationCountByFeedId.get(feed.id) || 0}
+                          Active schedules: {activeScheduleCountByFeedId.get(feed.id) || 0}
                         </span>
                         <span>
                           Last checked:{' '}

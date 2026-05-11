@@ -270,7 +270,7 @@ const SettingsPage = () => {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
-        <p className="text-muted-foreground">Configure global defaults and safety controls.</p>
+        <p className="text-muted-foreground">Set publishing behavior, Status delivery, and Shabbos mode.</p>
       </div>
 
       {isSettingsLoading ? (
@@ -305,17 +305,17 @@ const SettingsPage = () => {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Settings className="h-5 w-5" />
-              General
+              Publishing
             </CardTitle>
-            <CardDescription>Basic application settings</CardDescription>
+            <CardDescription>One global stop switch for feed checks and scheduled sends.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-3 sm:col-span-2 rounded-lg border bg-muted/20 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-medium">Pause Entire App</p>
+                  <p className="text-sm font-medium">Stop publishing</p>
                   <p className="text-xs text-muted-foreground">
-                    Stops automatic feed polling, queueing, and automation sends until resumed.
+                    Stops feed checks, queueing, and scheduled sends until turned back on.
                   </p>
                 </div>
                 <Controller
@@ -330,9 +330,9 @@ const SettingsPage = () => {
                 />
               </div>
               {appPaused ? (
-                <Badge variant="warning">App paused</Badge>
+                <Badge variant="warning">Publishing stopped</Badge>
               ) : (
-                <Badge variant="success">App running</Badge>
+                <Badge variant="success">Publishing on</Badge>
               )}
             </div>
 
@@ -370,7 +370,7 @@ const SettingsPage = () => {
               <Clock className="h-5 w-5" />
               Messaging
             </CardTitle>
-            <CardDescription>Core defaults for sending and history.</CardDescription>
+            <CardDescription>Normal operator defaults.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
@@ -390,74 +390,6 @@ const SettingsPage = () => {
                 <p className="text-xs text-muted-foreground">How long sent/failed history stays visible.</p>
               </div>
             </div>
-
-            <details className="rounded-lg border bg-muted/20 p-3">
-              <summary className="cursor-pointer text-sm font-medium">Advanced delivery options</summary>
-              <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <div className="space-y-2">
-                  <Label htmlFor="max_retries">Max Retries</Label>
-                  <Input
-                    id="max_retries"
-                    type="number"
-                    min={0}
-                    max={50}
-                    {...form.register('max_retries', { valueAsNumber: true })}
-                  />
-                  <p className="text-xs text-muted-foreground">Retries before a message is marked failed.</p>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="defaultInterTargetDelaySec">Gap Between Targets (sec)</Label>
-                  <Input
-                    id="defaultInterTargetDelaySec"
-                    type="number"
-                    {...form.register('defaultInterTargetDelaySec', { valueAsNumber: true })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="defaultIntraTargetDelaySec">Gap Within One Target (sec)</Label>
-                  <Input
-                    id="defaultIntraTargetDelaySec"
-                    type="number"
-                    {...form.register('defaultIntraTargetDelaySec', { valueAsNumber: true })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="processingTimeoutMinutes">Stuck Send Timeout (min)</Label>
-                  <Input
-                    id="processingTimeoutMinutes"
-                    type="number"
-                    min={5}
-                    {...form.register('processingTimeoutMinutes', { valueAsNumber: true })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="post_send_edit_window_minutes">In-place Edit Window (min)</Label>
-                  <Input
-                    id="post_send_edit_window_minutes"
-                    type="number"
-                    min={1}
-                    max={WHATSAPP_EDIT_MAX_MINUTES}
-                    {...form.register('post_send_edit_window_minutes', { valueAsNumber: true })}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    True WhatsApp edit only. Max {WHATSAPP_EDIT_MAX_MINUTES} minutes (real WhatsApp limit). No resend fallback.
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="post_send_correction_window_minutes">Correction Attempt Window (min)</Label>
-                  <Input
-                    id="post_send_correction_window_minutes"
-                    type="number"
-                    min={1}
-                    max={CORRECTION_SCAN_MAX_MINUTES}
-                    {...form.register('post_send_correction_window_minutes', { valueAsNumber: true })}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Must match WhatsApp edit support (max {CORRECTION_SCAN_MAX_MINUTES} min). No delete-and-resend.
-                  </p>
-                </div>
-              </div>
-            </details>
           </CardContent>
         </Card>
 
@@ -513,7 +445,7 @@ const SettingsPage = () => {
                   <div>
                     <p className="text-sm font-medium">Use synced private viewers</p>
                     <p className="text-xs text-muted-foreground">
-                      Keeps the Status audience broad while using only contacts WhatsApp exposes to this session.
+                      Sends production Status posts to the private viewers WhatsApp exposes to this session.
                     </p>
                   </div>
                   <Controller
@@ -567,78 +499,6 @@ const SettingsPage = () => {
               <p className="text-xs text-muted-foreground">
                 Default 0.88. Lower catches more near-duplicates.
               </p>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card id="advanced">
-          <CardHeader>
-            <CardTitle>Advanced</CardTitle>
-            <CardDescription>Additional backend queue and retention controls.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <div className="space-y-2">
-                <Label htmlFor="send_timeout_ms">Send Timeout (ms)</Label>
-                <Input
-                  id="send_timeout_ms"
-                  type="number"
-                  min={10000}
-                  max={180000}
-                  {...form.register('send_timeout_ms', { valueAsNumber: true })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="max_pending_age_hours">Max Pending Age (hours)</Label>
-                <Input
-                  id="max_pending_age_hours"
-                  type="number"
-                  min={1}
-                  max={336}
-                  {...form.register('max_pending_age_hours', { valueAsNumber: true })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="reconcile_queue_lookback_hours">Queue Reconcile Lookback (hours)</Label>
-                <Input
-                  id="reconcile_queue_lookback_hours"
-                  type="number"
-                  min={1}
-                  max={168}
-                  {...form.register('reconcile_queue_lookback_hours', { valueAsNumber: true })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="initial_fetch_limit">Initial Feed Fetch Limit</Label>
-                <Input
-                  id="initial_fetch_limit"
-                  type="number"
-                  min={1}
-                  max={50}
-                  {...form.register('initial_fetch_limit', { valueAsNumber: true })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="authRetentionDays">Auth State Retention (days)</Label>
-                <Input
-                  id="authRetentionDays"
-                  type="number"
-                  min={1}
-                  max={3650}
-                  {...form.register('authRetentionDays', { valueAsNumber: true })}
-                />
-              </div>
-            </div>
-
-            <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
-              <p>WhatsApp paused flag: <strong>{settings?.whatsapp_paused ? 'paused' : 'running'}</strong></p>
-              <p>
-                WhatsApp paused at:{' '}
-                <strong>
-                  {settings?.whatsapp_paused_at ? new Date(settings.whatsapp_paused_at).toLocaleString() : 'n/a'}
-                </strong>
-              </p>
-              <p className="mt-1">Use the WhatsApp page Pause/Resume buttons to change this operational state.</p>
             </div>
           </CardContent>
         </Card>

@@ -61,16 +61,16 @@ const FeedItemsPage = () => {
 
   const getStatus = (item: FeedItem) => {
     if (item.delivery_status === 'no_automation') {
-      return { label: 'No active automation', variant: 'secondary' as const };
+      return { label: 'No active schedule', variant: 'secondary' as const };
     }
     if (item.delivery_status === 'automation_incomplete') {
-      return { label: 'Automation setup incomplete', variant: 'warning' as const };
+      return { label: 'Schedule setup incomplete', variant: 'warning' as const };
     }
     if (item.delivery_status === 'not_queued') {
       return { label: 'Will queue on next poll', variant: 'secondary' as const };
     }
     if (item.delivery_status === 'not_queued_old') {
-      return { label: 'Older than the current automation window', variant: 'secondary' as const };
+      return { label: 'Older than the current schedule window', variant: 'secondary' as const };
     }
 
     const delivery = item.delivery || {
@@ -219,7 +219,7 @@ const FeedItemsPage = () => {
           Stories from your feeds. Queue is where editable outgoing messages live before they are sent.
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Story status here is based on the latest live automation rows for each destination. Older history is ignored.
+          Story status here is based on the latest live schedule rows for each destination. Older history is ignored.
         </p>
       </div>
 
@@ -239,7 +239,7 @@ const FeedItemsPage = () => {
                 variant={scope === 'automation' ? 'default' : 'outline'}
                 onClick={() => setScope('automation')}
               >
-                In automations
+                In schedules
               </Button>
               <Button
                 size="sm"

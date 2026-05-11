@@ -64,8 +64,8 @@ const GlobalStatusBanner = () => {
       return {
         tone: 'destructive' as const,
         icon: AlertTriangle,
-        title: 'App paused',
-        body: 'All automations are paused (polling and sending).',
+        title: 'Publishing stopped',
+        body: 'Feed checks and scheduled sends are stopped.',
         href: '/settings',
         hrefLabel: 'Open Settings'
       };
@@ -76,8 +76,8 @@ const GlobalStatusBanner = () => {
       return {
         tone: 'warning' as const,
         icon: PauseCircle,
-        title: `WhatsApp paused${when}`,
-        body: 'Sending is stopped until you resume the WhatsApp session.',
+        title: `WhatsApp connection paused${when}`,
+        body: 'The bot is not connected to WhatsApp.',
         href: '/whatsapp',
         hrefLabel: 'Open WhatsApp'
       };

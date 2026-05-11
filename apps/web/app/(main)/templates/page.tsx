@@ -912,7 +912,7 @@ const TemplatesPage = () => {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <Label>Template enabled</Label>
-                      <p className="text-xs text-muted-foreground">Disabled templates stay saved but are hidden from new automation choices.</p>
+                      <p className="text-xs text-muted-foreground">Disabled templates stay saved but are hidden from new schedule choices.</p>
                     </div>
                     <Switch
                       checked={watchedActive === true}
@@ -975,7 +975,7 @@ const TemplatesPage = () => {
                   )}
 
                   <p className="border-t pt-3 text-xs text-muted-foreground">
-                    Templates are always available to automations; pick which one to use on the Automations page.
+                    Templates are always available to schedules; pick which one to use on the Schedules page.
                   </p>
                 </div>
 
@@ -1039,7 +1039,7 @@ const TemplatesPage = () => {
                     <div>
                       <Label>Status / Message Sequence</Label>
                       <p className="text-xs text-muted-foreground">
-                        When steps are added, automations send each step in order for every story.
+                        When steps are added, schedules send each step in order for every story.
                       </p>
                     </div>
                     <Button type="button" variant="outline" size="sm" onClick={addSequenceStep}>
@@ -1195,7 +1195,7 @@ const TemplatesPage = () => {
                 <Send className="h-5 w-5" />
                 Send Preview
               </CardTitle>
-              <CardDescription>Send this template to any active destination before enabling it in automations.</CardDescription>
+              <CardDescription>Send this template to any active destination before enabling it in schedules.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="space-y-2">
@@ -1296,7 +1296,7 @@ const TemplatesPage = () => {
                   </Select>
                 </div>
                 <p className="text-xs text-muted-foreground sm:self-end">
-                  Pick different samples to preview edge cases before automations run.
+                  Pick different samples to preview edge cases before schedules run.
                 </p>
               </div>
             </CardHeader>

@@ -4,12 +4,12 @@ import React from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { Target, WhatsAppQrState, WhatsAppStatus, WhatsAppStatusAudience } from '@/lib/types';
+import type { Target, WhatsAppQrState, WhatsAppStatus } from '@/lib/types';
 import { dedupeTargets } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { AlertTriangle, RefreshCw, Power, CheckCircle, QrCode, RadioTower, Send } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Power, QrCode, RadioTower, Send } from 'lucide-react';
 
 const isSafeImageSrc = (value: unknown) => {
   const src = String(value || '').trim();
@@ -69,32 +69,10 @@ const WhatsAppPage = () => {
     refetchInterval: status?.status === 'connected' ? 10000 : 30000
   });
 
-  const { data: statusAudience } = useQuery<WhatsAppStatusAudience>({
-    queryKey: ['whatsapp-status-audience'],
-    queryFn: () => api.get('/api/whatsapp/status-audience'),
-    refetchInterval: status?.status === 'connected' ? 30000 : 60000
-  });
   const existingTargets = React.useMemo<Target[]>(() => {
     if (!Array.isArray(existingTargetsRaw)) return [];
     return dedupeTargets(existingTargetsRaw as Array<Partial<Target>>, { activeOnly: false });
   }, [existingTargetsRaw]);
-
-  const disconnect = useMutation({
-    mutationFn: () => api.post('/api/whatsapp/disconnect'),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
-      queryClient.invalidateQueries({ queryKey: ['targets'] });
-    }
-  });
-
-  const pauseSession = useMutation({
-    mutationFn: () => api.post('/api/whatsapp/pause'),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-status'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-qr'] });
-      queryClient.invalidateQueries({ queryKey: ['targets'] });
-    }
-  });
 
   const resumeSession = useMutation({
     mutationFn: () => api.post('/api/whatsapp/resume'),
@@ -119,7 +97,6 @@ const WhatsAppPage = () => {
     onSuccess: () => {
       lastAutoSyncStatusRef.current = status?.status || 'connected';
       queryClient.invalidateQueries({ queryKey: ['targets'] });
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-status-audience'] });
     },
     onError: () => {
       lastAutoSyncStatusRef.current = null;
@@ -164,46 +141,14 @@ const WhatsAppPage = () => {
     }),
     [groupedTargets, statusTargets]
   );
-  const statusAudienceCount = Number(statusAudience?.participantCount || 0);
-  const statusSources = statusAudience?.sources || {
-    contactsCache: 0,
-    storeContacts: 0,
-    storeChats: 0,
-    groupMetadata: 0,
-    env: 0,
-    me: 0,
-    activeIndividualTargets: 0,
-    recentSuccessfulDirectRecipients: 0
-  };
-  const statusTrustedAudienceCount =
-    Number(statusSources.contactsCache || 0) +
-    Number(statusSources.storeContacts || 0) +
-    Number(statusSources.storeChats || 0) +
-    Number(statusSources.env || 0) +
-    Number(statusSources.activeIndividualTargets || 0) +
-    Number(statusSources.recentSuccessfulDirectRecipients || 0);
-  const statusHasOnlySelfAudience =
-    statusAudienceCount <= 1 &&
-    statusTrustedAudienceCount <= 0 &&
-    Number(statusSources.contactsCache || 0) === 0 &&
-    Number(statusSources.storeContacts || 0) === 0 &&
-    Number(statusSources.storeChats || 0) === 0 &&
-    Number(statusSources.env || 0) === 0 &&
-    Number(statusSources.activeIndividualTargets || 0) === 0 &&
-    Number(statusSources.recentSuccessfulDirectRecipients || 0) === 0;
-  const statusAudienceLabel = statusHasOnlySelfAudience
-    ? 'not ready because no private viewers are available'
-    : statusAudienceCount > 0
-      ? `${statusAudienceCount} viewers available`
-      : 'loading after WhatsApp connects';
   const plainSessionState = React.useMemo(() => {
     if (isConnected) return 'Connected and ready for normal queue work.';
-    if (isPaused) return 'Paused. Automation and WhatsApp sends are intentionally stopped.';
+    if (isPaused) return 'WhatsApp connection is paused. Scheduled sends are held.';
     if (isQrReady || activeQr) return 'Waiting for you to scan the login code.';
     if (requiresManualPairing) return 'WhatsApp did not issue a login code. Queued messages are being held, not marked sent.';
     if (status?.status === 'connecting') return 'Connecting to WhatsApp.';
     if (status?.status === 'conflict') return 'Another instance still has the WhatsApp session.';
-    return 'Disconnected. Resume or request a fresh login code.';
+    return 'Disconnected. Request a fresh login code.';
   }, [activeQr, isConnected, isPaused, isQrReady, requiresManualPairing, status?.status]);
 
   React.useEffect(() => {
@@ -235,21 +180,18 @@ const WhatsAppPage = () => {
           {isPaused ? (
             <Button onClick={() => resumeSession.mutate()} disabled={resumeSession.isPending}>
               <Power className="mr-2 h-4 w-4" />
-              {resumeSession.isPending ? 'Resuming...' : 'Resume'}
+              {resumeSession.isPending ? 'Resuming...' : 'Resume WhatsApp'}
             </Button>
-          ) : (
-            <Button variant="outline" onClick={() => pauseSession.mutate()} disabled={pauseSession.isPending}>
-              <Power className="mr-2 h-4 w-4" />
-              {pauseSession.isPending ? 'Pausing...' : 'Pause'}
+          ) : !isConnected ? (
+            <Button type="button" variant="outline" onClick={() => setShowAdvancedRecovery((current) => !current)}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              {showAdvancedRecovery ? 'Hide repair' : 'Connection repair'}
             </Button>
-          )}
-          <Button type="button" variant="ghost" onClick={() => setShowAdvancedRecovery((current) => !current)}>
-            {showAdvancedRecovery ? 'Hide recovery tools' : 'Advanced recovery'}
-          </Button>
+          ) : null}
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className={isConnected ? 'grid gap-6' : 'grid gap-6 lg:grid-cols-2'}>
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -284,7 +226,7 @@ const WhatsAppPage = () => {
 
             {isPaused ? (
               <div className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
-                WhatsApp is paused. Resume to reconnect (and to generate a QR code if needed).
+                WhatsApp connection is paused. Resume to reconnect.
               </div>
             ) : requiresManualPairing ? (
               <div className="space-y-3 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
@@ -307,94 +249,80 @@ const WhatsAppPage = () => {
               </div>
             ) : null}
 
-            {showAdvancedRecovery ? (
+            {showAdvancedRecovery && !isConnected && !isPaused ? (
               <div className="space-y-2 rounded-lg border p-3">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Recovery tools</p>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Connection repair</p>
                 <div className="flex flex-wrap gap-2">
-                  {!isConnected && !isPaused ? (
-                    <Button onClick={() => refreshQr.mutate(requiresManualPairing)} disabled={refreshQr.isPending} variant="outline">
-                      <RefreshCw className={`mr-2 h-4 w-4 ${refreshQr.isPending ? 'animate-spin' : ''}`} />
-                      {refreshQr.isPending ? 'Trying login...' : requiresManualPairing ? 'Try login again' : 'Get QR code'}
-                    </Button>
-                  ) : null}
-                  <Button
-                    variant="outline"
-                    onClick={() => disconnect.mutate()}
-                    disabled={disconnect.isPending || !isConnected}
-                  >
-                    {disconnect.isPending ? 'Disconnecting...' : 'Disconnect'}
+                  <Button onClick={() => refreshQr.mutate(requiresManualPairing)} disabled={refreshQr.isPending} variant="outline">
+                    <RefreshCw className={`mr-2 h-4 w-4 ${refreshQr.isPending ? 'animate-spin' : ''}`} />
+                    {refreshQr.isPending ? 'Trying login...' : requiresManualPairing ? 'Try login again' : 'Get QR code'}
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Use these only if pause/resume does not recover the session.
+                  Use this only when the app is disconnected or waiting for a fresh linked-device login.
                 </p>
               </div>
             ) : null}
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <QrCode className="h-5 w-5" />
-              QR Code
-            </CardTitle>
-            <CardDescription>Scan in WhatsApp &rarr; Linked Devices</CardDescription>
-          </CardHeader>
-          <CardContent className="flex min-h-[280px] items-center justify-center">
-            {isPaused ? (
-              <div className="space-y-3 text-center">
-                <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-muted">
-                  <Power className="h-8 w-8 text-muted-foreground" />
+        {!isConnected ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <QrCode className="h-5 w-5" />
+                QR Code
+              </CardTitle>
+              <CardDescription>Scan in WhatsApp &rarr; Linked Devices</CardDescription>
+            </CardHeader>
+            <CardContent className="flex min-h-[280px] items-center justify-center">
+              {isPaused ? (
+                <div className="space-y-3 text-center">
+                  <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-muted">
+                    <Power className="h-8 w-8 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm text-muted-foreground">Paused. Resume to reconnect.</p>
                 </div>
-                <p className="text-sm text-muted-foreground">Paused. Resume to reconnect.</p>
-              </div>
-            ) : isConnected ? (
-              <div className="space-y-3 text-center">
-                <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-success/10">
-                  <CheckCircle className="h-8 w-8 text-success" />
+              ) : requiresManualPairing ? (
+                <div className="space-y-3 text-center">
+                  <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
+                    <AlertTriangle className="h-8 w-8 text-destructive" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">No login code available</p>
+                    <p className="text-sm text-muted-foreground">Queued messages are held until WhatsApp connects.</p>
+                  </div>
                 </div>
-                <p className="text-sm text-muted-foreground">Session is active</p>
-              </div>
-            ) : requiresManualPairing ? (
-              <div className="space-y-3 text-center">
-                <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
-                  <AlertTriangle className="h-8 w-8 text-destructive" />
+              ) : activeQr && isSafeImageSrc(activeQr) ? (
+                <div className="space-y-3 text-center">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={activeQr} alt="WhatsApp QR Code" className="h-56 w-56 rounded-lg border bg-white p-2 object-contain" />
+                  <div className="space-y-1">
+                    <p className="text-sm text-muted-foreground">Scan with your phone</p>
+                    <p className="text-xs text-muted-foreground">{qrCountdownLabel}</p>
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  <p className="text-sm font-medium">No login code available</p>
-                  <p className="text-sm text-muted-foreground">Queued messages are held until WhatsApp connects.</p>
+              ) : qr?.qr && isQrExpired ? (
+                <div className="space-y-3 text-center">
+                  <p className="text-sm text-muted-foreground">QR expired. Waiting for the next fresh code...</p>
                 </div>
-              </div>
-            ) : activeQr && isSafeImageSrc(activeQr) ? (
-              <div className="space-y-3 text-center">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={activeQr} alt="WhatsApp QR Code" className="h-56 w-56 rounded-lg border bg-white p-2 object-contain" />
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Scan with your phone</p>
-                  <p className="text-xs text-muted-foreground">{qrCountdownLabel}</p>
+              ) : qr?.qr ? (
+                <div className="space-y-3 text-center">
+                  <p className="text-sm text-muted-foreground break-all">
+                    QR payload received but could not render as image. Click Get QR code again.
+                  </p>
                 </div>
-              </div>
-            ) : qr?.qr && isQrExpired ? (
-              <div className="space-y-3 text-center">
-                <p className="text-sm text-muted-foreground">QR expired. Waiting for the next fresh code...</p>
-              </div>
-            ) : qr?.qr ? (
-              <div className="space-y-3 text-center">
-                <p className="text-sm text-muted-foreground break-all">
-                  QR payload received but could not render as image. Click Get QR code again.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3 text-center">
-                <div className="inline-flex h-16 w-16 animate-pulse items-center justify-center rounded-full bg-muted">
-                  <QrCode className="h-8 w-8 text-muted-foreground" />
+              ) : (
+                <div className="space-y-3 text-center">
+                  <div className="inline-flex h-16 w-16 animate-pulse items-center justify-center rounded-full bg-muted">
+                    <QrCode className="h-8 w-8 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm text-muted-foreground">Waiting for QR code...</p>
                 </div>
-                <p className="text-sm text-muted-foreground">Waiting for QR code...</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              )}
+            </CardContent>
+          </Card>
+        ) : null}
       </div>
 
       <Card>
@@ -425,10 +353,6 @@ const WhatsAppPage = () => {
               <p className="text-sm text-muted-foreground">Status</p>
               <p className="text-2xl font-semibold">{destinationSummary.status}</p>
             </div>
-          </div>
-
-          <div className={`rounded-lg border p-3 text-sm ${statusHasOnlySelfAudience ? 'border-warning/40 bg-warning/10 text-warning-foreground' : 'bg-muted/30 text-muted-foreground'}`}>
-            Status audience: {statusAudienceLabel}.
           </div>
 
           {syncTargets.isError ? (

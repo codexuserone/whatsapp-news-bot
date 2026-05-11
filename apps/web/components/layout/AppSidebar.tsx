@@ -50,7 +50,7 @@ const AppSidebar = () => {
             </div>
             <div className="flex flex-col">
               <span className="text-sm font-semibold">WhatsApp News Bot</span>
-              <span className="text-xs text-muted-foreground">Automation Suite</span>
+              <span className="text-xs text-muted-foreground">Publishing Console</span>
             </div>
           </div>
           {isMobile ? (

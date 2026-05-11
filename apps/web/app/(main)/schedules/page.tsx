@@ -7,7 +7,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { Feed, ReconcileResult, Schedule, Target, Template } from '@/lib/types';
-import { dedupeTargets, formatTargetLabel } from '@/lib/targetUtils';
+import { dedupeTargets, formatTargetLabel, isTestTarget } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -97,6 +97,7 @@ const SchedulesPage = () => {
   const [batchTimeInput, setBatchTimeInput] = React.useState('09:00');
   const [automationNotice, setAutomationNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [showAdvancedOptions, setShowAdvancedOptions] = React.useState(false);
+  const [showTestDestinations, setShowTestDestinations] = React.useState(false);
   const { data: schedules = [] } = useQuery<Schedule[]>({
     queryKey: ['schedules'],
     queryFn: () => api.get('/api/schedules'),
@@ -118,6 +119,11 @@ const SchedulesPage = () => {
     () => dedupeTargets(targets, { activeOnly: true }),
     [targets]
   );
+  const visibleActiveTargets = React.useMemo(
+    () => activeTargets.filter((target) => showTestDestinations || !isTestTarget(target)),
+    [activeTargets, showTestDestinations]
+  );
+  const hiddenTestTargetCount = activeTargets.length - visibleActiveTargets.length;
   const templateById = React.useMemo(() => {
     const map = new Map<string, Template>();
     for (const template of templates) {
@@ -354,12 +360,12 @@ const SchedulesPage = () => {
         resetCreateForm();
         setAutomationNotice({
           type: 'success',
-          message: `Created ${result.length} automation${result.length !== 1 ? 's' : ''}.`
+          message: `Created ${result.length} schedule${result.length !== 1 ? 's' : ''}.`
         });
         return;
       }
       setActive(result);
-      setAutomationNotice({ type: 'success', message: 'Automation saved.' });
+      setAutomationNotice({ type: 'success', message: 'Schedule saved.' });
     },
     onError: (error: unknown) => alert(`Failed to save schedule: ${getErrorMessage(error)}`)
   });
@@ -381,9 +387,9 @@ const SchedulesPage = () => {
     onSuccess: (clonedSchedule: Schedule) => {
       queryClient.invalidateQueries({ queryKey: ['schedules'] });
       setActive(clonedSchedule);
-      setAutomationNotice({ type: 'success', message: 'Automation cloned. Review and save any changes you want.' });
+      setAutomationNotice({ type: 'success', message: 'Schedule cloned. Review and save any changes you want.' });
     },
-    onError: (error: unknown) => alert(`Failed to clone automation: ${getErrorMessage(error)}`)
+    onError: (error: unknown) => alert(`Failed to clone schedule: ${getErrorMessage(error)}`)
   });
 
   const setScheduleState = useMutation({
@@ -399,16 +405,16 @@ const SchedulesPage = () => {
       }
       const nextState = String(result?.state || '').trim().toLowerCase();
       if (nextState === 'active') {
-        setAutomationNotice({ type: 'success', message: 'Automation running.' });
+        setAutomationNotice({ type: 'success', message: 'Schedule running.' });
       } else if (nextState === 'paused') {
-        setAutomationNotice({ type: 'success', message: 'Automation paused.' });
+        setAutomationNotice({ type: 'success', message: 'Schedule paused.' });
       } else if (nextState === 'stopped') {
-        setAutomationNotice({ type: 'success', message: 'Automation stopped.' });
+        setAutomationNotice({ type: 'success', message: 'Schedule stopped.' });
       } else {
-        setAutomationNotice({ type: 'success', message: 'Automation updated.' });
+        setAutomationNotice({ type: 'success', message: 'Schedule updated.' });
       }
     },
-    onError: (error: unknown) => alert(`Failed to update automation state: ${getErrorMessage(error)}`)
+    onError: (error: unknown) => alert(`Failed to update schedule state: ${getErrorMessage(error)}`)
   });
 
   const dispatchSchedule = useMutation({
@@ -592,6 +598,22 @@ const SchedulesPage = () => {
   const deliveryMode = form.watch('delivery_mode');
   const selectedBatchTimes = form.watch('batch_times') || [];
   const selectedFeedIds = form.watch('feed_ids') || [];
+  const timingChoice =
+    deliveryMode === 'batched'
+      ? 'batched'
+      : timingMode === 'scheduled'
+        ? 'scheduled'
+        : 'on_new';
+
+  const setTimingChoice = (choice: 'on_new' | 'scheduled' | 'batched') => {
+    if (choice === 'batched') {
+      form.setValue('delivery_mode', 'batched');
+      form.setValue('timing_mode', 'on_new');
+      return;
+    }
+    form.setValue('delivery_mode', 'immediate');
+    form.setValue('timing_mode', choice === 'scheduled' ? 'scheduled' : 'on_new');
+  };
 
   const setBatchTimes = (times: string[]) => {
     const normalized = Array.from(
@@ -615,12 +637,12 @@ const SchedulesPage = () => {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Automations</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Schedules</h1>
           <p className="text-muted-foreground">Choose what to send, where to send it, and when it should run.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="outline" className="text-sm">
-            {schedules.length} Automation{schedules.length !== 1 ? 's' : ''}
+            {schedules.length} Schedule{schedules.length !== 1 ? 's' : ''}
           </Badge>
         </div>
       </div>
@@ -630,9 +652,9 @@ const SchedulesPage = () => {
           <CardHeader className="bg-primary/5">
             <CardTitle className="flex items-center gap-2">
               <CalendarClock className="h-5 w-5 text-primary" />
-              {active ? 'Edit Automation' : 'Create New Automation'}
+              {active ? 'Edit Schedule' : 'Create Schedule'}
             </CardTitle>
-            <CardDescription>Set when this automation should send messages.</CardDescription>
+            <CardDescription>Pick the feed, destinations, message format, and timing.</CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -652,58 +674,43 @@ const SchedulesPage = () => {
               </div>
 
               <div className="space-y-2">
-                <Label>Send style</Label>
-                <div className="grid grid-cols-2 gap-2">
+                <Label>Timing</Label>
+                <div className="grid gap-2 sm:grid-cols-3">
                   <Button
                     type="button"
-                    variant={deliveryMode === 'immediate' ? 'default' : 'outline'}
-                    onClick={() => form.setValue('delivery_mode', 'immediate')}
+                    variant={timingChoice === 'on_new' ? 'default' : 'outline'}
+                    onClick={() => setTimingChoice('on_new')}
                   >
-                    Send as items arrive
+                    New stories
                   </Button>
                   <Button
                     type="button"
-                    variant={deliveryMode === 'batched' ? 'default' : 'outline'}
-                    onClick={() => form.setValue('delivery_mode', 'batched')}
+                    variant={timingChoice === 'scheduled' ? 'default' : 'outline'}
+                    onClick={() => setTimingChoice('scheduled')}
                   >
-                    Send at set times
+                    Repeating check
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={timingChoice === 'batched' ? 'default' : 'outline'}
+                    onClick={() => setTimingChoice('batched')}
+                  >
+                    Batch times
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {deliveryMode === 'batched'
-                    ? 'New items queue up and send together at the selected times.'
-                    : 'New items send based on your timing choice below.'}
+                  {timingChoice === 'batched'
+                    ? 'New stories wait in the queue and send at the selected times.'
+                    : timingChoice === 'scheduled'
+                      ? 'The feed is checked on the interval below.'
+                      : 'New feed stories send as they are detected.'}
                 </p>
               </div>
 
-              {deliveryMode === 'immediate' ? (
+              {timingChoice === 'scheduled' ? (
                 <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="timing_mode">When should it send?</Label>
-                  <Controller
-                    control={form.control}
-                    name="timing_mode"
-                    render={({ field }) => (
-                      <Select value={field.value} onValueChange={field.onChange}>
-                        <SelectTrigger id="timing_mode">
-                          <SelectValue placeholder="Send timing" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="on_new">On new items</SelectItem>
-                          <SelectItem value="scheduled">On a schedule</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    )}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    {timingMode === 'scheduled'
-                      ? 'Messages send on a simple schedule (no cron required).'
-                      : 'Messages send automatically when new feed items are detected.'}
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="schedule_preset">Schedule</Label>
+                  <Label htmlFor="schedule_preset">Check interval</Label>
                   <Controller
                     control={form.control}
                     name="schedule_preset"
@@ -711,10 +718,9 @@ const SchedulesPage = () => {
                       <Select
                         value={field.value}
                         onValueChange={field.onChange}
-                        disabled={timingMode !== 'scheduled'}
                       >
                         <SelectTrigger id="schedule_preset">
-                          <SelectValue placeholder="Schedule" />
+                          <SelectValue placeholder="Check interval" />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="every15">Every 15 minutes</SelectItem>
@@ -728,7 +734,7 @@ const SchedulesPage = () => {
                   />
                 </div>
               </div>
-              ) : (
+              ) : timingChoice === 'batched' ? (
                 <div className="space-y-3 rounded-lg border p-3">
                   <Label>Send windows</Label>
                   <div className="flex flex-wrap gap-2">
@@ -774,9 +780,9 @@ const SchedulesPage = () => {
                   </div>
                   <p className="text-xs text-muted-foreground">Timezone: {defaultTimezone}</p>
                 </div>
-              )}
+              ) : null}
 
-              {deliveryMode === 'immediate' && timingMode === 'scheduled' && (schedulePreset === 'daily' || schedulePreset === 'weekly') && (
+              {timingChoice === 'scheduled' && (schedulePreset === 'daily' || schedulePreset === 'weekly') && (
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="time_of_day">Time</Label>
@@ -819,16 +825,16 @@ const SchedulesPage = () => {
               )}
 
               <p className="text-xs text-muted-foreground">
-                This automation starts from now. Older feed stories stay in history unless you queue them on purpose.
+                This schedule starts from now. Older feed stories stay in history unless you queue them on purpose.
               </p>
 
               <div className="flex items-center justify-between rounded-lg border bg-muted/20 p-3">
                 <div className="space-y-1">
-                  <p className="text-sm font-medium">Advanced options</p>
+                  <p className="text-sm font-medium">Approval before sending</p>
                   <p className="text-xs text-muted-foreground">Use this only if you want manual review before sending.</p>
                 </div>
                 <Button type="button" variant="ghost" size="sm" onClick={() => setShowAdvancedOptions((current) => !current)}>
-                  {showAdvancedOptions ? 'Hide advanced' : 'Show advanced'}
+                  {showAdvancedOptions ? 'Hide approval' : 'Set approval'}
                 </Button>
               </div>
 
@@ -921,7 +927,7 @@ const SchedulesPage = () => {
                         </div>
                         {!active && selected.size > 1 ? (
                           <p className="text-xs text-muted-foreground">
-                            Saving creates one automation per feed, using the same destinations, template, and timing.
+                            Saving creates one schedule per feed, using the same destinations, template, and timing.
                           </p>
                         ) : null}
                       </div>
@@ -939,7 +945,7 @@ const SchedulesPage = () => {
                   control={form.control}
                   name="target_ids"
                   render={({ field }) => {
-                    const all = activeTargets;
+                    const all = visibleActiveTargets;
                     const groups = all.filter(t => t.type === 'group');
                     const channels = all.filter(t => t.type === 'channel');
                     const individuals = all.filter(t => t.type === 'individual');
@@ -1019,6 +1025,16 @@ const SchedulesPage = () => {
                           >
                             Clear
                           </Button>
+                          {hiddenTestTargetCount > 0 ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setShowTestDestinations((current) => !current)}
+                            >
+                              {showTestDestinations ? 'Hide test' : `Show ${hiddenTestTargetCount} test`}
+                            </Button>
+                          ) : null}
                         </div>
                         <div className="rounded-lg border p-2 max-h-60 overflow-y-auto space-y-3">
                           {all.length === 0 ? (
@@ -1081,10 +1097,10 @@ const SchedulesPage = () => {
                 <Button type="submit" disabled={saveSchedule.isPending} size="lg">
                   {saveSchedule.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   {active
-                    ? 'Update Automation'
+                    ? 'Update Schedule'
                     : selectedFeedIds.length > 1
-                      ? `Create ${selectedFeedIds.length} Automations`
-                      : 'Create Automation'}
+                      ? `Create ${selectedFeedIds.length} Schedules`
+                      : 'Create Schedule'}
                 </Button>
                 {active && (
                   <Button type="button" variant="outline" onClick={() => { setActive(null); resetCreateForm(); }}>
@@ -1098,8 +1114,8 @@ const SchedulesPage = () => {
 
         <Card>
           <CardHeader>
-            <CardTitle>Your Automations</CardTitle>
-            <CardDescription>Use &quot;Send once&quot; for an immediate one-time send, or let automations run on their own.</CardDescription>
+            <CardTitle>Your Schedules</CardTitle>
+            <CardDescription>Use &quot;Send once&quot; for an immediate one-time send, or let schedules run on their own.</CardDescription>
           </CardHeader>
           <CardContent>
             {automationNotice ? (
@@ -1130,12 +1146,12 @@ const SchedulesPage = () => {
                 const canActivate = Boolean(schedule.feed_id && schedule.template_id && hasUsableTargets && !feedDisabled && !templateDisabled);
                 const activateBlockedReason = !canActivate
                   ? feedDisabled
-                    ? 'Enable this feed first to run this automation.'
+                    ? 'Enable this feed first to run this schedule.'
                     : templateDisabled
-                      ? 'Enable this template first to run this automation.'
+                      ? 'Enable this template first to run this schedule.'
                       : !hasUsableTargets
-                        ? 'Automation has no active destinations.'
-                        : 'Automation is missing feed or template.'
+                        ? 'Schedule has no active destinations.'
+                        : 'Schedule is missing feed or template.'
                   : null;
 
                 return (
@@ -1239,9 +1255,9 @@ const SchedulesPage = () => {
               {schedules.length === 0 && (
                 <div className="text-center py-12 px-4">
                   <CalendarClock className="h-12 w-12 text-muted-foreground/50 mx-auto mb-4" />
-                  <h3 className="font-medium text-lg mb-1">No automations yet</h3>
+                  <h3 className="font-medium text-lg mb-1">No schedules yet</h3>
                   <p className="text-muted-foreground text-sm">
-                    Create your first automation using the form on the left to start sending messages automatically.
+                    Create your first schedule using the form on the left to start sending messages automatically.
                   </p>
                 </div>
               )}

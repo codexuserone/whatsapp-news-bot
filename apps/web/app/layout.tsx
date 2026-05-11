@@ -17,7 +17,7 @@ const fraunces = Fraunces({
 
 export const metadata: Metadata = {
   title: 'WhatsApp News Bot',
-  description: 'WhatsApp News Bot Automation Suite'
+  description: 'WhatsApp News Bot Publishing Console'
 };
 
 export const viewport: Viewport = {

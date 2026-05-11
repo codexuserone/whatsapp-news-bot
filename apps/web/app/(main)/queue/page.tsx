@@ -786,7 +786,7 @@ const QueueInner = () => {
                           {item.target_name ? <Badge variant="outline">{item.target_name}</Badge> : null}
                           {targetStateBadge}
                           <span className="text-xs text-muted-foreground">
-                            {item.is_manual ? 'Manual' : item.schedule_name || 'Automation'}
+                            {item.is_manual ? 'Manual' : item.schedule_name || 'Schedule'}
                           </span>
                         </div>
                         <p className="truncate font-medium">{item.title || 'No title'}</p>

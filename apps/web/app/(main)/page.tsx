@@ -7,7 +7,6 @@ import type { Feed, LogEntry, QueueStats, Schedule, Target, Template } from '@/l
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '@/components/ui/table';
 import { Rss, Layers, Target as TargetIcon, CalendarClock, ArrowRight, Send } from 'lucide-react';
 
@@ -32,10 +31,6 @@ const OverviewPage = () => {
   const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
   const { data: schedules = [] } = useQuery<Schedule[]>({ queryKey: ['schedules'], queryFn: () => api.get('/api/schedules') });
   const { data: logs = [] } = useQuery<LogEntry[]>({ queryKey: ['logs'], queryFn: () => api.get('/api/logs') });
-  const { data: settings } = useQuery<{ app_paused?: boolean }>({
-    queryKey: ['settings'],
-    queryFn: () => api.get('/api/settings')
-  });
   const { data: queueStats } = useQuery<QueueStats>({
     queryKey: ['queue-stats'],
     queryFn: () => api.get('/api/queue/stats?window_hours=24'),
@@ -55,20 +50,10 @@ const OverviewPage = () => {
     }
   });
 
-  const toggleAppPause = useMutation({
-    mutationFn: (nextPaused: boolean) => api.put('/api/settings', { app_paused: nextPaused }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['settings'] });
-      queryClient.invalidateQueries({ queryKey: ['queue'] });
-      queryClient.invalidateQueries({ queryKey: ['queue-stats'] });
-      queryClient.invalidateQueries({ queryKey: ['schedules'] });
-    }
-  });
-
   const stats = [
     { label: 'Feeds', value: feeds.length, to: '/feeds', icon: Rss, color: 'text-primary' },
     { label: 'Templates', value: templates.length, to: '/templates', icon: Layers, color: 'text-amber-500' },
-    { label: 'Targets', value: targets.length, to: '/targets', icon: TargetIcon, color: 'text-emerald-500' },
+    { label: 'Destinations', value: targets.length, to: '/targets', icon: TargetIcon, color: 'text-emerald-500' },
     { label: 'Schedules', value: schedules.length, to: '/schedules', icon: CalendarClock, color: 'text-sky-500' }
   ];
 
@@ -83,11 +68,11 @@ const OverviewPage = () => {
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Overview</h1>
-          <p className="text-muted-foreground">Monitor the automation pipeline and WhatsApp connection.</p>
+          <p className="text-muted-foreground">Monitor feeds, schedules, queue, and WhatsApp connection.</p>
         </div>
         <Button asChild variant="outline">
           <Link href="/whatsapp">
-            Open WhatsApp Console
+            Open WhatsApp
             <ArrowRight className="ml-2 h-4 w-4" />
           </Link>
         </Button>
@@ -123,17 +108,6 @@ const OverviewPage = () => {
             <CardTitle>Quick Actions</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-3">
-            <label className="flex items-center justify-between rounded-lg border p-3 text-sm">
-              <div className="space-y-0.5">
-                <span className="font-medium">Pause entire app</span>
-                <p className="text-xs text-muted-foreground">Stops feed polling and automatic sends.</p>
-              </div>
-              <Switch
-                checked={settings?.app_paused === true}
-                onCheckedChange={(checked) => toggleAppPause.mutate(checked === true)}
-                disabled={toggleAppPause.isPending}
-              />
-            </label>
             <Button asChild variant="outline" className="justify-start">
               <Link href="/feeds">
                 <Rss className="mr-2 h-4 w-4" />
@@ -149,7 +123,7 @@ const OverviewPage = () => {
             <Button asChild variant="outline" className="justify-start">
               <Link href="/schedules">
                 <CalendarClock className="mr-2 h-4 w-4" />
-                Setup Schedule
+                Create Schedule
               </Link>
             </Button>
             <Button

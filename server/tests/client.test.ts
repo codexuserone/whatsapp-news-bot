@@ -900,7 +900,7 @@ describe('WhatsAppClient', () => {
         }
     });
 
-    it('does not use group metadata for status audience when the unsafe override is absent', async () => {
+    it('uses group metadata for status audience when group participants are enabled', async () => {
         const originalInclude = process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS;
         const originalAllow = process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE;
         process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS = 'true';
@@ -927,9 +927,9 @@ describe('WhatsAppClient', () => {
         try {
             const audience = await client.getStatusAudience({ sampleSize: 10 });
 
-            expect(groupFetchAllParticipating).not.toHaveBeenCalled();
-            expect(audience.participantCount).toBe(0);
-            expect(audience.sources.groupMetadata).toBe(0);
+            expect(groupFetchAllParticipating).toHaveBeenCalled();
+            expect(audience.sample).toContain('19144477725@s.whatsapp.net');
+            expect(audience.sources.groupMetadata).toBeGreaterThan(0);
         } finally {
             if (originalInclude === undefined) {
                 delete process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS;
@@ -1285,7 +1285,7 @@ describe('WhatsAppClient', () => {
         );
     });
 
-    it('should not include the sender account in status delivery by default', async () => {
+    it('should include the sender account in status delivery by default', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-self' } }));
         client.socket = {
             sendMessage,
@@ -1298,15 +1298,16 @@ describe('WhatsAppClient', () => {
         );
 
         const sentOptions = sendMessage.mock.calls[0]?.[2];
-        expect(sentOptions.statusJidList).toEqual(['19144477725@s.whatsapp.net']);
+        expect(sentOptions.statusJidList).toEqual([
+            '19144477725@s.whatsapp.net',
+            '16465527019@s.whatsapp.net'
+        ]);
         expect(sentOptions.useUserDevicesCache).toBe(false);
         expect(sentOptions).not.toHaveProperty('includeSender');
         expect(sentOptions).not.toHaveProperty('includeSelf');
     });
 
-    it('should include all known sender identities only when self-audience is explicitly enabled', async () => {
-        const previous = process.env.WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE;
-        process.env.WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE = 'true';
+    it('should include all known sender identities in status delivery', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-self-lid' } }));
         client.socket = {
             sendMessage,
@@ -1316,18 +1317,10 @@ describe('WhatsAppClient', () => {
             }
         };
 
-        try {
-            await client.sendStatusBroadcast(
-                { text: 'hello' },
-                { statusJidList: ['19144477725@s.whatsapp.net'] }
-            );
-        } finally {
-            if (previous === undefined) {
-                delete process.env.WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE;
-            } else {
-                process.env.WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE = previous;
-            }
-        }
+        await client.sendStatusBroadcast(
+            { text: 'hello' },
+            { statusJidList: ['19144477725@s.whatsapp.net'] }
+        );
 
         const sentOptions = sendMessage.mock.calls[0]?.[2];
         expect(sentOptions.statusJidList).toEqual([
@@ -1363,7 +1356,7 @@ describe('WhatsAppClient', () => {
             expect.objectContaining({
                 messageId: 'status-generated-id',
                 useUserDevicesCache: false,
-                statusJidList: ['19144477725@s.whatsapp.net']
+                statusJidList: ['19144477725@s.whatsapp.net', '16465527019@s.whatsapp.net']
             })
         );
         expect(result.key.id).toBe('status-generated-id');
@@ -1402,7 +1395,7 @@ describe('WhatsAppClient', () => {
                 expect.objectContaining({
                     messageId: 'status-generated-id',
                     useUserDevicesCache: false,
-                    statusJidList: ['19144477725@s.whatsapp.net']
+                    statusJidList: ['19144477725@s.whatsapp.net', '16465527019@s.whatsapp.net']
                 })
             );
             expect(result.key.id).toBe('status-generated-id');
@@ -1417,7 +1410,7 @@ describe('WhatsAppClient', () => {
         }
     });
 
-    it('should sync status sends to the sender linked devices without adding self to the Status audience', async () => {
+    it('should sync status sends to the sender linked devices', async () => {
         const previous = process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES;
         process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES = 'true';
         const relayMessage: any = jest.fn(async () => 'status-generated-id');
@@ -1458,7 +1451,7 @@ describe('WhatsAppClient', () => {
                 expect.objectContaining({
                     messageId: 'status-generated-id',
                     useUserDevicesCache: false,
-                    statusJidList: ['19144477725@s.whatsapp.net']
+                    statusJidList: ['19144477725@s.whatsapp.net', '16465527019@s.whatsapp.net']
                 })
             );
             expect(relayMessage).toHaveBeenNthCalledWith(
@@ -2182,7 +2175,7 @@ describe('WhatsAppClient', () => {
         expect(client.connect).toHaveBeenCalled();
     });
 
-    it('should exclude self from the final status delivery audience by default', async () => {
+    it('should include self in the final status delivery audience by default', async () => {
         const sendMessage = jest.fn(async () => ({
             key: { id: 'status-msg-id', remoteJid: 'status@broadcast', fromMe: true },
             message: { imageMessage: { mimetype: 'image/jpeg', caption: 'caption' } }
@@ -2218,7 +2211,7 @@ describe('WhatsAppClient', () => {
             expect.any(Object),
             expect.objectContaining({
                 broadcast: true,
-                statusJidList: ['15551234567@s.whatsapp.net']
+                statusJidList: ['15551234567@s.whatsapp.net', '16465527019@s.whatsapp.net']
             })
         );
     });

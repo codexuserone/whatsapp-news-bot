@@ -41,13 +41,13 @@ const WhatsAppPage = () => {
   const { data: status, isLoading: statusLoading } = useQuery<WhatsAppStatus>({
     queryKey: ['whatsapp-status'],
     queryFn: () => api.get('/api/whatsapp/status'),
-    refetchInterval: 3000
+    refetchInterval: 10000
   });
 
   const { data: qr } = useQuery<WhatsAppQrState>({
     queryKey: ['whatsapp-qr'],
     queryFn: () => api.get('/api/whatsapp/qr'),
-    refetchInterval: 3000,
+    refetchInterval: 10000,
     enabled: status?.status !== 'connected' && status?.status !== 'paused'
   });
 
@@ -66,7 +66,7 @@ const WhatsAppPage = () => {
   const { data: existingTargetsRaw } = useQuery<unknown>({
     queryKey: ['targets'],
     queryFn: () => api.get('/api/targets'),
-    refetchInterval: status?.status === 'connected' ? 10000 : 30000
+    refetchInterval: status?.status === 'connected' ? 30000 : 60000
   });
 
   const existingTargets = React.useMemo<Target[]>(() => {

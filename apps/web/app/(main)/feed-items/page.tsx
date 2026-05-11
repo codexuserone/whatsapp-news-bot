@@ -37,7 +37,7 @@ const FeedItemsPage = () => {
   const { data: items = [], isLoading, error } = useQuery<FeedItem[]>({
     queryKey: ['feed-items', scope],
     queryFn: () => api.get(`/api/feed-items?scope=${scope}`),
-    refetchInterval: 15000
+    refetchInterval: 60000
   });
   const feedItemsErrorMessage = error instanceof Error ? error.message : null;
 

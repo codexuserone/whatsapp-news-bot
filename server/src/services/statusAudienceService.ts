@@ -117,7 +117,7 @@ const isTruthyEnvFlag = (value: unknown) =>
 
 const isGroupMetadataStatusAudienceEnabled = () =>
   isTruthyEnvFlag(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS) &&
-  ['unsafe', 'force'].includes(
+  !['0', 'false', 'no', 'off'].includes(
     String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || '')
       .trim()
       .toLowerCase()

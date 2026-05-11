@@ -10,11 +10,12 @@ const isTruthyFlag = (value: unknown) =>
 
 const defaultStatusGroupAudienceEnabled = () =>
   isTruthyFlag(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS) &&
-  isTruthyFlag(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE);
+  !['0', 'false', 'no', 'off'].includes(
+    String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || 'true').trim().toLowerCase()
+  );
 
 const defaultStatusIncludeSender = () =>
-  isTruthyFlag(process.env.WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE) &&
-  !['0', 'false', 'no', 'off'].includes(String(process.env.WHATSAPP_STATUS_INCLUDE_SENDER ?? 'false').trim().toLowerCase());
+  !['0', 'false', 'no', 'off'].includes(String(process.env.WHATSAPP_STATUS_INCLUDE_SENDER ?? 'true').trim().toLowerCase());
 
 const DEFAULTS = {
   retentionDays: env.RETENTION_DAYS,

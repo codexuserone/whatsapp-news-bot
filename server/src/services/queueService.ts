@@ -245,8 +245,8 @@ const isTruthyEnvFlag = (value: unknown) =>
 
 const isGroupStatusAudienceAllowed = () =>
   isTruthyEnvFlag(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS) &&
-  ['1', 'true', 'yes', 'on', 'unsafe', 'force'].includes(
-    String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || '').trim().toLowerCase()
+  !['0', 'false', 'no', 'off'].includes(
+    String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || 'true').trim().toLowerCase()
   );
 
 const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undefined) => {
@@ -301,13 +301,18 @@ const buildUncertainErrorMessage = (message: string) =>
 const buildUnconfirmedTimeoutErrorMessage = (message: string) =>
   `WhatsApp did not return a message id before timeout. ${stripFalseAcceptedPrefix(message)}`.trim();
 
+const buildUnconfirmedMessageIdErrorMessage = (message: string) =>
+  `WhatsApp returned a message id, but did not confirm the send. ${stripFalseAcceptedPrefix(message)}`.trim();
+
 const isTimedOutWithoutMessageId = (row: { whatsapp_message_id?: unknown; error_message?: unknown; media_error?: unknown }) => {
   if (String(row?.whatsapp_message_id || '').trim()) return false;
   return isUnknownDeliveryTimeout([row?.error_message, row?.media_error].filter(Boolean).join(' '));
 };
 
 const shouldTreatAcceptedMessageIdAsSent = () =>
-  String(process.env.WHATSAPP_REQUIRE_RECEIPT_TO_MARK_SENT || '').trim().toLowerCase() !== 'true';
+  ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.WHATSAPP_MARK_UNCONFIRMED_MESSAGE_ID_AS_SENT || '').trim().toLowerCase()
+  );
 
 const normalizeComparableText = (value: unknown) =>
   String(value || '')
@@ -985,7 +990,7 @@ const reconcileUncertainMessageLogs = async (supabase: SupabaseClient, settings:
         processing_started_at: null,
         error_message: canAutoRetry
           ? `Max retries (${maxRetries}) exceeded after no-receipt verification`
-          : 'Delivery was not observed locally after the uncertain-send verification window'
+          : 'WhatsApp did not confirm this delivery before the verification window closed'
       })
       .eq('id', id);
     terminalFailed += 1;
@@ -994,7 +999,7 @@ const reconcileUncertainMessageLogs = async (supabase: SupabaseClient, settings:
   if (resolvedSent || requeuedPending || terminalFailed) {
     logger.info(
       { resolvedSent, requeuedPending, terminalFailed, pendingReview },
-      'Reconciled uncertain queue rows'
+      'Reconciled unconfirmed queue rows'
     );
   }
 
@@ -4893,8 +4898,9 @@ const sendQueuedForSchedule = async (
                     messageId,
                     confirmationError
                   },
-                  'WhatsApp returned a message id but no receipt confirmation; marking sent'
+                  'WhatsApp returned a message id but no send confirmation'
                 );
+                throw new Error(`Message send not confirmed (${confirmationError})`);
               }
             }
           }
@@ -4991,16 +4997,16 @@ const sendQueuedForSchedule = async (
               await supabase
                 .from('message_logs')
                 .update({
-                  status: 'sent',
-                  sent_at: new Date().toISOString(),
+                  status: 'failed',
+                  sent_at: null,
                   processing_started_at: null,
-                  error_message: null,
+                  error_message: buildUnconfirmedMessageIdErrorMessage(errorMessage),
                   message_content: expectedRender?.outboundText || null,
                   whatsapp_message_id: attemptedMessageId,
                   media_url: expectedMedia.url || null,
                   media_type: expectedMedia.kind || null,
-                  media_sent: Boolean(expectedMedia.url && expectedMedia.kind),
-                  media_error: null
+                  media_sent: false,
+                  media_error: errorMessage
                 })
                 .eq('id', log.id);
               continue;
@@ -5384,15 +5390,17 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
                 }
         );
         if (!confirmation?.ok) {
+          const confirmationError = confirmation?.error || 'no upsert/ack';
           logger.warn(
             {
               logId: log.id,
               targetId: targetRow.id,
               messageId,
-              confirmationError: confirmation?.error || 'no upsert/ack'
+              confirmationError
             },
-            'WhatsApp returned a message id but no receipt confirmation; marking sent'
+            'WhatsApp returned a message id but no send confirmation'
           );
+          throw new Error(`Message send not confirmed (${confirmationError})`);
         }
         return;
       }
@@ -5401,8 +5409,9 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
         if (!observed) {
           logger.warn(
             { logId: log.id, targetId: targetRow.id, messageId },
-            'WhatsApp returned a message id but no local upsert was observed; marking sent'
+            'WhatsApp returned a message id but no local upsert was observed'
           );
+          throw new Error('Message send not confirmed (no local upsert)');
         }
       }
     };
@@ -5563,8 +5572,9 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
                 messageId,
                 confirmationError
               },
-              'WhatsApp returned a message id but no receipt confirmation; marking sent'
+              'WhatsApp returned a message id but no send confirmation'
             );
+            throw new Error(`Message send not confirmed (${confirmationError})`);
           }
         }
 
@@ -5974,19 +5984,19 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
         await supabase
           .from('message_logs')
           .update({
-            status: 'sent',
-            sent_at: new Date().toISOString(),
+            status: 'failed',
+            sent_at: null,
             processing_started_at: null,
-            error_message: null,
+            error_message: buildUnconfirmedMessageIdErrorMessage(errorMessage),
             message_content: uncertainMessageContent || log.message_content || null,
             whatsapp_message_id: uncertainWhatsAppMessageId,
             media_url: uncertainMediaUrl,
             media_type: uncertainMediaType,
-            media_sent: Boolean(uncertainMediaUrl && uncertainMediaType),
-            media_error: null
+            media_sent: false,
+            media_error: errorMessage
           })
           .eq('id', log.id);
-        return { ok: true, messageId: uncertainWhatsAppMessageId, mediaSent: Boolean(uncertainMediaUrl && uncertainMediaType) };
+        return { ok: false, error: errorMessage, messageId: uncertainWhatsAppMessageId, mediaSent: false };
       }
       const terminalStatus = connectionStateError ? originalStatus : 'failed';
 

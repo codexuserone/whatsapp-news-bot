@@ -94,7 +94,7 @@ const LogsPage = () => {
   const { data: logs = [], isLoading, error } = useQuery<LogEntry[]>({
     queryKey: ['logs', status],
     queryFn: () => api.get(status === 'all' ? '/api/logs?include_queue=true' : `/api/logs?status=${status}`),
-    refetchInterval: 10000
+    refetchInterval: 30000
   });
   const logsErrorMessage = error instanceof Error ? error.message : null;
 

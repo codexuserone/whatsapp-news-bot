@@ -584,12 +584,16 @@ const TemplatesPage = () => {
 
   const sendPreview = useMutation({
     mutationFn: (payload: TemplatePreviewPayload) =>
-      api.post<{ messageId?: string; sent?: number; failed?: number }>('/api/whatsapp/send-test', payload),
-    onSuccess: (result: { messageId?: string; sent?: number; failed?: number }) => {
+      api.post<{ ok?: boolean; messageId?: string; sent?: number; failed?: number; error?: string | null }>('/api/whatsapp/send-test', payload),
+    onSuccess: (result: { ok?: boolean; messageId?: string; sent?: number; failed?: number; error?: string | null }) => {
       const messageId = String(result?.messageId || '').trim();
       const sent = Number(result?.sent || 0);
       const failed = Number(result?.failed || 0);
       const suffix = messageId ? ` (${messageId})` : '';
+      if (result?.ok === false) {
+        setPreviewSendNotice(`Failed: ${result?.error || 'WhatsApp did not confirm the preview send'}${suffix}.`);
+        return;
+      }
       if (sent > 0 && failed > 0) {
         setPreviewSendNotice(`Sent ${sent}, failed ${failed}${suffix}.`);
         return;
@@ -602,7 +606,7 @@ const TemplatesPage = () => {
         setPreviewSendNotice(`Failed ${failed}${suffix}.`);
         return;
       }
-      setPreviewSendNotice(messageId ? `Sent (${messageId})` : 'Sent');
+      setPreviewSendNotice(messageId ? `Recorded (${messageId}).` : 'Preview request finished.');
     },
     onError: (error: unknown) => {
       setPreviewSendNotice(`Failed: ${getErrorMessage(error)}`);

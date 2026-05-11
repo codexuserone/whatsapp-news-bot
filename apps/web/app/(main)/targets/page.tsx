@@ -52,19 +52,19 @@ const TargetsPage = () => {
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
     queryKey: ['targets'],
     queryFn: () => api.get('/api/targets'),
-    refetchInterval: 15000
+    refetchInterval: 60000
   });
 
   const { data: schedules = [] } = useQuery<Schedule[]>({
     queryKey: ['schedules'],
     queryFn: () => api.get('/api/schedules'),
-    refetchInterval: 15000
+    refetchInterval: 60000
   });
 
   const { data: waStatus } = useQuery<WhatsAppStatus>({
     queryKey: ['whatsapp-status'],
     queryFn: () => api.get('/api/whatsapp/status'),
-    refetchInterval: 5000
+    refetchInterval: 30000
   });
 
   const isConnected = waStatus?.status === 'connected';

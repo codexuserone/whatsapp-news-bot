@@ -49,9 +49,10 @@ const resolveDatabaseRetryDelayMs = () => {
 
 const isTruthyEnvFlag = (value: unknown) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 const isFalseLikeFlag = (value: unknown) => ['0', 'false', 'no', 'off'].includes(String(value || '').trim().toLowerCase());
-const isStatusSelfAudienceEnabled = () => isTruthyEnvFlag(process.env.WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE);
+const isStatusSelfAudienceEnabled = () =>
+  !isTruthyEnvFlag(process.env.WHATSAPP_STATUS_DISABLE_SELF_AUDIENCE);
 const isStatusOwnDeviceSyncEnabled = () =>
-  isTruthyEnvFlag(process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES);
+  !isTruthyEnvFlag(process.env.WHATSAPP_STATUS_DISABLE_OWN_DEVICE_SYNC);
 const STATUS_OWN_DEVICE_SYNC_LIMIT = Math.max(
   0,
   Math.min(Math.floor(Number(process.env.WHATSAPP_STATUS_OWN_DEVICE_SYNC_LIMIT || 12)), 50)
@@ -67,8 +68,8 @@ const shouldIncludeSenderInStatusAudience = (override?: unknown) => {
 const isGroupMetadataStatusAudienceEnabled = (override?: boolean) =>
   typeof override === 'boolean' ? override :
   isTruthyEnvFlag(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS) &&
-  ['unsafe', 'force'].includes(
-    String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || '')
+  !isFalseLikeFlag(
+    String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || 'true')
       .trim()
       .toLowerCase()
   );

@@ -83,7 +83,7 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
-  it('marks test sends sent when WhatsApp returned a message id even if confirmation is absent', () => {
+  it('marks test sends failed when confirmation is absent', () => {
     const result = __testUtils.resolveTestSendLogResolution({
       messageId: 'abc123',
       confirmRequested: true,
@@ -92,9 +92,9 @@ describe('whatsapp route test-send logging', () => {
     });
 
     expect(result).toEqual({
-      status: 'sent',
-      errorMessage: null,
-      sentAt: '2026-03-18T22:00:00.000Z'
+      status: 'failed',
+      errorMessage: 'Message send not confirmed',
+      sentAt: null
     });
   });
 
@@ -144,7 +144,7 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
-  it('marks test sends sent when confirmation was skipped after WhatsApp returned a message id', () => {
+  it('does not record skipped confirmation as sent', () => {
     const result = __testUtils.resolveTestSendLogResolution({
       messageId: 'abc123',
       confirmRequested: false,
@@ -153,9 +153,9 @@ describe('whatsapp route test-send logging', () => {
     });
 
     expect(result).toEqual({
-      status: 'sent',
-      errorMessage: null,
-      sentAt: '2026-03-18T22:00:00.000Z'
+      status: 'failed',
+      errorMessage: 'Send confirmation was skipped; delivery was not recorded as sent',
+      sentAt: null
     });
   });
 

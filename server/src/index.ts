@@ -542,6 +542,11 @@ const start = async () => {
           reason: 'blocked'
         });
       }
+
+      if (shouldUseBasicAuthChallenge(req)) {
+        return redirectToLogin(req, res, 'invalid');
+      }
+
       const nextAttempt = recordBasicAuthFailure({
         currentAttempt,
         nowMs,

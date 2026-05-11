@@ -142,7 +142,7 @@ const QueueInner = () => {
   const { data: queueStats } = useQuery<QueueStats>({
     queryKey: ['queue-stats', includeManual],
     queryFn: () => api.get(`/api/queue/stats?window_hours=24&include_manual=${includeManual}`),
-    refetchInterval: 10000
+    refetchInterval: 30000
   });
 
   const retryableIssueCount = Number(queueStats?.failed || 0);
@@ -167,7 +167,7 @@ const QueueInner = () => {
           ? `/api/queue?include_manual=${includeManual}`
           : `/api/queue?status=${statusFilter}&include_manual=${includeManual}`
       ),
-    refetchInterval: 10000
+    refetchInterval: 30000
   });
   const queueErrorMessage = queueError instanceof Error ? queueError.message : null;
 

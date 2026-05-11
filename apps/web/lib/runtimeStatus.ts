@@ -26,7 +26,7 @@ export const useRuntimeStatus = () => {
   const readyQuery = useQuery<ReadyStatus>({
     queryKey: ['ready-status'],
     queryFn: () => api.get('/ready'),
-    refetchInterval: 15000
+    refetchInterval: 30000
   });
 
   const databaseUnavailable = isDatabaseUnavailable(readyQuery.data);

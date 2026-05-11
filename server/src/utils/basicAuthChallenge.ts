@@ -53,10 +53,8 @@ export const sendBasicAuthFailure = (
     realm: string;
   }
 ) => {
-  if (shouldUseBasicAuthChallenge(req)) {
-    res.setHeader('WWW-Authenticate', `Basic realm="${options.realm}"`);
-    return res.status(options.status).send(options.message);
-  }
+  void req;
+  void options.realm;
 
   return res.status(options.status).json({ error: options.message });
 };

@@ -118,8 +118,8 @@ const isTruthyEnvFlag = (value: unknown) =>
 
 const isGroupStatusAudienceAllowed = () =>
   isTruthyEnvFlag(process.env.WHATSAPP_STATUS_INCLUDE_GROUP_PARTICIPANTS) &&
-  ['1', 'true', 'yes', 'on', 'unsafe', 'force'].includes(
-    String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || '').trim().toLowerCase()
+  !['0', 'false', 'no', 'off'].includes(
+    String(process.env.WHATSAPP_STATUS_ALLOW_GROUP_PARTICIPANT_AUDIENCE || 'true').trim().toLowerCase()
   );
 
 const assertUsableStatusAudience = (snapshot: Record<string, any> | null | undefined) => {
@@ -293,9 +293,9 @@ const resolveTestSendLogResolution = (options: {
 
   if (!confirmRequested) {
     return {
-      status: 'sent',
-      errorMessage: null,
-      sentAt: confirmedAt
+      status: 'failed',
+      errorMessage: 'Send confirmation was skipped; delivery was not recorded as sent',
+      sentAt: null
     } satisfies TestSendLogResolution;
   }
 
@@ -309,9 +309,11 @@ const resolveTestSendLogResolution = (options: {
   }
 
   return {
-    status: 'sent',
-    errorMessage: null,
-    sentAt: confirmedAt
+    status: 'failed',
+    errorMessage: confirmationError
+      ? `Message send not confirmed (${confirmationError})`
+      : 'Message send not confirmed',
+    sentAt: null
   } satisfies TestSendLogResolution;
 };
 
@@ -1766,6 +1768,13 @@ const whatsappRoutes = () => {
         const holdReason = held
           ? buildChannelMediaHoldMessage(requestedMediaType, confirmation?.error)
           : null;
+        if (!held && confirmationRequired && !confirmation?.ok) {
+          throw new Error(
+            confirmation?.error
+              ? `Message send not confirmed (${confirmation.error})`
+              : 'Message send not confirmed'
+          );
+        }
         results.push({
           jid: normalizedJid,
           ok: true,
@@ -2076,12 +2085,19 @@ const whatsappRoutes = () => {
       : null;
     const operatorConfirmation = normalizeConfirmationForOperator(confirmation, 'status@broadcast');
     const rejected = isAck479Error(operatorConfirmation?.error);
+    const confirmed = Boolean(messageId && operatorConfirmation?.ok && !rejected);
+    const confirmationError = String(operatorConfirmation?.error || '').trim();
     res.json({
-      ok: Boolean(messageId && !rejected),
-      sent: Boolean(messageId && !rejected),
-      failed: Boolean(rejected),
+      ok: confirmed,
+      sent: confirmed,
+      failed: !confirmed,
       messageId,
       confirmation: operatorConfirmation,
+      error: confirmed
+        ? null
+        : confirmationError
+          ? `Message send not confirmed (${confirmationError})`
+          : 'Message send not confirmed',
       audienceCount: statusSnapshot.recipients.length,
       ...(strippedStatusStyleOptions.length ? { strippedStatusStyleOptions } : {})
     });

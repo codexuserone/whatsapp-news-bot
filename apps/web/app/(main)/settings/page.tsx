@@ -49,7 +49,8 @@ const schema = z.object({
   status_audience_mode: z.enum(['auto', 'explicit']).default('auto'),
   status_audience_jids: z.string().max(12000).default(''),
   status_test_audience_jids: z.string().max(12000).default(''),
-  status_include_group_participants: z.boolean().default(true)
+  status_include_group_participants: z.boolean().default(true),
+  status_include_sender: z.boolean().default(true)
 }).superRefine((value, ctx) => {
   if (value.post_send_correction_window_minutes < value.post_send_edit_window_minutes) {
     ctx.addIssue({
@@ -134,7 +135,8 @@ const toSettingsFormValues = (settings?: Partial<BackendSettings> | null): Setti
   status_audience_mode: settings?.status_audience_mode === 'explicit' ? 'explicit' : 'auto',
   status_audience_jids: formatStatusAudienceText(settings?.status_audience_jids || ''),
   status_test_audience_jids: formatStatusAudienceText(settings?.status_test_audience_jids || ''),
-  status_include_group_participants: settings?.status_include_group_participants !== false
+  status_include_group_participants: settings?.status_include_group_participants !== false,
+  status_include_sender: settings?.status_include_sender !== false
 });
 
 const SettingsPage = () => {
@@ -443,9 +445,9 @@ const SettingsPage = () => {
               {statusAudienceMode === 'auto' ? (
                 <div className="flex items-center justify-between gap-3 rounded-lg border bg-background/40 p-4">
                   <div>
-                    <p className="text-sm font-medium">Use synced private viewers</p>
+                    <p className="text-sm font-medium">Use synced viewers</p>
                     <p className="text-xs text-muted-foreground">
-                      Sends production Status posts to the private viewers WhatsApp exposes to this session.
+                      Sends production Status posts to viewers WhatsApp exposes to this session.
                     </p>
                   </div>
                   <Controller
@@ -460,6 +462,24 @@ const SettingsPage = () => {
                   />
                 </div>
               ) : null}
+              <div className="flex items-center justify-between gap-3 rounded-lg border bg-background/40 p-4">
+                <div>
+                  <p className="text-sm font-medium">Show on this WhatsApp account</p>
+                  <p className="text-xs text-muted-foreground">
+                    Keeps Status posts visible from the connected WhatsApp Business account.
+                  </p>
+                </div>
+                <Controller
+                  control={form.control}
+                  name="status_include_sender"
+                  render={({ field }) => (
+                    <Switch
+                      checked={field.value !== false}
+                      onCheckedChange={(checked) => field.onChange(checked === true)}
+                    />
+                  )}
+                />
+              </div>
             </div>
 
             <div className="space-y-2">

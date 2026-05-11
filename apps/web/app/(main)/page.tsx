@@ -34,7 +34,7 @@ const OverviewPage = () => {
   const { data: queueStats } = useQuery<QueueStats>({
     queryKey: ['queue-stats'],
     queryFn: () => api.get('/api/queue/stats?window_hours=24'),
-    refetchInterval: 10000
+    refetchInterval: 30000
   });
   const { data: deliveryAnalytics } = useQuery<DeliveryAnalytics>({
     queryKey: ['delivery-analytics'],

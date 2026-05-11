@@ -35,7 +35,7 @@ const GlobalStatusBanner = () => {
   const { data: whatsapp } = useQuery<WhatsAppStatus>({
     queryKey: ['whatsapp-status'],
     queryFn: () => api.get('/api/whatsapp/status'),
-    refetchInterval: 15000
+    refetchInterval: 30000
   });
 
   const { data: settings } = useQuery<SettingsLike>({

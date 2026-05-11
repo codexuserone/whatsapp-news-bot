@@ -101,13 +101,13 @@ const SchedulesPage = () => {
   const { data: schedules = [] } = useQuery<Schedule[]>({
     queryKey: ['schedules'],
     queryFn: () => api.get('/api/schedules'),
-    refetchInterval: 5000
+    refetchInterval: 30000
   });
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: targets = [] } = useQuery<Target[]>({
     queryKey: ['targets'],
     queryFn: () => api.get('/api/targets'),
-    refetchInterval: 15000
+    refetchInterval: 60000
   });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
   const { data: settings } = useQuery<{ default_timezone?: string }>({

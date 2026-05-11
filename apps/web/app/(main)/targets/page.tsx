@@ -46,34 +46,10 @@ type TargetPayload = {
   intra_target_delay_sec_override?: number | null;
 };
 
-type ChannelDiagnostics = {
-  methodsTried?: string[];
-  methodErrors?: string[];
-  sourceCounts?: {
-    api?: number;
-    cache?: number;
-    metadata?: number;
-    store?: number;
-  };
-  seeded?: {
-    provided?: number;
-    verified?: number;
-    failed?: number;
-    failedAddresses?: string[];
-  };
-  limitation?: string | null;
-};
-
-type ChannelDiagnosticsResponse = {
-  channels?: WhatsAppChannel[];
-  diagnostics?: ChannelDiagnostics;
-};
-
 type DiscoverChannelsResponse = {
   ok?: boolean;
   discovered?: number;
   channels?: WhatsAppChannel[];
-  diagnostics?: ChannelDiagnostics;
   persisted?: {
     candidates?: number;
   };
@@ -133,12 +109,6 @@ const TargetsPage = () => {
     refetchInterval: isConnected ? 15000 : false
   });
 
-  const { data: channelDiagnosticsRaw, refetch: refetchChannelDiagnostics } = useQuery<ChannelDiagnosticsResponse>({
-    queryKey: ['whatsapp-channels-diagnostics'],
-    queryFn: () => api.get('/api/whatsapp/channels/diagnostics'),
-    enabled: isConnected
-  });
-
   const waGroups = React.useMemo<WhatsAppGroup[]>(() => {
     if (!Array.isArray(waGroupsRaw)) return [];
     return waGroupsRaw.filter((entry): entry is WhatsAppGroup => Boolean(entry && typeof entry === 'object' && (entry as WhatsAppGroup).jid));
@@ -159,12 +129,6 @@ const TargetsPage = () => {
       })
       .filter((channel) => Boolean(channel.name));
   }, [waChannelsRaw]);
-
-  const liveChannelCount = waChannels.filter((channel) => channel.source === 'live').length;
-  const channelDiagnostics = channelDiagnosticsRaw?.diagnostics;
-  const channelMethodErrors = Array.isArray(channelDiagnostics?.methodErrors)
-    ? channelDiagnostics?.methodErrors?.slice(0, 3)
-    : [];
 
   const updateTarget = useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: TargetPayload }) => api.put(`/api/targets/${id}`, payload),
@@ -204,10 +168,8 @@ const TargetsPage = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['targets'] }),
         queryClient.invalidateQueries({ queryKey: ['whatsapp-groups'] }),
-        queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] }),
-        queryClient.invalidateQueries({ queryKey: ['whatsapp-channels-diagnostics'] })
+        queryClient.invalidateQueries({ queryKey: ['whatsapp-channels'] })
       ]);
-      await refetchChannelDiagnostics();
     },
     onError: (error: unknown) => {
       const message = error instanceof Error ? error.message : 'Channel discovery failed';
@@ -256,7 +218,7 @@ const TargetsPage = () => {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Targets</h1>
-        <p className="text-muted-foreground">Destinations are synced automatically. Feed posts only go to targets selected in an automation.</p>
+        <p className="text-muted-foreground">Destinations update from WhatsApp automatically. Feed posts only go where you select them.</p>
       </div>
 
       {!isConnected ? (
@@ -271,7 +233,7 @@ const TargetsPage = () => {
                 Connect WhatsApp once. Groups and channels will sync here automatically.
               </p>
               <Button variant="outline" size="sm" className="mt-3" asChild>
-                <Link href="/whatsapp">Open WhatsApp Console</Link>
+                <Link href="/whatsapp">Open WhatsApp</Link>
               </Button>
             </div>
           </CardContent>
@@ -285,10 +247,10 @@ const TargetsPage = () => {
                   <RefreshCw className="h-5 w-5" />
                   Connected Destinations
                 </CardTitle>
-                <CardDescription>Groups and channels are discovered from your live WhatsApp session.</CardDescription>
+                <CardDescription>Groups and channels update while WhatsApp is connected.</CardDescription>
               </div>
               <Button type="button" variant="ghost" size="sm" onClick={() => setShowAdvancedTools((current) => !current)}>
-                {showAdvancedTools ? 'Hide advanced tools' : 'Advanced tools'}
+                {showAdvancedTools ? 'Hide recovery tools' : 'Recovery tools'}
               </Button>
             </div>
           </CardHeader>
@@ -301,9 +263,6 @@ const TargetsPage = () => {
               <div className="rounded-lg border p-3">
                 <p className="text-xs text-muted-foreground">Channels</p>
                 <p className="text-xl font-semibold">{waChannels.length}</p>
-                {liveChannelCount > 0 ? (
-                  <p className="text-[11px] text-muted-foreground">Live: {liveChannelCount}</p>
-                ) : null}
               </div>
               <div className="rounded-lg border p-3">
                 <p className="text-xs text-muted-foreground">Saved targets</p>
@@ -317,23 +276,20 @@ const TargetsPage = () => {
             ) : null}
             {isConnected && waChannels.length === 0 ? (
               <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                No channels discovered yet. Open the channel in WhatsApp mobile/web, then click Discover channels now.
+                No channels are visible to this connected session right now.
               </p>
-            ) : null}
-            {channelDiagnostics?.limitation && waChannels.length === 0 ? (
-              <p className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning-foreground">
-                Live channel list is not available in this session yet. Open your channels in WhatsApp, then run discovery again.
-              </p>
-            ) : null}
-            {channelMethodErrors.length ? (
-              <div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning-foreground">
-                <p className="font-medium">Discovery warnings</p>
-                <p className="mt-1">{channelMethodErrors.join(' | ')}</p>
-              </div>
             ) : null}
             {showAdvancedTools ? (
               <div className="space-y-3 rounded-lg border p-3">
                 <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowTechnicalDetails((current) => !current)}
+                  >
+                    {showTechnicalDetails ? 'Hide addresses' : 'Show addresses'}
+                  </Button>
                   <Button
                     type="button"
                     variant="outline"
@@ -346,7 +302,7 @@ const TargetsPage = () => {
                   </Button>
                 </div>
                 <div className="space-y-2 rounded-lg border p-3">
-                  <p className="text-sm font-medium">Add from WhatsApp link</p>
+                  <p className="text-sm font-medium">Add missing destination from link</p>
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <Input
                       placeholder="Paste chat.whatsapp.com/... or whatsapp.com/channel/..."
@@ -372,7 +328,7 @@ const TargetsPage = () => {
                       {addNotice.message}
                     </p>
                   ) : (
-                    <p className="text-xs text-muted-foreground">Use this only if automatic sync missed a destination.</p>
+                    <p className="text-xs text-muted-foreground">Use this only when a destination is missing from the automatic list.</p>
                   )}
                 </div>
               </div>
@@ -387,19 +343,11 @@ const TargetsPage = () => {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <TargetIcon className="h-5 w-5" />
-                Synced Targets
+                Destinations
               </CardTitle>
               <CardDescription>{targets.length} target{targets.length !== 1 ? 's' : ''} available</CardDescription>
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setShowTechnicalDetails((current) => !current)}
-              >
-                {showTechnicalDetails ? 'Hide technical details' : 'Technical details'}
-              </Button>
               <Input
                 placeholder="Search targets..."
                 value={search}

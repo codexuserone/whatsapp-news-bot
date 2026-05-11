@@ -9,7 +9,7 @@ import { dedupeTargets } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { AlertTriangle, RefreshCw, Power, CheckCircle, QrCode, Loader2, RadioTower, Send } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Power, CheckCircle, QrCode, RadioTower, Send } from 'lucide-react';
 
 const isSafeImageSrc = (value: unknown) => {
   const src = String(value || '').trim();
@@ -192,10 +192,10 @@ const WhatsAppPage = () => {
     Number(statusSources.activeIndividualTargets || 0) === 0 &&
     Number(statusSources.recentSuccessfulDirectRecipients || 0) === 0;
   const statusAudienceLabel = statusHasOnlySelfAudience
-    ? 'needs private viewers'
+    ? 'not ready because no private viewers are available'
     : statusAudienceCount > 0
-      ? `${statusAudienceCount} possible viewers from the current snapshot`
-      : 'not ready yet';
+      ? `${statusAudienceCount} viewers available`
+      : 'loading after WhatsApp connects';
   const plainSessionState = React.useMemo(() => {
     if (isConnected) return 'Connected and ready for normal queue work.';
     if (isPaused) return 'Paused. Automation and WhatsApp sends are intentionally stopped.';
@@ -265,12 +265,8 @@ const WhatsAppPage = () => {
                 <span className="font-medium">{status?.me?.name || (isConnected ? 'Connected account' : 'Not connected')}</span>
               </div>
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Synced destinations</span>
+                <span className="text-muted-foreground">Destinations</span>
                 <span className="font-medium">{activeTargets.length}</span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Target sync</span>
-                <span className="font-medium">{syncTargets.isPending ? 'Checking now' : isConnected ? 'Automatic' : 'Waiting for connection'}</span>
               </div>
             </div>
 
@@ -408,7 +404,7 @@ const WhatsAppPage = () => {
             Publishing Destinations
           </CardTitle>
           <CardDescription>
-            Groups, channels, and Status are synced from the connected WhatsApp account.
+            Groups, channels, and Status stay in sync from the connected WhatsApp account.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -432,29 +428,16 @@ const WhatsAppPage = () => {
           </div>
 
           <div className={`rounded-lg border p-3 text-sm ${statusHasOnlySelfAudience ? 'border-warning/40 bg-warning/10 text-warning-foreground' : 'bg-muted/30 text-muted-foreground'}`}>
-            Status audience: {statusAudienceLabel}
-            {statusAudience?.refreshedAt ? `, refreshed ${new Date(statusAudience.refreshedAt).toLocaleString()}` : ''}.
-            {Array.isArray(statusAudience?.warnings) && statusAudience.warnings.length ? ` ${statusAudience.warnings[0]}` : ''}
-            {statusHasOnlySelfAudience ? ' Add or sync a private WhatsApp contact before using Status, so the app does not create false sent rows.' : ''}
-            {statusAudience?.stale ? ' This snapshot is stale because WhatsApp is not connected.' : ''}
+            Status audience: {statusAudienceLabel}.
           </div>
 
           {syncTargets.isError ? (
             <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              Sync could not finish: {(syncTargets.error as Error)?.message || 'Unknown error'}
+              Destinations could not update: {(syncTargets.error as Error)?.message || 'Unknown error'}
             </div>
           ) : null}
 
           <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => syncTargets.mutate()}
-              disabled={!isConnected || syncTargets.isPending}
-            >
-              {syncTargets.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-              Check destinations now
-            </Button>
             <Button asChild variant="outline">
               <Link href="/targets">Review destinations</Link>
             </Button>

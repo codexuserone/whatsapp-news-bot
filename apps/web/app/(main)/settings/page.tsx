@@ -91,6 +91,25 @@ const COMMON_TIMEZONES = [
   'Asia/Dubai'
 ];
 
+const formatStatusAudienceText = (value: unknown) =>
+  Array.from(
+    new Set(
+      String(value || '')
+        .split(/[\n,]+/)
+        .map((entry) => {
+          const raw = entry.trim();
+          if (!raw) return '';
+          const user = raw.split('@')[0]?.split(':')[0] || raw;
+          const digits = user.replace(/[^0-9]/g, '');
+          if ((raw.endsWith('@s.whatsapp.net') || raw.endsWith('@c.us')) && digits.length >= 6) {
+            return `+${digits}`;
+          }
+          return raw;
+        })
+        .filter(Boolean)
+    )
+  ).join('\n');
+
 const toSettingsFormValues = (settings?: Partial<BackendSettings> | null): SettingsFormValues => ({
   app_name: String(settings?.app_name || 'WhatsApp News Bot'),
   app_paused: settings?.app_paused === true,
@@ -113,8 +132,8 @@ const toSettingsFormValues = (settings?: Partial<BackendSettings> | null): Setti
   send_timeout_ms: Number(settings?.send_timeout_ms ?? 45000),
   reconcile_queue_lookback_hours: Number(settings?.reconcile_queue_lookback_hours ?? 12),
   status_audience_mode: settings?.status_audience_mode === 'explicit' ? 'explicit' : 'auto',
-  status_audience_jids: String(settings?.status_audience_jids || ''),
-  status_test_audience_jids: String(settings?.status_test_audience_jids || ''),
+  status_audience_jids: formatStatusAudienceText(settings?.status_audience_jids || ''),
+  status_test_audience_jids: formatStatusAudienceText(settings?.status_test_audience_jids || ''),
   status_include_group_participants: settings?.status_include_group_participants !== false
 });
 
@@ -445,14 +464,14 @@ const SettingsPage = () => {
         <Card id="status">
           <CardHeader>
             <CardTitle>Status</CardTitle>
-            <CardDescription>Production Status and preview audience.</CardDescription>
+            <CardDescription>Choose who receives production Status posts and previews.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
               <div>
                 <Label>Production Audience</Label>
                 <p className="text-xs text-muted-foreground">
-                  Use all available viewers for production Status, or limit Status to the phone numbers below.
+                  Production sends to everyone WhatsApp can reach unless you choose a smaller phone list.
                 </p>
               </div>
               <Controller
@@ -472,29 +491,29 @@ const SettingsPage = () => {
                       variant={field.value === 'explicit' ? 'default' : 'outline'}
                       onClick={() => field.onChange('explicit')}
                     >
-                      Specific recipients
+                      Only selected phones
                     </Button>
                   </div>
                 )}
               />
               {statusAudienceMode === 'explicit' ? (
                 <div className="space-y-2">
-                  <Label htmlFor="status_audience_jids">Production Status Recipients</Label>
+                  <Label htmlFor="status_audience_jids">Production Status Phone Numbers</Label>
                   <Textarea
                     id="status_audience_jids"
                     rows={3}
                     placeholder="+1 914 447 7725"
                     {...form.register('status_audience_jids')}
                   />
-                  <p className="text-xs text-muted-foreground">One phone number per line, or comma separated.</p>
+                  <p className="text-xs text-muted-foreground">One phone number per line.</p>
                 </div>
               ) : null}
               {statusAudienceMode === 'auto' ? (
                 <div className="flex items-center justify-between gap-3 rounded-lg border bg-background/40 p-4">
                   <div>
-                    <p className="text-sm font-medium">Include Synced Group Members</p>
+                    <p className="text-sm font-medium">Use synced private viewers</p>
                     <p className="text-xs text-muted-foreground">
-                      Uses people from synced WhatsApp groups as production Status viewers.
+                      Keeps the Status audience broad while using only contacts WhatsApp exposes to this session.
                     </p>
                   </div>
                   <Controller
@@ -512,7 +531,7 @@ const SettingsPage = () => {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="status_test_audience_jids">Status Preview Recipients</Label>
+              <Label htmlFor="status_test_audience_jids">Status Preview Phone Numbers</Label>
               <Textarea
                 id="status_test_audience_jids"
                 rows={3}
@@ -520,7 +539,7 @@ const SettingsPage = () => {
                 {...form.register('status_test_audience_jids')}
               />
               <p className="text-xs text-muted-foreground">
-                Template previews and manual Status tests use this list so test sends do not go to the production audience.
+                Preview Status sends only go to this phone list.
               </p>
             </div>
           </CardContent>

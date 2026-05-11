@@ -59,11 +59,11 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
-  it('requires server ACKs for group test-send confirmation', () => {
+  it('accepts local upsert confirmation for group test-send confirmation', () => {
     expect(__testUtils.resolveTestSendConfirmationOptions('120363425146275942@g.us', null)).toEqual({
       upsertTimeoutMs: 5000,
       ackTimeoutMs: 15000,
-      requireServerAck: true,
+      requireServerAck: false,
       failureGraceMs: 0
     });
   });

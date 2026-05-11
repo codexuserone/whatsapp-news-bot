@@ -2287,7 +2287,7 @@ const shouldRequireServerAckForSend = (
   sendResult: SendWithMediaResult | null | undefined
 ) => {
   void sendResult;
-  return true;
+  return targetType === 'channel' || targetType === 'status';
 };
 
 const resolveNewsletterConfirmFetchTimeoutMs = (sendResult: SendWithMediaResult | null | undefined) =>

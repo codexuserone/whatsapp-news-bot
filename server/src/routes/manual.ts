@@ -140,7 +140,7 @@ const fallbackManualStatus = (result?: ManualSendServiceResult | null) => {
   if (result?.status) return normalizeManualStatus(result.status);
   if (result?.held) return 'awaiting_approval';
   if (result?.ok) return 'sent';
-  return 'uncertain';
+  return 'failed';
 };
 
 const buildManualSendResponse = (
@@ -158,7 +158,8 @@ const buildManualSendResponse = (
     const id = String(item.id);
     const stored = storedById.get(id);
     const sendResult = resultForId(id) || null;
-    const status = normalizeManualStatus(stored?.status) || fallbackManualStatus(sendResult);
+    const rawStatus = normalizeManualStatus(stored?.status) || fallbackManualStatus(sendResult);
+    const status = rawStatus === 'uncertain' ? 'failed' : rawStatus;
     const messageId = stored?.whatsapp_message_id || sendResult?.messageId || null;
     const mediaSent = typeof stored?.media_sent === 'boolean' ? stored.media_sent : Boolean(sendResult?.mediaSent);
     const error = stored?.error_message || stored?.media_error || sendResult?.error || null;
@@ -173,7 +174,6 @@ const buildManualSendResponse = (
   });
 
   const sent = results.filter((row) => SUCCESSFUL_MANUAL_SEND_STATUSES.has(row.status)).length;
-  const uncertain = results.filter((row) => row.status === 'uncertain').length;
   const held = results.filter((row) => row.status === 'awaiting_approval').length;
   const pending = results.filter((row) => row.status === 'pending').length;
   const processing = results.filter((row) => row.status === 'processing').length;
@@ -184,7 +184,6 @@ const buildManualSendResponse = (
     ok: results.length > 0 && sent === results.length,
     queued: inserted.length,
     sent,
-    uncertain,
     held,
     pending,
     processing,

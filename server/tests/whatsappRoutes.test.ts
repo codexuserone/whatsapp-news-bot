@@ -72,14 +72,14 @@ describe('whatsapp route test-send logging resolution', () => {
     });
   });
 
-  it('marks missing message ids as uncertain', () => {
+  it('marks missing message ids as failed', () => {
     expect(
       testUtils.resolveTestSendLogResolution({
         messageId: null,
         confirmation: null
       })
     ).toMatchObject({
-      status: 'uncertain',
+      status: 'failed',
       sentAt: null
     });
   });

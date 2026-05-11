@@ -76,7 +76,6 @@ const OverviewPage = () => {
   const liveQueuedNow = Number(queueStats?.queued_now ?? ((queueStats?.awaiting_approval ?? 0) + (queueStats?.pending ?? 0) + (queueStats?.processing ?? 0)));
   const recentRecordedCount = Number(deliveryAnalytics?.sent ?? 0);
   const recentFailedCount = Number(queueStats?.failed ?? 0);
-  const recentUncertainCount = Number(queueStats?.uncertain ?? 0);
   const recentSkippedCount = Number(queueStats?.skipped ?? 0);
 
   return (
@@ -194,8 +193,8 @@ const OverviewPage = () => {
               <span className="font-medium">{recentRecordedCount}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Failed or not confirmed</span>
-              <span className="font-medium">{recentFailedCount + recentUncertainCount}</span>
+              <span className="text-muted-foreground">Failed</span>
+              <span className="font-medium">{recentFailedCount}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Skipped</span>

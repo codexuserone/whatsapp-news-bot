@@ -20,7 +20,6 @@ const STATUS_COLORS: Record<string, 'success' | 'destructive' | 'warning' | 'sec
   played: 'success',
   skipped: 'warning',
   failed: 'destructive',
-  uncertain: 'warning',
   superseded: 'secondary'
 };
 
@@ -32,7 +31,6 @@ const LOG_FILTERS = [
   { value: 'sent', label: 'Sent' },
   { value: 'failed', label: 'Failed' },
   { value: 'skipped', label: 'Skipped' },
-  { value: 'uncertain', label: 'Not confirmed' },
   { value: 'superseded', label: 'Superseded' }
 ];
 
@@ -48,8 +46,6 @@ const getStatusLabel = (status: string) => {
       return 'Sending';
     case 'awaiting_approval':
       return 'Held';
-    case 'uncertain':
-      return 'Not confirmed';
     case 'delivered':
     case 'read':
     case 'played':

@@ -48,7 +48,6 @@ type DeliverySummary = {
   processing: number;
   sent: number;
   failed: number;
-  uncertain: number;
   skipped: number;
   superseded: number;
   manual_paused: number;
@@ -63,7 +62,6 @@ const createEmptyDeliverySummary = (): DeliverySummary => ({
   processing: 0,
   sent: 0,
   failed: 0,
-  uncertain: 0,
   skipped: 0,
   superseded: 0,
   manual_paused: 0,
@@ -131,8 +129,7 @@ const summarizeDeliveryRows = (rows: DeliveryLogRow[]) => {
     else if (status === 'pending') current.pending += 1;
     else if (status === 'processing') current.processing += 1;
     else if (status === 'sent' || status === 'delivered' || status === 'read' || status === 'played') current.sent += 1;
-    else if (status === 'failed') current.failed += 1;
-    else if (status === 'uncertain') current.uncertain += 1;
+    else if (status === 'failed' || status === 'uncertain') current.failed += 1;
     else if (status === 'superseded') current.superseded += 1;
     else if (status === 'skipped') {
       current.skipped += 1;
@@ -183,7 +180,7 @@ const resolveDeliveryStatus = (
 ) => {
   const held = delivery.awaiting_approval || 0;
   const queued = held + delivery.pending + delivery.processing;
-  const unresolved = delivery.failed + delivery.uncertain;
+  const unresolved = delivery.failed;
   const hasQueued = queued > 0;
   const hasSent = delivery.sent > 0;
 
@@ -325,7 +322,6 @@ const feedItemRoutes = () => {
           processing: 0,
           sent: 0,
           failed: 0,
-          uncertain: 0,
           skipped: 0,
           superseded: 0,
           manual_paused: 0,
@@ -335,14 +331,13 @@ const feedItemRoutes = () => {
         };
         const held = delivery.awaiting_approval || 0;
         const queued = held + delivery.pending + delivery.processing;
-        const unresolved = delivery.failed + delivery.uncertain;
+        const unresolved = delivery.failed;
         const total =
           delivery.awaiting_approval +
           delivery.pending +
           delivery.processing +
           delivery.sent +
           delivery.failed +
-          delivery.uncertain +
           delivery.skipped +
           delivery.superseded;
         const hasQueued = queued > 0;

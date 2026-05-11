@@ -78,7 +78,6 @@ const FeedItemsPage = () => {
       processing: 0,
       sent: 0,
       failed: 0,
-      uncertain: 0,
       skipped: 0,
       superseded: 0,
       manual_paused: 0,
@@ -87,11 +86,9 @@ const FeedItemsPage = () => {
     const queued = (delivery.pending || 0) + (delivery.processing || 0);
     const sent = delivery.sent || 0;
     const failed = delivery.failed || 0;
-    const uncertain = delivery.uncertain || 0;
     const held = delivery.awaiting_approval || 0;
     const superseded = delivery.superseded || 0;
     const unresolved = failed + held;
-    const review = uncertain;
     const manualPaused = delivery.manual_paused || 0;
     const correctedBeforeSend = delivery.corrected_before_send || 0;
     const correctedAfterSend = delivery.corrected_after_send || 0;
@@ -118,10 +115,10 @@ const FeedItemsPage = () => {
       };
     }
 
-    if (queued > 0 && sent > 0 && (unresolved > 0 || review > 0)) {
+    if (queued > 0 && sent > 0 && unresolved > 0) {
       return {
         label: joinStatusSummary([
-          formatTargetSummary(sent + review, 'sent'),
+          formatTargetSummary(sent, 'sent'),
           formatTargetSummary(queued, 'queued'),
           unresolved > 0 ? formatTargetSummary(unresolved, 'need attention') : '',
           ...correctionParts
@@ -139,11 +136,10 @@ const FeedItemsPage = () => {
         variant: 'warning' as const
       };
     }
-    if (queued > 0 && (unresolved > 0 || review > 0)) {
+    if (queued > 0 && unresolved > 0) {
       return {
         label: joinStatusSummary([
           formatTargetSummary(queued, 'queued'),
-          review > 0 ? formatTargetSummary(review, 'under review') : '',
           unresolved > 0 ? formatTargetSummary(unresolved, 'need attention') : '',
           ...correctionParts
         ]),
@@ -156,20 +152,19 @@ const FeedItemsPage = () => {
         variant: 'warning' as const
       };
     }
-    if (sent > 0 && (unresolved > 0 || review > 0)) {
+    if (sent > 0 && unresolved > 0) {
       return {
         label: joinStatusSummary([
-          formatTargetSummary(sent + review, 'sent'),
+          formatTargetSummary(sent, 'sent'),
           unresolved > 0 ? formatTargetSummary(unresolved, 'need attention') : '',
           ...correctionParts
         ]),
         variant: 'warning' as const
       };
     }
-    if (unresolved > 0 || review > 0) {
+    if (unresolved > 0) {
       return {
         label: joinStatusSummary([
-          review > 0 ? formatTargetSummary(review, 'under review') : '',
           unresolved > 0 ? formatTargetSummary(unresolved, 'need attention') : '',
           ...correctionParts
         ]),
@@ -184,7 +179,7 @@ const FeedItemsPage = () => {
     }
     if (sent > 0) {
       return {
-        label: joinStatusSummary([formatTargetSummary(sent + review, 'sent'), ...correctionParts]),
+        label: joinStatusSummary([formatTargetSummary(sent, 'sent'), ...correctionParts]),
         variant: 'success' as const
       };
     }

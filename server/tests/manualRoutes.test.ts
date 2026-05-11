@@ -36,7 +36,7 @@ describe('manual route queue payloads', () => {
     expect(rows[0].message_content).toContain('__WNB_MANUAL_META__=');
   });
 
-  it('summarizes manual send results from stored delivery status without flattening unresolved sends into failures', () => {
+  it('summarizes legacy unresolved manual send results as failures', () => {
     const response = testUtils.buildManualSendResponse(
       [
         { id: 'sent-row' },
@@ -72,9 +72,8 @@ describe('manual route queue payloads', () => {
       ok: false,
       queued: 4,
       sent: 1,
-      uncertain: 1,
       held: 1,
-      failed: 1
+      failed: 2
     });
     expect(response.results).toEqual([
       {
@@ -87,7 +86,7 @@ describe('manual route queue payloads', () => {
       },
       {
         id: 'uncertain-row',
-        status: 'uncertain',
+        status: 'failed',
         ok: false,
         messageId: 'msg-2',
         mediaSent: false,
@@ -126,7 +125,6 @@ describe('manual route queue payloads', () => {
       ok: true,
       queued: 3,
       sent: 3,
-      uncertain: 0,
       held: 0,
       failed: 0
     });

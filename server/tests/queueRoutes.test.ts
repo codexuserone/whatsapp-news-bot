@@ -101,7 +101,6 @@ describe('queue route retry safeguards', () => {
   it('limits history filters to the recent window and keeps live statuses separate', () => {
     expect(testUtils.shouldLimitQueueStatusToRecentHistory('sent')).toBe(true);
     expect(testUtils.shouldLimitQueueStatusToRecentHistory('failed')).toBe(true);
-    expect(testUtils.shouldLimitQueueStatusToRecentHistory('uncertain')).toBe(true);
     expect(testUtils.shouldLimitQueueStatusToRecentHistory('pending')).toBe(false);
     expect(testUtils.shouldLimitQueueStatusToRecentHistory(undefined)).toBe(false);
   });
@@ -137,7 +136,7 @@ describe('queue route retry safeguards', () => {
     expect(testUtils.sanitizeMediaUrlForApi('https://example.com/image.jpg')).toBe('https://example.com/image.jpg');
   });
 
-  it('returns an accepted send-now response for uncertain queue outcomes instead of a hard failure', () => {
+  it('returns legacy unresolved send-now rows as failed outcomes', () => {
     expect(
       testUtils.buildQueueSendNowResponse(
         { ok: false, error: 'Server ack was not observed yet' },
@@ -150,11 +149,10 @@ describe('queue route retry safeguards', () => {
         }
       )
     ).toEqual({
-      httpStatus: 202,
+      httpStatus: 400,
       body: {
-        ok: true,
-        accepted: true,
-        status: 'uncertain',
+        ok: false,
+        status: 'failed',
         messageId: 'msg-1',
         mediaSent: false,
         error: 'Server ack was not observed yet'
@@ -178,7 +176,6 @@ describe('queue route retry safeguards', () => {
       httpStatus: 400,
       body: {
         ok: false,
-        accepted: false,
         status: 'failed',
         messageId: null,
         mediaSent: false,

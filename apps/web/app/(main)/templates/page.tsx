@@ -584,22 +584,22 @@ const TemplatesPage = () => {
 
   const sendPreview = useMutation({
     mutationFn: (payload: TemplatePreviewPayload) =>
-      api.post<{ messageId?: string; confirmed?: number; uncertain?: number }>('/api/whatsapp/send-test', payload),
-    onSuccess: (result: { messageId?: string; confirmed?: number; uncertain?: number }) => {
+      api.post<{ messageId?: string; sent?: number; failed?: number }>('/api/whatsapp/send-test', payload),
+    onSuccess: (result: { messageId?: string; sent?: number; failed?: number }) => {
       const messageId = String(result?.messageId || '').trim();
-      const confirmed = Number(result?.confirmed || 0);
-      const uncertain = Number(result?.uncertain || 0);
+      const sent = Number(result?.sent || 0);
+      const failed = Number(result?.failed || 0);
       const suffix = messageId ? ` (${messageId})` : '';
-      if (confirmed > 0 && uncertain > 0) {
-        setPreviewSendNotice(`Sent${suffix}. ${confirmed} confirmed, ${uncertain} not confirmed.`);
+      if (sent > 0 && failed > 0) {
+        setPreviewSendNotice(`Sent ${sent}, failed ${failed}${suffix}.`);
         return;
       }
-      if (confirmed > 0) {
-        setPreviewSendNotice(`Sent${suffix}. ${confirmed} confirmed.`);
+      if (sent > 0) {
+        setPreviewSendNotice(`Sent${suffix}.`);
         return;
       }
-      if (uncertain > 0) {
-        setPreviewSendNotice(`Not confirmed${suffix}.`);
+      if (failed > 0) {
+        setPreviewSendNotice(`Failed ${failed}${suffix}.`);
         return;
       }
       setPreviewSendNotice(messageId ? `Sent (${messageId})` : 'Sent');

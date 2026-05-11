@@ -135,7 +135,6 @@ export type FeedItem = {
     processing: number;
     sent: number;
     failed: number;
-    uncertain?: number;
     skipped: number;
     superseded?: number;
     manual_paused?: number;
@@ -204,7 +203,6 @@ export type QueueStats = {
   sent: number;
   failed: number;
   skipped: number;
-  uncertain?: number;
   superseded?: number;
   total: number;
   queued_now?: number;
@@ -213,7 +211,6 @@ export type QueueStats = {
   sent_all_time?: number;
   failed_all_time?: number;
   skipped_all_time?: number;
-  uncertain_all_time?: number;
   superseded_all_time?: number;
   window_hours?: number;
   window_start?: string;

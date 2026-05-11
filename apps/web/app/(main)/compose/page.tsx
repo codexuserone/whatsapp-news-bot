@@ -98,7 +98,6 @@ type ManualSendResponse = {
   ok?: boolean;
   queued?: number;
   sent?: number;
-  uncertain?: number;
   held?: number;
   pending?: number;
   processing?: number;
@@ -367,14 +366,13 @@ const ComposeInner = () => {
     mutationFn: () => api.post<ManualSendResponse>('/api/manual/send', buildManualPayload()),
     onSuccess: (result: ManualSendResponse) => {
       const sent = Number(result?.sent || 0);
-      const uncertain = Number(result?.uncertain || 0);
       const held = Number(result?.held || 0);
       const pending = Number(result?.pending || 0);
       const processing = Number(result?.processing || 0);
       const skipped = Number(result?.skipped || 0);
       const failed = Number(result?.failed || 0);
       const parts = [
-        sent || uncertain ? `sent ${sent + uncertain}` : '',
+        sent ? `sent ${sent}` : '',
         held ? `held for review ${held}` : '',
         pending ? `still queued ${pending}` : '',
         processing ? `still processing ${processing}` : '',
@@ -386,7 +384,7 @@ const ComposeInner = () => {
       } else if (held > 0 || pending > 0 || processing > 0 || result?.ok === false) {
         setNotice({ type: 'warning', message: `${parts.join(', ') || 'Some messages still need attention'}. Open Queue for the exact records.` });
       } else {
-        setNotice({ type: 'success', message: `Sent ${sent + uncertain} message(s).` });
+        setNotice({ type: 'success', message: `Sent ${sent} message(s).` });
       }
       queryClient.invalidateQueries({ queryKey: ['queue'] });
       queryClient.invalidateQueries({ queryKey: ['queue-stats'] });

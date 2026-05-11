@@ -46,7 +46,7 @@ type TestSendConfirmation = {
 };
 
 type TestSendLogResolution = {
-  status: 'sent' | 'delivered' | 'read' | 'played' | 'failed' | 'uncertain' | 'awaiting_approval';
+  status: 'sent' | 'delivered' | 'read' | 'played' | 'failed' | 'awaiting_approval';
   errorMessage: string | null;
   sentAt: string | null;
 };
@@ -60,12 +60,12 @@ const setNoStoreHeaders = (res: Response) => {
   });
 };
 
-const buildUncertainSendMessage = (value: unknown) => {
+const buildMissingMessageIdSendMessage = (value: unknown) => {
   const message = String(value || '').trim();
   if (!message) {
-    return 'WhatsApp did not confirm this send.';
+    return 'WhatsApp did not return a message id.';
   }
-  return `WhatsApp did not confirm this send. ${message}`.trim();
+  return `WhatsApp did not return a message id. ${message}`.trim();
 };
 
 const normalizeConfirmationForOperator = (
@@ -277,8 +277,8 @@ const resolveTestSendLogResolution = (options: {
 
   if (!messageId) {
     return {
-      status: 'uncertain',
-      errorMessage: buildUncertainSendMessage('Missing WhatsApp message id'),
+      status: 'failed',
+      errorMessage: buildMissingMessageIdSendMessage('Missing WhatsApp message id'),
       sentAt: null
     } satisfies TestSendLogResolution;
   }
@@ -1613,7 +1613,6 @@ const whatsappRoutes = () => {
 	      jid: string;
 	      ok: boolean;
 	      messageId?: string | null;
-          confirmed?: boolean;
 	      confirmation?: TestSendConfirmation | null;
           held?: boolean;
           holdReason?: string | null;
@@ -1772,7 +1771,6 @@ const whatsappRoutes = () => {
           ok: true,
           messageId,
           confirmation,
-          confirmed: Boolean(confirmation?.ok),
           held,
           holdReason,
           ...(mediaWarning ? { warning: mediaWarning } : {})
@@ -1837,21 +1835,17 @@ const whatsappRoutes = () => {
       // Best effort only: test-message logging should not fail the send endpoint.
     }
 
-    const confirmedCount = successful.filter((entry) => entry.confirmed === true).length;
     const heldCount = successful.filter((entry) => entry.held === true).length;
     const rejectedCount = successful.filter((entry) => isAck479Error(entry.confirmation?.error)).length;
-    const acceptedSentCount = successful.length - heldCount - rejectedCount;
+    const sentCount = successful.length - heldCount - rejectedCount;
     const failedCount = results.length - successful.length + rejectedCount;
 
     if (normalizedJids.length === 1) {
       const first = successful[0];
       return res.json({
         ok: results.every((entry) => entry.ok) && heldCount === 0 && failedCount === 0,
-        accepted: successful.length,
-        sent: acceptedSentCount,
-        confirmed: confirmedCount,
+        sent: sentCount,
         held: heldCount,
-        uncertain: 0,
         failed: failedCount,
         messageId: first?.messageId || null,
         confirmation: first?.confirmation || null,
@@ -1861,11 +1855,8 @@ const whatsappRoutes = () => {
 
     res.json({
       ok: results.every((entry) => entry.ok) && heldCount === 0 && failedCount === 0,
-      accepted: successful.length,
-      sent: acceptedSentCount,
-      confirmed: confirmedCount,
+      sent: sentCount,
       held: heldCount,
-      uncertain: 0,
       failed: failedCount,
       results
     });
@@ -2087,10 +2078,8 @@ const whatsappRoutes = () => {
     const rejected = isAck479Error(operatorConfirmation?.error);
     res.json({
       ok: Boolean(messageId && !rejected),
-      accepted: Boolean(messageId),
-      confirmed: Boolean(operatorConfirmation?.ok),
+      sent: Boolean(messageId && !rejected),
       failed: Boolean(rejected),
-      uncertain: false,
       messageId,
       confirmation: operatorConfirmation,
       audienceCount: statusSnapshot.recipients.length,
@@ -2148,7 +2137,7 @@ module.exports = whatsappRoutes;
 module.exports.__testUtils = {
   assertUsableStatusAudience,
   buildStatusAudienceResponse,
-  buildUncertainSendMessage,
+  buildMissingMessageIdSendMessage,
   isGroupJid,
   buildTextStatusStyleOptions,
   normalizeConfirmationForOperator,

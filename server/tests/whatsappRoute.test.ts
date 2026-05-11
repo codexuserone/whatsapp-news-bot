@@ -68,7 +68,7 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
-  it('marks test sends uncertain when no message id is present', () => {
+  it('marks test sends failed when no message id is present', () => {
     const result = __testUtils.resolveTestSendLogResolution({
       messageId: null,
       confirmRequested: true,
@@ -77,8 +77,8 @@ describe('whatsapp route test-send logging', () => {
     });
 
     expect(result).toEqual({
-      status: 'uncertain',
-      errorMessage: 'WhatsApp did not confirm this send. Missing WhatsApp message id',
+      status: 'failed',
+      errorMessage: 'WhatsApp did not return a message id. Missing WhatsApp message id',
       sentAt: null
     });
   });

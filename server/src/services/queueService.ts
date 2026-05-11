@@ -717,9 +717,9 @@ const recoverStaleProcessingLogs = async (
     await supabase
       .from('message_logs')
       .update({
-        status: 'uncertain',
+        status: 'superseded',
         processing_started_at: null,
-        error_message: 'Recovered a stale in-progress send after reconnect/redeploy. WhatsApp accepted a related send record, but no final delivery receipt has arrived yet.'
+        error_message: 'Recovered a stale in-progress send after reconnect/redeploy. A matching send already completed.'
       })
       .in('id', toFailed);
   }
@@ -4987,19 +4987,35 @@ const sendQueuedForSchedule = async (
 
           if (timeoutUnknownDelivery) {
             const hasAttemptedMessageId = Boolean(attemptedMessageId);
+            if (hasAttemptedMessageId) {
+              await supabase
+                .from('message_logs')
+                .update({
+                  status: 'sent',
+                  sent_at: new Date().toISOString(),
+                  processing_started_at: null,
+                  error_message: null,
+                  message_content: expectedRender?.outboundText || null,
+                  whatsapp_message_id: attemptedMessageId,
+                  media_url: expectedMedia.url || null,
+                  media_type: expectedMedia.kind || null,
+                  media_sent: Boolean(expectedMedia.url && expectedMedia.kind),
+                  media_error: null
+                })
+                .eq('id', log.id);
+              continue;
+            }
             await supabase
               .from('message_logs')
               .update({
-                status: hasAttemptedMessageId ? 'uncertain' : 'failed',
+                status: 'failed',
                 processing_started_at: null,
-                error_message: hasAttemptedMessageId
-                  ? buildUncertainErrorMessage(errorMessage)
-                  : buildUnconfirmedTimeoutErrorMessage(errorMessage),
+                error_message: buildUnconfirmedTimeoutErrorMessage(errorMessage),
                 message_content: expectedRender?.outboundText || null,
-                whatsapp_message_id: attemptedMessageId,
+                whatsapp_message_id: null,
                 media_url: expectedMedia.url || null,
                 media_type: expectedMedia.kind || null,
-                media_sent: Boolean(hasAttemptedMessageId && expectedMedia.url && expectedMedia.kind),
+                media_sent: false,
                 media_error: errorMessage
               })
               .eq('id', log.id);
@@ -5954,25 +5970,40 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
         return { ok: false, held: true, error: holdError };
       }
       const timedOutWithMessageId = Boolean(timedOut && uncertainWhatsAppMessageId);
-      const terminalStatus = timedOutWithMessageId ? 'uncertain' : connectionStateError ? originalStatus : 'failed';
+      if (timedOutWithMessageId) {
+        await supabase
+          .from('message_logs')
+          .update({
+            status: 'sent',
+            sent_at: new Date().toISOString(),
+            processing_started_at: null,
+            error_message: null,
+            message_content: uncertainMessageContent || log.message_content || null,
+            whatsapp_message_id: uncertainWhatsAppMessageId,
+            media_url: uncertainMediaUrl,
+            media_type: uncertainMediaType,
+            media_sent: Boolean(uncertainMediaUrl && uncertainMediaType),
+            media_error: null
+          })
+          .eq('id', log.id);
+        return { ok: true, messageId: uncertainWhatsAppMessageId, mediaSent: Boolean(uncertainMediaUrl && uncertainMediaType) };
+      }
+      const terminalStatus = connectionStateError ? originalStatus : 'failed';
 
       const keepMedia = !isAutomationBacked && Boolean(String(log.media_url || '').trim());
-      const acceptedMedia = Boolean(timedOutWithMessageId && uncertainMediaUrl && uncertainMediaType);
       const failurePatch: Record<string, unknown> = {
         status: terminalStatus,
-        processing_started_at: timedOutWithMessageId ? log.processing_started_at || new Date().toISOString() : null,
-        error_message: timedOutWithMessageId
-          ? buildUncertainErrorMessage(errorMessage)
-          : timedOut
+        processing_started_at: null,
+        error_message: timedOut
             ? buildUnconfirmedTimeoutErrorMessage(errorMessage)
           : connectionStateError
             ? buildConnectionWaitErrorMessage(errorMessage)
             : errorMessage,
         message_content: timedOut ? uncertainMessageContent : log.message_content || null,
-        whatsapp_message_id: timedOutWithMessageId ? uncertainWhatsAppMessageId : null,
+        whatsapp_message_id: null,
         media_url: timedOut ? uncertainMediaUrl : keepMedia ? log.media_url || null : null,
         media_type: timedOut ? uncertainMediaType : keepMedia ? log.media_type || null : null,
-        media_sent: acceptedMedia,
+        media_sent: false,
         media_error: timedOut || keepMedia ? errorMessage : null
       };
       if (connectionStateError) {

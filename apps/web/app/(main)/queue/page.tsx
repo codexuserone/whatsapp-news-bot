@@ -33,7 +33,7 @@ import {
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
 const isSuccessfulSendStatus = (status: unknown) => SUCCESSFUL_SEND_STATUSES.has(String(status || '').toLowerCase());
 const LIVE_QUEUE_STATUSES = new Set(['awaiting_approval', 'pending', 'processing']);
-const HISTORY_STATUSES = new Set(['sent', 'delivered', 'read', 'played', 'failed', 'uncertain', 'skipped', 'superseded']);
+const HISTORY_STATUSES = new Set(['sent', 'delivered', 'read', 'played', 'failed', 'skipped', 'superseded']);
 
 type NoticeType = 'success' | 'warning' | 'error';
 
@@ -275,15 +275,9 @@ const QueueInner = () => {
   const sendNowItem = useMutation({
     mutationFn: (id: string) => api.post<QueueSendNowResponse>(`/api/queue/${id}/send-now`),
     onSuccess: (result: QueueSendNowResponse) => {
-      const status = String(result?.status || '').toLowerCase();
-      if (status === 'uncertain') {
-        setActionNotice({
-          type: 'error',
-          message: result?.error || 'Send did not return a WhatsApp message id.'
-        });
-      } else if (result?.ok) {
+      if (result?.ok) {
         setActionNotice({ type: 'success', message: result?.messageId ? `Sent now (${result.messageId}).` : 'Sent now.' });
-      } else if (status === 'awaiting_approval') {
+      } else if (String(result?.status || '').toLowerCase() === 'awaiting_approval') {
         setActionNotice({ type: 'warning', message: result?.error || 'Held for review before another send attempt.' });
       } else {
         setActionNotice({ type: 'error', message: result?.error || 'Send now did not complete.' });
@@ -402,10 +396,10 @@ const QueueInner = () => {
 
   const canPause = (item: QueueItem) =>
     !databaseActionsBlocked &&
-    (item.status === 'awaiting_approval' || item.status === 'pending' || item.status === 'failed' || item.status === 'uncertain');
+    (item.status === 'awaiting_approval' || item.status === 'pending' || item.status === 'failed');
 
   const canResume = (item: QueueItem) =>
-    !databaseActionsBlocked && (isPaused(item) || item.status === 'failed' || item.status === 'uncertain');
+    !databaseActionsBlocked && (isPaused(item) || item.status === 'failed');
 
   const canPausePost = (item: QueueItem) => !databaseActionsBlocked && Boolean(item.feed_item_id) && !isPostPaused(item);
 
@@ -446,7 +440,7 @@ const QueueInner = () => {
 
   const canReschedule = (item: QueueItem) =>
     !databaseActionsBlocked &&
-    ['awaiting_approval', 'pending', 'failed', 'uncertain'].includes(String(item.status || '').toLowerCase()) &&
+    ['awaiting_approval', 'pending', 'failed'].includes(String(item.status || '').toLowerCase()) &&
     !isPaused(item) &&
     !isPostPaused(item);
 
@@ -482,8 +476,6 @@ const QueueInner = () => {
         return <Badge variant="success">Sent</Badge>;
       case 'failed':
         return <Badge variant="destructive">Failed</Badge>;
-      case 'uncertain':
-        return <Badge variant="warning">Not confirmed</Badge>;
       case 'skipped':
         return <Badge variant="warning">Skipped</Badge>;
       default:
@@ -554,12 +546,6 @@ const QueueInner = () => {
       return hasRequestedMedia
         ? { label: 'Held with media', tone: 'warning' as const }
         : { label: 'Held', tone: 'warning' as const };
-    }
-
-    if (item.status === 'uncertain') {
-      return hasRequestedMedia
-        ? { label: 'Not confirmed; check media', tone: 'warning' as const }
-        : { label: 'Not confirmed', tone: 'warning' as const };
     }
 
     const plannedKind = String(item.media_kind || item.media_type || '').toLowerCase();
@@ -697,7 +683,6 @@ const QueueInner = () => {
               <SelectItem value="processing">Attempting send ({queueStats?.processing ?? 0})</SelectItem>
               <SelectItem value="sent">Sent ({queueStats?.sent ?? 0})</SelectItem>
               <SelectItem value="failed">Failed ({queueStats?.failed ?? 0})</SelectItem>
-              <SelectItem value="uncertain">Not confirmed ({queueStats?.uncertain ?? 0})</SelectItem>
               <SelectItem value="skipped">Skipped ({queueStats?.skipped ?? 0})</SelectItem>
               <SelectItem value="all">All ({queueStats?.total ?? 0})</SelectItem>
             </SelectContent>

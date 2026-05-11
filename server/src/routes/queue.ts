@@ -22,7 +22,8 @@ const { sanitizeSendErrorForApi } = require('../utils/sendErrorPresentation');
 const WHATSAPP_IN_PLACE_EDIT_MAX_MINUTES = 15;
 const SUCCESSFUL_SEND_STATUSES = new Set(['sent', 'delivered', 'read', 'played']);
 const LIVE_QUEUE_STATUS_VALUES = ['awaiting_approval', 'pending', 'processing'];
-const HISTORY_QUEUE_STATUSES = new Set(['sent', 'failed', 'skipped', 'uncertain', 'superseded']);
+const HISTORY_QUEUE_STATUSES = new Set(['sent', 'failed', 'skipped', 'superseded']);
+const FAILED_SEND_STATUSES = ['failed', 'uncertain'];
 const DEFAULT_QUEUE_HISTORY_WINDOW_HOURS = 24;
 const MAX_QUEUE_HISTORY_WINDOW_HOURS = 168;
 const NON_RETRYABLE_FAILURE_PATTERNS = [
@@ -52,6 +53,10 @@ type QueueSendNowStoredRow = {
 };
 
 const normalizeQueueStatus = (status: unknown) => String(status || '').trim().toLowerCase();
+const normalizeQueueStatusForOperator = (status: unknown) => {
+  const normalized = normalizeQueueStatus(status);
+  return normalized === 'uncertain' ? 'failed' : normalized;
+};
 
 const fallbackSendNowStatus = (result?: QueueSendNowResult | null) => {
   if (result?.status) return normalizeQueueStatus(result.status);
@@ -61,11 +66,10 @@ const fallbackSendNowStatus = (result?: QueueSendNowResult | null) => {
 };
 
 const buildQueueSendNowResponse = (result: QueueSendNowResult | null | undefined, storedRow?: QueueSendNowStoredRow | null) => {
-  const status = normalizeQueueStatus(storedRow?.status) || fallbackSendNowStatus(result);
-  const accepted = status === 'uncertain' || status === 'awaiting_approval' || isSuccessfulSendStatus(status);
+  const status = normalizeQueueStatusForOperator(storedRow?.status) || fallbackSendNowStatus(result);
+  const ok = status === 'awaiting_approval' || isSuccessfulSendStatus(status);
   const body = {
-    ok: accepted,
-    accepted,
+    ok,
     status,
     messageId: storedRow?.whatsapp_message_id || result?.messageId || null,
     mediaSent: typeof storedRow?.media_sent === 'boolean' ? storedRow.media_sent : Boolean(result?.mediaSent),
@@ -74,7 +78,7 @@ const buildQueueSendNowResponse = (result: QueueSendNowResult | null | undefined
   const httpStatus =
     isSuccessfulSendStatus(status)
       ? 200
-      : status === 'uncertain' || status === 'awaiting_approval'
+      : status === 'awaiting_approval'
         ? 202
         : 400;
   return { httpStatus, body };
@@ -342,7 +346,7 @@ const queueRoutes = () => {
       const supabase = getDb();
       const { status } = req.query;
       const statusFilterRaw = typeof status === 'string' ? status : undefined;
-      const statusFilter = statusFilterRaw ? String(statusFilterRaw).toLowerCase() : undefined;
+      const statusFilter = statusFilterRaw ? normalizeQueueStatusForOperator(statusFilterRaw) : undefined;
       const shouldFilterByStatus = Boolean(statusFilter && statusFilter !== 'all');
       const includeManual = String(req.query.include_manual || '').toLowerCase() === 'true';
       const windowHours = parseWindowHours(req.query.window_hours);
@@ -425,6 +429,8 @@ const queueRoutes = () => {
       if (shouldFilterByStatus && statusFilter) {
         if (statusFilter === 'sent') {
           query = query.in('status', Array.from(SUCCESSFUL_SEND_STATUSES));
+        } else if (statusFilter === 'failed') {
+          query = query.in('status', FAILED_SEND_STATUSES);
         } else {
           query = query.eq('status', statusFilter);
         }
@@ -544,7 +550,7 @@ const queueRoutes = () => {
           pub_date: feedItems?.pub_date || null,
           pub_precision: null,
           rendered_content: isManual ? displayMessageContent : displayMessageContent || automationPreview?.text || null,
-          status: row.status,
+          status: normalizeQueueStatusForOperator(row.status),
           error_message: sanitizeSendErrorForApi(row.error_message),
           media_url: sanitizeMediaUrlForApi(rawMediaUrl),
           media_stored: isStoredMediaReference(rawMediaUrl),
@@ -681,6 +687,8 @@ const queueRoutes = () => {
         let query = supabase.from('message_logs').select('id', { count: 'exact', head: true });
         if (status === 'sent') {
           query = query.in('status', Array.from(SUCCESSFUL_SEND_STATUSES));
+        } else if (status === 'failed') {
+          query = query.in('status', FAILED_SEND_STATUSES);
         } else {
           query = query.eq('status', status);
         }
@@ -693,22 +701,20 @@ const queueRoutes = () => {
         return query;
       };
 
-      const [awaitingRes, pendingRes, processingRes, sentRes, failedRes, skippedRes, uncertainRes, supersededRes] = await Promise.all([
+      const [awaitingRes, pendingRes, processingRes, sentRes, failedRes, skippedRes, supersededRes] = await Promise.all([
         countByStatus('awaiting_approval'),
         countByStatus('pending'),
         countByStatus('processing'),
         countByStatus('sent', true),
         countByStatus('failed', true),
         countByStatus('skipped', true),
-        countByStatus('uncertain', true),
         countByStatus('superseded', true)
       ]);
 
-      const [sentAllTimeRes, failedAllTimeRes, skippedAllTimeRes, uncertainAllTimeRes, supersededAllTimeRes] = await Promise.all([
+      const [sentAllTimeRes, failedAllTimeRes, skippedAllTimeRes, supersededAllTimeRes] = await Promise.all([
         countByStatus('sent'),
         countByStatus('failed'),
         countByStatus('skipped'),
-        countByStatus('uncertain'),
         countByStatus('superseded')
       ]);
 
@@ -718,16 +724,14 @@ const queueRoutes = () => {
       const sRecentCount = sentRes.count ?? 0;
       const fRecentCount = failedRes.count ?? 0;
       const skRecentCount = skippedRes.count ?? 0;
-      const uRecentCount = uncertainRes.count ?? 0;
       const suRecentCount = supersededRes.count ?? 0;
       const sAllCount = sentAllTimeRes.count ?? 0;
       const fAllCount = failedAllTimeRes.count ?? 0;
       const skAllCount = skippedAllTimeRes.count ?? 0;
-      const uAllCount = uncertainAllTimeRes.count ?? 0;
       const suAllCount = supersededAllTimeRes.count ?? 0;
       const queuedNow = awaitingCount + pCount + prCount;
-      const historyWindowTotal = sRecentCount + fRecentCount + skRecentCount + uRecentCount + suRecentCount;
-      const allTimeTotal = sAllCount + fAllCount + skAllCount + uAllCount + suAllCount;
+      const historyWindowTotal = sRecentCount + fRecentCount + skRecentCount + suRecentCount;
+      const allTimeTotal = sAllCount + fAllCount + skAllCount + suAllCount;
 
       res.json({
         awaiting_approval: awaitingCount,
@@ -736,7 +740,6 @@ const queueRoutes = () => {
         sent: sRecentCount,
         failed: fRecentCount,
         skipped: skRecentCount,
-        uncertain: uRecentCount,
         superseded: suRecentCount,
         total: queuedNow + historyWindowTotal,
         queued_now: queuedNow,
@@ -745,7 +748,6 @@ const queueRoutes = () => {
         sent_all_time: sAllCount,
         failed_all_time: fAllCount,
         skipped_all_time: skAllCount,
-        uncertain_all_time: uAllCount,
         superseded_all_time: suAllCount,
         window_hours: windowHours,
         window_start: windowStartIso

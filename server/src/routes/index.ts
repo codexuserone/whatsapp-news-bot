@@ -17,6 +17,24 @@ const queueRoutes = require('./queue');
 const analyticsRoutes = require('./analytics');
 const manualRoutes = require('./manual');
 
+const READY_DB_CACHE_TTL_MS = Math.max(Number(process.env.READY_DB_CACHE_TTL_MS || 30_000), 5_000);
+let readyDbCache: { checkedAtMs: number; ok: boolean; state: unknown } | null = null;
+
+const getReadyDbState = async () => {
+  const now = Date.now();
+  if (readyDbCache && now - readyDbCache.checkedAtMs < READY_DB_CACHE_TTL_MS) {
+    return readyDbCache;
+  }
+
+  const ok = await testConnection();
+  readyDbCache = {
+    checkedAtMs: now,
+    ok,
+    state: getSupabaseHealthState?.()
+  };
+  return readyDbCache;
+};
+
 const registerRoutes = (app: Express) => {
   const router = express.Router();
 
@@ -27,13 +45,14 @@ const registerRoutes = (app: Express) => {
   router.get('/api/health', (_req: Request, res: Response) => res.json({ ok: true }));
   router.get('/api/ping', (_req: Request, res: Response) => res.json({ ok: true, uptime: process.uptime() }));
   router.get('/ready', async (req: Request, res: Response) => {
-    const dbOk = await testConnection();
+    const dbReady = await getReadyDbState();
+    const dbOk = dbReady.ok;
     const whatsappStatus = req.app.locals.whatsapp?.getStatus?.();
     const whatsappOk = whatsappStatus?.status === 'connected';
     res.json({
       ok: dbOk && whatsappOk,
       db: dbOk,
-      dbState: getSupabaseHealthState?.(),
+      dbState: dbReady.state,
       whatsapp: whatsappStatus?.status || 'unknown'
     });
   });

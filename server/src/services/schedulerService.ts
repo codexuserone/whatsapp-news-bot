@@ -635,7 +635,7 @@ const startRecentFeedCorrectionWatcher = (whatsappClient?: WhatsAppClient) => {
     recentFeedCorrectionTimer = null;
   }
 
-  const intervalMs = Math.max(Number(process.env.FEED_CORRECTION_POLL_MS || 60000), 30000);
+  const intervalMs = Math.max(Number(process.env.FEED_CORRECTION_POLL_MS || 120000), 60000);
   void runRecentFeedCorrectionPass(whatsappClient);
   recentFeedCorrectionTimer = setInterval(() => {
     void runRecentFeedCorrectionPass(whatsappClient);
@@ -787,7 +787,7 @@ const startPendingSendCatchup = (whatsappClient?: WhatsAppClient) => {
     pendingSendCatchupTimer = null;
   }
 
-  const intervalMs = Math.max(Number(process.env.PENDING_SEND_CATCHUP_MS || 60000), 15000);
+  const intervalMs = Math.max(Number(process.env.PENDING_SEND_CATCHUP_MS || 120000), 30000);
   const runCatchupPass = async () => {
     if (pendingSendCatchupInFlight) {
       logger.info('Skipping pending-send catch-up pass - previous pass still running');
@@ -877,7 +877,7 @@ const startImmediateScheduleCatchup = (whatsappClient?: WhatsAppClient) => {
     immediateScheduleCatchupTimer = null;
   }
 
-  const intervalMs = Math.max(Number(process.env.IMMEDIATE_FEED_CATCHUP_MS || 60000), 30000);
+  const intervalMs = Math.max(Number(process.env.IMMEDIATE_FEED_CATCHUP_MS || 120000), 60000);
   void runImmediateScheduleCatchupPass(whatsappClient).catch((error) => {
     logger.error({ error }, 'Failed immediate feed catch-up pass');
   });

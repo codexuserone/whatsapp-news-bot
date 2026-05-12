@@ -52,7 +52,15 @@ const DEFAULTS = {
   whatsapp_paused_at: null
 };
 
+const SETTINGS_CACHE_TTL_MS = Math.max(Number(process.env.SETTINGS_CACHE_TTL_MS || 30_000), 5_000);
 let cachedSettings: Record<string, unknown> | null = null;
+let cachedSettingsAtMs = 0;
+
+const getCachedSettings = () => {
+  if (!cachedSettings) return null;
+  if (Date.now() - cachedSettingsAtMs > SETTINGS_CACHE_TTL_MS) return null;
+  return { ...DEFAULTS, ...cachedSettings };
+};
 
 const clampNumber = (value: unknown, fallback: number, min: number, max: number) => {
   const parsed = Number(value);
@@ -298,7 +306,12 @@ const ensureDefaults = async () => {
   }
 };
 
-const getSettings = async () => {
+const getSettings = async (options?: { force?: boolean }) => {
+  if (!options?.force) {
+    const cached = getCachedSettings();
+    if (cached) return cached;
+  }
+
   const supabase = getSupabaseClient();
   if (!supabase) return DEFAULTS;
   
@@ -339,6 +352,7 @@ const getSettings = async () => {
     Object.assign(data, normalizeSettingsPatch({ ...data }));
 
     cachedSettings = { ...data };
+    cachedSettingsAtMs = Date.now();
     return data;
   } catch (error) {
     console.error('Error getting settings:', getErrorMessage(error));
@@ -367,7 +381,9 @@ const updateSettings = async (updates: Record<string, unknown>) => {
         if (error) throw error;
       })
     );
-    return getSettings();
+    cachedSettings = null;
+    cachedSettingsAtMs = 0;
+    return getSettings({ force: true });
   } catch (error) {
     console.error('Error updating settings:', getErrorMessage(error));
     throw error;

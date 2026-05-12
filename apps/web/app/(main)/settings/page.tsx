@@ -92,6 +92,12 @@ const COMMON_TIMEZONES = [
   'Asia/Dubai'
 ];
 
+const SEND_PACE_OPTIONS = [
+  { label: 'Fast', value: 1000, description: 'Use for small test sends.' },
+  { label: 'Normal', value: 2000, description: 'Balanced default for daily publishing.' },
+  { label: 'Careful', value: 5000, description: 'Adds more space between messages.' }
+];
+
 const formatStatusAudienceText = (value: unknown) =>
   Array.from(
     new Set(
@@ -142,7 +148,7 @@ const toSettingsFormValues = (settings?: Partial<BackendSettings> | null): Setti
 const SettingsPage = () => {
   const queryClient = useQueryClient();
   const [saveNotice, setSaveNotice] = useState<SaveNotice | null>(null);
-  const [showAdvancedPublishing, setShowAdvancedPublishing] = useState(false);
+  const [showDuplicateFilter, setShowDuplicateFilter] = useState(false);
   const { data: settings, isLoading: isSettingsLoading } = useQuery<BackendSettings>({
     queryKey: ['settings'],
     queryFn: () => api.get('/api/settings')
@@ -376,23 +382,34 @@ const SettingsPage = () => {
             <CardDescription>Normal operator defaults.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2" id="delays">
-                <Label htmlFor="message_delay_ms">Gap Between Messages (ms)</Label>
-                <Input
-                  id="message_delay_ms"
-                  type="number"
-                  min={0}
-                  {...form.register('message_delay_ms', { valueAsNumber: true })}
-                />
-                <p className="text-xs text-muted-foreground">Higher value = slower and safer sending.</p>
-              </div>
-              <div className="space-y-2" id="retention">
-                <Label htmlFor="log_retention_days">Keep History (days)</Label>
-                <Input id="log_retention_days" type="number" {...form.register('log_retention_days', { valueAsNumber: true })} />
-                <p className="text-xs text-muted-foreground">How long sent/failed history stays visible.</p>
-              </div>
-            </div>
+            <Controller
+              control={form.control}
+              name="message_delay_ms"
+              render={({ field }) => {
+                const current = Number(field.value || 2000);
+                return (
+                  <div className="space-y-3" id="delays">
+                    <Label>Send Pace</Label>
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      {SEND_PACE_OPTIONS.map((option) => (
+                        <Button
+                          key={option.value}
+                          type="button"
+                          variant={current === option.value ? 'default' : 'outline'}
+                          className="h-auto justify-start whitespace-normal py-3 text-left"
+                          onClick={() => field.onChange(option.value)}
+                        >
+                          <span>
+                            <span className="block font-medium">{option.label}</span>
+                            <span className="block text-xs opacity-80">{option.description}</span>
+                          </span>
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              }}
+            />
           </CardContent>
         </Card>
 
@@ -502,13 +519,13 @@ const SettingsPage = () => {
           <Button
             type="button"
             variant="outline"
-            onClick={() => setShowAdvancedPublishing((current) => !current)}
+            onClick={() => setShowDuplicateFilter((current) => !current)}
           >
-            {showAdvancedPublishing ? 'Hide advanced publishing' : 'Advanced publishing'}
+            {showDuplicateFilter ? 'Hide duplicate filter' : 'Duplicate filter'}
           </Button>
         </div>
 
-        {showAdvancedPublishing ? (
+        {showDuplicateFilter ? (
         <Card id="dedupe">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

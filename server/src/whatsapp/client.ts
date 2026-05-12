@@ -543,6 +543,23 @@ type MessageFailureSnapshot = {
   updatedAtMs: number;
 };
 
+type ConfirmSendOptions = {
+  upsertTimeoutMs?: number;
+  ackTimeoutMs?: number;
+  requireServerAck?: boolean;
+  failureGraceMs?: number;
+  ignoredFailureRemoteJids?: string[];
+  acceptIgnoredFailureWithUpsert?: boolean;
+};
+
+type ConfirmSendResult = {
+  ok: boolean;
+  via: 'upsert' | 'ack' | 'none';
+  status?: number | null;
+  statusLabel?: string | null;
+  error?: string | null;
+};
+
 type NewsletterMessageSnapshot = {
   id: string;
   remoteJid: string;
@@ -3344,14 +3361,26 @@ class WhatsAppClient {
 
   async confirmSend(
     messageId: string,
-    options?: { upsertTimeoutMs?: number; ackTimeoutMs?: number; requireServerAck?: boolean; failureGraceMs?: number }
-  ): Promise<{ ok: boolean; via: 'upsert' | 'ack' | 'none'; status?: number | null; statusLabel?: string | null; error?: string | null }> {
+    options?: ConfirmSendOptions
+  ): Promise<ConfirmSendResult> {
     const upsertTimeoutMs = Number(options?.upsertTimeoutMs ?? 5000);
     const ackTimeoutMs = Number(options?.ackTimeoutMs ?? 15000);
     const requireServerAck = Boolean(options?.requireServerAck);
     const failureGraceMs = Math.max(Number(options?.failureGraceMs ?? 0), 0);
+    const ignoredFailureRemoteJids = new Set(
+      (Array.isArray(options?.ignoredFailureRemoteJids) ? options?.ignoredFailureRemoteJids : [])
+        .map((jid) => normalizeExactDeviceJid(jid))
+        .filter(Boolean)
+    );
+    const acceptIgnoredFailureWithUpsert = options?.acceptIgnoredFailureWithUpsert === true;
     const minStatus = 2;
     let sawLocalUpsert = false;
+    let sawIgnoredFailure = false;
+
+    const isIgnoredFailure = (failure: MessageFailureSnapshot | null | undefined) => {
+      const remoteJid = normalizeExactDeviceJid(failure?.remoteJid);
+      return Boolean(remoteJid && ignoredFailureRemoteJids.has(remoteJid));
+    };
 
     const waitForAckOrFailure = async (timeoutMs: number) => {
       const startedAt = Date.now();
@@ -3362,6 +3391,16 @@ class WhatsAppClient {
         failed ? ({ type: 'failure' as const, value: failed }) : ({ type: 'none' as const })
       );
       const outcome = await Promise.race([ackPromise, failurePromise]);
+      if (outcome.type === 'failure' && isIgnoredFailure(outcome.value)) {
+        sawIgnoredFailure = true;
+        const elapsedMs = Date.now() - startedAt;
+        const remainingMs = Math.max(timeoutMs - elapsedMs, 0);
+        if (remainingMs > 0) {
+          const acked = await this.waitForMessageStatus(messageId, minStatus, remainingMs);
+          if (acked) return { type: 'ack' as const, value: acked };
+        }
+        return { type: 'ignored_failure' as const, value: outcome.value };
+      }
       if (outcome.type !== 'failure' || failureGraceMs <= 0) return outcome;
 
       const elapsedMs = Date.now() - startedAt;
@@ -3383,13 +3422,17 @@ class WhatsAppClient {
 
     const cachedFailure = this.recentMessageFailures.get(messageId);
     if (cachedFailure) {
-      if (failureGraceMs > 0) {
-        const acked = await this.waitForMessageStatus(messageId, minStatus, failureGraceMs);
-        if (acked) {
-          return { ok: true, via: 'ack', status: acked.status, statusLabel: acked.statusLabel };
+      if (isIgnoredFailure(cachedFailure)) {
+        sawIgnoredFailure = true;
+      } else {
+        if (failureGraceMs > 0) {
+          const acked = await this.waitForMessageStatus(messageId, minStatus, failureGraceMs);
+          if (acked) {
+            return { ok: true, via: 'ack', status: acked.status, statusLabel: acked.statusLabel };
+          }
         }
+        return { ok: false, via: 'none', error: cachedFailure.errorMessage };
       }
-      return { ok: false, via: 'none', error: cachedFailure.errorMessage };
     }
 
     if (sawLocalUpsert) {
@@ -3411,6 +3454,12 @@ class WhatsAppClient {
         if (outcome.type === 'ack') {
           return { ok: true, via: 'ack', status: outcome.value.status, statusLabel: outcome.value.statusLabel };
         }
+        if (outcome.type === 'ignored_failure' && acceptIgnoredFailureWithUpsert) {
+          return { ok: true, via: 'upsert', status: 1, statusLabel: 'accepted' };
+        }
+        if (sawIgnoredFailure && acceptIgnoredFailureWithUpsert) {
+          return { ok: true, via: 'upsert', status: 1, statusLabel: 'accepted' };
+        }
         return {
           ok: false,
           via: 'upsert',
@@ -3423,11 +3472,15 @@ class WhatsAppClient {
       if (failureGraceMs > 0) {
         const failed = await this.waitForMessageFailure(messageId, failureGraceMs);
         if (failed) {
-          const acked = await this.waitForMessageStatus(messageId, minStatus, failureGraceMs);
-          if (acked) {
-            return { ok: true, via: 'ack', status: acked.status, statusLabel: acked.statusLabel };
+          if (isIgnoredFailure(failed)) {
+            sawIgnoredFailure = true;
+          } else {
+            const acked = await this.waitForMessageStatus(messageId, minStatus, failureGraceMs);
+            if (acked) {
+              return { ok: true, via: 'ack', status: acked.status, statusLabel: acked.statusLabel };
+            }
+            return { ok: false, via: 'none', error: failed.errorMessage };
           }
-          return { ok: false, via: 'none', error: failed.errorMessage };
         }
       }
 
@@ -3440,6 +3493,9 @@ class WhatsAppClient {
     }
     if (outcome.type === 'ack') {
       return { ok: true, via: 'ack', status: outcome.value.status, statusLabel: outcome.value.statusLabel };
+    }
+    if (outcome.type === 'ignored_failure' && acceptIgnoredFailureWithUpsert && sawLocalUpsert) {
+      return { ok: true, via: 'upsert', status: 1, statusLabel: 'accepted' };
     }
 
     return { ok: false, via: 'none', error: requireServerAck ? 'Server ack not observed' : null };
@@ -4577,6 +4633,8 @@ class WhatsAppClient {
 
       let sent = 0;
       let failed = 0;
+      const sentJids: string[] = [];
+      const failedJids: string[] = [];
       for (const jid of deviceJids) {
         try {
           await socket.relayMessage('status@broadcast', message, {
@@ -4585,8 +4643,10 @@ class WhatsAppClient {
             useUserDevicesCache: false
           });
           sent += 1;
+          sentJids.push(jid);
         } catch (error) {
           failed += 1;
+          failedJids.push(jid);
           logger.warn({ jid, error: getErrorMessage(error) }, 'Failed to sync Status to sender linked device');
         }
       }
@@ -4599,7 +4659,7 @@ class WhatsAppClient {
         },
         'Synced Status to sender linked devices'
       );
-      return { attempted: deviceJids.length, sent, failed };
+      return { attempted: deviceJids.length, sent, failed, deviceJids, sentJids, failedJids };
     } catch (error) {
       logger.warn({ error: getErrorMessage(error) }, 'Failed to resolve sender linked devices for Status sync');
       return { attempted: 0, sent: 0, failed: 0, error: getErrorMessage(error) };

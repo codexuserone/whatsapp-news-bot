@@ -45,6 +45,23 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
+  it('ignores sender linked-device failures when confirming status sends', () => {
+    expect(
+      __testUtils.resolveTestSendConfirmationOptions('status@broadcast', 'image', {
+        ownDeviceFanout: {
+          deviceJids: ['103140015788103:59@lid']
+        }
+      })
+    ).toEqual({
+      upsertTimeoutMs: 30000,
+      ackTimeoutMs: 60000,
+      requireServerAck: true,
+      failureGraceMs: 15000,
+      ignoredFailureRemoteJids: ['103140015788103:59@lid'],
+      acceptIgnoredFailureWithUpsert: true
+    });
+  });
+
   it('builds text status styling options for test sends', () => {
     expect(__testUtils.buildTextStatusStyleOptions('#166534', 5)).toEqual({
       backgroundColor: '#166534',

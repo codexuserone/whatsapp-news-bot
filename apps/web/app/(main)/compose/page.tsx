@@ -261,7 +261,7 @@ const ComposeInner = () => {
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
     queryKey: ['targets'],
-    queryFn: () => api.get('/api/targets')
+    queryFn: () => api.get('/api/targets?sync=true')
   });
 
   const { data: settings } = useQuery<SettingsShape>({

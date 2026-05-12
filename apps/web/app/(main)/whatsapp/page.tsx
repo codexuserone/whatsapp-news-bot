@@ -65,7 +65,7 @@ const WhatsAppPage = () => {
 
   const { data: existingTargetsRaw } = useQuery<unknown>({
     queryKey: ['targets'],
-    queryFn: () => api.get('/api/targets'),
+    queryFn: () => api.get('/api/targets?sync=true'),
     refetchInterval: status?.status === 'connected' ? 30000 : 60000
   });
 

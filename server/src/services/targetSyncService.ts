@@ -68,6 +68,11 @@ const hasRawJidLabel = (value: string) =>
 const isNumericOnlyLabel = (value: string) => /^\d{6,}$/.test(String(value || '').trim());
 const hasOnlyDigitsAndSeparators = (value: string) => /^[\d\s._-]{6,}$/.test(String(value || '').trim());
 const isPlaceholderChannelName = (value: string) => /^channel[\s_-]*\d+$/i.test(String(value || '').trim());
+const buildChannelFallbackName = (phoneNumber: unknown) => {
+  const digits = String(phoneNumber || '').replace(/\D/g, '');
+  const suffix = digits.length >= 4 ? digits.slice(-4) : '';
+  return suffix ? `WhatsApp Channel ${suffix}` : 'WhatsApp Channel';
+};
 
 const buildFriendlyChannelName = (name: string, jid: string) => {
   const normalizedJid = normalizeChannelJid(jid, { allowNumericFallback: true, returnEmptyOnInvalid: true });
@@ -183,10 +188,9 @@ const syncTargetsFromWhatsApp = async (
     const jid = normalizeChannelJid(String(channel?.jid || '').trim());
     if (!jid || usedJids.has(jid)) continue;
     const friendlyName = buildFriendlyChannelName(String(channel?.name || ''), jid);
-    if (!friendlyName) continue;
     usedJids.add(jid);
     candidates.push({
-      name: friendlyName,
+      name: friendlyName || buildChannelFallbackName(jid),
       phone_number: jid,
       type: 'channel',
       active: true,
@@ -232,13 +236,13 @@ const syncTargetsFromWhatsApp = async (
     deactivated += 1;
   }
 
-  // Clean up channel rows that are clearly placeholders or malformed JIDs.
-  // These are usually stale artifacts from previous fake/manual entries.
+  // Keep valid saved channels even when WhatsApp cannot return a friendly display name.
+  // Channel inventory from linked-device sessions is partial, so name quality is not proof
+  // that the destination is unusable.
   for (const row of Array.from(canonicalByKey.values())) {
     if (row.type !== 'channel' || row.active !== true) continue;
     const normalizedJid = normalizeChannelJid(String(row.phone_number || '').trim());
-    const friendlyName = buildFriendlyChannelName(String(row.name || ''), normalizedJid);
-    if (!normalizedJid || !normalizedJid.toLowerCase().includes('@newsletter') || !friendlyName) {
+    if (!normalizedJid || !normalizedJid.toLowerCase().includes('@newsletter')) {
       const { error: deactivateError } = await supabase
         .from('targets')
         .update({ active: false })

@@ -44,6 +44,11 @@ const normalizePhoneForKey = (type: string, phoneNumber: string) => {
 const isPlaceholderChannelName = (name: unknown) => /^channel[\s_-]*\d+$/i.test(String(name || '').trim());
 const isRawChannelJidLabel = (name: unknown) => String(name || '').trim().toLowerCase().includes('@newsletter');
 const hasOnlyDigitsAndSeparators = (name: unknown) => /^[\d\s._-]{6,}$/.test(String(name || '').trim());
+const buildChannelFallbackName = (phoneNumber: unknown) => {
+  const digits = String(phoneNumber || '').replace(/\D/g, '');
+  const suffix = digits.length >= 4 ? digits.slice(-4) : '';
+  return suffix ? `WhatsApp Channel ${suffix}` : 'WhatsApp Channel';
+};
 const isValidPhoneForType = (type: string, phoneNumber: string) => {
   const phone = String(phoneNumber || '').trim().toLowerCase();
   if (!phone) return false;
@@ -99,8 +104,9 @@ const cleanupDisplayName = (value: unknown, type: string) => {
 const normalizeTargetName = (name: unknown, type: string, phone: string) => {
   if (type === 'status') return 'My Status';
   const fallback = String(phone || '').trim();
+  const channelFallback = type === 'channel' ? buildChannelFallbackName(phone) : fallback;
   let cleaned = normalizeDisplayText(name);
-  if (!cleaned) return fallback;
+  if (!cleaned) return channelFallback;
   const repeatedTypeMentions = (cleaned.match(/\((group|channel|status|individual)\)/gi) || []).length;
   if (repeatedTypeMentions > 1) {
     const firstSegment = normalizeDisplayText(cleaned.split(/\((group|channel|status|individual)\)/i)[0]);
@@ -116,8 +122,8 @@ const normalizeTargetName = (name: unknown, type: string, phone: string) => {
       isNumericOnlyLabel(cleaned) ||
       hasOnlyDigitsAndSeparators(cleaned))
   )
-    return '';
-  return cleaned;
+    return channelFallback;
+  return cleaned || channelFallback;
 };
 
 const scoreTargetForResponse = (target: { active?: boolean; type?: string; name?: string; updated_at?: string | null; created_at?: string | null }) => {
@@ -143,9 +149,6 @@ const dedupeTargetsForResponse = (rows: TargetRow[]) => {
 
   for (const row of rows || []) {
     const type = normalizeTargetType(row.type, row.phone_number);
-    if (type === 'channel' && (isPlaceholderChannelName(row.name) || isRawChannelJidLabel(row.name))) {
-      continue;
-    }
     const phone = normalizePhoneForKey(type, String(row.phone_number || ''));
     if (!type || !phone) continue;
     const key = `${type}:${phone}`;
@@ -155,9 +158,6 @@ const dedupeTargetsForResponse = (rows: TargetRow[]) => {
       phone_number: phone,
       name: normalizeTargetName(row.name, type, phone)
     };
-    if (type === 'channel' && !normalizeDisplayText(normalizedRow.name)) {
-      continue;
-    }
     const current = byKey.get(key);
     if (!current || scoreTargetForResponse(normalizedRow) > scoreTargetForResponse(current)) {
       byKey.set(key, normalizedRow);
@@ -169,7 +169,7 @@ const dedupeTargetsForResponse = (rows: TargetRow[]) => {
       const type = normalizeTargetType(row.type, row.phone_number);
       const phone = String(row.phone_number || '').trim();
       const name = normalizeTargetName(row.name, type, phone);
-      const fallbackName = type === 'status' ? 'My Status' : phone;
+      const fallbackName = type === 'status' ? 'My Status' : type === 'channel' ? buildChannelFallbackName(phone) : phone;
       return {
         ...row,
         type,
@@ -201,13 +201,16 @@ const sanitizeStoredTargets = async (supabase: ReturnType<typeof getSupabaseClie
       !normalizedPhone ||
       !isValidPhoneForType(computedType, normalizedPhone) ||
       (!WHATSAPP_STATUS_ENABLED && computedType === 'status') ||
-      (computedType === 'channel' && !normalizedName) ||
       (computedType === 'status' && normalizedPhone !== 'status@broadcast');
 
     if (shouldDeactivate) {
       if (row.active === true) patch.active = false;
     } else {
-      const fallbackName = computedType === 'status' ? 'My Status' : normalizedPhone;
+      const fallbackName = computedType === 'status'
+        ? 'My Status'
+        : computedType === 'channel'
+          ? buildChannelFallbackName(normalizedPhone)
+          : normalizedPhone;
       const safeName = normalizedName || fallbackName;
       if (normalizeDisplayText(row.name) !== safeName) patch.name = safeName;
     }
@@ -409,6 +412,7 @@ const targetRoutes = () => {
 };
 
 targetRoutes.__testUtils = {
-  resolveSyncTargetsOptions
+  resolveSyncTargetsOptions,
+  dedupeTargetsForResponse
 };
 module.exports = targetRoutes;

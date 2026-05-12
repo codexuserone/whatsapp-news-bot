@@ -122,4 +122,66 @@ describe('targetSyncService', () => {
     expect(rows.find((row) => row.id === 'channel-main')?.active).toBe(true);
     expect(rows.find((row) => row.id === 'channel-test')?.active).toBe(true);
   });
+
+  it('keeps valid saved channels active even when their saved name is only a jid', async () => {
+    const { rows, supabase } = buildSupabaseMock([
+      {
+        id: 'channel-main',
+        type: 'channel',
+        active: true,
+        name: '120363400000000000@newsletter',
+        phone_number: '120363400000000000@newsletter',
+        created_at: '2026-05-10T00:00:00.000Z'
+      }
+    ]);
+    getSupabaseClientMock.mockReturnValue(supabase);
+
+    await syncTargetsFromWhatsApp(
+      {
+        getStatus: () => ({ status: 'connected' }),
+        getGroups: async () => [],
+        getChannelsWithDiagnostics: async () => ({
+          channels: [],
+          diagnostics: { sourceCounts: { api: 0, cache: 0, metadata: 0, store: 0 } }
+        })
+      },
+      { includeStatus: true, strict: true }
+    );
+
+    expect(rows.find((row) => row.id === 'channel-main')?.active).toBe(true);
+  });
+
+  it('saves newly discovered valid channels even when the channel name has not resolved yet', async () => {
+    const { rows, supabase } = buildSupabaseMock([]);
+    getSupabaseClientMock.mockReturnValue(supabase);
+
+    await syncTargetsFromWhatsApp(
+      {
+        getStatus: () => ({ status: 'connected' }),
+        getGroups: async () => [],
+        getChannelsWithDiagnostics: async () => ({
+          channels: [
+            {
+              jid: '120363400000000000@newsletter',
+              name: '120363400000000000@newsletter',
+              subscribers: 0
+            }
+          ],
+          diagnostics: { sourceCounts: { api: 0, cache: 1, metadata: 0, store: 0 } }
+        })
+      },
+      { includeStatus: true, strict: false }
+    );
+
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'channel',
+          active: true,
+          name: 'WhatsApp Channel 0000',
+          phone_number: '120363400000000000@newsletter'
+        })
+      ])
+    );
+  });
 });

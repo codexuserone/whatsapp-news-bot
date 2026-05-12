@@ -118,7 +118,14 @@ type WhatsAppClient = {
   waitForMessage?: (messageId: string, timeoutMs?: number) => Promise<any>;
   confirmSend?: (
     messageId: string,
-    options?: { upsertTimeoutMs?: number; ackTimeoutMs?: number; requireServerAck?: boolean; failureGraceMs?: number }
+    options?: {
+      upsertTimeoutMs?: number;
+      ackTimeoutMs?: number;
+      requireServerAck?: boolean;
+      failureGraceMs?: number;
+      ignoredFailureRemoteJids?: string[];
+      acceptIgnoredFailureWithUpsert?: boolean;
+    }
   ) => Promise<{ ok: boolean; via: 'upsert' | 'ack' | 'none'; status?: number | null; statusLabel?: string | null; error?: string | null }>;
   confirmNewsletterMessage?: (
     jid: string,
@@ -2295,6 +2302,16 @@ const resolveNewsletterConfirmFetchTimeoutMs = (sendResult: SendWithMediaResult 
     ? NEWSLETTER_CONFIRM_FETCH_TIMEOUT_MEDIA_MS
     : NEWSLETTER_CONFIRM_FETCH_TIMEOUT_TEXT_MS;
 
+const getStatusOwnDeviceFanoutJids = (sendResult: SendWithMediaResult | null | undefined) => {
+  const fanout = sendResult?.response?.ownDeviceFanout || {};
+  const values = [
+    ...(Array.isArray(fanout.deviceJids) ? fanout.deviceJids : []),
+    ...(Array.isArray(fanout.sentJids) ? fanout.sentJids : []),
+    ...(Array.isArray(fanout.failedJids) ? fanout.failedJids : [])
+  ];
+  return Array.from(new Set(values.map((jid) => String(jid || '').trim()).filter(Boolean)));
+};
+
 const isChannelMediaAckRejection = (
   targetType: Target['type'] | null | undefined,
   sendResult: SendWithMediaResult | null | undefined,
@@ -2406,6 +2423,13 @@ const confirmSendResult = async (
     const requireServerAck = shouldRequireServerAckForSend(targetType, sendResult);
     const isStatus = Boolean(options?.isStatus);
     const failureGraceMs = isStatus ? STATUS_FAILURE_GRACE_MS : targetType === 'channel' ? 3000 : 0;
+    const ignoredFailureRemoteJids = isStatus ? getStatusOwnDeviceFanoutJids(sendResult) : [];
+    const ignoredStatusFailureOptions = ignoredFailureRemoteJids.length
+      ? {
+          ignoredFailureRemoteJids,
+          acceptIgnoredFailureWithUpsert: true
+        }
+      : {};
     const ackConfirmation = await whatsappClient.confirmSend(
       messageId,
       isStatus
@@ -2413,7 +2437,8 @@ const confirmSendResult = async (
             upsertTimeoutMs: media ? 30000 : 5000,
             ackTimeoutMs: media ? 90000 : 60000,
             requireServerAck,
-            failureGraceMs
+            failureGraceMs,
+            ...ignoredStatusFailureOptions
           }
         : media
           ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck, failureGraceMs }
@@ -5388,6 +5413,23 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
           : targetRow.type === 'channel'
             ? 3000
             : 0;
+        const sendResultForConfirmation: SendWithMediaResult = {
+          response: { key: { id: messageId } },
+          text: uncertainMessageContent || '',
+          media: {
+            type: isMedia ? uncertainMediaType : null,
+            url: uncertainMediaUrl,
+            sent: isMedia,
+            error: null
+          }
+        };
+        const ignoredFailureRemoteJids = isStatus ? getStatusOwnDeviceFanoutJids(sendResultForConfirmation) : [];
+        const ignoredStatusFailureOptions = ignoredFailureRemoteJids.length
+          ? {
+              ignoredFailureRemoteJids,
+              acceptIgnoredFailureWithUpsert: true
+            }
+          : {};
         const confirmation = await activeWhatsappClient.confirmSend(
           messageId,
           isStatus
@@ -5395,7 +5437,8 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
                 upsertTimeoutMs: isMedia ? 30000 : 5000,
                 ackTimeoutMs: isMedia ? 90000 : 60000,
                 requireServerAck,
-                failureGraceMs
+                failureGraceMs,
+                ...ignoredStatusFailureOptions
               }
             : isMedia
               ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck }

@@ -27,7 +27,7 @@ type DeliveryAnalytics = {
 const OverviewPage = () => {
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
-  const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
+  const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets?sync=true') });
   const { data: schedules = [] } = useQuery<Schedule[]>({ queryKey: ['schedules'], queryFn: () => api.get('/api/schedules') });
   const { data: logs = [] } = useQuery<LogEntry[]>({ queryKey: ['logs'], queryFn: () => api.get('/api/logs') });
   const { data: queueStats } = useQuery<QueueStats>({

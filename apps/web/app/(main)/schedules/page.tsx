@@ -105,7 +105,7 @@ const SchedulesPage = () => {
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: targets = [] } = useQuery<Target[]>({
     queryKey: ['targets'],
-    queryFn: () => api.get('/api/targets'),
+    queryFn: () => api.get('/api/targets?sync=true'),
     refetchInterval: 60000
   });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });

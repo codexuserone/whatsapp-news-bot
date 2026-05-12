@@ -1475,7 +1475,14 @@ describe('WhatsAppClient', () => {
                     participant: { jid: '16465527019:24@s.whatsapp.net', count: 0 }
                 })
             );
-            expect(result.ownDeviceFanout).toEqual({ attempted: 2, sent: 2, failed: 0 });
+            expect(result.ownDeviceFanout).toEqual({
+                attempted: 2,
+                sent: 2,
+                failed: 0,
+                deviceJids: ['16465527019:0@s.whatsapp.net', '16465527019:24@s.whatsapp.net'],
+                sentJids: ['16465527019:0@s.whatsapp.net', '16465527019:24@s.whatsapp.net'],
+                failedJids: []
+            });
         } finally {
             if (previous === undefined) {
                 delete process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES;
@@ -1906,6 +1913,33 @@ describe('WhatsAppClient', () => {
             statusLabel: 'delivered'
         });
         expect(client.waitForMessageStatus).toHaveBeenCalledWith('msg-cached-ack-error', 2, 10);
+    });
+
+    it('should ignore configured sender-device status ack failures after the status leaves the socket', async () => {
+        const baileysLogger = client.createBaileysLogger();
+        client.waitForMessage = jest.fn(async () => ({ key: { id: 'msg-status-own-device-failed' } }));
+        client.waitForMessageStatus = jest.fn(async () => null);
+
+        baileysLogger.warn(
+            { node: { attrs: { class: 'message', from: '103140015788103:59@lid', id: 'msg-status-own-device-failed', error: '479' } } },
+            'received error in ack'
+        );
+
+        const result = await client.confirmSend('msg-status-own-device-failed', {
+            upsertTimeoutMs: 10,
+            ackTimeoutMs: 10,
+            requireServerAck: true,
+            failureGraceMs: 10,
+            ignoredFailureRemoteJids: ['103140015788103:59@lid'],
+            acceptIgnoredFailureWithUpsert: true
+        });
+
+        expect(result).toEqual({
+            ok: true,
+            via: 'upsert',
+            status: 1,
+            statusLabel: 'accepted'
+        });
     });
 
     it('should not close the session for a Baileys log-only incoming decrypt miss', () => {

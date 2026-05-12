@@ -45,6 +45,15 @@ type TestSendConfirmation = {
   unsupported?: boolean;
 };
 
+type TestSendConfirmationOptions = {
+  upsertTimeoutMs: number;
+  ackTimeoutMs: number;
+  requireServerAck: boolean;
+  failureGraceMs: number;
+  ignoredFailureRemoteJids?: string[];
+  acceptIgnoredFailureWithUpsert?: boolean;
+};
+
 type TestSendLogResolution = {
   status: 'sent' | 'delivered' | 'read' | 'played' | 'failed' | 'awaiting_approval';
   errorMessage: string | null;
@@ -80,6 +89,16 @@ const normalizeConfirmationForOperator = (
     };
   }
   return confirmation;
+};
+
+const getStatusOwnDeviceFanoutJids = (result: Record<string, any> | null | undefined) => {
+  const fanout = result?.ownDeviceFanout || {};
+  const values = [
+    ...(Array.isArray(fanout.deviceJids) ? fanout.deviceJids : []),
+    ...(Array.isArray(fanout.sentJids) ? fanout.sentJids : []),
+    ...(Array.isArray(fanout.failedJids) ? fanout.failedJids : [])
+  ];
+  return Array.from(new Set(values.map((jid) => String(jid || '').trim()).filter(Boolean)));
 };
 
 const getStatusAudienceExplicitSourceCount = (snapshot: Record<string, any> | null | undefined) => {
@@ -386,15 +405,27 @@ const resolveSendTestTimeoutMs = (jid: string, mediaType: string | null) => {
   return hasMedia ? DIRECT_MEDIA_SEND_TIMEOUT_MS : DEFAULT_SEND_TIMEOUT_MS;
 };
 
-const resolveTestSendConfirmationOptions = (jid: string, mediaType: string | null) => {
+const resolveTestSendConfirmationOptions = (
+  jid: string,
+  mediaType: string | null,
+  sendResult?: Record<string, any> | null
+): TestSendConfirmationOptions => {
   const hasMedia = Boolean(String(mediaType || '').trim());
   const isStatus = String(jid || '').trim() === 'status@broadcast';
   const isChannel = isNewsletterJid(jid);
   const failureGraceMs = isStatus ? STATUS_FAILURE_GRACE_MS : isNewsletterJid(jid) ? 3000 : 0;
   const requireServerAck = isStatus || isChannel;
-  return hasMedia
+  const base = hasMedia
     ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck, failureGraceMs }
     : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck, failureGraceMs };
+  if (!isStatus) return base;
+  const ignoredFailureRemoteJids = getStatusOwnDeviceFanoutJids(sendResult);
+  if (!ignoredFailureRemoteJids.length) return base;
+  return {
+    ...base,
+    ignoredFailureRemoteJids,
+    acceptIgnoredFailureWithUpsert: true
+  };
 };
 
 const resolveNewsletterConfirmFetchTimeoutMs = (mediaType: string | null) =>
@@ -1624,18 +1655,22 @@ const whatsappRoutes = () => {
 	    }
       assertRequestedMediaWasPrepared(requestedMediaType, content);
 
-	    const results: Array<{
-	      jid: string;
-	      ok: boolean;
-	      messageId?: string | null;
-	      confirmation?: TestSendConfirmation | null;
-          held?: boolean;
-          holdReason?: string | null;
-	      warning?: string;
-	      error?: string;
-	    }> = [];
+    const results: Array<{
+      jid: string;
+      ok: boolean;
+      messageId?: string | null;
+      confirmation?: TestSendConfirmation | null;
+      held?: boolean;
+      holdReason?: string | null;
+      warning?: string;
+      error?: string;
+    }> = [];
 
     for (const normalizedJid of normalizedJids) {
+      let attemptMessageId: string | null = null;
+      let attemptConfirmation: TestSendConfirmation | null = null;
+      let attemptHeld = false;
+      let attemptHoldReason: string | null = null;
       try {
         if (isStatusBroadcast(normalizedJid) && (requestedMediaType === 'audio' || requestedMediaType === 'document')) {
           throw badRequest('Status only supports text, image, and video');
@@ -1747,6 +1782,7 @@ const whatsappRoutes = () => {
         }
 
         const messageId = result?.key?.id || null;
+        attemptMessageId = messageId;
         let confirmation: TestSendConfirmation | null = null;
         if (confirmationRequired && !messageId) {
           throw new Error('Test message was not assigned a WhatsApp message id');
@@ -1766,7 +1802,7 @@ const whatsappRoutes = () => {
           if (!confirmation) {
             ackConfirmation = await whatsapp.confirmSend(
               messageId,
-              resolveTestSendConfirmationOptions(normalizedJid, requestedMediaType)
+              resolveTestSendConfirmationOptions(normalizedJid, requestedMediaType, result)
             );
             if (ackConfirmation?.ok || !channelConfirmation || channelConfirmation.unsupported) {
               confirmation = ackConfirmation;
@@ -1782,6 +1818,7 @@ const whatsappRoutes = () => {
             }
           }
           confirmation = normalizeConfirmationForOperator(confirmation, normalizedJid);
+          attemptConfirmation = confirmation;
         }
         const held = shouldHoldRejectedChannelMediaTestSend({
           jid: normalizedJid,
@@ -1791,6 +1828,8 @@ const whatsappRoutes = () => {
         const holdReason = held
           ? buildChannelMediaHoldMessage(requestedMediaType, confirmation?.error)
           : null;
+        attemptHeld = held;
+        attemptHoldReason = holdReason;
         if (!held && confirmationRequired && !confirmation?.ok) {
           throw new Error(
             confirmation?.error
@@ -1808,19 +1847,25 @@ const whatsappRoutes = () => {
           ...(mediaWarning ? { warning: mediaWarning } : {})
         });
       } catch (error) {
-        results.push({ jid: normalizedJid, ok: false, error: getErrorMessage(error) });
+        results.push({
+          jid: normalizedJid,
+          ok: false,
+          messageId: attemptMessageId,
+          confirmation: attemptConfirmation,
+          held: attemptHeld,
+          holdReason: attemptHoldReason,
+          ...(mediaWarning ? { warning: mediaWarning } : {}),
+          error: getErrorMessage(error)
+        });
       }
     }
 
     const successful = results.filter((entry) => entry.ok);
-    if (!successful.length) {
-      const firstError = results.find((entry) => !entry.ok)?.error || 'Failed to send test message';
-      throw badRequest(firstError);
-    }
+    const loggable = results.filter((entry) => entry.ok || String(entry.messageId || '').trim());
 
     try {
       const supabase = getSupabaseClient();
-      if (supabase) {
+      if (supabase && loggable.length) {
         const { data: targetRows } = await supabase
           .from('targets')
           .select('id,phone_number')
@@ -1834,7 +1879,7 @@ const whatsappRoutes = () => {
         }
 
         const confirmedAt = new Date().toISOString();
-        const rowsToInsert = successful.map((entry) => {
+        const rowsToInsert = loggable.map((entry) => {
           const resolution = resolveTestSendLogResolution({
             messageId: entry.messageId || null,
             confirmRequested: confirmationRequired,
@@ -1865,6 +1910,11 @@ const whatsappRoutes = () => {
       }
     } catch {
       // Best effort only: test-message logging should not fail the send endpoint.
+    }
+
+    if (!successful.length) {
+      const firstError = results.find((entry) => !entry.ok)?.error || 'Failed to send test message';
+      throw badRequest(firstError);
     }
 
     const heldCount = successful.filter((entry) => entry.held === true).length;
@@ -2094,13 +2144,29 @@ const whatsappRoutes = () => {
     );
     assertStatusMediaResponseMatches(requestedStatusMediaType, result);
     const messageId = String(result?.key?.id || '').trim() || null;
+    const ignoredFailureRemoteJids = getStatusOwnDeviceFanoutJids(result);
+    const ignoredStatusFailureOptions = ignoredFailureRemoteJids.length
+      ? { ignoredFailureRemoteJids, acceptIgnoredFailureWithUpsert: true }
+      : {};
     const confirmation = messageId && whatsapp?.confirmSend
       ? await withTimeout(
           whatsapp.confirmSend(
             messageId,
             normalizedImageUrl || normalizedImageDataUrl || normalizedVideoUrl || normalizedVideoDataUrl
-              ? { upsertTimeoutMs: 30000, ackTimeoutMs: 90000, requireServerAck: true, failureGraceMs: STATUS_FAILURE_GRACE_MS }
-              : { upsertTimeoutMs: 5000, ackTimeoutMs: 60000, requireServerAck: true, failureGraceMs: STATUS_FAILURE_GRACE_MS }
+              ? {
+                  upsertTimeoutMs: 30000,
+                  ackTimeoutMs: 90000,
+                  requireServerAck: true,
+                  failureGraceMs: STATUS_FAILURE_GRACE_MS,
+                  ...ignoredStatusFailureOptions
+                }
+              : {
+                  upsertTimeoutMs: 5000,
+                  ackTimeoutMs: 60000,
+                  requireServerAck: true,
+                  failureGraceMs: STATUS_FAILURE_GRACE_MS,
+                  ...ignoredStatusFailureOptions
+                }
           ),
           STATUS_CONFIRM_TIMEOUT_MS,
           'Timed out confirming status broadcast'

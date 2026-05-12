@@ -34,6 +34,27 @@ const isIpv4InRange = (ip: string, a: number, b: number, c: number, dStart: numb
   return b3 >= dStart && b3 <= dEnd;
 };
 
+const parseIpv4MappedIpv6 = (ip: string): string | null => {
+  const value = String(ip || '').trim().toLowerCase();
+  const dotted = value.match(/(?:^|:)ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (dotted?.[1] && parseIpv4(dotted[1])) {
+    return dotted[1];
+  }
+
+  const hex = value.match(/(?:^|:)ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (!hex?.[1] || !hex?.[2]) return null;
+
+  const high = Number.parseInt(hex[1], 16);
+  const low = Number.parseInt(hex[2], 16);
+  if (!Number.isFinite(high) || !Number.isFinite(low)) return null;
+  return [
+    (high >> 8) & 0xff,
+    high & 0xff,
+    (low >> 8) & 0xff,
+    low & 0xff
+  ].join('.');
+};
+
 const isPrivateOrReservedIp = (ip: string): boolean => {
   const family = net.isIP(ip);
   if (family === 4) {
@@ -67,9 +88,13 @@ const isPrivateOrReservedIp = (ip: string): boolean => {
 
   if (family === 6) {
     const v = ip.toLowerCase();
+    const mappedIpv4 = parseIpv4MappedIpv6(v);
+    if (mappedIpv4 && isPrivateOrReservedIp(mappedIpv4)) return true;
+
     if (v === '::' || v === '::1') return true;
     if (v.startsWith('fe80:')) return true; // link-local
     if (v.startsWith('fc') || v.startsWith('fd')) return true; // ULA fc00::/7
+    if (v.startsWith('2001:db8:')) return true; // documentation
     if (v.startsWith('ff')) return true; // multicast
     return false;
   }

@@ -471,10 +471,13 @@ const QueueInner = () => {
       case 'processing':
         return <Badge variant="warning">Sending</Badge>;
       case 'sent':
+        return <Badge variant="success">Accepted</Badge>;
       case 'delivered':
+        return <Badge variant="success">Delivered</Badge>;
       case 'read':
+        return <Badge variant="success">Read</Badge>;
       case 'played':
-        return <Badge variant="success">Sent</Badge>;
+        return <Badge variant="success">Played</Badge>;
       case 'failed':
         return <Badge variant="destructive">Failed</Badge>;
       case 'skipped':
@@ -702,7 +705,7 @@ const QueueInner = () => {
               <SelectItem value="awaiting_approval">Awaiting approval ({queueStats?.awaiting_approval ?? 0})</SelectItem>
               <SelectItem value="pending">Queued ({queueStats?.pending ?? 0})</SelectItem>
               <SelectItem value="processing">Attempting send ({queueStats?.processing ?? 0})</SelectItem>
-              <SelectItem value="sent">Sent ({queueStats?.sent ?? 0})</SelectItem>
+              <SelectItem value="sent">Accepted / delivered ({queueStats?.sent ?? 0})</SelectItem>
               <SelectItem value="failed">Failed ({queueStats?.failed ?? 0})</SelectItem>
               <SelectItem value="skipped">Skipped ({queueStats?.skipped ?? 0})</SelectItem>
               <SelectItem value="all">All ({queueStats?.total ?? 0})</SelectItem>

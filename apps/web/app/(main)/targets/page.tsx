@@ -5,23 +5,14 @@ import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { Schedule, Target, WhatsAppStatus } from '@/lib/types';
+import { dedupeTargets } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '@/components/ui/table';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle
-} from '@/components/ui/alert-dialog';
-import { Target as TargetIcon, Users, Radio, MessageSquare, Trash2, AlertTriangle, Loader2 } from 'lucide-react';
+import { Target as TargetIcon, Users, Radio, MessageSquare, AlertTriangle, Loader2 } from 'lucide-react';
 
 const TYPE_BADGES: Record<
   Target['type'],
@@ -45,7 +36,6 @@ const TargetsPage = () => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | Target['type']>('all');
-  const [deleteTarget, setDeleteTarget] = useState<Target | null>(null);
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
     queryKey: ['targets'],
@@ -72,15 +62,7 @@ const TargetsPage = () => {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] })
   });
 
-  const removeTarget = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/targets/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['targets'] });
-      setDeleteTarget(null);
-    }
-  });
-
-  const visibleTargets = targets;
+  const visibleTargets = React.useMemo(() => dedupeTargets(targets, { activeOnly: false }), [targets]);
 
   const runningSchedules = React.useMemo(
     () =>
@@ -139,7 +121,7 @@ const TargetsPage = () => {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Destinations</h1>
         <p className="text-muted-foreground">
-          Groups, channels, private recipients, and Status sync from the connected WhatsApp account.
+          Groups, channels, private recipients, and Status are discovered from the connected WhatsApp account.
         </p>
       </div>
 
@@ -216,11 +198,10 @@ const TargetsPage = () => {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHeaderCell className="w-12">On</TableHeaderCell>
+                    <TableHeaderCell className="w-24">Available</TableHeaderCell>
                     <TableHeaderCell>Name</TableHeaderCell>
                     <TableHeaderCell>Type</TableHeaderCell>
                     <TableHeaderCell className="hidden lg:table-cell">Used by</TableHeaderCell>
-                    <TableHeaderCell className="w-20">Actions</TableHeaderCell>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -259,18 +240,6 @@ const TargetsPage = () => {
                             <span className="text-muted-foreground">Off</span>
                           )}
                         </TableCell>
-                        <TableCell>
-                          <div className="flex items-center justify-end gap-1">
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => setDeleteTarget(target)}
-                              className="text-destructive hover:text-destructive"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </TableCell>
                       </TableRow>
                     );
                   })}
@@ -280,26 +249,6 @@ const TargetsPage = () => {
           )}
         </CardContent>
       </Card>
-
-      <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Destination</AlertDialogTitle>
-            <AlertDialogDescription>
-              Delete &quot;{deleteTarget?.name}&quot; from this app? This does not remove the real WhatsApp chat, group, or channel.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => deleteTarget && removeTarget.mutate(deleteTarget.id)}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 };

@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useRuntimeStatus } from '@/lib/runtimeStatus';
 import type { Target } from '@/lib/types';
+import { dedupeTargets } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -286,7 +287,7 @@ const ComposeInner = () => {
       .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
   }, [settings?.manual_blocks]);
 
-  const selectableTargets = useMemo(() => targets.filter((target) => target.active !== false), [targets]);
+  const selectableTargets = useMemo(() => dedupeTargets(targets, { activeOnly: true }), [targets]);
   const filteredTargets = useMemo(() => {
     const term = targetSearch.trim().toLowerCase();
     if (!term) return selectableTargets;

@@ -18,6 +18,11 @@ const hasRawJidLabel = (value: string) =>
 const isPlaceholderChannelName = (name: string) => /^channel[\s_-]*\d+$/i.test(String(name || '').trim());
 const isNumericOnlyLabel = (name: string) => /^\d{6,}$/.test(String(name || '').trim());
 const hasOnlyDigitsAndSeparators = (name: string) => /^[\d\s._-]{6,}$/.test(String(name || '').trim());
+const buildChannelFallbackName = (phoneNumber: unknown) => {
+  const digits = String(phoneNumber || '').replace(/\D/g, '');
+  const suffix = digits.length >= 4 ? digits.slice(-4) : '';
+  return suffix ? `WhatsApp Channel ${suffix}` : 'WhatsApp Channel';
+};
 const isLikelyPlaceholderChannelName = (name: string) => {
   const normalized = normalizeDisplayText(name).toLowerCase();
   if (!normalized) return true;
@@ -138,9 +143,10 @@ export const inferTargetType = (type: unknown, phoneNumber: unknown): Target['ty
 
 export const normalizeTargetName = (name: unknown, type: Target['type'], phoneNumber: unknown) => {
   const fallback = normalizeDisplayText(phoneNumber);
+  const channelFallback = type === 'channel' ? buildChannelFallbackName(phoneNumber) : fallback;
   if (type === 'status') return 'My Status';
   let cleaned = normalizeDisplayText(name);
-  if (!cleaned) return fallback;
+  if (!cleaned) return channelFallback;
 
   const repeatedTypeMentions = (cleaned.match(/\((group|channel|status|individual)\)/gi) || []).length;
   if (repeatedTypeMentions > 1) {
@@ -150,11 +156,11 @@ export const normalizeTargetName = (name: unknown, type: Target['type'], phoneNu
 
   cleaned = stripTargetTypeTags(cleaned);
   cleaned = cleanupDisplayName(cleaned);
-  if (!cleaned) return fallback;
+  if (!cleaned) return channelFallback;
 
   if (type === 'channel') {
-    if (isLikelyPlaceholderChannelName(cleaned)) return '';
-    if (hasRawJidLabel(cleaned)) return '';
+    if (isLikelyPlaceholderChannelName(cleaned)) return channelFallback;
+    if (hasRawJidLabel(cleaned)) return channelFallback;
   } else if (hasRawJidLabel(cleaned) && cleaned.toLowerCase() === fallback.toLowerCase()) {
     return fallback;
   }
@@ -187,12 +193,11 @@ export const dedupeTargets = (targets: Array<Partial<Target>>, options?: { activ
     const phone = normalizePhoneByType(type, rawPhone).toLowerCase();
     if (!phone) continue;
     const name = normalizeTargetName(target.name, type, phone);
-    if (type === 'channel' && !name) continue;
 
     const key = `${type}:${phone}`;
     const normalized: Target = {
       id: String(target.id || key),
-      name: name || (type === 'status' ? 'My Status' : phone),
+      name: name || (type === 'status' ? 'My Status' : type === 'channel' ? buildChannelFallbackName(phone) : phone),
       phone_number: phone,
       type,
       active: target.active === true,

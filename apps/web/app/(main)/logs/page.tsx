@@ -37,6 +37,9 @@ const LOG_FILTERS = [
 const getStatusLabel = (status: string) => {
   switch (status) {
     case 'sent':
+    case 'delivered':
+    case 'read':
+    case 'played':
       return 'Sent to WhatsApp';
     case 'failed':
       return 'Failed';
@@ -46,12 +49,6 @@ const getStatusLabel = (status: string) => {
       return 'Sending';
     case 'awaiting_approval':
       return 'Held';
-    case 'delivered':
-      return 'Delivered receipt';
-    case 'read':
-      return 'Read receipt';
-    case 'played':
-      return 'Played';
     case 'skipped':
       return 'Skipped';
     case 'superseded':

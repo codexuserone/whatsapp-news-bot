@@ -473,11 +473,9 @@ const QueueInner = () => {
       case 'sent':
         return <Badge variant="success">Sent to WhatsApp</Badge>;
       case 'delivered':
-        return <Badge variant="success">Delivered receipt</Badge>;
       case 'read':
-        return <Badge variant="success">Read receipt</Badge>;
       case 'played':
-        return <Badge variant="success">Played</Badge>;
+        return <Badge variant="success">Sent</Badge>;
       case 'failed':
         return <Badge variant="destructive">Failed</Badge>;
       case 'skipped':

@@ -260,7 +260,7 @@ const syncTargetsFromWhatsApp = async (
     }
 
     const patch: Partial<SyncCandidate> = {};
-    if (current.name !== candidate.name && candidate.type !== 'status') patch.name = candidate.name;
+    if (current.name !== candidate.name) patch.name = candidate.name;
     if (current.type !== candidate.type) patch.type = candidate.type;
     if (current.active !== true) patch.active = true;
     if (String(current.notes || '') !== String(candidate.notes || '')) patch.notes = candidate.notes || null;

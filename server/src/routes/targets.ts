@@ -97,9 +97,10 @@ const cleanupDisplayName = (value: unknown, type: string) => {
 };
 
 const normalizeTargetName = (name: unknown, type: string, phone: string) => {
+  if (type === 'status') return 'My Status';
   const fallback = String(phone || '').trim();
   let cleaned = normalizeDisplayText(name);
-  if (!cleaned) return type === 'status' ? 'My Status' : fallback;
+  if (!cleaned) return fallback;
   const repeatedTypeMentions = (cleaned.match(/\((group|channel|status|individual)\)/gi) || []).length;
   if (repeatedTypeMentions > 1) {
     const firstSegment = normalizeDisplayText(cleaned.split(/\((group|channel|status|individual)\)/i)[0]);
@@ -107,7 +108,7 @@ const normalizeTargetName = (name: unknown, type: string, phone: string) => {
   }
   cleaned = stripTargetTypeTags(cleaned);
   cleaned = cleanupDisplayName(cleaned, type);
-  if (!cleaned) return type === 'status' ? 'My Status' : fallback;
+  if (!cleaned) return fallback;
   if (
     type === 'channel' &&
     (isPlaceholderChannelName(cleaned) ||

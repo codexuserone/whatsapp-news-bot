@@ -138,8 +138,9 @@ export const inferTargetType = (type: unknown, phoneNumber: unknown): Target['ty
 
 export const normalizeTargetName = (name: unknown, type: Target['type'], phoneNumber: unknown) => {
   const fallback = normalizeDisplayText(phoneNumber);
+  if (type === 'status') return 'My Status';
   let cleaned = normalizeDisplayText(name);
-  if (!cleaned) return type === 'status' ? 'My Status' : fallback;
+  if (!cleaned) return fallback;
 
   const repeatedTypeMentions = (cleaned.match(/\((group|channel|status|individual)\)/gi) || []).length;
   if (repeatedTypeMentions > 1) {
@@ -149,13 +150,13 @@ export const normalizeTargetName = (name: unknown, type: Target['type'], phoneNu
 
   cleaned = stripTargetTypeTags(cleaned);
   cleaned = cleanupDisplayName(cleaned);
-  if (!cleaned) return type === 'status' ? 'My Status' : fallback;
+  if (!cleaned) return fallback;
 
   if (type === 'channel') {
     if (isLikelyPlaceholderChannelName(cleaned)) return '';
     if (hasRawJidLabel(cleaned)) return '';
   } else if (hasRawJidLabel(cleaned) && cleaned.toLowerCase() === fallback.toLowerCase()) {
-    return type === 'status' ? 'My Status' : fallback;
+    return fallback;
   }
 
   return cleaned;
@@ -228,13 +229,4 @@ export const formatTargetLabel = (target: Pick<Target, 'name' | 'type'>) => {
     (type === 'channel' ? 'Channel' : '') ||
     (type === 'status' ? 'My Status' : 'Destination');
   return `${baseName} (${type})`;
-};
-
-export const isTestTarget = (target: Pick<Target, 'name' | 'phone_number' | 'type'>) => {
-  const name = normalizeDisplayText(target?.name).toLowerCase();
-  const phone = normalizeDisplayText(target?.phone_number).toLowerCase();
-  if (/\btest\b/.test(name)) return true;
-  if (name === 'feed for anash whatsapp') return true;
-  if (phone.includes('19144477725')) return true;
-  return false;
 };

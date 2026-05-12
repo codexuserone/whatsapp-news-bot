@@ -7,7 +7,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { Feed, ReconcileResult, Schedule, Target, Template } from '@/lib/types';
-import { dedupeTargets, formatTargetLabel, isTestTarget } from '@/lib/targetUtils';
+import { dedupeTargets, formatTargetLabel } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -97,7 +97,6 @@ const SchedulesPage = () => {
   const [batchTimeInput, setBatchTimeInput] = React.useState('09:00');
   const [automationNotice, setAutomationNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [showAdvancedOptions, setShowAdvancedOptions] = React.useState(false);
-  const [showTestDestinations, setShowTestDestinations] = React.useState(false);
   const { data: schedules = [] } = useQuery<Schedule[]>({
     queryKey: ['schedules'],
     queryFn: () => api.get('/api/schedules'),
@@ -119,11 +118,7 @@ const SchedulesPage = () => {
     () => dedupeTargets(targets, { activeOnly: true }),
     [targets]
   );
-  const visibleActiveTargets = React.useMemo(
-    () => activeTargets.filter((target) => showTestDestinations || !isTestTarget(target)),
-    [activeTargets, showTestDestinations]
-  );
-  const hiddenTestTargetCount = activeTargets.length - visibleActiveTargets.length;
+  const visibleActiveTargets = activeTargets;
   const templateById = React.useMemo(() => {
     const map = new Map<string, Template>();
     for (const template of templates) {
@@ -1025,16 +1020,6 @@ const SchedulesPage = () => {
                           >
                             Clear
                           </Button>
-                          {hiddenTestTargetCount > 0 ? (
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => setShowTestDestinations((current) => !current)}
-                            >
-                              {showTestDestinations ? 'Hide test' : `Show ${hiddenTestTargetCount} test`}
-                            </Button>
-                          ) : null}
                         </div>
                         <div className="rounded-lg border p-2 max-h-60 overflow-y-auto space-y-3">
                           {all.length === 0 ? (

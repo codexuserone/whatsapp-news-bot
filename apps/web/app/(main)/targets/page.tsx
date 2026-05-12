@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { Schedule, Target, WhatsAppStatus } from '@/lib/types';
-import { isTestTarget } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -46,7 +45,6 @@ const TargetsPage = () => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | Target['type']>('all');
-  const [showTestDestinations, setShowTestDestinations] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Target | null>(null);
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
@@ -82,11 +80,7 @@ const TargetsPage = () => {
     }
   });
 
-  const visibleTargets = React.useMemo(
-    () => targets.filter((target) => showTestDestinations || !isTestTarget(target)),
-    [targets, showTestDestinations]
-  );
-  const hiddenTestTargetCount = targets.length - visibleTargets.length;
+  const visibleTargets = targets;
 
   const runningSchedules = React.useMemo(
     () =>
@@ -181,11 +175,6 @@ const TargetsPage = () => {
               </CardDescription>
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
-              {hiddenTestTargetCount > 0 ? (
-                <Button type="button" variant="outline" size="sm" onClick={() => setShowTestDestinations((current) => !current)}>
-                  {showTestDestinations ? 'Hide test' : `Show ${hiddenTestTargetCount} test`}
-                </Button>
-              ) : null}
               <Input
                 placeholder="Search destinations..."
                 value={search}

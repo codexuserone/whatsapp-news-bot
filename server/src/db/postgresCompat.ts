@@ -90,6 +90,10 @@ const POSTGRES_QUERY_RETRY_MAX_MS = Math.max(
   POSTGRES_QUERY_RETRY_BASE_MS,
   Math.floor(Number(process.env.POSTGRES_QUERY_RETRY_MAX_MS || 5000))
 );
+const POSTGRES_POOL_MAX = Math.max(
+  1,
+  Math.floor(Number(process.env.POSTGRES_POOL_MAX || process.env.POSTGRES_MAX_POOL || 2))
+);
 
 const preferIpv4 = () => {
   try {
@@ -151,7 +155,7 @@ const getPostgresPool = (): PgPool | null => {
   pgPool = new Pool({
     connectionString,
     ssl: { rejectUnauthorized: false },
-    max: 5,
+    max: POSTGRES_POOL_MAX,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 15_000,
     keepAlive: true

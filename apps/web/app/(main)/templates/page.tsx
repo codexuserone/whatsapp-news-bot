@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Layers, Pencil, Trash2, Eye, Loader2, Send } from 'lucide-react';
+import { AlertTriangle, Layers, Pencil, Trash2, Eye, Loader2, Send } from 'lucide-react';
 
 const schema = z.object({
   name: z.string().min(1),
@@ -277,6 +277,7 @@ const TemplatesPage = () => {
   const [sampleItemKey, setSampleItemKey] = useState<'latest' | 'with_image' | 'with_video' | 'no_media' | 'long_title' | 'blank'>('latest');
   const [previewTargetKey, setPreviewTargetKey] = useState<string>('');
   const [previewSendNotice, setPreviewSendNotice] = useState<string>('');
+  const [saveError, setSaveError] = useState<string | null>(null);
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets?sync=true') });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
@@ -541,6 +542,7 @@ const TemplatesPage = () => {
         : api.post<Template>('/api/templates', payload);
     },
     onSuccess: (savedTemplate: Template) => {
+      setSaveError(null);
       queryClient.invalidateQueries({ queryKey: ['templates'] });
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
       setActive(savedTemplate);
@@ -558,12 +560,13 @@ const TemplatesPage = () => {
     },
     retry: (failureCount, error) => isTransientDatabaseError(error) && failureCount < 2,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 5000),
-    onError: (error: unknown) => alert(`Failed to save template: ${getErrorMessage(error)}`)
+    onError: (error: unknown) => setSaveError(`Failed to save template: ${getErrorMessage(error)}`)
   });
 
   const deleteTemplate = useMutation({
     mutationFn: (id: string) => api.delete(`/api/templates/${id}`),
     onSuccess: (_, id) => {
+      setSaveError(null);
       queryClient.invalidateQueries({ queryKey: ['templates'] });
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
       if (active?.id === id) {
@@ -581,7 +584,7 @@ const TemplatesPage = () => {
         });
       }
     },
-    onError: (error: unknown) => alert(`Failed to delete template: ${getErrorMessage(error)}`)
+    onError: (error: unknown) => setSaveError(`Failed to delete template: ${getErrorMessage(error)}`)
   });
 
   const sendPreview = useMutation({
@@ -616,6 +619,7 @@ const TemplatesPage = () => {
   });
 
   const onSubmit = (values: TemplateFormValues) => {
+    setSaveError(null);
     const templateId = active?.id || null;
     saveTemplate.mutate({
       templateId,
@@ -815,6 +819,13 @@ const TemplatesPage = () => {
             </CardHeader>
             <CardContent>
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                {saveError && (
+                  <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{saveError}</span>
+                  </div>
+                )}
+
                 <div className="space-y-2">
                   <Label htmlFor="name">Template Name</Label>
                   <Input id="name" {...form.register('name')} placeholder="Breaking News Template" />

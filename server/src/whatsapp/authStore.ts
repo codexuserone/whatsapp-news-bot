@@ -148,7 +148,7 @@ const getAuthStatePool = (): InstanceType<typeof Pool> | null => {
   authStatePool = new Pool({
     connectionString,
     ssl: { rejectUnauthorized: false },
-    max: 3,
+    max: getAuthStatePoolMax(),
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 15_000,
     keepAlive: true
@@ -238,6 +238,12 @@ const getAuthStateRetryMaxMs = () => {
     Math.floor(resolveRetryNumber('AUTH_STATE_QUERY_RETRY_MAX_MS', 'POSTGRES_QUERY_RETRY_MAX_MS', 5000))
   );
 };
+
+const getAuthStatePoolMax = () =>
+  Math.max(
+    1,
+    Math.floor(resolveRetryNumber('AUTH_STATE_POOL_MAX', 'AUTH_STATE_MAX_POOL', 2))
+  );
 
 const getAuthStateRetryDelayMs = (attempt: number) => {
   const baseMs = getAuthStateRetryBaseMs();

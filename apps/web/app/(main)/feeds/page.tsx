@@ -103,6 +103,7 @@ const FeedsPage = () => {
   const [active, setActive] = useState<Feed | null>(null);
   const [testResult, setTestResult] = useState<FeedTestResult | null>(null);
   const [testLoading, setTestLoading] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const getErrorMessage = (error: unknown) => formatApiErrorMessage(error, 'Unknown error');
   const feedsErrorMessage = [feedsError, schedulesError]
@@ -171,6 +172,7 @@ const FeedsPage = () => {
   const selectFeed = (feed: Feed) => {
     setActive(feed);
     setTestResult(null);
+    setSaveError(null);
   };
 
   const saveFeed = useMutation({
@@ -189,6 +191,7 @@ const FeedsPage = () => {
       return feedId ? api.put<Feed>(`/api/feeds/${feedId}`, body) : api.post<Feed>('/api/feeds', body);
     },
     onSuccess: (savedFeed: Feed) => {
+      setSaveError(null);
       queryClient.invalidateQueries({ queryKey: ['feeds'] });
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
       setActive(savedFeed);
@@ -219,7 +222,7 @@ const FeedsPage = () => {
     },
     retry: (failureCount, error) => isTransientDatabaseError(error) && failureCount < 2,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 5000),
-    onError: (error: unknown) => alert(`Failed to save feed: ${getErrorMessage(error)}`)
+    onError: (error: unknown) => setSaveError(`Failed to save feed: ${getErrorMessage(error)}`)
   });
 
   const deleteFeed = useMutation({
@@ -297,6 +300,7 @@ const FeedsPage = () => {
   };
 
   const onSubmit = (values: FeedFormValues) => {
+    setSaveError(null);
     saveFeed.mutate({
       feedId: active?.id || null,
       payload: values
@@ -337,6 +341,13 @@ const FeedsPage = () => {
             </CardHeader>
             <CardContent>
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                {saveError && (
+                  <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{saveError}</span>
+                  </div>
+                )}
+
                 <div className="space-y-2">
                   <Label htmlFor="url">Feed URL</Label>
                   <div className="flex gap-2">

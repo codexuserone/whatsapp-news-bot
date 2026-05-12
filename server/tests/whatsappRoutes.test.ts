@@ -5,6 +5,70 @@ const whatsappRoutes = require('../src/routes/whatsapp');
 describe('whatsapp route test-send logging resolution', () => {
   const testUtils = whatsappRoutes.__testUtils;
 
+  const buildTargetsSupabaseMock = (seed: Array<Record<string, any>>) => {
+    const rows = seed.map((row) => ({ ...row }));
+
+    class SelectBuilder {
+      private filters: Array<(row: Record<string, any>) => boolean> = [];
+
+      in(field: string, values: any[]) {
+        this.filters.push((row) => values.includes(row[field]));
+        return this;
+      }
+
+      eq(field: string, value: any) {
+        this.filters.push((row) => row[field] === value);
+        return this;
+      }
+
+      then(resolve: (value: any) => any) {
+        return resolve({
+          data: rows.filter((row) => this.filters.every((filter) => filter(row))).map((row) => ({ ...row })),
+          error: null
+        });
+      }
+    }
+
+    class UpdateBuilder {
+      private filters: Array<(row: Record<string, any>) => boolean> = [];
+
+      constructor(private readonly patch: Record<string, any>) {}
+
+      in(field: string, values: any[]) {
+        this.filters.push((row) => values.includes(row[field]));
+        return this;
+      }
+
+      eq(field: string, value: any) {
+        this.filters.push((row) => row[field] === value);
+        return this;
+      }
+
+      then(resolve: (value: any) => any) {
+        for (const row of rows) {
+          if (this.filters.every((filter) => filter(row))) {
+            Object.assign(row, this.patch);
+          }
+        }
+        return resolve({ data: null, error: null });
+      }
+    }
+
+    return {
+      rows,
+      supabase: {
+        from: () => ({
+          select: () => new SelectBuilder(),
+          insert: async (row: Record<string, any>) => {
+            rows.push({ id: `inserted-${rows.length + 1}`, ...row });
+            return { data: row, error: null };
+          },
+          update: (patch: Record<string, any>) => new UpdateBuilder(patch)
+        })
+      }
+    };
+  };
+
   it('marks confirmed sends as sent', () => {
     expect(
       testUtils.resolveTestSendLogResolution({
@@ -198,5 +262,40 @@ describe('whatsapp route test-send logging resolution', () => {
       recipientCount: 1154,
       recipientsTruncated: true
     });
+  });
+
+  it('does not deactivate saved channels when discovery returns a partial channel list', async () => {
+    const { rows, supabase } = buildTargetsSupabaseMock([
+      {
+        id: 'channel-main',
+        type: 'channel',
+        active: true,
+        name: 'Main Channel',
+        phone_number: '120363400000000000@newsletter'
+      },
+      {
+        id: 'channel-test',
+        type: 'channel',
+        active: true,
+        name: 'Test Channel',
+        phone_number: '120363406955649221@newsletter'
+      }
+    ]);
+
+    await testUtils.upsertDiscoveredTargets(
+      supabase,
+      [
+        {
+          name: 'Test Channel',
+          phone_number: '120363406955649221@newsletter',
+          type: 'channel',
+          active: true
+        }
+      ],
+      { deactivateMissingTypes: ['channel'] }
+    );
+
+    expect(rows.find((row) => row.id === 'channel-main')?.active).toBe(true);
+    expect(rows.find((row) => row.id === 'channel-test')?.active).toBe(true);
   });
 });

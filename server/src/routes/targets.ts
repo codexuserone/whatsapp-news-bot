@@ -273,7 +273,7 @@ const targetRoutes = () => {
             await syncTargetsFromWhatsApp(whatsapp, {
               includeStatus: WHATSAPP_STATUS_ENABLED,
               skipIfDisconnected: true,
-              strict: true
+              strict: false
             });
           } catch {
             // Best-effort sync only; list endpoint should still respond.

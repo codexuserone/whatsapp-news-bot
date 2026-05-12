@@ -49,7 +49,7 @@ const TargetsPage = () => {
 
   const { data: targets = [], isLoading: targetsLoading } = useQuery<Target[]>({
     queryKey: ['targets'],
-    queryFn: () => api.get('/api/targets'),
+    queryFn: () => api.get('/api/targets?sync=true'),
     refetchInterval: 60000
   });
 

@@ -285,28 +285,6 @@ const syncTargetsFromWhatsApp = async (
         .map((candidate) => String(candidate.phone_number || '').trim())
         .filter(Boolean)
     );
-    const discoveredChannels = new Set(
-      candidates
-        .filter((candidate) => candidate.type === 'channel')
-        .map((candidate) => normalizeChannelJid(String(candidate.phone_number || '').trim()))
-        .filter(Boolean)
-    );
-    const failedSeededChannels = new Set(
-      (
-        Array.isArray(
-          (channelsWithDiagnostics?.diagnostics as { seeded?: { failedJids?: unknown[] } } | undefined)?.seeded
-            ?.failedJids
-        )
-          ? (
-            (channelsWithDiagnostics?.diagnostics as { seeded?: { failedJids?: unknown[] } } | undefined)?.seeded
-              ?.failedJids || []
-          )
-          : []
-      )
-        .map((jid) => normalizeChannelJid(String(jid || '').trim()))
-        .filter(Boolean)
-    );
-    const canStrictDeactivateChannels = discoveredChannels.size > 0;
     const discoveredStatus = new Set(
       candidates
         .filter((candidate) => candidate.type === 'status')
@@ -324,10 +302,7 @@ const syncTargetsFromWhatsApp = async (
       if (row.type === 'group') {
         shouldDeactivate = !discoveredGroups.has(jid);
       } else if (row.type === 'channel') {
-        const normalizedChannelJid = normalizeChannelJid(jid);
-        shouldDeactivate = canStrictDeactivateChannels
-          ? !discoveredChannels.has(normalizedChannelJid)
-          : failedSeededChannels.has(normalizedChannelJid);
+        shouldDeactivate = false;
       } else if (row.type === 'status') {
         shouldDeactivate = includeStatus ? !discoveredStatus.has(jid) : true;
       }

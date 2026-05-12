@@ -803,7 +803,7 @@ const upsertDiscoveredTargets = async (
   }
 
   const deactivateTypes = Array.isArray(options?.deactivateMissingTypes)
-    ? options?.deactivateMissingTypes || []
+    ? (options?.deactivateMissingTypes || []).filter((type) => type !== 'channel')
     : [];
 
   if (!deactivateTypes.length) return;
@@ -1001,11 +1001,7 @@ const discoverChannelsForSession = async (
   }
 
   if (supabase && options?.persistTargets !== false) {
-    const shouldDeactivateMissingChannels =
-      options?.strictDeactivateMissing === true || discoveredChannelCandidates.length > 0;
-    await upsertDiscoveredTargets(supabase, discoveredChannelCandidates, {
-      deactivateMissingTypes: shouldDeactivateMissingChannels ? ['channel'] : []
-    });
+    await upsertDiscoveredTargets(supabase, discoveredChannelCandidates);
   }
 
   const allChannels = Array.from(channelsByJid.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -2186,5 +2182,6 @@ module.exports.__testUtils = {
   normalizeConfirmationForOperator,
   resolveTestSendConfirmationOptions,
   resolveSendTestTimeoutMs,
-  resolveTestSendLogResolution
+  resolveTestSendLogResolution,
+  upsertDiscoveredTargets
 };

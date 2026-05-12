@@ -196,7 +196,7 @@ const feedsRoutes = () => {
       }
       const { data: feed, error } = await getDb()
         .from('feeds')
-        .insert(payload)
+        .upsert(payload, { onConflict: 'url' })
         .select()
         .single();
       

@@ -213,4 +213,27 @@ describe('postgresCompat query builder', () => {
       ]
     );
   });
+
+  it('upserts feeds by URL without replacing the existing id', async () => {
+    const { createPostgresCompatClient } = require('../src/db/postgresCompat');
+    const db = createPostgresCompatClient();
+
+    await db
+      .from('feeds')
+      .upsert(
+        {
+          name: 'Feed from collive.com',
+          url: 'https://collive.com/mazel-tov/',
+          fetch_interval: 900,
+          active: true
+        },
+        { onConflict: 'url' }
+      )
+      .select();
+
+    expect(fakeQuery).toHaveBeenCalledWith(
+      'INSERT INTO "feeds" ("name", "url", "fetch_interval", "active") VALUES ($1, $2, $3, $4) ON CONFLICT ("url") DO UPDATE SET "name" = EXCLUDED."name", "fetch_interval" = EXCLUDED."fetch_interval", "active" = EXCLUDED."active" RETURNING *',
+      ['Feed from collive.com', 'https://collive.com/mazel-tov/', 900, true]
+    );
+  });
 });

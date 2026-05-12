@@ -2304,6 +2304,15 @@ const isChannelMediaAckRejection = (
   return /(?:ack|server rejected|rejected).*479|479.*(?:ack|server rejected|rejected)/i.test(String(errorMessage || ''));
 };
 
+const isChannelFetchTimeoutError = (value: unknown) =>
+  /timed out fetching channel messages/i.test(String(value || ''));
+
+const isHardSendConfirmationError = (value: unknown) => {
+  const message = String(value || '').trim();
+  if (!message) return false;
+  return !/server ack not observed|no upsert\/ack/i.test(message);
+};
+
 const buildChannelMediaHoldError = (mediaType: string | null | undefined, errorMessage: unknown) => {
   const kind = String(mediaType || 'media').trim() || 'media';
   const reason = String(errorMessage || 'WhatsApp rejected the channel media send').trim();
@@ -2411,6 +2420,14 @@ const confirmSendResult = async (
           : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck, failureGraceMs }
     );
     if (ackConfirmation?.ok || !channelFetchError) return ackConfirmation;
+    if (
+      targetType === 'channel' &&
+      !media &&
+      isChannelFetchTimeoutError(channelFetchError) &&
+      !isHardSendConfirmationError(ackConfirmation?.error)
+    ) {
+      return { ok: true, via: 'upsert', status: 1, statusLabel: 'accepted' };
+    }
     return {
       ok: false,
       via: 'none',

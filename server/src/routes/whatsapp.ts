@@ -235,6 +235,22 @@ const buildTextStatusStyleOptions = (backgroundColor: unknown, font: unknown) =>
 const isAck479Error = (value: unknown) =>
   /(?:ack|server rejected|rejected).*479|479.*(?:ack|server rejected|rejected)/i.test(String(value || ''));
 
+const isChannelFetchTimeoutError = (value: unknown) =>
+  /timed out fetching channel messages/i.test(String(value || ''));
+
+const isHardSendConfirmationError = (value: unknown) => {
+  const message = String(value || '').trim();
+  if (!message) return false;
+  return !/server ack not observed|no upsert\/ack/i.test(message);
+};
+
+const buildAcceptedChannelTextConfirmation = (): TestSendConfirmation => ({
+  ok: true,
+  via: 'upsert',
+  status: 1,
+  statusLabel: 'accepted'
+});
+
 const buildChannelMediaHoldMessage = (mediaType: string | null, errorMessage: unknown) => {
   const kind = String(mediaType || 'media').trim() || 'media';
   const reason = String(errorMessage || 'WhatsApp rejected the channel media send').trim();
@@ -1741,6 +1757,7 @@ const whatsappRoutes = () => {
         }
         if (confirmationRequired && messageId && whatsapp?.confirmSend) {
           let channelConfirmation: TestSendConfirmation | null = null;
+          let ackConfirmation: TestSendConfirmation | null = null;
           if (isNewsletterJid(normalizedJid) && typeof whatsapp.confirmNewsletterMessage === 'function') {
             channelConfirmation = await whatsapp.confirmNewsletterMessage(normalizedJid, messageId, {
               timeoutMs: resolveNewsletterConfirmFetchTimeoutMs(requestedMediaType),
@@ -1751,13 +1768,22 @@ const whatsappRoutes = () => {
             }
           }
           if (!confirmation) {
-            const ackConfirmation = await whatsapp.confirmSend(
+            ackConfirmation = await whatsapp.confirmSend(
               messageId,
               resolveTestSendConfirmationOptions(normalizedJid, requestedMediaType)
             );
-            confirmation = ackConfirmation?.ok || !channelConfirmation || channelConfirmation.unsupported
-              ? ackConfirmation
-              : channelConfirmation;
+            if (ackConfirmation?.ok || !channelConfirmation || channelConfirmation.unsupported) {
+              confirmation = ackConfirmation;
+            } else if (
+              isNewsletterJid(normalizedJid) &&
+              !requestedMediaType &&
+              isChannelFetchTimeoutError(channelConfirmation.error) &&
+              !isHardSendConfirmationError(ackConfirmation?.error)
+            ) {
+              confirmation = buildAcceptedChannelTextConfirmation();
+            } else {
+              confirmation = channelConfirmation;
+            }
           }
           confirmation = normalizeConfirmationForOperator(confirmation, normalizedJid);
         }

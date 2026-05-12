@@ -250,6 +250,68 @@ describe('queueService __testUtils', () => {
     expect(confirmSend).toHaveBeenCalled();
   });
 
+  it('accepts channel text sends when channel history verification times out without a hard rejection', async () => {
+    const confirmNewsletterMessage: any = jest.fn(async () => ({
+      ok: false,
+      via: 'none',
+      error: 'Timed out fetching channel messages',
+      unsupported: false
+    }));
+    const confirmSend: any = jest.fn(async () => ({
+      ok: false,
+      via: 'none',
+      error: 'Server ack not observed'
+    }));
+
+    await expect(
+      testUtils.confirmSendResult(
+        { confirmNewsletterMessage, confirmSend },
+        'channel',
+        {
+          response: { key: { id: 'newsletter-msg-123', remoteJid: '120363406955649221@newsletter' } },
+          media: { type: null, url: null, sent: false, error: null }
+        }
+      )
+    ).resolves.toEqual({
+      ok: true,
+      via: 'upsert',
+      status: 1,
+      statusLabel: 'accepted'
+    });
+
+    expect(confirmNewsletterMessage).toHaveBeenCalled();
+    expect(confirmSend).toHaveBeenCalled();
+  });
+
+  it('does not accept channel media sends when channel verification times out without ACK', async () => {
+    const confirmNewsletterMessage: any = jest.fn(async () => ({
+      ok: false,
+      via: 'none',
+      error: 'Timed out fetching channel messages',
+      unsupported: false
+    }));
+    const confirmSend: any = jest.fn(async () => ({
+      ok: false,
+      via: 'none',
+      error: 'Server ack not observed'
+    }));
+
+    await expect(
+      testUtils.confirmSendResult(
+        { confirmNewsletterMessage, confirmSend },
+        'channel',
+        {
+          response: { key: { id: 'newsletter-msg-123', remoteJid: '120363406955649221@newsletter' } },
+          media: { type: 'image', url: 'https://example.com/a.jpg', sent: true, error: null }
+        }
+      )
+    ).resolves.toEqual({
+      ok: false,
+      via: 'none',
+      error: 'Message send not confirmed (Timed out fetching channel messages)'
+    });
+  });
+
   it('blocks text fallback after media failure for status targets', () => {
     expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('status')).toBe(true);
     expect(testUtils.shouldBlockTextFallbackAfterMediaFailure('channel')).toBe(false);

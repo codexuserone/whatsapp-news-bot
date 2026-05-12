@@ -119,6 +119,8 @@ services:
       - key: WHATSAPP_STATUS_ALLOW_SELF_AUDIENCE
         value: "true"
       - key: WHATSAPP_STATUS_SYNC_OWN_DEVICES
+        value: "false"
+      - key: WHATSAPP_STATUS_DISABLE_OWN_DEVICE_SYNC
         value: "true"
       - key: WHATSAPP_ALLOW_POST_SEND_MEDIA_EDITS
         value: "false"

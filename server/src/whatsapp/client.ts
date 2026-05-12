@@ -51,8 +51,12 @@ const isTruthyEnvFlag = (value: unknown) => ['1', 'true', 'yes', 'on'].includes(
 const isFalseLikeFlag = (value: unknown) => ['0', 'false', 'no', 'off'].includes(String(value || '').trim().toLowerCase());
 const isStatusSelfAudienceEnabled = () =>
   !isTruthyEnvFlag(process.env.WHATSAPP_STATUS_DISABLE_SELF_AUDIENCE);
-const isStatusOwnDeviceSyncEnabled = () =>
-  !isTruthyEnvFlag(process.env.WHATSAPP_STATUS_DISABLE_OWN_DEVICE_SYNC);
+const isStatusOwnDeviceSyncEnabled = () => {
+  if (isTruthyEnvFlag(process.env.WHATSAPP_STATUS_DISABLE_OWN_DEVICE_SYNC)) return false;
+  const explicit = String(process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES || '').trim();
+  if (explicit) return isTruthyEnvFlag(explicit);
+  return false;
+};
 const STATUS_OWN_DEVICE_SYNC_LIMIT = Math.max(
   0,
   Math.min(Math.floor(Number(process.env.WHATSAPP_STATUS_OWN_DEVICE_SYNC_LIMIT || 12)), 50)
@@ -1228,6 +1232,9 @@ class WhatsAppClient {
   rememberMessageStatus(messageId: string, snapshot: MessageStatusSnapshot): void {
     const id = String(messageId || '').trim();
     if (!id) return;
+    if (snapshot.status === 0 && this.isIgnorableStatusSelfAckFailure({ messageId: id, remoteJid: snapshot.remoteJid })) {
+      return;
+    }
 
     const existing = this.recentMessageStatuses.get(id);
     const existingStatus = typeof existing?.status === 'number' ? existing.status : -1;
@@ -1280,6 +1287,9 @@ class WhatsAppClient {
   rememberMessageFailure(messageId: string, snapshot: MessageFailureSnapshot): void {
     const id = String(messageId || '').trim();
     if (!id) return;
+    if (this.isIgnorableStatusSelfAckFailure({ messageId: id, remoteJid: snapshot.remoteJid })) {
+      return;
+    }
 
     this.recentMessageFailures.set(id, snapshot);
     if (this.recentMessageFailures.size > 1000) {
@@ -1289,6 +1299,22 @@ class WhatsAppClient {
       }
       }
     }
+
+  isIgnorableStatusSelfAckFailure(value: { messageId?: unknown; remoteJid?: unknown } | null | undefined): boolean {
+    const id = String(value?.messageId || '').trim();
+    if (!id) return false;
+    const sent = this.recentSentMessages.get(id) as { key?: { remoteJid?: unknown } } | undefined;
+    if (String(sent?.key?.remoteJid || '').trim() !== 'status@broadcast') return false;
+
+    const remoteJid = normalizeStatusAudienceJid(value?.remoteJid);
+    if (!remoteJid) return false;
+    const selfJids = new Set(
+      buildStatusSelfCandidates(this.socket, this.meJid, null)
+        .map((candidate) => normalizeStatusAudienceJid(candidate))
+        .filter(Boolean)
+    );
+    return selfJids.has(remoteJid);
+  }
 
   async ensureAuthStoreInitialized() {
     if (this.authStore) {
@@ -2032,14 +2058,16 @@ class WhatsAppClient {
       const errorMessage = this.extractErrorMessage(args);
       const ackFailure = this.extractAckFailure(args);
       if (ackFailure) {
-        this.rememberMessageFailure(ackFailure.messageId, {
-          errorCode: ackFailure.errorCode,
-          errorMessage: ackFailure.errorCode
-            ? `WhatsApp server rejected message ack ${ackFailure.errorCode}`
-            : 'WhatsApp server rejected message ack',
-          remoteJid: ackFailure.remoteJid,
-          updatedAtMs: Date.now()
-        });
+        if (!this.isIgnorableStatusSelfAckFailure(ackFailure)) {
+          this.rememberMessageFailure(ackFailure.messageId, {
+            errorCode: ackFailure.errorCode,
+            errorMessage: ackFailure.errorCode
+              ? `WhatsApp server rejected message ack ${ackFailure.errorCode}`
+              : 'WhatsApp server rejected message ack',
+            remoteJid: ackFailure.remoteJid,
+            updatedAtMs: Date.now()
+          });
+        }
       }
       if (this.isAuthStateCorrupted(message) || this.isAuthStateCorrupted(errorMessage)) {
         void this.handleCorruptedAuthState(
@@ -2055,6 +2083,18 @@ class WhatsAppClient {
     baileysLogger.error = (...args: unknown[]) => {
       const message = this.extractLogMessage(args);
       const errorMessage = this.extractErrorMessage(args);
+      const ackFailure = this.extractAckFailure(args);
+      if (ackFailure && this.isIgnorableStatusSelfAckFailure(ackFailure)) {
+        baseLogger.debug(
+          {
+            messageId: ackFailure.messageId,
+            remoteJid: ackFailure.remoteJid,
+            errorCode: ackFailure.errorCode
+          },
+          'Ignored sender-device Status ack failure'
+        );
+        return;
+      }
       if (isBenignInitQueryTrace(message, errorMessage)) {
         baseLogger.debug({ reason: 'init_query_bad_request' }, 'Baileys init query rejected during reconnect');
         return;
@@ -2076,6 +2116,18 @@ class WhatsAppClient {
     baileysLogger.warn = (...args: unknown[]) => {
       const message = this.extractLogMessage(args);
       const errorMessage = this.extractErrorMessage(args);
+      const ackFailure = this.extractAckFailure(args);
+      if (ackFailure && this.isIgnorableStatusSelfAckFailure(ackFailure)) {
+        baseLogger.debug(
+          {
+            messageId: ackFailure.messageId,
+            remoteJid: ackFailure.remoteJid,
+            errorCode: ackFailure.errorCode
+          },
+          'Ignored sender-device Status ack failure'
+        );
+        return;
+      }
       if (isBenignInitQueryTrace(message, errorMessage)) {
         baseLogger.debug({ reason: 'init_query_bad_request' }, 'Baileys init query rejected during reconnect');
         return;

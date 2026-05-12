@@ -1448,9 +1448,67 @@ describe('WhatsAppClient', () => {
         }
     });
 
-    it('should sync status sends to the sender linked devices', async () => {
+    it('should keep custom sender linked-device status fanout disabled by default', async () => {
+        const previousSync = process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES;
+        const previousDisable = process.env.WHATSAPP_STATUS_DISABLE_OWN_DEVICE_SYNC;
+        delete process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES;
+        delete process.env.WHATSAPP_STATUS_DISABLE_OWN_DEVICE_SYNC;
+        const relayMessage: any = jest.fn(async () => 'status-generated-id');
+        const sendMessage: any = jest.fn();
+        const getUSyncDevices: any = jest.fn(async () => [
+            { jid: '16465527019:58@s.whatsapp.net', user: '16465527019', device: 58 },
+            { jid: '16465527019:0@s.whatsapp.net', user: '16465527019', device: 0 }
+        ]);
+        client.socket = {
+            relayMessage,
+            sendMessage,
+            getUSyncDevices,
+            ev: { emit: jest.fn() },
+            user: { id: '16465527019:58@s.whatsapp.net' },
+            authState: { creds: { me: { id: '16465527019:58@s.whatsapp.net' } } }
+        };
+        client.meJid = '16465527019:58@s.whatsapp.net';
+
+        try {
+            const result = await client.sendStatusBroadcast(
+                { text: 'hello' },
+                { statusJidList: ['19144477725@s.whatsapp.net'] }
+            );
+
+            expect(sendMessage).not.toHaveBeenCalled();
+            expect(getUSyncDevices).not.toHaveBeenCalled();
+            expect(relayMessage).toHaveBeenCalledTimes(1);
+            expect(relayMessage).toHaveBeenCalledWith(
+                'status@broadcast',
+                expect.objectContaining({
+                    extendedTextMessage: expect.objectContaining({ text: 'hello' })
+                }),
+                expect.objectContaining({
+                    messageId: 'status-generated-id',
+                    useUserDevicesCache: false,
+                    statusJidList: ['19144477725@s.whatsapp.net', '16465527019@s.whatsapp.net']
+                })
+            );
+            expect(result.ownDeviceFanout).toBeUndefined();
+        } finally {
+            if (previousSync === undefined) {
+                delete process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES;
+            } else {
+                process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES = previousSync;
+            }
+            if (previousDisable === undefined) {
+                delete process.env.WHATSAPP_STATUS_DISABLE_OWN_DEVICE_SYNC;
+            } else {
+                process.env.WHATSAPP_STATUS_DISABLE_OWN_DEVICE_SYNC = previousDisable;
+            }
+        }
+    });
+
+    it('should sync status sends to the sender linked devices when explicitly enabled', async () => {
         const previous = process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES;
+        const previousDisable = process.env.WHATSAPP_STATUS_DISABLE_OWN_DEVICE_SYNC;
         process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES = 'true';
+        delete process.env.WHATSAPP_STATUS_DISABLE_OWN_DEVICE_SYNC;
         const relayMessage: any = jest.fn(async () => 'status-generated-id');
         const sendMessage: any = jest.fn();
         const getUSyncDevices: any = jest.fn(async () => [
@@ -1529,6 +1587,11 @@ describe('WhatsAppClient', () => {
                 delete process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES;
             } else {
                 process.env.WHATSAPP_STATUS_SYNC_OWN_DEVICES = previous;
+            }
+            if (previousDisable === undefined) {
+                delete process.env.WHATSAPP_STATUS_DISABLE_OWN_DEVICE_SYNC;
+            } else {
+                process.env.WHATSAPP_STATUS_DISABLE_OWN_DEVICE_SYNC = previousDisable;
             }
         }
     });
@@ -1954,6 +2017,53 @@ describe('WhatsAppClient', () => {
             statusLabel: 'delivered'
         });
         expect(client.waitForMessageStatus).toHaveBeenCalledWith('msg-cached-ack-error', 2, 10);
+    });
+
+    it('should ignore sender-device status ack failures for statuses sent by this session', async () => {
+        const baileysLogger = client.createBaileysLogger();
+        client.socket = {
+            user: {
+                id: '16465527019:58@s.whatsapp.net',
+                lid: '103140015788103@lid'
+            }
+        };
+        client.meJid = '16465527019:58@s.whatsapp.net';
+        client.recentSentMessages.set('msg-status-self-ack-error', {
+            key: { id: 'msg-status-self-ack-error', remoteJid: 'status@broadcast', fromMe: true }
+        });
+
+        baileysLogger.error(
+            { attrs: { class: 'message', from: '16465527019:59@s.whatsapp.net', id: 'msg-status-self-ack-error', error: '479' } },
+            'received error in ack'
+        );
+        baileysLogger.warn(
+            { attrs: { class: 'message', from: '103140015788103:59@lid', id: 'msg-status-self-ack-error', error: '479' } },
+            'received error in ack'
+        );
+        client.rememberMessageStatus('msg-status-self-ack-error', {
+            status: 0,
+            statusLabel: 'error',
+            remoteJid: '103140015788103:59@lid',
+            updatedAtMs: Date.now()
+        });
+
+        expect(client.recentMessageFailures.has('msg-status-self-ack-error')).toBe(false);
+        expect(client.recentMessageStatuses.has('msg-status-self-ack-error')).toBe(false);
+
+        client.rememberMessageStatus('msg-status-self-ack-error', {
+            status: 3,
+            statusLabel: 'delivered',
+            remoteJid: 'status@broadcast',
+            updatedAtMs: Date.now()
+        });
+
+        expect(client.recentMessageStatuses.get('msg-status-self-ack-error')).toEqual(
+            expect.objectContaining({
+                status: 3,
+                statusLabel: 'delivered',
+                remoteJid: 'status@broadcast'
+            })
+        );
     });
 
     it('should ignore configured sender-device status ack failures after the status leaves the socket', async () => {

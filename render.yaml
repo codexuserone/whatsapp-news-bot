@@ -73,7 +73,7 @@ services:
       - key: WHATSAPP_LEASE_AUTO_TAKEOVER
         value: "false"
       - key: WHATSAPP_LEASE_DEPLOY_TAKEOVER
-        value: "false"
+        value: "true"
       - key: WHATSAPP_LEASE_TTL_MS
         value: "45000"
       - key: WHATSAPP_AUTH_AUTO_CLEAR_CORRUPTION

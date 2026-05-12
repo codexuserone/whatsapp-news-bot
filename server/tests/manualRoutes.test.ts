@@ -90,7 +90,7 @@ describe('manual route queue payloads', () => {
         ok: false,
         messageId: 'msg-2',
         mediaSent: false,
-        error: 'Server ack was not observed yet'
+        error: 'WhatsApp did not confirm this send. It was not counted as sent.'
       },
       {
         id: 'held-row',

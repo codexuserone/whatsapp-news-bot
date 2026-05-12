@@ -90,7 +90,7 @@ const getMediaSummary = (log: LogEntry) => {
 };
 
 const LogsPage = () => {
-  const [status, setStatus] = useState('sent');
+  const [status, setStatus] = useState('all');
   const { data: logs = [], isLoading, error } = useQuery<LogEntry[]>({
     queryKey: ['logs', status],
     queryFn: () => api.get(status === 'all' ? '/api/logs?include_queue=true' : `/api/logs?status=${status}`),

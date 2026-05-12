@@ -113,6 +113,7 @@ const QueueInner = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftMessage, setDraftMessage] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  const [showQueueTools, setShowQueueTools] = useState(false);
   const [actionNotice, setActionNotice] = useState<{ type: NoticeType; message: string } | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const { databaseUnavailable, databaseUnavailableMessage } = useRuntimeStatus();
@@ -579,47 +580,67 @@ const QueueInner = () => {
           <p className="text-muted-foreground">Review, edit, pause, retry, or send queued items.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            onClick={() => resetProcessing.mutate()}
-            disabled={databaseActionsBlocked || resetProcessing.isPending || !(queueStats?.processing ?? 0)}
-            title={
-              databaseActionsBlocked
-                ? 'Database unavailable; queue actions are paused'
-                : (queueStats?.processing ?? 0) > 0
-                  ? 'Reset stuck processing items'
-                  : 'No processing items'
-            }
-          >
-            <RefreshCw className={`mr-2 h-4 w-4 ${resetProcessing.isPending ? 'animate-spin' : ''}`} />
-            Fix stuck sends
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => retryFailed.mutate()}
-            disabled={databaseActionsBlocked || retryFailed.isPending || !retryableIssueCount}
-            title={
-              databaseActionsBlocked
-                ? 'Database unavailable; retry is paused'
-                : retryableIssueCount
-                  ? 'Retry recent failed sends from the last 24 hours'
-                  : 'No recent failed sends to retry'
-            }
-          >
-            <RefreshCw className={`mr-2 h-4 w-4 ${retryFailed.isPending ? 'animate-spin' : ''}`} />
-            Retry failed
-          </Button>
-          <Button
-            variant="destructive"
-            onClick={() => clearPending.mutate()}
-            disabled={databaseActionsBlocked || clearPending.isPending}
-            title={databaseActionsBlocked ? 'Database unavailable; queue actions are paused' : undefined}
-          >
-            <Trash2 className="mr-2 h-4 w-4" />
-            Clear queued
+          <Button variant="outline" onClick={() => setShowQueueTools((current) => !current)}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Queue tools
           </Button>
         </div>
       </div>
+
+      {showQueueTools ? (
+        <Card className="border-dashed">
+          <CardHeader>
+            <CardTitle>Queue tools</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Use these only when a send is visibly stuck or a failed item should be tried again.
+            </p>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={() => resetProcessing.mutate()}
+              disabled={databaseActionsBlocked || resetProcessing.isPending || !(queueStats?.processing ?? 0)}
+              title={
+                databaseActionsBlocked
+                  ? 'Database unavailable; queue actions are paused'
+                  : (queueStats?.processing ?? 0) > 0
+                    ? 'Move currently stuck sending items back to the queue'
+                    : 'No sending items are stuck'
+              }
+            >
+              <RefreshCw className={`mr-2 h-4 w-4 ${resetProcessing.isPending ? 'animate-spin' : ''}`} />
+              Reset stuck sends
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => retryFailed.mutate()}
+              disabled={databaseActionsBlocked || retryFailed.isPending || !retryableIssueCount}
+              title={
+                databaseActionsBlocked
+                  ? 'Database unavailable; retry is paused'
+                  : retryableIssueCount
+                    ? 'Move recent failed sends back to the queue'
+                    : 'No recent failed sends to retry'
+              }
+            >
+              <RefreshCw className={`mr-2 h-4 w-4 ${retryFailed.isPending ? 'animate-spin' : ''}`} />
+              Retry failed sends
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (!window.confirm('Clear every currently queued item in this view? Sent history will not be deleted.')) return;
+                clearPending.mutate();
+              }}
+              disabled={databaseActionsBlocked || clearPending.isPending}
+              title={databaseActionsBlocked ? 'Database unavailable; queue actions are paused' : undefined}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Clear queued items
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {databaseActionsBlocked ? (
         <Card className="border-destructive/40 bg-destructive/5">

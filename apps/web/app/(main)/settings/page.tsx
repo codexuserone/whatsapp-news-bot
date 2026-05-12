@@ -142,6 +142,7 @@ const toSettingsFormValues = (settings?: Partial<BackendSettings> | null): Setti
 const SettingsPage = () => {
   const queryClient = useQueryClient();
   const [saveNotice, setSaveNotice] = useState<SaveNotice | null>(null);
+  const [showAdvancedPublishing, setShowAdvancedPublishing] = useState(false);
   const { data: settings, isLoading: isSettingsLoading } = useQuery<BackendSettings>({
     queryKey: ['settings'],
     queryFn: () => api.get('/api/settings')
@@ -497,13 +498,24 @@ const SettingsPage = () => {
           </CardContent>
         </Card>
 
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setShowAdvancedPublishing((current) => !current)}
+          >
+            {showAdvancedPublishing ? 'Hide advanced publishing' : 'Advanced publishing'}
+          </Button>
+        </div>
+
+        {showAdvancedPublishing ? (
         <Card id="dedupe">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Copy className="h-5 w-5" />
               Duplicate Filter
             </CardTitle>
-            <CardDescription>Optional: block near-duplicate stories.</CardDescription>
+            <CardDescription>Optional: block near-duplicate stories when the feed repeats similar posts.</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
@@ -522,6 +534,7 @@ const SettingsPage = () => {
             </div>
           </CardContent>
         </Card>
+        ) : null}
 
         <Button type="submit" disabled={saveSettings.isPending}>
           {saveSettings.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

@@ -155,7 +155,7 @@ describe('queue route retry safeguards', () => {
         status: 'failed',
         messageId: 'msg-1',
         mediaSent: false,
-        error: 'Server ack was not observed yet'
+        error: 'WhatsApp did not confirm this send. It was not counted as sent.'
       }
     });
   });

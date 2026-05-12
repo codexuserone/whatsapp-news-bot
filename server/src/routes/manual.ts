@@ -5,6 +5,7 @@ const { serviceUnavailable } = require('../core/errors');
 const { validate, schemas } = require('../middleware/validation');
 const { getErrorMessage, getErrorStatus } = require('../utils/errorUtils');
 const { encodeManualMessageContent } = require('../utils/manualMeta');
+const { sanitizeSendErrorForApi } = require('../utils/sendErrorPresentation');
 const { sendQueueLogNow } = require('../services/queueService');
 
 type ManualPostBody = {
@@ -162,7 +163,7 @@ const buildManualSendResponse = (
     const status = rawStatus === 'uncertain' ? 'failed' : rawStatus;
     const messageId = stored?.whatsapp_message_id || sendResult?.messageId || null;
     const mediaSent = typeof stored?.media_sent === 'boolean' ? stored.media_sent : Boolean(sendResult?.mediaSent);
-    const error = stored?.error_message || stored?.media_error || sendResult?.error || null;
+    const error = sanitizeSendErrorForApi(stored?.error_message || stored?.media_error || sendResult?.error || null);
     return {
       id,
       status,

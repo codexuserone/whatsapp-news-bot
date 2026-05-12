@@ -73,7 +73,7 @@ const buildQueueSendNowResponse = (result: QueueSendNowResult | null | undefined
     status,
     messageId: storedRow?.whatsapp_message_id || result?.messageId || null,
     mediaSent: typeof storedRow?.media_sent === 'boolean' ? storedRow.media_sent : Boolean(result?.mediaSent),
-    error: storedRow?.error_message || storedRow?.media_error || result?.error || null
+    error: sanitizeSendErrorForApi(storedRow?.error_message || storedRow?.media_error || result?.error || null)
   };
   const httpStatus =
     isSuccessfulSendStatus(status)

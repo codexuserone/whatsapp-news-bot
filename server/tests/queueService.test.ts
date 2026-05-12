@@ -382,7 +382,6 @@ describe('queueService __testUtils', () => {
       { text: 'Status title', linkPreview: null },
       {
         statusJidList: ['15551234567@s.whatsapp.net'],
-        includeSender: true,
         backgroundColor: '#166534',
         font: 5
       }

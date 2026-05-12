@@ -1443,9 +1443,9 @@ const whatsappRoutes = () => {
   const resolveStatusIncludeSender = async () => {
     try {
       const settings = await settingsService.getSettings();
-      return settings?.status_include_sender !== false;
+      return settings?.status_include_sender === true;
     } catch {
-      return true;
+      return false;
     }
   };
 
@@ -2130,7 +2130,9 @@ const whatsappRoutes = () => {
     const strippedStatusStyleOptions: string[] = [];
     const providedStatusFont = parseProvidedStatusFont(font);
     if (statusSnapshot.recipients.length) sendOptions.statusJidList = statusSnapshot.recipients;
-    sendOptions.includeSender = await resolveStatusIncludeSender();
+    if (await resolveStatusIncludeSender()) {
+      sendOptions.includeSender = true;
+    }
     if (shouldAllowUnmappedStatusLids(statusSnapshot)) {
       sendOptions.allowUnmappedLidRecipients = true;
     }

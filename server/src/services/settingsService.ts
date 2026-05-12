@@ -15,7 +15,7 @@ const defaultStatusGroupAudienceEnabled = () =>
   );
 
 const defaultStatusIncludeSender = () =>
-  !['0', 'false', 'no', 'off'].includes(String(process.env.WHATSAPP_STATUS_INCLUDE_SENDER ?? 'true').trim().toLowerCase());
+  ['1', 'true', 'yes', 'on'].includes(String(process.env.WHATSAPP_STATUS_INCLUDE_SENDER || '').trim().toLowerCase());
 
 const DEFAULTS = {
   retentionDays: env.RETENTION_DAYS,

@@ -2485,13 +2485,13 @@ const buildTemplateStatusTextOptions = (template: Template) => {
 
 const resolveStatusIncludeSender = async (settings?: Record<string, unknown> | null) => {
   if (settings && Object.prototype.hasOwnProperty.call(settings, 'status_include_sender')) {
-    return settings.status_include_sender !== false;
+    return settings.status_include_sender === true;
   }
   try {
     const currentSettings = await settingsService.getSettings();
-    return currentSettings?.status_include_sender !== false;
+    return currentSettings?.status_include_sender === true;
   } catch {
-    return true;
+    return false;
   }
 };
 
@@ -2504,9 +2504,11 @@ const buildStatusBroadcastOptions = async (
     snapshot || await ensureFreshStatusRecipients(whatsappClient, { maxAgeMinutes: 10, sampleSize: 25 });
   assertUsableStatusAudience(statusSnapshot);
   const options: Record<string, unknown> = {
-    statusJidList: statusSnapshot.recipients || [],
-    includeSender: await resolveStatusIncludeSender(settings)
+    statusJidList: statusSnapshot.recipients || []
   };
+  if (await resolveStatusIncludeSender(settings)) {
+    options.includeSender = true;
+  }
   if (statusSnapshot.groupAudienceAllowed === true || isGroupStatusAudienceAllowed()) {
     options.allowUnmappedLidRecipients = true;
   }

@@ -13,6 +13,7 @@ const HEX_COLOR_PATTERN = /^#?[0-9a-f]{6}$/i;
 
 // Validation schemas
 const normalizeOptional = (value: string | null | undefined) => (value === '' ? null : value);
+const normalizeNullableObject = (value: unknown) => (value === null ? undefined : value);
 const normalizeOptionalInt = (value: unknown) => {
   if (value === '' || value === undefined || value === null) return null;
   const parsed = Number(value);
@@ -115,25 +116,31 @@ const schemas = {
     url: z.string().url(),
     type: z.enum(['rss', 'atom', 'json', 'html']).optional(),
     active: z.boolean().optional(),
-    fetch_interval: z.number().int().min(60).default(300),
-    parse_config: z
-      .object({
-        itemsPath: z.string().max(255).optional().nullable().transform(normalizeOptional),
-        titlePath: z.string().max(255).optional().nullable().transform(normalizeOptional),
-        descriptionPath: z.string().max(255).optional().nullable().transform(normalizeOptional),
-        linkPath: z.string().max(255).optional().nullable().transform(normalizeOptional),
-        imagePath: z.string().max(255).optional().nullable().transform(normalizeOptional)
-      })
-      .partial()
-      .optional(),
-    cleaning: z
-      .object({
-        stripUtm: z.boolean().optional(),
-        decodeEntities: z.boolean().optional(),
-        removePhrases: z.array(z.string().max(500)).optional()
-      })
-      .partial()
-      .optional()
+    fetch_interval: z.coerce.number().int().min(60).default(300),
+    parse_config: z.preprocess(
+      normalizeNullableObject,
+      z
+        .object({
+          itemsPath: z.string().max(255).optional().nullable().transform(normalizeOptional),
+          titlePath: z.string().max(255).optional().nullable().transform(normalizeOptional),
+          descriptionPath: z.string().max(255).optional().nullable().transform(normalizeOptional),
+          linkPath: z.string().max(255).optional().nullable().transform(normalizeOptional),
+          imagePath: z.string().max(255).optional().nullable().transform(normalizeOptional)
+        })
+        .partial()
+        .optional()
+    ),
+    cleaning: z.preprocess(
+      normalizeNullableObject,
+      z
+        .object({
+          stripUtm: z.boolean().optional(),
+          decodeEntities: z.boolean().optional(),
+          removePhrases: z.array(z.string().max(500)).optional()
+        })
+        .partial()
+        .optional()
+    )
   }),
 
   target: z.object({

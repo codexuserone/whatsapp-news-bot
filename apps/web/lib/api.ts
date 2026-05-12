@@ -54,13 +54,26 @@ const handleResponse = async <T>(response: Response): Promise<T> => {
       }
     }
 
+    const details = Array.isArray(parsedBody?.details)
+      ? parsedBody.details
+          .map((detail) => {
+            if (!detail || typeof detail !== 'object') return '';
+            const field = String((detail as { field?: unknown }).field || '').trim();
+            const detailMessage = String((detail as { message?: unknown }).message || '').trim();
+            if (!field && !detailMessage) return '';
+            return field ? `${field}: ${detailMessage || 'Invalid value'}` : detailMessage;
+          })
+          .filter(Boolean)
+          .join('; ')
+      : '';
+
     const message =
       String(parsedBody?.error || '').trim() ||
       String(parsedBody?.message || '').trim() ||
       String(rawBody || '').trim() ||
       `Request failed (${response.status})`;
 
-    const error = new Error(message) as Error & { status?: number };
+    const error = new Error(details ? `${message}: ${details}` : message) as Error & { status?: number };
     error.status = response.status;
     throw error;
   }

@@ -182,8 +182,8 @@ const FeedsPage = () => {
         url: payload.url,
         ...(payload.type ? { type: payload.type } : {}),
         fetch_interval: payload.fetch_interval,
-        parse_config,
-        cleaning,
+        ...(parse_config ? { parse_config } : {}),
+        ...(cleaning ? { cleaning } : {}),
         active: active ? Boolean(active.active) : true
       };
       return feedId ? api.put<Feed>(`/api/feeds/${feedId}`, body) : api.post<Feed>('/api/feeds', body);

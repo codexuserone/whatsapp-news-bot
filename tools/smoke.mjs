@@ -230,9 +230,9 @@ const main = async () => {
       throw new Error(`Auth smoke failed: /health returned ${openHealth.status}`);
     }
 
-    const lockedReady = await fetchText(`${authBaseUrl}/ready`);
-    if (lockedReady.status !== 401) {
-      throw new Error(`Auth smoke failed: /ready without auth returned ${lockedReady.status}`);
+    const openReady = await fetchText(`${authBaseUrl}/ready`);
+    if (openReady.status !== 200) {
+      throw new Error(`Auth smoke failed: /ready returned ${openReady.status}`);
     }
 
     const lockedHealthMethod = await fetchText(`${authBaseUrl}/health`, { method: 'POST' });

@@ -5,7 +5,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, formatApiErrorMessage, isTransientDatabaseError } from '@/lib/api';
 import type { Feed, ReconcileResult, Schedule, Target, Template } from '@/lib/types';
 import { dedupeTargets, formatTargetLabel } from '@/lib/targetUtils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
@@ -281,7 +281,7 @@ const SchedulesPage = () => {
     }
   });
 
-  const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Unknown error');
+  const getErrorMessage = (error: unknown) => formatApiErrorMessage(error, 'Unknown error');
 
   useEffect(() => {
     if (active) {
@@ -362,6 +362,8 @@ const SchedulesPage = () => {
       setActive(result);
       setAutomationNotice({ type: 'success', message: 'Schedule saved.' });
     },
+    retry: (failureCount, error) => isTransientDatabaseError(error) && failureCount < 2,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 5000),
     onError: (error: unknown) => alert(`Failed to save schedule: ${getErrorMessage(error)}`)
   });
 

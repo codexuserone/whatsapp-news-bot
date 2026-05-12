@@ -5,7 +5,7 @@ import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, formatApiErrorMessage, isTransientDatabaseError } from '@/lib/api';
 import type { Feed, Schedule } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -104,7 +104,7 @@ const FeedsPage = () => {
   const [testResult, setTestResult] = useState<FeedTestResult | null>(null);
   const [testLoading, setTestLoading] = useState(false);
 
-  const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Unknown error');
+  const getErrorMessage = (error: unknown) => formatApiErrorMessage(error, 'Unknown error');
   const feedsErrorMessage = [feedsError, schedulesError]
     .map((value) => getErrorMessage(value))
     .find((value) => value && value !== 'Unknown error');
@@ -217,6 +217,8 @@ const FeedsPage = () => {
         }
       });
     },
+    retry: (failureCount, error) => isTransientDatabaseError(error) && failureCount < 2,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 5000),
     onError: (error: unknown) => alert(`Failed to save feed: ${getErrorMessage(error)}`)
   });
 

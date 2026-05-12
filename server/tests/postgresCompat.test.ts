@@ -167,7 +167,7 @@ describe('postgresCompat query builder', () => {
     const recovered = await db.from('feeds').select('id');
 
     expect(failed.error?.status).toBe(503);
-    expect(String(failed.error?.message || '')).toContain('ECONNREFUSED');
+    expect(String(failed.error?.message || '')).toBe('Database is temporarily unavailable. Please try again in a few seconds.');
     expect(recovered.error).toBeNull();
     expect(recovered.data).toEqual([{ id: 'feed-after-recovery' }]);
     expect(fakeQuery).toHaveBeenCalledTimes(4);

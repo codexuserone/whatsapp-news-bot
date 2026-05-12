@@ -24,6 +24,15 @@ describe('getErrorMessage', () => {
             'Supabase database is temporarily unreachable'
         );
     });
+
+    it('normalizes raw Postgres transport errors', () => {
+        expect(getErrorMessage(new Error('connect ECONNREFUSED 10.28.136.81:5432'))).toBe(
+            'Database is temporarily unavailable. Please try again in a few seconds.'
+        );
+        expect(getErrorMessage(new Error('getaddrinfo ENOTFOUND dpg-example'))).toBe(
+            'Database is temporarily unavailable. Please try again in a few seconds.'
+        );
+    });
 });
 
 describe('getErrorStatus', () => {
@@ -44,5 +53,10 @@ describe('getErrorStatus', () => {
     it('maps Supabase availability failures to service unavailable', () => {
         expect(getErrorStatus(new Error('Supabase request timed out after 8000ms'))).toBe(503);
         expect(getErrorStatus(new Error('Supabase temporarily unavailable: recent connection failure'))).toBe(503);
+    });
+
+    it('maps Postgres transport failures to service unavailable', () => {
+        expect(getErrorStatus(new Error('connect ECONNREFUSED 10.28.136.81:5432'))).toBe(503);
+        expect(getErrorStatus(new Error('connection terminated unexpectedly'))).toBe(503);
     });
 });

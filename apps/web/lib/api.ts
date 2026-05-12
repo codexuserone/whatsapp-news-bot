@@ -80,6 +80,28 @@ const handleResponse = async <T>(response: Response): Promise<T> => {
   return response.json();
 };
 
+export const isTransientDatabaseError = (error: unknown) => {
+  const status = typeof error === 'object' && error ? Number((error as { status?: unknown }).status) : 0;
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error || '').toLowerCase();
+  return (
+    status === 503 &&
+    (
+      message.includes('database is temporarily unavailable') ||
+      message.includes('postgres temporarily unavailable') ||
+      message.includes('connect econnrefused') ||
+      message.includes('getaddrinfo enotfound') ||
+      message.includes('connection terminated unexpectedly')
+    )
+  );
+};
+
+export const formatApiErrorMessage = (error: unknown, fallback = 'Request failed') => {
+  if (isTransientDatabaseError(error)) {
+    return 'Database is waking up. Please try again in a few seconds.';
+  }
+  return error instanceof Error && error.message ? error.message : fallback;
+};
+
 const mergeHeaders = (base?: HeadersInit, extra?: HeadersInit): HeadersInit | undefined => {
   if (!base && !extra) return undefined;
   const headers = new Headers(base || undefined);

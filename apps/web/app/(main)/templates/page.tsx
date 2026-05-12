@@ -6,7 +6,7 @@ import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, formatApiErrorMessage, isTransientDatabaseError } from '@/lib/api';
 import { buildTemplatePreviewSendPayloads, type TemplatePreviewPayload } from '@/lib/templatePreviewPayload';
 import type { BackendSettings, Feed, FeedItem, Target, Template } from '@/lib/types';
 import { dedupeTargets, formatTargetLabel, normalizeTargetName } from '@/lib/targetUtils';
@@ -516,7 +516,7 @@ const TemplatesPage = () => {
       };
     });
 
-  const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Unknown error');
+  const getErrorMessage = (error: unknown) => formatApiErrorMessage(error, 'Unknown error');
 
   useEffect(() => {
     if (active) {
@@ -556,6 +556,8 @@ const TemplatesPage = () => {
         sequence_steps: getTemplateSequenceSteps(savedTemplate)
       });
     },
+    retry: (failureCount, error) => isTransientDatabaseError(error) && failureCount < 2,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 5000),
     onError: (error: unknown) => alert(`Failed to save template: ${getErrorMessage(error)}`)
   });
 

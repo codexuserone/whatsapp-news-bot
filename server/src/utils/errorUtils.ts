@@ -22,6 +22,15 @@ const normalizeErrorText = (value: string, fallback: string): string => {
   if (lower.includes('supabase temporarily unavailable')) {
     return 'Supabase database is temporarily unreachable';
   }
+  if (
+    lower.includes('postgres temporarily unavailable') ||
+    lower.includes('postgres connection failed') ||
+    lower.includes('connect econnrefused') ||
+    lower.includes('getaddrinfo enotfound') ||
+    lower.includes('connection terminated unexpectedly')
+  ) {
+    return 'Database is temporarily unavailable. Please try again in a few seconds.';
+  }
   if (lower.includes('error code: 522') || lower.includes('522: connection timed out')) {
     return 'Supabase project is temporarily unreachable (Cloudflare 522 connection timeout)';
   }
@@ -74,9 +83,14 @@ const isServiceUnavailableErrorText = (value: string) => {
   const lower = value.toLowerCase();
   return (
     lower.includes('supabase database is temporarily unreachable') ||
+    lower.includes('database is temporarily unavailable') ||
     lower.includes('supabase request timed out') ||
     lower.includes('supabase temporarily unavailable') ||
     lower.includes('postgres temporarily unavailable') ||
+    lower.includes('postgres connection failed') ||
+    lower.includes('connect econnrefused') ||
+    lower.includes('getaddrinfo enotfound') ||
+    lower.includes('connection terminated unexpectedly') ||
     lower.includes('data transfer quota') ||
     lower.includes('quota exceeded') ||
     lower.includes('cloudflare 522') ||

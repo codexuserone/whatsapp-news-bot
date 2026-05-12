@@ -408,7 +408,7 @@ const FeedsPage = () => {
 
                 <details className="rounded-lg border bg-muted/20 p-4">
                   <summary className="cursor-pointer text-sm font-medium">
-                    Advanced: JSON paths + cleaning
+                    Custom extraction rules
                   </summary>
                   <div className="mt-4 space-y-4">
                     <div className="flex flex-wrap gap-2">
@@ -450,10 +450,9 @@ const FeedsPage = () => {
                     </div>
 
                     <div className="space-y-2">
-                      <p className="text-sm font-medium">JSON Parse Config (optional)</p>
+                      <p className="text-sm font-medium">Custom field mapping</p>
                       <p className="text-xs text-muted-foreground">
-                        Only needed for JSON feeds. Use dot paths like <code>title.rendered</code> or{' '}
-                        <code>_embedded.wp:featuredmedia[0].source_url</code>.
+                        Only needed when the checker cannot find the story title, link, or image automatically.
                       </p>
                       <div className="grid gap-3 sm:grid-cols-2">
                         <div className="space-y-1.5">
@@ -490,7 +489,7 @@ const FeedsPage = () => {
                     <Separator />
 
                     <div className="space-y-3">
-                      <p className="text-sm font-medium">Cleaning (optional)</p>
+                      <p className="text-sm font-medium">Cleanup</p>
 
                       <div className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2">
                         <div className="min-w-0">
@@ -531,7 +530,7 @@ const FeedsPage = () => {
                 </details>
 
                 <p className="text-xs text-muted-foreground">
-                  Feed polling only runs when at least one running schedule uses this feed.
+                  Running schedules check feeds automatically.
                 </p>
 
                 <input type="hidden" {...form.register('fetch_interval')} value={900} />

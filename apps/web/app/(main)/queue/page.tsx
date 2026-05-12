@@ -712,7 +712,7 @@ const QueueInner = () => {
         <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
           <Switch id="include-manual" checked={includeManual} onCheckedChange={setIncludeManual} />
           <Label htmlFor="include-manual" className="text-sm">
-            Include manual
+            Include Compose sends
           </Label>
         </div>
         <span className="w-full text-sm text-muted-foreground sm:w-auto">

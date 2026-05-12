@@ -30,6 +30,7 @@ export type Template = {
   name: string;
   description?: string | null;
   content: string;
+  variables?: string[] | null;
   active: boolean;
   send_images?: boolean | null;
   send_mode?: 'auto_media' | 'media_only' | 'text_preview' | 'text_only' | null;

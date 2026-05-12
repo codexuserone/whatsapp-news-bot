@@ -341,5 +341,6 @@ module.exports.__testUtils = {
   normalizeStatusBackgroundColor,
   normalizeStatusFont,
   normalizeTemplatePayload,
-  normalizeTemplateResponse
+  normalizeTemplateResponse,
+  extractVariablesFromTemplate
 };

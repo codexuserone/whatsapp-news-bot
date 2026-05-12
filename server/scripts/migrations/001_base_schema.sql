@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS templates (
     name TEXT NOT NULL,
     content TEXT NOT NULL,
     description TEXT,
+    variables TEXT[] NOT NULL DEFAULT '{}',
     send_images BOOLEAN DEFAULT true,
     active BOOLEAN DEFAULT true,
     created_at TIMESTAMPTZ DEFAULT NOW(),

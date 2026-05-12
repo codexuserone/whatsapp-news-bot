@@ -116,6 +116,18 @@ describe('template route normalization', () => {
     });
   });
 
+  it('extracts variables from main content and status sequence steps', () => {
+    expect(
+      testUtils.extractVariablesFromTemplate({
+        content: '{{title}}\n{{link}}',
+        sequence_steps: [
+          { content: '{{description}}' },
+          { content: '{{title}}\n{{image_url}}' }
+        ]
+      }).sort()
+    ).toEqual(['description', 'image_url', 'link', 'title']);
+  });
+
   it('normalizes status style values for template responses', () => {
     expect(
       testUtils.normalizeTemplateResponse({

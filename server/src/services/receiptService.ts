@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 const { getSupabaseClient } = require('../db/supabase');
 const logger = require('../utils/logger');
 const { getErrorMessage } = require('../utils/errorUtils');
+const { normalizePhoneForType } = require('../utils/targetJid');
 
 type ReceiptUpdate = {
   id?: unknown;
@@ -34,18 +35,34 @@ const isReceiptPromotableTargetType = (value: unknown) => {
   return type === 'individual' || type === 'group';
 };
 
+const normalizeReceiptJidForType = (type: unknown, value: unknown) => {
+  const targetType = String(type || '').trim().toLowerCase();
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return String(normalizePhoneForType(targetType, raw) || raw).trim().toLowerCase();
+};
+
+const receiptRemoteMatchesTarget = (remoteJid: unknown, targetPhoneNumber: unknown, targetType: unknown) => {
+  const type = String(targetType || '').trim().toLowerCase();
+  if (!isReceiptPromotableTargetType(type)) return false;
+  const remote = normalizeReceiptJidForType(type, remoteJid);
+  const target = normalizeReceiptJidForType(type, targetPhoneNumber);
+  return Boolean(remote && target && remote === target);
+};
+
 const loadPromotableMessageLogIds = async (
   supabase: SupabaseClient,
   whatsappMessageIds: string[],
   allowedCurrentStatuses: string[],
-  chunkSize: number
+  chunkSize: number,
+  remoteJidByMessageId: Map<string, string>
 ) => {
   const promotableIds: string[] = [];
 
   for (const batch of chunk(whatsappMessageIds, chunkSize)) {
     const { data: logRows, error: logError } = await supabase
       .from('message_logs')
-      .select('id,target_id')
+      .select('id,target_id,whatsapp_message_id')
       .in('whatsapp_message_id', batch)
       .in('status', allowedCurrentStatuses);
     if (logError) {
@@ -64,23 +81,29 @@ const loadPromotableMessageLogIds = async (
 
     const { data: targetRows, error: targetError } = await supabase
       .from('targets')
-      .select('id,type')
+      .select('id,type,phone_number')
       .in('id', targetIds);
     if (targetError) {
       throw targetError;
     }
 
-    const targetTypeById = new Map(
-      (targetRows || []).map((row: { id?: unknown; type?: unknown }) => [
+    const targetById = new Map(
+      (targetRows || []).map((row: { id?: unknown; type?: unknown; phone_number?: unknown }) => [
         String(row?.id || '').trim(),
-        String(row?.type || '').trim().toLowerCase()
+        {
+          type: String(row?.type || '').trim().toLowerCase(),
+          phoneNumber: String(row?.phone_number || '').trim()
+        }
       ])
     );
 
-    for (const row of rows as Array<{ id?: unknown; target_id?: unknown }>) {
+    for (const row of rows as Array<{ id?: unknown; target_id?: unknown; whatsapp_message_id?: unknown }>) {
       const id = String(row?.id || '').trim();
       const targetId = String(row?.target_id || '').trim();
-      if (id && isReceiptPromotableTargetType(targetTypeById.get(targetId))) {
+      const whatsappMessageId = String(row?.whatsapp_message_id || '').trim();
+      const target = targetById.get(targetId);
+      const remoteJid = remoteJidByMessageId.get(whatsappMessageId);
+      if (id && target && receiptRemoteMatchesTarget(remoteJid, target.phoneNumber, target.type)) {
         promotableIds.push(id);
       }
     }
@@ -101,10 +124,13 @@ const persistReceiptUpdates = async (
   const deliveredIds: string[] = [];
   const readIds: string[] = [];
   const playedIds: string[] = [];
+  const remoteJidByMessageId = new Map<string, string>();
 
   for (const update of Array.isArray(updates) ? updates : []) {
     const id = String(update?.id || '').trim();
     if (!id) continue;
+    const remoteJid = String(update?.remoteJid || '').trim();
+    if (remoteJid) remoteJidByMessageId.set(id, remoteJid);
     const status = toFiniteNumberOrNull(update?.status);
     if (status === null) continue;
 
@@ -130,7 +156,13 @@ const persistReceiptUpdates = async (
   ): Promise<number> => {
     if (!ids.length) return 0;
     let updated = 0;
-    const promotableIds = await loadPromotableMessageLogIds(supabase, ids, allowedCurrentStatuses, chunkSize);
+    const promotableIds = await loadPromotableMessageLogIds(
+      supabase,
+      ids,
+      allowedCurrentStatuses,
+      chunkSize,
+      remoteJidByMessageId
+    );
     if (!promotableIds.length) {
       return 0;
     }
@@ -209,7 +241,8 @@ const persistReceiptUpdates = async (
 module.exports = {
   persistReceiptUpdates,
   __testUtils: {
-    isReceiptPromotableTargetType
+    isReceiptPromotableTargetType,
+    receiptRemoteMatchesTarget
   }
 };
 export {};

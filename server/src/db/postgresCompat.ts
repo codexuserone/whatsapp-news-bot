@@ -78,6 +78,14 @@ const POSTGRES_CIRCUIT_BREAKER_MS = Math.max(
   5000,
   Math.floor(Number(process.env.POSTGRES_CIRCUIT_BREAKER_MS || process.env.SUPABASE_CIRCUIT_BREAKER_MS || 45_000))
 );
+const POSTGRES_QUERY_RETRIES = Math.max(
+  0,
+  Math.floor(Number(process.env.POSTGRES_QUERY_RETRIES || 2))
+);
+const POSTGRES_QUERY_RETRY_BASE_MS = Math.max(
+  0,
+  Math.floor(Number(process.env.POSTGRES_QUERY_RETRY_BASE_MS || 250))
+);
 
 const preferIpv4 = () => {
   try {
@@ -193,6 +201,29 @@ const isPostgresAvailabilityError = (error: unknown) => {
   );
 };
 
+const isPostgresCircuitBreakerError = (error: unknown) => {
+  const message = getErrorMessage(error, '').toLowerCase();
+  return (
+    message.includes('data transfer quota') ||
+    message.includes('quota exceeded') ||
+    message.includes('project has been suspended') ||
+    message.includes('database is suspended')
+  );
+};
+
+const isPostgresTransientConnectionError = (error: unknown) => {
+  const message = getErrorMessage(error, '').toLowerCase();
+  const code = String((error as { code?: unknown } | null)?.code || '').trim().toUpperCase();
+  return (
+    code === 'ECONNREFUSED' ||
+    code === 'ECONNRESET' ||
+    code === 'ETIMEDOUT' ||
+    message.includes('connect econnrefused') ||
+    message.includes('connection terminated') ||
+    message.includes('timeout')
+  );
+};
+
 const markPostgresSuccess = () => {
   pgCircuitOpenUntil = 0;
   pgLastFailureAt = 0;
@@ -203,7 +234,9 @@ const markPostgresFailure = (error: unknown) => {
   if (!isPostgresAvailabilityError(error)) return;
   pgLastFailureAt = Date.now();
   pgLastFailureMessage = getErrorMessage(error, 'Postgres request failed');
-  pgCircuitOpenUntil = Math.max(pgCircuitOpenUntil, pgLastFailureAt + POSTGRES_CIRCUIT_BREAKER_MS);
+  if (isPostgresCircuitBreakerError(error)) {
+    pgCircuitOpenUntil = Math.max(pgCircuitOpenUntil, pgLastFailureAt + POSTGRES_CIRCUIT_BREAKER_MS);
+  }
 };
 
 const buildPostgresCircuitError = () => ({
@@ -335,6 +368,30 @@ const prepareMutationValue = (table: string, column: string, value: unknown) => 
     return JSON.stringify(value);
   }
   return value;
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const runPostgresQuery = async (
+  pool: PgPool,
+  sql: string,
+  params: unknown[] = []
+) => {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await pool.query(sql, params);
+    } catch (error) {
+      if (!isPostgresTransientConnectionError(error) || attempt >= POSTGRES_QUERY_RETRIES) {
+        throw error;
+      }
+      attempt += 1;
+      const delayMs = POSTGRES_QUERY_RETRY_BASE_MS * attempt;
+      if (delayMs > 0) {
+        await sleep(delayMs);
+      }
+    }
+  }
 };
 
 class PostgresQueryBuilder {
@@ -612,7 +669,8 @@ class PostgresQueryBuilder {
 
     let count: number | null = null;
     if (this.countExact) {
-      const countResult = await this.pool.query(
+      const countResult = await runPostgresQuery(
+        this.pool,
         `SELECT COUNT(*)::int AS count FROM ${quoteIdentifier(this.table)}${where.sql}`,
         where.params
       );
@@ -622,7 +680,8 @@ class PostgresQueryBuilder {
       }
     }
 
-    const result = await this.pool.query(
+    const result = await runPostgresQuery(
+      this.pool,
       `SELECT ${this.buildSelectClause()} FROM ${quoteIdentifier(this.table)}${where.sql}${orderClause}${limitClause.sql}`,
       [...where.params, ...limitClause.params]
     );
@@ -656,7 +715,8 @@ class PostgresQueryBuilder {
       .join(', ');
 
     const returning = this.returningExplicit ? ' RETURNING *' : '';
-    const result = await this.pool.query(
+    const result = await runPostgresQuery(
+      this.pool,
       `INSERT INTO ${quoteIdentifier(this.table)} (${columns.map(quoteIdentifier).join(', ')}) VALUES ${valuesSql}${returning}`,
       params
     );
@@ -683,7 +743,8 @@ class PostgresQueryBuilder {
 
     const where = this.buildWhereClause(params.length + 1);
     const returning = this.returningExplicit ? ' RETURNING *' : '';
-    const result = await this.pool.query(
+    const result = await runPostgresQuery(
+      this.pool,
       `UPDATE ${quoteIdentifier(this.table)} SET ${setClause}${where.sql}${returning}`,
       [...params, ...where.params]
     );
@@ -698,7 +759,8 @@ class PostgresQueryBuilder {
   private async executeDelete(): Promise<QueryResponse> {
     const where = this.buildWhereClause(1);
     const returning = this.returningExplicit ? ' RETURNING *' : '';
-    const result = await this.pool.query(
+    const result = await runPostgresQuery(
+      this.pool,
       `DELETE FROM ${quoteIdentifier(this.table)}${where.sql}${returning}`,
       where.params
     );
@@ -742,7 +804,8 @@ class PostgresQueryBuilder {
         : ' DO NOTHING';
 
     const returning = this.returningExplicit ? ' RETURNING *' : '';
-    const result = await this.pool.query(
+    const result = await runPostgresQuery(
+      this.pool,
       `INSERT INTO ${quoteIdentifier(this.table)} (${columns.map(quoteIdentifier).join(', ')}) VALUES ${valuesSql}${conflictClause}${conflictAction}${returning}`,
       params
     );
@@ -782,7 +845,8 @@ class PostgresQueryBuilder {
 
       const requestedFields = uniqueStrings([definition.remoteColumn, ...relation.fields]);
       const placeholders = joinIds.map((_id, index) => `$${index + 1}`).join(', ');
-      const relationResult = await this.pool.query(
+      const relationResult = await runPostgresQuery(
+        this.pool,
         `SELECT ${requestedFields.map(quoteIdentifier).join(', ')} FROM ${quoteIdentifier(definition.table)} WHERE ${quoteIdentifier(definition.remoteColumn)} IN (${placeholders})`,
         joinIds
       );
@@ -964,7 +1028,7 @@ const testPostgresConnection = async () => {
   const pool = getPostgresPool();
   if (!pool) return false;
   try {
-    await pool.query('SELECT 1');
+    await runPostgresQuery(pool, 'SELECT 1');
     markPostgresSuccess();
     return true;
   } catch (error) {

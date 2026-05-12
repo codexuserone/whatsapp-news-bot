@@ -19,7 +19,8 @@ describe('postgresCompat query builder', () => {
     process.env = {
       ...originalEnv,
       DATABASE_URL: 'postgresql://example.com/test',
-      DB_PROVIDER: 'postgres'
+      DB_PROVIDER: 'postgres',
+      POSTGRES_QUERY_RETRY_BASE_MS: '0'
     };
     fakeQuery.mockResolvedValue({ rows: [] });
   });
@@ -129,6 +130,47 @@ describe('postgresCompat query builder', () => {
     expect(second.error?.status).toBe(503);
     expect(String(second.error?.message || '')).toContain('Postgres temporarily unavailable');
     expect(fakeQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries transient connection refusals without opening a circuit', async () => {
+    fakeQuery
+      .mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED 10.28.136.81:5432'), { code: 'ECONNREFUSED' }))
+      .mockResolvedValueOnce({ rows: [{ id: 'feed-1' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'feed-2' }] });
+
+    const { createPostgresCompatClient, getPostgresHealthState } = require('../src/db/postgresCompat');
+    const db = createPostgresCompatClient();
+
+    const first = await db.from('feeds').select('id');
+    const second = await db.from('feeds').select('id');
+
+    expect(first.error).toBeNull();
+    expect(first.data).toEqual([{ id: 'feed-1' }]);
+    expect(second.error).toBeNull();
+    expect(second.data).toEqual([{ id: 'feed-2' }]);
+    expect(fakeQuery).toHaveBeenCalledTimes(3);
+    expect(getPostgresHealthState().circuitOpen).toBe(false);
+  });
+
+  it('does not block later requests after a transient connection failure exhausts retries', async () => {
+    fakeQuery
+      .mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED 10.28.136.81:5432'), { code: 'ECONNREFUSED' }))
+      .mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED 10.28.136.81:5432'), { code: 'ECONNREFUSED' }))
+      .mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED 10.28.136.81:5432'), { code: 'ECONNREFUSED' }))
+      .mockResolvedValueOnce({ rows: [{ id: 'feed-after-recovery' }] });
+
+    const { createPostgresCompatClient, getPostgresHealthState } = require('../src/db/postgresCompat');
+    const db = createPostgresCompatClient();
+
+    const failed = await db.from('feeds').select('id');
+    const recovered = await db.from('feeds').select('id');
+
+    expect(failed.error?.status).toBe(503);
+    expect(String(failed.error?.message || '')).toContain('ECONNREFUSED');
+    expect(recovered.error).toBeNull();
+    expect(recovered.data).toEqual([{ id: 'feed-after-recovery' }]);
+    expect(fakeQuery).toHaveBeenCalledTimes(4);
+    expect(getPostgresHealthState().circuitOpen).toBe(false);
   });
 
   it('exposes the last Postgres availability failure for readiness checks', async () => {

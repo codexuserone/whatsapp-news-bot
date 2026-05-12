@@ -364,7 +364,7 @@ const SchedulesPage = () => {
     },
     retry: (failureCount, error) => isTransientDatabaseError(error) && failureCount < 2,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 5000),
-    onError: (error: unknown) => alert(`Failed to save schedule: ${getErrorMessage(error)}`)
+    onError: (error: unknown) => setAutomationNotice({ type: 'error', message: `Failed to save schedule: ${getErrorMessage(error)}` })
   });
 
   const deleteSchedule = useMutation({
@@ -376,7 +376,7 @@ const SchedulesPage = () => {
         resetCreateForm();
       }
     },
-    onError: (error: unknown) => alert(`Failed to delete schedule: ${getErrorMessage(error)}`)
+    onError: (error: unknown) => setAutomationNotice({ type: 'error', message: `Failed to delete schedule: ${getErrorMessage(error)}` })
   });
 
   const cloneSchedule = useMutation({
@@ -386,7 +386,7 @@ const SchedulesPage = () => {
       setActive(clonedSchedule);
       setAutomationNotice({ type: 'success', message: 'Schedule cloned. Review and save any changes you want.' });
     },
-    onError: (error: unknown) => alert(`Failed to clone schedule: ${getErrorMessage(error)}`)
+    onError: (error: unknown) => setAutomationNotice({ type: 'error', message: `Failed to clone schedule: ${getErrorMessage(error)}` })
   });
 
   const setScheduleState = useMutation({
@@ -411,7 +411,7 @@ const SchedulesPage = () => {
         setAutomationNotice({ type: 'success', message: 'Schedule updated.' });
       }
     },
-    onError: (error: unknown) => alert(`Failed to update schedule state: ${getErrorMessage(error)}`)
+    onError: (error: unknown) => setAutomationNotice({ type: 'error', message: `Failed to update schedule state: ${getErrorMessage(error)}` })
   });
 
   const dispatchSchedule = useMutation({
@@ -513,10 +513,10 @@ const SchedulesPage = () => {
           }
         }
       }
-      alert(message);
+      setAutomationNotice({ type: 'success', message });
     },
     onError: (error: unknown) => {
-      alert(`Error: ${getErrorMessage(error) || 'Failed to dispatch schedule'}`);
+      setAutomationNotice({ type: 'error', message: getErrorMessage(error) || 'Failed to dispatch schedule' });
     }
   });
 
@@ -1107,7 +1107,7 @@ const SchedulesPage = () => {
           <CardContent>
             {automationNotice ? (
               <div
-                className={`mb-3 rounded-md border px-3 py-2 text-sm ${
+                className={`mb-3 whitespace-pre-line rounded-md border px-3 py-2 text-sm ${
                   automationNotice.type === 'success'
                     ? 'border-emerald-300/70 bg-emerald-50 text-emerald-900'
                     : 'border-red-300/70 bg-red-50 text-red-900'

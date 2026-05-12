@@ -254,7 +254,7 @@ const FeedsPage = () => {
       queryClient.invalidateQueries({ queryKey: ['feeds'] });
       queryClient.invalidateQueries({ queryKey: ['available-variables'] });
       if (result?.rateLimited) {
-        alert(
+        setSaveError(
           result.message ||
             (result?.deactivated
               ? 'Feed is paused for now. Delete again in a few seconds to remove it fully.'
@@ -270,10 +270,10 @@ const FeedsPage = () => {
     onError: (error: unknown) => {
       const message = getErrorMessage(error);
       if (isRateLimitedError(error)) {
-        alert('Delete is temporarily rate-limited. Wait a few seconds and try once more.');
+        setSaveError('Delete is temporarily rate-limited. Wait a few seconds and try once more.');
         return;
       }
-      alert(`Failed to delete feed: ${message}`);
+      setSaveError(`Failed to delete feed: ${message}`);
     }
   });
 

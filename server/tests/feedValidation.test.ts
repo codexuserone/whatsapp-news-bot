@@ -37,4 +37,18 @@ describe('feed validation', () => {
     if (!result.success) return;
     expect(result.data.fetch_interval).toBe(900);
   });
+
+  it('normalizes browser-submitted feed type casing', () => {
+    const result = schemas.feed.safeParse({
+      name: 'COLlive Mazel Tov',
+      url: 'https://collive.com/feed/',
+      type: 'Rss',
+      fetch_interval: 900,
+      active: true
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.type).toBe('rss');
+  });
 });

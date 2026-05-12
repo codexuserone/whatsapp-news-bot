@@ -351,7 +351,7 @@ const QueueInner = () => {
       const blockedStatus = String(item.status || 'unknown');
       setActionNotice({
         type: 'error',
-        message: `Editing is available before send and for recently sent messages inside WhatsApp's ${editWindowMinutes}-minute edit window. Current status: ${blockedStatus}.`
+        message: `Editing is available before send. Recently sent text-only messages can be edited inside WhatsApp's ${editWindowMinutes}-minute edit window. Current status: ${blockedStatus}.`
       });
       return;
     }
@@ -870,7 +870,7 @@ const QueueInner = () => {
 
                     {editing ? (
                       <div className="space-y-2 rounded-md bg-muted p-3">
-                        <p className="text-xs text-muted-foreground">Edit the queued message, or update the caption on a recently sent text, image, video, or document</p>
+                        <p className="text-xs text-muted-foreground">Edit queued content. Recently sent text-only messages can be edited inside WhatsApp's edit window.</p>
                         <Textarea
                           value={draftMessage}
                           onChange={(event) => setDraftMessage(event.target.value)}
@@ -899,7 +899,7 @@ const QueueInner = () => {
                         variant="outline"
                         onClick={() => requestEdit(item)}
                         disabled={!canEdit(item)}
-                        title={canEdit(item) ? 'Edit queued content or update a recent WhatsApp caption in place' : 'Can edit queued items or recently sent text, image, video, or document messages still inside the WhatsApp edit window'}
+                        title={canEdit(item) ? 'Edit queued content or a recent text-only WhatsApp message' : 'Can edit queued items, plus recent text-only WhatsApp messages still inside the edit window'}
                       >
                         <Pencil className="mr-1 h-3 w-3" /> Edit
                       </Button>
@@ -1064,7 +1064,7 @@ const QueueInner = () => {
                       {item.correction_error ? <p className="text-[11px] text-warning-foreground">Correction: {item.correction_error}</p> : null}
                       {editing ? (
                         <div className="rounded-md border bg-muted/30 p-2 space-y-2">
-                          <p className="text-[11px] text-muted-foreground">Edit the queued message, or update the caption on a recently sent text, image, video, or document</p>
+                          <p className="text-[11px] text-muted-foreground">Edit queued content. Recently sent text-only messages can be edited inside WhatsApp's edit window.</p>
                           <Textarea
                             value={draftMessage}
                             onChange={(event) => setDraftMessage(event.target.value)}
@@ -1090,7 +1090,7 @@ const QueueInner = () => {
                             className="h-7 text-xs px-2"
                             onClick={() => requestEdit(item)}
                             disabled={!canEdit(item)}
-                            title={canEdit(item) ? 'Edit queued content or update a recent WhatsApp caption in place' : 'Can edit queued items or recently sent text, image, video, or document messages still inside the WhatsApp edit window'}
+                            title={canEdit(item) ? 'Edit queued content or a recent text-only WhatsApp message' : 'Can edit queued items, plus recent text-only WhatsApp messages still inside the edit window'}
                           >
                             <Pencil className="mr-1 h-3 w-3" /> Edit
                           </Button>

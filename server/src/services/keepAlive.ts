@@ -17,6 +17,12 @@ const resolveKeepAliveTimeoutMs = (value: unknown) => {
   return Math.min(Math.max(Math.floor(parsed), 2_000), 60_000);
 };
 
+const resolveKeepAliveUrl = (baseUrl: string, explicitUrl?: string | null) => {
+  const explicit = String(explicitUrl || '').trim();
+  if (explicit) return explicit;
+  return `${String(baseUrl || '').replace(/\/+$/, '')}/ready`;
+};
+
 const keepAlive = (): void => {
   if (!env.KEEP_ALIVE) {
     return;
@@ -27,7 +33,7 @@ const keepAlive = (): void => {
     clearInterval(keepAliveInterval);
   }
 
-  const url = env.KEEP_ALIVE_URL || `${env.BASE_URL}/ping`;
+  const url = resolveKeepAliveUrl(env.BASE_URL, env.KEEP_ALIVE_URL);
   const intervalMs = resolveKeepAliveIntervalMs(env.KEEP_ALIVE_INTERVAL_MS);
   const timeoutMs = resolveKeepAliveTimeoutMs(env.KEEP_ALIVE_TIMEOUT_MS);
 
@@ -57,7 +63,8 @@ module.exports = {
   stopKeepAlive,
   __testUtils: {
     resolveKeepAliveIntervalMs,
-    resolveKeepAliveTimeoutMs
+    resolveKeepAliveTimeoutMs,
+    resolveKeepAliveUrl
   }
 };
 export {};

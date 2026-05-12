@@ -25,21 +25,21 @@ services:
       - key: POSTGRES_POOL_MAX
         value: "1"
       - key: POSTGRES_QUERY_RETRIES
-        value: "10"
+        value: "20"
       - key: POSTGRES_QUERY_RETRY_BASE_MS
         value: "500"
       - key: POSTGRES_QUERY_RETRY_MAX_MS
-        value: "5000"
+        value: "3000"
       - key: POSTGRES_CIRCUIT_BREAKER_MS
         value: "5000"
       - key: AUTH_STATE_POOL_MAX
         value: "1"
       - key: AUTH_STATE_QUERY_RETRIES
-        value: "10"
+        value: "20"
       - key: AUTH_STATE_QUERY_RETRY_BASE_MS
         value: "500"
       - key: AUTH_STATE_QUERY_RETRY_MAX_MS
-        value: "5000"
+        value: "3000"
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY

@@ -4716,7 +4716,7 @@ class WhatsAppClient {
       const statusJidList = buildStatusDeliveryRecipients(
         candidateStatusJidList,
         selfAudienceJids,
-        false
+        includeSender
       );
 
       options = {

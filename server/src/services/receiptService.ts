@@ -30,9 +30,14 @@ const chunk = <T>(items: T[], size: number) => {
 
 const uniq = (items: string[]) => Array.from(new Set(items));
 
-const isReceiptPromotableTargetType = (value: unknown) => {
+const isReceiptDeliveredPromotableTargetType = (value: unknown) => {
   const type = String(value || '').trim().toLowerCase();
   return type === 'individual' || type === 'group';
+};
+
+const isReceiptReadPromotableTargetType = (value: unknown) => {
+  const type = String(value || '').trim().toLowerCase();
+  return type === 'individual';
 };
 
 const normalizeReceiptJidForType = (type: unknown, value: unknown) => {
@@ -42,9 +47,19 @@ const normalizeReceiptJidForType = (type: unknown, value: unknown) => {
   return String(normalizePhoneForType(targetType, raw) || raw).trim().toLowerCase();
 };
 
-const receiptRemoteMatchesTarget = (remoteJid: unknown, targetPhoneNumber: unknown, targetType: unknown) => {
+const receiptRemoteMatchesTarget = (
+  remoteJid: unknown,
+  targetPhoneNumber: unknown,
+  targetType: unknown,
+  options?: { receiptLevel?: 'delivered' | 'read' }
+) => {
   const type = String(targetType || '').trim().toLowerCase();
-  if (!isReceiptPromotableTargetType(type)) return false;
+  const receiptLevel = options?.receiptLevel || 'delivered';
+  const allowed =
+    receiptLevel === 'read'
+      ? isReceiptReadPromotableTargetType(type)
+      : isReceiptDeliveredPromotableTargetType(type);
+  if (!allowed) return false;
   const remote = normalizeReceiptJidForType(type, remoteJid);
   const target = normalizeReceiptJidForType(type, targetPhoneNumber);
   return Boolean(remote && target && remote === target);
@@ -55,7 +70,8 @@ const loadPromotableMessageLogIds = async (
   whatsappMessageIds: string[],
   allowedCurrentStatuses: string[],
   chunkSize: number,
-  remoteJidByMessageId: Map<string, string>
+  remoteJidByMessageId: Map<string, string>,
+  options?: { receiptLevel?: 'delivered' | 'read' }
 ) => {
   const promotableIds: string[] = [];
 
@@ -103,7 +119,13 @@ const loadPromotableMessageLogIds = async (
       const whatsappMessageId = String(row?.whatsapp_message_id || '').trim();
       const target = targetById.get(targetId);
       const remoteJid = remoteJidByMessageId.get(whatsappMessageId);
-      if (id && target && receiptRemoteMatchesTarget(remoteJid, target.phoneNumber, target.type)) {
+      if (
+        id &&
+        target &&
+        receiptRemoteMatchesTarget(remoteJid, target.phoneNumber, target.type, {
+          receiptLevel: options?.receiptLevel || 'delivered'
+        })
+      ) {
         promotableIds.push(id);
       }
     }
@@ -161,7 +183,8 @@ const persistReceiptUpdates = async (
       ids,
       allowedCurrentStatuses,
       chunkSize,
-      remoteJidByMessageId
+      remoteJidByMessageId,
+      { receiptLevel: String(patch.status || '') === 'delivered' ? 'delivered' : 'read' }
     );
     if (!promotableIds.length) {
       return 0;
@@ -241,7 +264,8 @@ const persistReceiptUpdates = async (
 module.exports = {
   persistReceiptUpdates,
   __testUtils: {
-    isReceiptPromotableTargetType,
+    isReceiptDeliveredPromotableTargetType,
+    isReceiptReadPromotableTargetType,
     receiptRemoteMatchesTarget
   }
 };

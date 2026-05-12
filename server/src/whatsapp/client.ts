@@ -4584,8 +4584,9 @@ class WhatsAppClient {
     const socket = this.socket as any;
     if (!socket) throw new Error('WhatsApp not connected');
     const syncOwnDevices = deliveryOptions.syncOwnDevices !== false;
+    const forceRawRelay = String(process.env.WHATSAPP_STATUS_FORCE_RAW_RELAY || '').trim().toLowerCase() === 'true';
 
-    if (typeof socket.relayMessage !== 'function') {
+    if (!forceRawRelay || typeof socket.relayMessage !== 'function') {
       return socket.sendMessage('status@broadcast', content, options);
     }
 
@@ -4622,7 +4623,7 @@ class WhatsAppClient {
         socket.relayMessage('status@broadcast', fullMsg.message, {
           messageId: fullMsg.key?.id,
           statusJidList: options.statusJidList,
-          useUserDevicesCache: false
+          useUserDevicesCache: options.useUserDevicesCache
         }),
         statusRelayTimeoutMs,
         'Timed out relaying status broadcast'
@@ -4794,8 +4795,7 @@ class WhatsAppClient {
       options = {
         ...sanitized.options,
         broadcast: true,
-        statusJidList,
-        useUserDevicesCache: false
+        statusJidList
       };
       if (isStatusMediaContent(content)) {
         const requestedTimeout = Number((sanitized.options as { mediaUploadTimeoutMs?: unknown }).mediaUploadTimeoutMs);

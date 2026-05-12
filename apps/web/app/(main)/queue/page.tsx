@@ -71,6 +71,21 @@ const getMediaDisplayLabel = (item: QueueItem) => {
   return 'media attached';
 };
 
+const getSendStateLabel = (status: unknown) => {
+  switch (String(status || '').trim().toLowerCase()) {
+    case 'sent':
+      return 'Accepted by WhatsApp';
+    case 'delivered':
+      return 'Delivered';
+    case 'read':
+      return 'Read';
+    case 'played':
+      return 'Played';
+    default:
+      return 'Sent';
+  }
+};
+
 const deriveDefaultMessage = (item: QueueItem) => {
   const title = String(item.title || '').trim();
   const url = String(item.url || '').trim();
@@ -277,7 +292,7 @@ const QueueInner = () => {
     mutationFn: (id: string) => api.post<QueueSendNowResponse>(`/api/queue/${id}/send-now`),
     onSuccess: (result: QueueSendNowResponse) => {
       if (result?.ok) {
-        setActionNotice({ type: 'success', message: result?.messageId ? `Sent now (${result.messageId}).` : 'Sent now.' });
+        setActionNotice({ type: 'success', message: result?.messageId ? `Accepted by WhatsApp (${result.messageId}).` : 'Accepted by WhatsApp.' });
       } else if (String(result?.status || '').toLowerCase() === 'awaiting_approval') {
         setActionNotice({ type: 'warning', message: result?.error || 'Held for review before another send attempt.' });
       } else {
@@ -471,11 +486,13 @@ const QueueInner = () => {
       case 'processing':
         return <Badge variant="warning">Sending</Badge>;
       case 'sent':
-        return <Badge variant="success">Sent to WhatsApp</Badge>;
+        return <Badge variant="success">Accepted by WhatsApp</Badge>;
       case 'delivered':
+        return <Badge variant="success">Delivered</Badge>;
       case 'read':
+        return <Badge variant="success">Read</Badge>;
       case 'played':
-        return <Badge variant="success">Sent</Badge>;
+        return <Badge variant="success">Played</Badge>;
       case 'failed':
         return <Badge variant="destructive">Failed</Badge>;
       case 'skipped':
@@ -533,15 +550,16 @@ const QueueInner = () => {
     const hasRequestedMedia = Boolean(mediaType || item.media_url || item.image_url);
 
     if (isSuccessfulSendStatus(item.status)) {
+      const stateLabel = getSendStateLabel(item.status);
       if (mediaSent && mediaType) {
-        return { label: `Sent with ${mediaType}`, tone: 'success' as const };
+        return { label: `${stateLabel} with ${mediaType}`, tone: 'success' as const };
       }
       if (mediaType && !mediaSent) {
         return item.media_error
-          ? { label: `Sent text/link; ${mediaType} not sent`, tone: 'warning' as const }
-          : { label: 'Sent text-only', tone: 'warning' as const };
+          ? { label: `${stateLabel}; ${mediaType} not sent`, tone: 'warning' as const }
+          : { label: `${stateLabel} text-only`, tone: 'warning' as const };
       }
-      return { label: 'Sent text-only', tone: 'secondary' as const };
+      return { label: `${stateLabel} text-only`, tone: 'secondary' as const };
     }
 
     if (item.status === 'awaiting_approval') {
@@ -703,7 +721,10 @@ const QueueInner = () => {
               <SelectItem value="awaiting_approval">Awaiting approval ({queueStats?.awaiting_approval ?? 0})</SelectItem>
               <SelectItem value="pending">Queued ({queueStats?.pending ?? 0})</SelectItem>
               <SelectItem value="processing">Attempting send ({queueStats?.processing ?? 0})</SelectItem>
-              <SelectItem value="sent">Sent to WhatsApp ({queueStats?.sent ?? 0})</SelectItem>
+              <SelectItem value="sent">Accepted / delivered ({queueStats?.sent ?? 0})</SelectItem>
+              <SelectItem value="delivered">Delivered</SelectItem>
+              <SelectItem value="read">Read</SelectItem>
+              <SelectItem value="played">Played</SelectItem>
               <SelectItem value="failed">Failed ({queueStats?.failed ?? 0})</SelectItem>
               <SelectItem value="skipped">Skipped ({queueStats?.skipped ?? 0})</SelectItem>
               <SelectItem value="all">All ({queueStats?.total ?? 0})</SelectItem>
@@ -987,13 +1008,16 @@ const QueueInner = () => {
                       <span>Created: {formatDate(item.created_at)}</span>
                       {item.batch_times && item.batch_times.length ? <span>Send windows: {item.batch_times.join(', ')}</span> : null}
                       {item.scheduled_for ? <span>Scheduled: {formatDate(item.scheduled_for)}</span> : null}
-                      {item.sent_at ? <span>Sent: {formatDate(item.sent_at)}</span> : null}
+                      {item.sent_at ? <span>Accepted: {formatDate(item.sent_at)}</span> : null}
+                      {item.delivered_at ? <span>Delivered: {formatDate(item.delivered_at)}</span> : null}
+                      {item.read_at ? <span>Read: {formatDate(item.read_at)}</span> : null}
+                      {item.played_at ? <span>Played: {formatDate(item.played_at)}</span> : null}
                       {item.corrected_at ? <span>Corrected: {formatDate(item.corrected_at)}</span> : null}
                       {editCountdown ? <span>Editable: {editCountdown} left</span> : null}
                       {item.error_message ? <span className="text-destructive">Error: {item.error_message}</span> : null}
                       {item.correction_error ? <span className="text-warning-foreground">Correction: {item.correction_error}</span> : null}
                       {isSuccessfulSendStatus(item.status) && item.media_type === 'image' && !item.media_sent && item.media_error ? (
-                        <span className="text-warning-foreground">Sent text-only; requested image was not sent</span>
+                        <span className="text-warning-foreground">Accepted text-only; requested image was not sent</span>
                       ) : null}
                       {item.media_error && !item.error_message ? <span className="text-destructive">Media: {item.media_error}</span> : null}
                     </div>
@@ -1057,7 +1081,10 @@ const QueueInner = () => {
                       {targetStateBadge ? <div className="flex flex-wrap gap-1">{targetStateBadge}</div> : null}
                       {correctionBadge ? <div className="flex flex-wrap gap-1">{correctionBadge}</div> : null}
                       {item.pub_date ? <p className="text-[11px] text-muted-foreground">Published: {formatPublishedDate(item.pub_date, item.pub_precision)}</p> : null}
-                      {item.sent_at ? <p className="text-[11px] text-muted-foreground">Sent: {formatDate(item.sent_at)}</p> : null}
+                      {item.sent_at ? <p className="text-[11px] text-muted-foreground">Accepted: {formatDate(item.sent_at)}</p> : null}
+                      {item.delivered_at ? <p className="text-[11px] text-muted-foreground">Delivered: {formatDate(item.delivered_at)}</p> : null}
+                      {item.read_at ? <p className="text-[11px] text-muted-foreground">Read: {formatDate(item.read_at)}</p> : null}
+                      {item.played_at ? <p className="text-[11px] text-muted-foreground">Played: {formatDate(item.played_at)}</p> : null}
                       {item.corrected_at ? <p className="text-[11px] text-muted-foreground">Corrected: {formatDate(item.corrected_at)}</p> : null}
                       {item.correction_error ? <p className="text-[11px] text-warning-foreground">Correction: {item.correction_error}</p> : null}
                       {editing ? (

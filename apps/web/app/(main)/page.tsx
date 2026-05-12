@@ -24,6 +24,30 @@ type DeliveryAnalytics = {
   played_rate: number;
 };
 
+const successfulStatuses = new Set(['sent', 'delivered', 'read', 'played']);
+
+const getLogStatusLabel = (status: unknown) => {
+  switch (String(status || '').trim().toLowerCase()) {
+    case 'sent':
+      return 'Accepted';
+    case 'delivered':
+      return 'Delivered';
+    case 'read':
+      return 'Read';
+    case 'played':
+      return 'Played';
+    default:
+      return String(status || 'Unknown');
+  }
+};
+
+const getLogTime = (log: LogEntry) =>
+  log.played_at ||
+  log.read_at ||
+  log.delivered_at ||
+  log.sent_at ||
+  log.created_at;
+
 const OverviewPage = () => {
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
@@ -145,7 +169,7 @@ const OverviewPage = () => {
             </div>
             <div className="border-t pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Last {queueStats?.window_hours ?? 24} hours</div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Sent with WhatsApp id</span>
+              <span className="text-muted-foreground">Accepted by WhatsApp</span>
               <span className="font-medium">{recentRecordedCount}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
@@ -190,14 +214,14 @@ const OverviewPage = () => {
                     <TableCell>
                       <Badge
                         variant={
-                          ['sent', 'delivered', 'read', 'played'].includes(String(log.status || '').toLowerCase())
+                          successfulStatuses.has(String(log.status || '').toLowerCase())
                             ? 'success'
                             : log.status === 'failed'
                               ? 'destructive'
                               : 'warning'
                         }
                       >
-                        {['sent', 'delivered', 'read', 'played'].includes(String(log.status || '').toLowerCase()) ? 'Sent' : log.status}
+                        {getLogStatusLabel(log.status)}
                       </Badge>
                     </TableCell>
                     <TableCell className="font-medium">{log.target?.name || log.target_id}</TableCell>
@@ -205,7 +229,7 @@ const OverviewPage = () => {
                       {log.message_content?.substring(0, 50) || '-'}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {new Date(log.sent_at || log.created_at).toLocaleString()}
+                      {new Date(getLogTime(log)).toLocaleString()}
                     </TableCell>
                   </TableRow>
                 ))}

@@ -28,7 +28,10 @@ const LOG_FILTERS = [
   { value: 'awaiting_approval', label: 'Held' },
   { value: 'pending', label: 'Queued' },
   { value: 'processing', label: 'Sending' },
-  { value: 'sent', label: 'Sent to WhatsApp' },
+  { value: 'sent', label: 'Accepted by WhatsApp' },
+  { value: 'delivered', label: 'Delivered' },
+  { value: 'read', label: 'Read' },
+  { value: 'played', label: 'Played' },
   { value: 'failed', label: 'Failed' },
   { value: 'skipped', label: 'Skipped' },
   { value: 'superseded', label: 'Superseded' }
@@ -37,10 +40,13 @@ const LOG_FILTERS = [
 const getStatusLabel = (status: string) => {
   switch (status) {
     case 'sent':
+      return 'Accepted by WhatsApp';
     case 'delivered':
+      return 'Delivered';
     case 'read':
+      return 'Read';
     case 'played':
-      return 'Sent to WhatsApp';
+      return 'Played';
     case 'failed':
       return 'Failed';
     case 'pending':
@@ -59,10 +65,10 @@ const getStatusLabel = (status: string) => {
 };
 
 const getWhenDate = (log: LogEntry) =>
-  log.sent_at ||
-  log.delivered_at ||
-  log.read_at ||
   log.played_at ||
+  log.read_at ||
+  log.delivered_at ||
+  log.sent_at ||
   log.scheduled_for ||
   log.processing_started_at ||
   log.created_at;

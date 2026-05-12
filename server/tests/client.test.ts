@@ -1285,6 +1285,44 @@ describe('WhatsAppClient', () => {
         );
     });
 
+    it('should use an explicit statusJidList without rescanning the live audience', async () => {
+        const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-explicit' } }));
+        client.socket = {
+            sendMessage,
+            user: { id: '16465527019:58@s.whatsapp.net' }
+        };
+        client.meJid = '16465527019:58@s.whatsapp.net';
+        const resolveAudience = jest.fn(async () => ({
+            participants: ['19999999999@s.whatsapp.net'],
+            selfJid: '16465527019@s.whatsapp.net',
+            sources: {
+                contactsCache: 1,
+                storeContacts: 0,
+                storeChats: 0,
+                groupMetadata: 0,
+                env: 0,
+                me: 1,
+                lidMappings: 0
+            },
+            warnings: []
+        }));
+        client.resolveStatusAudienceWithLidMappings = resolveAudience;
+
+        await client.sendStatusBroadcast(
+            { text: 'hello' },
+            { statusJidList: ['19144477725@s.whatsapp.net'] }
+        );
+
+        expect(resolveAudience).not.toHaveBeenCalled();
+        expect(sendMessage).toHaveBeenCalledWith(
+            'status@broadcast',
+            { text: 'hello' },
+            expect.objectContaining({
+                statusJidList: ['19144477725@s.whatsapp.net', '16465527019@s.whatsapp.net']
+            })
+        );
+    });
+
     it('should include the sender account in the server status audience by default', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-self' } }));
         client.socket = {

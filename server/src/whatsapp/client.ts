@@ -871,6 +871,16 @@ type StatusAudienceSources = {
   lidMappings: number;
 };
 
+const emptyStatusAudienceSources = (): StatusAudienceSources => ({
+  contactsCache: 0,
+  storeContacts: 0,
+  storeChats: 0,
+  groupMetadata: 0,
+  env: 0,
+  me: 0,
+  lidMappings: 0
+});
+
 const getStatusAudienceSafeSourceCount = (sources: Partial<StatusAudienceSources> | null | undefined) =>
   Math.max(0, Math.floor(Number(sources?.contactsCache || 0))) +
   Math.max(0, Math.floor(Number(sources?.storeContacts || 0))) +
@@ -4682,7 +4692,17 @@ class WhatsAppClient {
         : [];
       const dedupedExplicit = Array.from(new Set(explicitStatusJids));
 
-      const resolvedAudience = await this.resolveStatusAudienceWithLidMappings();
+      const resolvedAudience = dedupedExplicit.length
+        ? {
+            participants: [] as string[],
+            sources: {
+              ...emptyStatusAudienceSources(),
+              me: 1
+            },
+            warnings: [] as string[],
+            selfJid: normalizeStatusAudienceJid(this.meJid || (this.socket as any)?.user?.id) || null
+          }
+        : await this.resolveStatusAudienceWithLidMappings();
       const allowLidRecipients =
         (options as { allowUnmappedLidRecipients?: unknown }).allowUnmappedLidRecipients === true ||
         (

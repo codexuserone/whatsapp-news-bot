@@ -4458,9 +4458,14 @@ class WhatsAppClient {
     }
   }
 
-  private async relayStatusBroadcast(content: AnyMessageContent, options: Record<string, unknown>) {
+  private async relayStatusBroadcast(
+    content: AnyMessageContent,
+    options: Record<string, unknown>,
+    deliveryOptions: { syncOwnDevices?: boolean } = {}
+  ) {
     const socket = this.socket as any;
     if (!socket) throw new Error('WhatsApp not connected');
+    const syncOwnDevices = deliveryOptions.syncOwnDevices !== false;
 
     if (typeof socket.relayMessage !== 'function') {
       return socket.sendMessage('status@broadcast', content, options);
@@ -4515,7 +4520,9 @@ class WhatsAppClient {
       );
     }
 
-    const ownDeviceFanout = await this.relayStatusToOwnDevices(fullMsg.message, fullMsg.key?.id);
+    const ownDeviceFanout = syncOwnDevices
+      ? await this.relayStatusToOwnDevices(fullMsg.message, fullMsg.key?.id)
+      : null;
     if (ownDeviceFanout) {
       (fullMsg as Record<string, unknown>).ownDeviceFanout = ownDeviceFanout;
     }
@@ -4649,7 +4656,7 @@ class WhatsAppClient {
       const statusJidList = buildStatusDeliveryRecipients(
         candidateStatusJidList,
         selfAudienceJids,
-        includeSender
+        false
       );
 
       options = {
@@ -4695,7 +4702,7 @@ class WhatsAppClient {
         );
       }
 
-      const msg = await this.relayStatusBroadcast(content, options);
+      const msg = await this.relayStatusBroadcast(content, options, { syncOwnDevices: includeSender });
 
       try {
         const id = msg?.key?.id;

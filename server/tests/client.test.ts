@@ -1285,7 +1285,7 @@ describe('WhatsAppClient', () => {
         );
     });
 
-    it('should include the sender account in status delivery by default', async () => {
+    it('should keep the sender account out of the server status audience', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-self' } }));
         client.socket = {
             sendMessage,
@@ -1299,15 +1299,14 @@ describe('WhatsAppClient', () => {
 
         const sentOptions = sendMessage.mock.calls[0]?.[2];
         expect(sentOptions.statusJidList).toEqual([
-            '19144477725@s.whatsapp.net',
-            '16465527019@s.whatsapp.net'
+            '19144477725@s.whatsapp.net'
         ]);
         expect(sentOptions.useUserDevicesCache).toBe(false);
         expect(sentOptions).not.toHaveProperty('includeSender');
         expect(sentOptions).not.toHaveProperty('includeSelf');
     });
 
-    it('should include all known sender identities in status delivery', async () => {
+    it('should remove all known sender identities from the server status audience', async () => {
         const sendMessage: any = jest.fn(async (..._args: any[]) => ({ key: { id: 'msg-self-lid' } }));
         client.socket = {
             sendMessage,
@@ -1324,9 +1323,7 @@ describe('WhatsAppClient', () => {
 
         const sentOptions = sendMessage.mock.calls[0]?.[2];
         expect(sentOptions.statusJidList).toEqual([
-            '19144477725@s.whatsapp.net',
-            '16465527019@s.whatsapp.net',
-            '123456789012345@lid'
+            '19144477725@s.whatsapp.net'
         ]);
         expect(sentOptions.useUserDevicesCache).toBe(false);
     });
@@ -1356,7 +1353,7 @@ describe('WhatsAppClient', () => {
             expect.objectContaining({
                 messageId: 'status-generated-id',
                 useUserDevicesCache: false,
-                statusJidList: ['19144477725@s.whatsapp.net', '16465527019@s.whatsapp.net']
+                statusJidList: ['19144477725@s.whatsapp.net']
             })
         );
         expect(result.key.id).toBe('status-generated-id');
@@ -1395,7 +1392,7 @@ describe('WhatsAppClient', () => {
                 expect.objectContaining({
                     messageId: 'status-generated-id',
                     useUserDevicesCache: false,
-                    statusJidList: ['19144477725@s.whatsapp.net', '16465527019@s.whatsapp.net']
+                    statusJidList: ['19144477725@s.whatsapp.net']
                 })
             );
             expect(result.key.id).toBe('status-generated-id');
@@ -1451,7 +1448,7 @@ describe('WhatsAppClient', () => {
                 expect.objectContaining({
                     messageId: 'status-generated-id',
                     useUserDevicesCache: false,
-                    statusJidList: ['19144477725@s.whatsapp.net', '16465527019@s.whatsapp.net']
+                    statusJidList: ['19144477725@s.whatsapp.net']
                 })
             );
             expect(relayMessage).toHaveBeenNthCalledWith(
@@ -2211,7 +2208,7 @@ describe('WhatsAppClient', () => {
             expect.any(Object),
             expect.objectContaining({
                 broadcast: true,
-                statusJidList: ['15551234567@s.whatsapp.net', '16465527019@s.whatsapp.net']
+                statusJidList: ['15551234567@s.whatsapp.net']
             })
         );
     });

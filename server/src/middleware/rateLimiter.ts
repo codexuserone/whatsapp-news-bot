@@ -17,7 +17,12 @@ interface RateLimitOptions {
 // In-memory store (consider Redis for multi-instance deployments)
 const store = new Map<string, RateLimitEntry>();
 
-const resolveClientIp = (req: Request) => {
+export const resolveClientIp = (req: Request) => {
+  const trustedIp = String(req.ip || '').trim();
+  if (trustedIp) {
+    return trustedIp.replace(/^::ffff:/, '').trim();
+  }
+
   const forwardedFor = String(req.headers['x-forwarded-for'] || '')
     .split(',')[0]
     ?.trim() || '';
@@ -29,7 +34,7 @@ const resolveClientIp = (req: Request) => {
 };
 
 // Cleanup expired entries every 5 minutes
-setInterval(() => {
+const cleanupInterval = setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of store.entries()) {
     if (entry.resetAt < now) {
@@ -37,6 +42,7 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1000);
+cleanupInterval.unref?.();
 
 /**
  * Simple in-memory rate limiter middleware

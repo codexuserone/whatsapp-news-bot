@@ -400,11 +400,24 @@ const formatIssues = (issues: ZodIssue[]) =>
     message: issue.message
   }));
 
+const formatIssueSummary = (issues: Array<{ field: string; message: string }>) =>
+  issues
+    .map((issue) => {
+      const field = String(issue.field || '').trim();
+      const message = String(issue.message || '').trim();
+      if (!field && !message) return '';
+      return field ? `${field}: ${message || 'Invalid value'}` : message;
+    })
+    .filter(Boolean)
+    .join('; ');
+
 const validate = (schema: ZodTypeAny) => {
   return (req: Request, _res: Response, next: NextFunction) => {
     const result = schema.safeParse(req.body);
     if (!result.success) {
-      return next(badRequest('Validation failed', formatIssues(result.error.issues)));
+      const issues = formatIssues(result.error.issues);
+      const summary = formatIssueSummary(issues);
+      return next(badRequest(summary ? `Validation failed: ${summary}` : 'Validation failed', issues));
     }
     req.body = result.data;
     return next();

@@ -187,6 +187,22 @@ describe('schedulerService dispatch entry points', () => {
         expect(mockCronSchedule).not.toHaveBeenCalled();
     });
 
+    it('does not run a schedule after the WhatsApp lease has moved to another instance', async () => {
+        const whatsappClient = {
+            getStatus: () => ({
+                status: 'connected',
+                instanceId: 'stale-instance',
+                lease: { supported: true, held: false, ownerId: 'new-instance', expiresAt: new Date(Date.now() + 60000).toISOString() }
+            })
+        };
+        mockGetSupabaseClient.mockReturnValue(createSchedulesSupabase([]));
+
+        await schedulerService.__testUtils.runScheduleOnce('schedule-after-lease-loss', whatsappClient);
+
+        expect(mockWithScheduleLock).not.toHaveBeenCalled();
+        expect(mockSendQueuedForSchedule).not.toHaveBeenCalled();
+    });
+
     it('queues only active batched schedules after a feed refresh', async () => {
         const whatsappClient = {
             getStatus: () => ({ status: 'connected' })

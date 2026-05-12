@@ -227,6 +227,10 @@ const runScheduleOnce = async (
     return;
   }
 
+  if (!canRunSchedulers(whatsappClient)) {
+    return;
+  }
+
   // Check local in-flight first (fast path)
   if (scheduleInFlight.get(scheduleId)) {
     logger.info({ scheduleId }, 'Skipping schedule run - already in progress locally');
@@ -373,6 +377,7 @@ const queueBatchSchedulesForFeed = async (feedId: string, whatsappClient?: Whats
   if (schedulersDisabled()) return;
   if (shouldSkipForDatabaseOutage('batch schedule queue')) return;
   if (await isAppPaused()) return;
+  if (!canRunSchedulers(whatsappClient)) return;
 
   const supabase = getSupabaseClient();
   if (!supabase) return;
@@ -411,6 +416,7 @@ const triggerImmediateSchedules = async (feedId: string, whatsappClient?: WhatsA
     logger.info({ feedId }, 'Skipping immediate schedules - app is paused');
     return;
   }
+  if (!canRunSchedulers(whatsappClient)) return;
   const supabase = getSupabaseClient();
   if (!supabase) return;
 
@@ -519,6 +525,11 @@ const scheduleFeedPolling = async (whatsappClient?: WhatsAppClient) => {
 
         if (feedInFlight.get(feed.id)) {
           logger.info({ feedId: feed.id }, 'Skipping feed refresh - already in progress');
+          scheduleNext(intervalMs);
+          return;
+        }
+
+        if (!canRunSchedulers(whatsappClient)) {
           scheduleNext(intervalMs);
           return;
         }
@@ -946,6 +957,7 @@ module.exports = {
   __testUtils: {
     parseCorrectionWindowMinutes,
     normalizeImmediateCatchupLookbackHours,
+    runScheduleOnce,
     processFeedResultForSchedules,
     runRecentFeedCorrectionPass,
     runImmediateScheduleCatchupPass

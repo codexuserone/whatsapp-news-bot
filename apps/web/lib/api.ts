@@ -45,8 +45,14 @@ const resolveApiUrl = (path: string) => {
 const handleResponse = async <T>(response: Response): Promise<T> => {
   if (!response.ok) {
     const rawBody = await response.text().catch(() => '');
+    const trimmedBody = rawBody.trim();
+    const looksLikeHtml =
+      /^<!doctype\s+html/i.test(trimmedBody) ||
+      /^<html[\s>]/i.test(trimmedBody) ||
+      trimmedBody.includes('<body') ||
+      trimmedBody.includes('__next');
     let parsedBody: Record<string, unknown> | null = null;
-    if (rawBody) {
+    if (rawBody && !looksLikeHtml) {
       try {
         parsedBody = JSON.parse(rawBody) as Record<string, unknown>;
       } catch {
@@ -70,7 +76,7 @@ const handleResponse = async <T>(response: Response): Promise<T> => {
     const message =
       String(parsedBody?.error || '').trim() ||
       String(parsedBody?.message || '').trim() ||
-      String(rawBody || '').trim() ||
+      (looksLikeHtml ? '' : String(rawBody || '').trim()) ||
       `Request failed (${response.status})`;
 
     const error = new Error(details ? `${message}: ${details}` : message) as Error & { status?: number };

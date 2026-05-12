@@ -26,8 +26,10 @@ let lastFailureAt = 0;
 let lastFailureMessage: string | null = null;
 
 const resolveSupabaseUrl = () => process.env.SUPABASE_URL || '';
+const isPostgresConnectionString = (value: unknown) => /^postgres(?:ql)?:\/\//i.test(String(value || '').trim());
 const resolveDbProvider = () => {
   const explicit = String(process.env.DB_PROVIDER || '').trim().toLowerCase();
+  if (isPostgresConnectionString(explicit)) return 'postgres';
   if (explicit === 'postgres' || explicit === 'pg' || explicit === 'neon') return 'postgres';
   if (explicit === 'supabase') return 'supabase';
 

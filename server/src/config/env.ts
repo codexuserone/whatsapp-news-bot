@@ -11,9 +11,12 @@ const isProd = process.env.NODE_ENV === 'production';
 const defaultPort = process.env.PORT || 10000;
 const baseUrl =
   process.env.BASE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${defaultPort}`;
-const dbProvider = String(process.env.DB_PROVIDER || '').trim().toLowerCase();
+const isPostgresConnectionString = (value: unknown) => /^postgres(?:ql)?:\/\//i.test(String(value || '').trim());
+const dbProviderRaw = String(process.env.DB_PROVIDER || '').trim();
+const dbProvider = isPostgresConnectionString(dbProviderRaw) ? 'postgres' : dbProviderRaw.toLowerCase();
 const hasPostgresUrl = Boolean(
   String(
+    (isPostgresConnectionString(dbProviderRaw) ? dbProviderRaw : '') ||
     process.env.DATABASE_URL ||
     process.env.NEON_DATABASE_URL ||
     process.env.POSTGRES_URL ||
@@ -28,13 +31,14 @@ const hasSupabaseCredentials = Boolean(
 );
 
 const resolveActiveDatabaseUrl = () => {
+  const providerUrl = isPostgresConnectionString(dbProviderRaw) ? dbProviderRaw : '';
   if (dbProvider === 'neon') {
-    return process.env.NEON_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
+    return providerUrl || process.env.NEON_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
   }
   if (dbProvider === 'postgres') {
-    return process.env.POSTGRES_URL || process.env.DATABASE_URL || process.env.NEON_DATABASE_URL || process.env.SUPABASE_DB_URL;
+    return providerUrl || process.env.POSTGRES_URL || process.env.DATABASE_URL || process.env.NEON_DATABASE_URL || process.env.SUPABASE_DB_URL;
   }
-  return process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.NEON_DATABASE_URL || process.env.SUPABASE_DB_URL;
+  return providerUrl || process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.NEON_DATABASE_URL || process.env.SUPABASE_DB_URL;
 };
 
 const env = {

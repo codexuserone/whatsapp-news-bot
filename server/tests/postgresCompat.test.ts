@@ -57,6 +57,17 @@ describe('postgresCompat query builder', () => {
     expect(resolvePostgresConnectionString()).toBe('postgresql://render-postgres/db');
   });
 
+  it('treats an accidental DB_PROVIDER connection string as the active Postgres URL', () => {
+    process.env.DB_PROVIDER = 'postgresql://provider-url/db';
+    process.env.POSTGRES_URL = 'postgresql://render-postgres/db';
+    process.env.DATABASE_URL = 'postgresql://legacy-database/db';
+    process.env.NEON_DATABASE_URL = 'postgresql://neon/db';
+
+    const { resolvePostgresConnectionString } = require('../src/db/postgresCompat');
+
+    expect(resolvePostgresConnectionString()).toBe('postgresql://provider-url/db');
+  });
+
   it('prefers Neon over POSTGRES_URL when DB_PROVIDER is neon', () => {
     process.env.DB_PROVIDER = 'neon';
     process.env.POSTGRES_URL = 'postgresql://render-postgres/db';

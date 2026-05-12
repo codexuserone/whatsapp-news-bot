@@ -74,6 +74,19 @@ let pgCircuitOpenUntil = 0;
 let pgLastFailureAt = 0;
 let pgLastFailureMessage: string | null = null;
 
+const isPostgresConnectionString = (value: unknown) => /^postgres(?:ql)?:\/\//i.test(String(value || '').trim());
+
+const getDbProviderConnectionString = () => {
+  const rawProvider = String(process.env.DB_PROVIDER || '').trim();
+  return isPostgresConnectionString(rawProvider) ? rawProvider : '';
+};
+
+const getNormalizedDbProvider = () => {
+  const rawProvider = String(process.env.DB_PROVIDER || '').trim().toLowerCase();
+  if (isPostgresConnectionString(rawProvider)) return 'postgres';
+  return rawProvider;
+};
+
 const POSTGRES_CIRCUIT_BREAKER_MS = Math.max(
   5000,
   Math.floor(Number(process.env.POSTGRES_CIRCUIT_BREAKER_MS || process.env.SUPABASE_CIRCUIT_BREAKER_MS || 45_000))
@@ -107,10 +120,12 @@ const preferIpv4 = () => {
 };
 
 const resolvePostgresConnectionString = () => {
-  const provider = String(process.env.DB_PROVIDER || '').trim().toLowerCase();
+  const provider = getNormalizedDbProvider();
+  const providerUrl = getDbProviderConnectionString();
   const candidates =
     provider === 'neon'
       ? [
+          providerUrl,
           process.env.NEON_DATABASE_URL,
           process.env.POSTGRES_URL,
           process.env.DATABASE_URL,
@@ -119,13 +134,15 @@ const resolvePostgresConnectionString = () => {
         ]
       : provider === 'postgres'
         ? [
+            providerUrl,
             process.env.POSTGRES_URL,
             process.env.DATABASE_URL,
             process.env.NEON_DATABASE_URL,
             process.env.SUPABASE_POOLER_URL,
             process.env.SUPABASE_DB_URL
           ]
-      : [
+        : [
+          providerUrl,
           process.env.DATABASE_URL,
           process.env.POSTGRES_URL,
           process.env.NEON_DATABASE_URL,

@@ -310,10 +310,13 @@ const runMigrations = async () => {
   preferIpv4();
   loadEnv();
 
-  const provider = String(process.env.DB_PROVIDER || '').trim().toLowerCase();
+  const rawProvider = String(process.env.DB_PROVIDER || '').trim();
+  const providerUrl = /^postgres(?:ql)?:\/\//i.test(rawProvider) ? rawProvider : '';
+  const provider = providerUrl ? 'postgres' : rawProvider.toLowerCase();
   const databaseUrlCandidates =
     provider === 'neon'
       ? [
+          ['DB_PROVIDER', providerUrl],
           ['NEON_DATABASE_URL', process.env.NEON_DATABASE_URL],
           ['POSTGRES_URL', process.env.POSTGRES_URL],
           ['DATABASE_URL', process.env.DATABASE_URL],
@@ -321,12 +324,14 @@ const runMigrations = async () => {
         ]
       : provider === 'postgres'
         ? [
+            ['DB_PROVIDER', providerUrl],
             ['POSTGRES_URL', process.env.POSTGRES_URL],
             ['DATABASE_URL', process.env.DATABASE_URL],
             ['NEON_DATABASE_URL', process.env.NEON_DATABASE_URL],
             ['SUPABASE_DB_URL', process.env.SUPABASE_DB_URL]
           ]
         : [
+            ['DB_PROVIDER', providerUrl],
             ['SUPABASE_DB_URL', process.env.SUPABASE_DB_URL],
             ['DATABASE_URL', process.env.DATABASE_URL],
             ['POSTGRES_URL', process.env.POSTGRES_URL],

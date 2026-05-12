@@ -84,13 +84,16 @@ const resolveAuthStateDbUrl = () => {
     return explicitPoolerUrl;
   }
 
-  const provider = String(process.env.DB_PROVIDER || '').trim().toLowerCase();
+  const rawProvider = String(process.env.DB_PROVIDER || '').trim();
+  const isProviderUrl = /^postgres(?:ql)?:\/\//i.test(rawProvider);
+  const provider = isProviderUrl ? 'postgres' : rawProvider.toLowerCase();
+  const providerUrl = isProviderUrl ? rawProvider : '';
   const configuredUrl =
     provider === 'neon'
-      ? String(process.env.NEON_DATABASE_URL || process.env.POSTGRES_URL || process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || '').trim()
+      ? String(providerUrl || process.env.NEON_DATABASE_URL || process.env.POSTGRES_URL || process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || '').trim()
       : provider === 'postgres'
-        ? String(process.env.POSTGRES_URL || process.env.DATABASE_URL || process.env.NEON_DATABASE_URL || process.env.SUPABASE_DB_URL || '').trim()
-      : String(process.env.SUPABASE_DB_URL || process.env.NEON_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL || '').trim();
+        ? String(providerUrl || process.env.POSTGRES_URL || process.env.DATABASE_URL || process.env.NEON_DATABASE_URL || process.env.SUPABASE_DB_URL || '').trim()
+      : String(providerUrl || process.env.SUPABASE_DB_URL || process.env.NEON_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL || '').trim();
   if (!configuredUrl) return '';
 
   try {

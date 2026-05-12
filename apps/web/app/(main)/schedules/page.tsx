@@ -834,7 +834,7 @@ const SchedulesPage = () => {
                   <p className="text-xs text-muted-foreground">Use this only if you want manual review before sending.</p>
                 </div>
                 <Button type="button" variant="ghost" size="sm" onClick={() => setShowAdvancedOptions((current) => !current)}>
-                  {showAdvancedOptions ? 'Hide approval' : 'Set approval'}
+                  {showAdvancedOptions ? 'Hide review option' : 'Review before send'}
                 </Button>
               </div>
 

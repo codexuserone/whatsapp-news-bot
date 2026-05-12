@@ -1,14 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { Feed, LogEntry, QueueStats, Schedule, Target, Template } from '@/lib/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '@/components/ui/table';
-import { Rss, Layers, Target as TargetIcon, CalendarClock, ArrowRight, Send } from 'lucide-react';
+import { Rss, Layers, Target as TargetIcon, CalendarClock, ArrowRight } from 'lucide-react';
 
 type DeliveryAnalytics = {
   window_hours?: number;
@@ -25,7 +25,6 @@ type DeliveryAnalytics = {
 };
 
 const OverviewPage = () => {
-  const queryClient = useQueryClient();
   const { data: feeds = [] } = useQuery<Feed[]>({ queryKey: ['feeds'], queryFn: () => api.get('/api/feeds') });
   const { data: templates = [] } = useQuery<Template[]>({ queryKey: ['templates'], queryFn: () => api.get('/api/templates') });
   const { data: targets = [] } = useQuery<Target[]>({ queryKey: ['targets'], queryFn: () => api.get('/api/targets') });
@@ -40,14 +39,6 @@ const OverviewPage = () => {
     queryKey: ['delivery-analytics'],
     queryFn: () => api.get('/api/analytics/delivery?window_hours=24'),
     refetchInterval: 30000
-  });
-
-  const dispatchAll = useMutation({
-    mutationFn: () => api.post('/api/schedules/dispatch-all'),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['logs'] });
-      queryClient.invalidateQueries({ queryKey: ['queue'] });
-    }
   });
 
   const stats = [
@@ -125,15 +116,6 @@ const OverviewPage = () => {
                 <CalendarClock className="mr-2 h-4 w-4" />
                 Create Schedule
               </Link>
-            </Button>
-            <Button
-              variant="outline"
-              className="justify-start"
-              onClick={() => dispatchAll.mutate()}
-              disabled={dispatchAll.isPending}
-            >
-              <Send className="mr-2 h-4 w-4" />
-              Dispatch All
             </Button>
           </CardContent>
         </Card>

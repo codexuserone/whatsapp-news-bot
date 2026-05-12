@@ -64,6 +64,10 @@ type DeleteFeedResponse = {
 
 const normalizeOptionalText = (value: unknown) => String(value ?? '').trim();
 
+const normalizeComparableUrl = (value: unknown) => normalizeOptionalText(value).replace(/\/+$/, '');
+
+const isHttpUrl = (value: unknown) => /^https?:\/\//i.test(normalizeOptionalText(value));
+
 const buildParseConfigPayload = (value: FeedFormValues['parse_config'] | undefined) => {
   if (!value) return null as Record<string, string> | null;
   const entries = Object.entries(value)
@@ -179,9 +183,18 @@ const FeedsPage = () => {
     mutationFn: ({ feedId, payload }: { feedId: string | null; payload: FeedFormValues }) => {
       const parse_config = buildParseConfigPayload(payload.parse_config);
       const cleaning = buildCleaningPayload(payload.cleaning);
+      const sourceUrl = normalizeOptionalText(testResult?.sourceUrl);
+      const originalCheckedUrl = normalizeOptionalText(testResult?.discoveredFromUrl);
+      const saveUrl =
+        sourceUrl &&
+        isHttpUrl(sourceUrl) &&
+        originalCheckedUrl &&
+        normalizeComparableUrl(originalCheckedUrl) === normalizeComparableUrl(payload.url)
+          ? sourceUrl
+          : payload.url;
       const body: Record<string, unknown> = {
         name: payload.name,
-        url: payload.url,
+        url: saveUrl,
         ...(payload.type ? { type: payload.type } : {}),
         fetch_interval: payload.fetch_interval,
         ...(parse_config ? { parse_config } : {}),
@@ -292,6 +305,14 @@ const FeedsPage = () => {
         result.detectedType === 'html'
       ) {
         form.setValue('type', result.detectedType);
+      }
+      if (
+        result.sourceUrl &&
+        result.discoveredFromUrl &&
+        isHttpUrl(result.sourceUrl) &&
+        normalizeComparableUrl(result.sourceUrl) !== normalizeComparableUrl(url)
+      ) {
+        form.setValue('url', result.sourceUrl);
       }
     } catch (error: unknown) {
       setTestResult({ error: getErrorMessage(error) || 'Failed to test feed' });

@@ -44,6 +44,7 @@ const normalizePhoneForKey = (type: string, phoneNumber: string) => {
 const isPlaceholderChannelName = (name: unknown) => /^channel[\s_-]*\d+$/i.test(String(name || '').trim());
 const isRawChannelJidLabel = (name: unknown) => String(name || '').trim().toLowerCase().includes('@newsletter');
 const hasOnlyDigitsAndSeparators = (name: unknown) => /^[\d\s._-]{6,}$/.test(String(name || '').trim());
+const isAutoSyncedTargetType = (type: string) => type === 'group' || type === 'channel' || type === 'status';
 const buildChannelFallbackName = (phoneNumber: unknown) => {
   const digits = String(phoneNumber || '').replace(/\D/g, '');
   const suffix = digits.length >= 4 ? digits.slice(-4) : '';
@@ -213,6 +214,7 @@ const sanitizeStoredTargets = async (supabase: ReturnType<typeof getSupabaseClie
           : normalizedPhone;
       const safeName = normalizedName || fallbackName;
       if (normalizeDisplayText(row.name) !== safeName) patch.name = safeName;
+      if (isAutoSyncedTargetType(computedType) && row.active !== true) patch.active = true;
     }
 
     if (Object.keys(patch).length) {
@@ -228,6 +230,7 @@ const sanitizeStoredTargets = async (supabase: ReturnType<typeof getSupabaseClie
     } else {
       const fallbackName = computedType === 'status' ? 'My Status' : normalizedPhone;
       row.name = normalizedName || fallbackName;
+      if (isAutoSyncedTargetType(computedType)) row.active = true;
     }
   }
 };
@@ -326,7 +329,8 @@ const targetRoutes = () => {
       payload: {
         ...payload,
         type: computedType,
-        phone_number: normalizedPhone
+        phone_number: normalizedPhone,
+        active: isAutoSyncedTargetType(computedType) ? true : payload.active !== false
       }
     };
   };
@@ -395,6 +399,18 @@ const targetRoutes = () => {
 
   router.delete('/:id', async (req: Request, res: Response) => {
     try {
+      const { data: existing, error: existingError } = await getDb()
+        .from('targets')
+        .select('id,type,phone_number')
+        .eq('id', req.params.id)
+        .single();
+      if (existingError) throw existingError;
+      const type = normalizeTargetType(existing?.type, existing?.phone_number);
+      if (isAutoSyncedTargetType(type)) {
+        return res.status(409).json({
+          error: 'Synced WhatsApp destinations cannot be deleted here. Remove them in WhatsApp or let automatic sync update them.'
+        });
+      }
       const { error } = await getDb()
         .from('targets')
         .delete()

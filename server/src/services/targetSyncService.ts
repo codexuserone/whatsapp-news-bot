@@ -236,13 +236,14 @@ const syncTargetsFromWhatsApp = async (
     deactivated += 1;
   }
 
-  // Keep valid saved channels even when WhatsApp cannot return a friendly display name.
-  // Channel inventory from linked-device sessions is partial, so name quality is not proof
-  // that the destination is unusable.
+  // Keep valid saved channels available even when WhatsApp cannot return a friendly
+  // display name on this pass. Channel inventory from linked-device sessions can be
+  // partial, so the app should not hide a known-good channel from the operator.
   for (const row of Array.from(canonicalByKey.values())) {
-    if (row.type !== 'channel' || row.active !== true) continue;
+    if (row.type !== 'channel') continue;
     const normalizedJid = normalizeChannelJid(String(row.phone_number || '').trim());
     if (!normalizedJid || !normalizedJid.toLowerCase().includes('@newsletter')) {
+      if (row.active !== true) continue;
       const { error: deactivateError } = await supabase
         .from('targets')
         .update({ active: false })
@@ -250,6 +251,16 @@ const syncTargetsFromWhatsApp = async (
       if (deactivateError) throw deactivateError;
       row.active = false;
       deactivated += 1;
+      continue;
+    }
+    if (row.active !== true) {
+      const { error: reactivateError } = await supabase
+        .from('targets')
+        .update({ active: true })
+        .eq('id', row.id);
+      if (reactivateError) throw reactivateError;
+      row.active = true;
+      updated += 1;
     }
   }
 

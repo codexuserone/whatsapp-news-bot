@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { Schedule, Target, WhatsAppStatus } from '@/lib/types';
 import { dedupeTargets } from '@/lib/targetUtils';
@@ -10,9 +10,8 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHeaderCell } from '@/components/ui/table';
-import { Target as TargetIcon, Users, Radio, MessageSquare, AlertTriangle, Loader2 } from 'lucide-react';
+import { Target as TargetIcon, Users, Radio, MessageSquare, AlertTriangle, Loader2, CheckCircle2 } from 'lucide-react';
 
 const TYPE_BADGES: Record<
   Target['type'],
@@ -24,16 +23,7 @@ const TYPE_BADGES: Record<
   status: { label: 'Status', variant: 'warning', icon: Radio }
 };
 
-type TargetPayload = {
-  name: string;
-  phone_number: string;
-  type: Target['type'];
-  active: boolean;
-  notes?: string | null;
-};
-
 const TargetsPage = () => {
-  const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | Target['type']>('all');
 
@@ -56,11 +46,6 @@ const TargetsPage = () => {
   });
 
   const isConnected = waStatus?.status === 'connected';
-
-  const updateTarget = useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: TargetPayload }) => api.put(`/api/targets/${id}`, payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['targets'] })
-  });
 
   const visibleTargets = React.useMemo(() => dedupeTargets(targets, { activeOnly: false }), [targets]);
 
@@ -103,25 +88,12 @@ const TargetsPage = () => {
     status: visibleTargets.filter((target) => target.type === 'status').length
   };
 
-  const updateActive = (target: Target, active: boolean) => {
-    updateTarget.mutate({
-      id: target.id,
-      payload: {
-        name: target.name,
-        phone_number: target.phone_number,
-        type: target.type,
-        active,
-        notes: target.notes || null
-      }
-    });
-  };
-
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Destinations</h1>
         <p className="text-muted-foreground">
-          Groups, channels, private recipients, and Status are discovered from the connected WhatsApp account.
+          Groups, channels, and Status are synced from WhatsApp automatically.
         </p>
       </div>
 
@@ -134,7 +106,7 @@ const TargetsPage = () => {
             <div className="flex-1">
               <h3 className="font-medium">WhatsApp not connected</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                Connect WhatsApp once. Destinations will sync here automatically.
+                Connect WhatsApp once. Groups, channels, and Status will appear here automatically.
               </p>
               <Button variant="outline" size="sm" className="mt-3" asChild>
                 <Link href="/whatsapp">Open WhatsApp</Link>
@@ -198,23 +170,18 @@ const TargetsPage = () => {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHeaderCell className="w-24">Available</TableHeaderCell>
                     <TableHeaderCell>Name</TableHeaderCell>
                     <TableHeaderCell>Type</TableHeaderCell>
+                    <TableHeaderCell className="hidden sm:table-cell">Source</TableHeaderCell>
                     <TableHeaderCell className="hidden lg:table-cell">Used by</TableHeaderCell>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredTargets.map((target) => {
                     const usedBy = targetUsageById.get(target.id) || [];
+                    const isAutoSynced = target.type === 'group' || target.type === 'channel' || target.type === 'status';
                     return (
                       <TableRow key={target.id}>
-                        <TableCell>
-                          <Checkbox
-                            checked={target.active}
-                            onCheckedChange={(checked) => updateActive(target, checked === true)}
-                          />
-                        </TableCell>
                         <TableCell className="font-medium">
                           <div className="min-w-0">
                             <p className="truncate">{target.name}</p>
@@ -226,6 +193,12 @@ const TargetsPage = () => {
                             {TYPE_BADGES[target.type]?.label || target.type}
                           </Badge>
                         </TableCell>
+                        <TableCell className="hidden sm:table-cell">
+                          <Badge variant={target.active ? 'success' : 'secondary'} className="gap-1">
+                            {target.active ? <CheckCircle2 className="h-3 w-3" /> : null}
+                            {isAutoSynced ? 'Synced' : target.active ? 'Saved' : 'Unavailable'}
+                          </Badge>
+                        </TableCell>
                         <TableCell className="hidden max-w-[300px] text-xs lg:table-cell">
                           {usedBy.length ? (
                             <div className="space-y-1">
@@ -235,9 +208,9 @@ const TargetsPage = () => {
                           ) : target.type === 'status' ? (
                             <span className="text-muted-foreground">Status destination</span>
                           ) : target.active ? (
-                            <span className="text-warning-foreground">Not selected in a running schedule</span>
+                            <span className="text-muted-foreground">Ready</span>
                           ) : (
-                            <span className="text-muted-foreground">Off</span>
+                            <span className="text-muted-foreground">Unavailable</span>
                           )}
                         </TableCell>
                       </TableRow>

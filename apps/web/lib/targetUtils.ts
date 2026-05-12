@@ -186,12 +186,13 @@ export const dedupeTargets = (targets: Array<Partial<Target>>, options?: { activ
 
   for (const target of targets || []) {
     if (!target) continue;
-    if (activeOnly && target.active !== true) continue;
 
     const rawPhone = normalizeDisplayText(target.phone_number);
     const type = inferTargetType(target.type, rawPhone);
     const phone = normalizePhoneByType(type, rawPhone).toLowerCase();
     if (!phone) continue;
+    const isAutoSynced = type === 'group' || type === 'channel' || type === 'status';
+    if (activeOnly && target.active !== true && !isAutoSynced) continue;
     const name = normalizeTargetName(target.name, type, phone);
 
     const key = `${type}:${phone}`;
@@ -200,7 +201,7 @@ export const dedupeTargets = (targets: Array<Partial<Target>>, options?: { activ
       name: name || (type === 'status' ? 'My Status' : type === 'channel' ? buildChannelFallbackName(phone) : phone),
       phone_number: phone,
       type,
-      active: target.active === true,
+      active: target.active === true || isAutoSynced,
       notes: target.notes || null
     };
 

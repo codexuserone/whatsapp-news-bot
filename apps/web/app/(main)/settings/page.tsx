@@ -32,20 +32,10 @@ const schema = z.object({
   app_name: z.string().min(1),
   app_paused: z.boolean().default(false),
   default_timezone: z.string().min(1),
-  log_retention_days: z.coerce.number().min(1),
   message_delay_ms: z.coerce.number().min(0),
-  max_retries: z.coerce.number().min(0).max(50),
-  defaultInterTargetDelaySec: z.coerce.number().min(0),
-  defaultIntraTargetDelaySec: z.coerce.number().min(0),
   post_send_edit_window_minutes: z.coerce.number().min(1).max(WHATSAPP_EDIT_MAX_MINUTES),
   post_send_correction_window_minutes: z.coerce.number().min(1).max(CORRECTION_SCAN_MAX_MINUTES),
-  processingTimeoutMinutes: z.coerce.number().min(5),
   dedupeThreshold: optionalNumberInput(z.number().min(0).max(1)),
-  authRetentionDays: z.coerce.number().min(1).max(3650),
-  initial_fetch_limit: z.coerce.number().min(1).max(50),
-  max_pending_age_hours: z.coerce.number().min(1).max(336),
-  send_timeout_ms: z.coerce.number().min(10000).max(180000),
-  reconcile_queue_lookback_hours: z.coerce.number().min(1).max(168),
   status_audience_mode: z.enum(['auto', 'explicit']).default('auto'),
   status_audience_jids: z.string().max(12000).default(''),
   status_test_audience_jids: z.string().max(12000).default(''),
@@ -62,6 +52,7 @@ const schema = z.object({
 });
 
 type SettingsFormValues = z.infer<typeof schema>;
+type SettingsSavePayload = SettingsFormValues & Record<string, unknown>;
 
 type SaveNotice =
   | { kind: 'success'; message: string }
@@ -98,6 +89,20 @@ const SEND_PACE_OPTIONS = [
   { label: 'Careful', value: 5000, description: 'Adds more space between messages.' }
 ];
 
+const SYSTEM_SETTING_KEYS = [
+  'log_retention_days',
+  'max_retries',
+  'defaultInterTargetDelaySec',
+  'defaultIntraTargetDelaySec',
+  'processingTimeoutMinutes',
+  'authRetentionDays',
+  'initial_fetch_limit',
+  'max_pending_age_hours',
+  'send_timeout_ms',
+  'reconcile_queue_lookback_hours',
+  'retentionDays'
+] as const;
+
 const formatStatusAudienceText = (value: unknown) =>
   Array.from(
     new Set(
@@ -121,29 +126,28 @@ const toSettingsFormValues = (settings?: Partial<BackendSettings> | null): Setti
   app_name: String(settings?.app_name || 'WhatsApp News Bot'),
   app_paused: settings?.app_paused === true,
   default_timezone: String(settings?.default_timezone || 'UTC'),
-  log_retention_days: Number(settings?.log_retention_days ?? settings?.retentionDays ?? 30),
   message_delay_ms: Number(settings?.message_delay_ms ?? 2000),
-  max_retries: Number(settings?.max_retries ?? 3),
-  defaultInterTargetDelaySec: Number(settings?.defaultInterTargetDelaySec ?? 8),
-  defaultIntraTargetDelaySec: Number(settings?.defaultIntraTargetDelaySec ?? 3),
   post_send_edit_window_minutes: Number(settings?.post_send_edit_window_minutes ?? 15),
   post_send_correction_window_minutes: Number(settings?.post_send_correction_window_minutes ?? 15),
-  processingTimeoutMinutes: Number(settings?.processingTimeoutMinutes ?? 30),
   dedupeThreshold:
     settings?.dedupeThreshold == null
       ? undefined
       : Number(settings.dedupeThreshold),
-  authRetentionDays: Number(settings?.authRetentionDays ?? 60),
-  initial_fetch_limit: Number(settings?.initial_fetch_limit ?? 20),
-  max_pending_age_hours: Number(settings?.max_pending_age_hours ?? 48),
-  send_timeout_ms: Number(settings?.send_timeout_ms ?? 45000),
-  reconcile_queue_lookback_hours: Number(settings?.reconcile_queue_lookback_hours ?? 12),
   status_audience_mode: settings?.status_audience_mode === 'explicit' ? 'explicit' : 'auto',
   status_audience_jids: formatStatusAudienceText(settings?.status_audience_jids || ''),
   status_test_audience_jids: formatStatusAudienceText(settings?.status_test_audience_jids || ''),
   status_include_group_participants: settings?.status_include_group_participants !== false,
   status_include_sender: settings?.status_include_sender !== false
 });
+
+const preserveSystemSettings = (settings?: Partial<BackendSettings> | null): Record<string, unknown> => {
+  if (!settings) return {};
+  return Object.fromEntries(
+    SYSTEM_SETTING_KEYS
+      .filter((key) => settings[key] !== undefined)
+      .map((key) => [key, settings[key]])
+  );
+};
 
 const SettingsPage = () => {
   const queryClient = useQueryClient();
@@ -191,8 +195,8 @@ const SettingsPage = () => {
     }
   }, []);
 
-  const saveSettings = useMutation<BackendSettings, Error, SettingsFormValues>({
-    mutationFn: (payload: SettingsFormValues) => api.put<BackendSettings>('/api/settings', payload),
+  const saveSettings = useMutation<BackendSettings, Error, SettingsSavePayload>({
+    mutationFn: (payload) => api.put<BackendSettings>('/api/settings', payload),
     onSuccess: async (data) => {
       const nextValues = toSettingsFormValues(data);
       queryClient.setQueryData(['settings'], data);
@@ -259,6 +263,7 @@ const SettingsPage = () => {
     );
 
     saveSettings.mutate({
+      ...preserveSystemSettings(settings),
       ...values,
       post_send_edit_window_minutes: editWindow,
       post_send_correction_window_minutes: correctionWindow

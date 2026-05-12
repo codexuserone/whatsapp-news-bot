@@ -2,10 +2,12 @@ import fs from 'fs';
 import path from 'path';
 
 const root = process.cwd();
+const ignoredDirs = new Set(['.git', '.next', 'node_modules', 'dist', 'build', 'coverage']);
 
 const walk = (dir, exts) => {
   const out = [];
   for (const name of fs.readdirSync(dir)) {
+    if (ignoredDirs.has(name)) continue;
     const full = path.join(dir, name);
     const st = fs.statSync(full);
     if (st.isDirectory()) {

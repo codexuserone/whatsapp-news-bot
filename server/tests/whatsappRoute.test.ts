@@ -36,10 +36,36 @@ describe('whatsapp route test-send logging', () => {
     });
   });
 
-  it('requires server ACKs for status test-send confirmation', () => {
+  it('accepts local upsert confirmation for completed status test-send relays', () => {
     expect(__testUtils.resolveTestSendConfirmationOptions('status@broadcast', 'video')).toEqual({
       upsertTimeoutMs: 30000,
       ackTimeoutMs: 60000,
+      requireServerAck: false,
+      failureGraceMs: 15000
+    });
+  });
+
+  it('requires server ACKs for status test-send confirmation when the relay timed out', () => {
+    expect(
+      __testUtils.resolveTestSendConfirmationOptions('status@broadcast', 'video', { relayTimedOut: true })
+    ).toEqual({
+      upsertTimeoutMs: 30000,
+      ackTimeoutMs: 60000,
+      requireServerAck: true,
+      failureGraceMs: 15000
+    });
+  });
+
+  it('uses the same completed-relay status confirmation policy for direct status broadcasts', () => {
+    expect(__testUtils.resolveStatusBroadcastConfirmationOptions(false, { key: { id: 'status-1' } })).toEqual({
+      upsertTimeoutMs: 5000,
+      ackTimeoutMs: 60000,
+      requireServerAck: false,
+      failureGraceMs: 15000
+    });
+    expect(__testUtils.resolveStatusBroadcastConfirmationOptions(true, { relayTimedOut: true })).toEqual({
+      upsertTimeoutMs: 30000,
+      ackTimeoutMs: 90000,
       requireServerAck: true,
       failureGraceMs: 15000
     });
@@ -55,7 +81,7 @@ describe('whatsapp route test-send logging', () => {
     ).toEqual({
       upsertTimeoutMs: 30000,
       ackTimeoutMs: 60000,
-      requireServerAck: true,
+      requireServerAck: false,
       failureGraceMs: 15000,
       ignoredFailureRemoteJids: ['103140015788103:59@lid'],
       acceptIgnoredFailureWithUpsert: true

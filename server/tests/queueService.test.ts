@@ -134,19 +134,24 @@ describe('queueService __testUtils', () => {
     expect(testUtils.buildConnectionWaitErrorMessage('')).toBe('Waiting for WhatsApp connection');
   });
 
-  it('requires server ACKs only for channel and status sends', () => {
+  it('requires server ACKs for channels and timed-out status relays only', () => {
     const mediaResult = {
       media: { type: 'image', url: 'https://example.com/a.jpg', sent: true, error: null }
     };
     const textResult = {
       media: { type: null, url: null, sent: false, error: null }
     };
+    const timedOutStatusResult = {
+      response: { relayTimedOut: true },
+      media: { type: 'image', url: 'https://example.com/a.jpg', sent: true, error: null }
+    };
 
     expect(testUtils.shouldRequireServerAckForSend('channel', mediaResult)).toBe(true);
     expect(testUtils.shouldRequireServerAckForSend('channel', textResult)).toBe(true);
     expect(testUtils.shouldRequireServerAckForSend('group', mediaResult)).toBe(false);
     expect(testUtils.shouldRequireServerAckForSend('individual', textResult)).toBe(false);
-    expect(testUtils.shouldRequireServerAckForSend('status', mediaResult)).toBe(true);
+    expect(testUtils.shouldRequireServerAckForSend('status', mediaResult)).toBe(false);
+    expect(testUtils.shouldRequireServerAckForSend('status', timedOutStatusResult)).toBe(true);
   });
 
   it('confirms channel sends with newsletter fetch when available', async () => {

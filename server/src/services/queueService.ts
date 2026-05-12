@@ -2293,8 +2293,9 @@ const shouldRequireServerAckForSend = (
   targetType: Target['type'] | null | undefined,
   sendResult: SendWithMediaResult | null | undefined
 ) => {
-  void sendResult;
-  return targetType === 'channel' || targetType === 'status';
+  if (targetType === 'channel') return true;
+  if (targetType !== 'status') return false;
+  return sendResult?.response?.relayTimedOut === true;
 };
 
 const resolveNewsletterConfirmFetchTimeoutMs = (sendResult: SendWithMediaResult | null | undefined) =>
@@ -5404,10 +5405,14 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       );
     };
 
-    const ensureSendConfirmed = async (messageId: string | null | undefined, isMedia: boolean, isStatus = false) => {
+    const ensureSendConfirmed = async (
+      messageId: string | null | undefined,
+      isMedia: boolean,
+      isStatus = false,
+      sendResult?: { response?: unknown } | null
+    ) => {
       if (!messageId) return;
       if (activeWhatsappClient.confirmSend) {
-        const requireServerAck = isStatus;
         const failureGraceMs = isStatus
           ? STATUS_FAILURE_GRACE_MS
           : targetRow.type === 'channel'
@@ -5423,6 +5428,10 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
             error: null
           }
         };
+        if (sendResult && typeof sendResult === 'object') {
+          sendResultForConfirmation.response = sendResult.response || sendResultForConfirmation.response;
+        }
+        const requireServerAck = shouldRequireServerAckForSend(targetRow.type, sendResultForConfirmation);
         const ignoredFailureRemoteJids = isStatus ? getStatusOwnDeviceFanoutJids(sendResultForConfirmation) : [];
         const ignoredStatusFailureOptions = ignoredFailureRemoteJids.length
           ? {
@@ -5975,7 +5984,7 @@ const sendQueueLogNow = async (logId: string, whatsappClient?: WhatsAppClient | 
       const messageId = sendResult?.response?.key?.id;
       uncertainWhatsAppMessageId = messageId ? String(messageId) : uncertainWhatsAppMessageId;
       const isMediaConfirmed = Boolean(sendResult?.media?.type) && Boolean(sendResult?.media?.sent);
-      await ensureSendConfirmed(messageId || null, isMediaConfirmed, targetRow.type === 'status');
+      await ensureSendConfirmed(messageId || null, isMediaConfirmed, targetRow.type === 'status', sendResult);
 
       await supabase
         .from('message_logs')

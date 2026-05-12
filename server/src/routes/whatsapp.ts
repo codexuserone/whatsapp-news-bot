@@ -414,7 +414,7 @@ const resolveTestSendConfirmationOptions = (
   const isStatus = String(jid || '').trim() === 'status@broadcast';
   const isChannel = isNewsletterJid(jid);
   const failureGraceMs = isStatus ? STATUS_FAILURE_GRACE_MS : isNewsletterJid(jid) ? 3000 : 0;
-  const requireServerAck = isStatus || isChannel;
+  const requireServerAck = isChannel || (isStatus && sendResult?.relayTimedOut === true);
   const base = hasMedia
     ? { upsertTimeoutMs: 30000, ackTimeoutMs: 60000, requireServerAck, failureGraceMs }
     : { upsertTimeoutMs: 5000, ackTimeoutMs: 15000, requireServerAck, failureGraceMs };
@@ -427,6 +427,17 @@ const resolveTestSendConfirmationOptions = (
     acceptIgnoredFailureWithUpsert: true
   };
 };
+
+const resolveStatusBroadcastConfirmationOptions = (
+  hasMedia: boolean,
+  sendResult?: Record<string, any> | null
+): TestSendConfirmationOptions => ({
+  ...(hasMedia
+    ? { upsertTimeoutMs: 30000, ackTimeoutMs: 90000 }
+    : { upsertTimeoutMs: 5000, ackTimeoutMs: 60000 }),
+  requireServerAck: sendResult?.relayTimedOut === true,
+  failureGraceMs: STATUS_FAILURE_GRACE_MS
+});
 
 const resolveNewsletterConfirmFetchTimeoutMs = (mediaType: string | null) =>
   mediaType ? NEWSLETTER_CONFIRM_FETCH_TIMEOUT_MEDIA_MS : NEWSLETTER_CONFIRM_FETCH_TIMEOUT_TEXT_MS;
@@ -2148,25 +2159,18 @@ const whatsappRoutes = () => {
     const ignoredStatusFailureOptions = ignoredFailureRemoteJids.length
       ? { ignoredFailureRemoteJids, acceptIgnoredFailureWithUpsert: true }
       : {};
+    const confirmationOptions = resolveStatusBroadcastConfirmationOptions(
+      Boolean(normalizedImageUrl || normalizedImageDataUrl || normalizedVideoUrl || normalizedVideoDataUrl),
+      result
+    );
     const confirmation = messageId && whatsapp?.confirmSend
       ? await withTimeout(
           whatsapp.confirmSend(
             messageId,
-            normalizedImageUrl || normalizedImageDataUrl || normalizedVideoUrl || normalizedVideoDataUrl
-              ? {
-                  upsertTimeoutMs: 30000,
-                  ackTimeoutMs: 90000,
-                  requireServerAck: true,
-                  failureGraceMs: STATUS_FAILURE_GRACE_MS,
-                  ...ignoredStatusFailureOptions
-                }
-              : {
-                  upsertTimeoutMs: 5000,
-                  ackTimeoutMs: 60000,
-                  requireServerAck: true,
-                  failureGraceMs: STATUS_FAILURE_GRACE_MS,
-                  ...ignoredStatusFailureOptions
-                }
+            {
+              ...confirmationOptions,
+              ...ignoredStatusFailureOptions
+            }
           ),
           STATUS_CONFIRM_TIMEOUT_MS,
           'Timed out confirming status broadcast'
@@ -2247,6 +2251,7 @@ module.exports.__testUtils = {
   buildTextStatusStyleOptions,
   normalizeConfirmationForOperator,
   resolveTestSendConfirmationOptions,
+  resolveStatusBroadcastConfirmationOptions,
   resolveSendTestTimeoutMs,
   resolveTestSendLogResolution,
   upsertDiscoveredTargets

@@ -68,6 +68,10 @@ describe('authStore', () => {
         delete process.env.POSTGRES_URL;
         delete process.env.SUPABASE_DB_URL;
         delete process.env.DATABASE_URL;
+        delete process.env.POSTGRES_QUERY_RETRIES;
+        delete process.env.POSTGRES_QUERY_RETRY_BASE_MS;
+        delete process.env.AUTH_STATE_QUERY_RETRIES;
+        delete process.env.AUTH_STATE_QUERY_RETRY_BASE_MS;
         mockPgQuery.mockReset();
         mockPgOn.mockReset();
         mockGetSupabaseClient.mockReturnValue(createSupabase());
@@ -210,6 +214,7 @@ describe('authStore', () => {
     it('does not retry Neon quota failures when loading auth state', async () => {
         process.env.DB_PROVIDER = 'neon';
         process.env.NEON_DATABASE_URL = 'postgresql://user:pass@example.com/db';
+        process.env.AUTH_STATE_QUERY_RETRY_BASE_MS = '0';
         mockGetSupabaseClient.mockReturnValue(null);
         mockPgQuery.mockRejectedValue(new Error('Your project has exceeded the data transfer quota. Upgrade your plan to increase limits.'));
 
@@ -217,5 +222,31 @@ describe('authStore', () => {
 
         await expect(useSupabaseAuthState('primary')).rejects.toThrow(/Auth state temporarily unavailable/);
         expect(mockPgQuery).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries transient auth state Postgres connection refusals', async () => {
+        process.env.DB_PROVIDER = 'postgres';
+        process.env.POSTGRES_URL = 'postgresql://render-postgres/db';
+        process.env.AUTH_STATE_QUERY_RETRIES = '2';
+        process.env.AUTH_STATE_QUERY_RETRY_BASE_MS = '0';
+        mockGetSupabaseClient.mockReturnValue(null);
+        mockPgQuery
+            .mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED 10.28.136.81:5432'), { code: 'ECONNREFUSED' }))
+            .mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED 10.28.136.81:5432'), { code: 'ECONNREFUSED' }))
+            .mockResolvedValueOnce({
+                rows: [
+                    {
+                        creds: { registered: true },
+                        lease_owner: null,
+                        lease_expires_at: null
+                    }
+                ]
+            });
+
+        const useSupabaseAuthState = require('../src/whatsapp/authStore');
+        const store = await useSupabaseAuthState('primary');
+
+        expect(store.state.creds).toEqual({ registered: true });
+        expect(mockPgQuery).toHaveBeenCalledTimes(3);
     });
 });

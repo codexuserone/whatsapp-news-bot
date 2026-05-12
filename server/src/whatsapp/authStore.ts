@@ -217,6 +217,35 @@ const isTransientLeaseTransportError = (error: unknown) => {
   ].some((needle) => normalized.includes(needle));
 };
 
+const resolveRetryNumber = (specificKey: string, sharedKey: string, fallback: number) => {
+  const specific = Number(process.env[specificKey]);
+  if (Number.isFinite(specific)) return specific;
+  const shared = Number(process.env[sharedKey]);
+  if (Number.isFinite(shared)) return shared;
+  return fallback;
+};
+
+const getAuthStateQueryRetries = () =>
+  Math.max(0, Math.floor(resolveRetryNumber('AUTH_STATE_QUERY_RETRIES', 'POSTGRES_QUERY_RETRIES', 6)));
+
+const getAuthStateRetryBaseMs = () =>
+  Math.max(0, Math.floor(resolveRetryNumber('AUTH_STATE_QUERY_RETRY_BASE_MS', 'POSTGRES_QUERY_RETRY_BASE_MS', 500)));
+
+const getAuthStateRetryMaxMs = () => {
+  const baseMs = getAuthStateRetryBaseMs();
+  return Math.max(
+    baseMs,
+    Math.floor(resolveRetryNumber('AUTH_STATE_QUERY_RETRY_MAX_MS', 'POSTGRES_QUERY_RETRY_MAX_MS', 5000))
+  );
+};
+
+const getAuthStateRetryDelayMs = (attempt: number) => {
+  const baseMs = getAuthStateRetryBaseMs();
+  if (baseMs <= 0) return 0;
+  const exponentialDelay = baseMs * (2 ** Math.max(attempt - 1, 0));
+  return Math.min(exponentialDelay, getAuthStateRetryMaxMs());
+};
+
 const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<AuthStore> => {
   const { BufferJSON, initAuthCreds } = await loadBaileys();
 
@@ -352,7 +381,7 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
     query: string,
     params: unknown[] = []
   ) => {
-    const maxAttempts = 3;
+    const maxAttempts = getAuthStateQueryRetries() + 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const pool = getAuthStatePool();
       if (!pool) throw new Error('auth_state postgres pool is not configured');
@@ -368,7 +397,10 @@ const useSupabaseAuthState = async (sessionId: string = 'default'): Promise<Auth
           `Transient auth_state Postgres query failure; retrying ${attempt}/${maxAttempts - 1}:`,
           getErrorMessage(error)
         );
-        await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+        const delayMs = getAuthStateRetryDelayMs(attempt);
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
       }
     }
     return [];

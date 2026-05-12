@@ -80,11 +80,15 @@ const POSTGRES_CIRCUIT_BREAKER_MS = Math.max(
 );
 const POSTGRES_QUERY_RETRIES = Math.max(
   0,
-  Math.floor(Number(process.env.POSTGRES_QUERY_RETRIES || 2))
+  Math.floor(Number(process.env.POSTGRES_QUERY_RETRIES || 6))
 );
 const POSTGRES_QUERY_RETRY_BASE_MS = Math.max(
   0,
-  Math.floor(Number(process.env.POSTGRES_QUERY_RETRY_BASE_MS || 250))
+  Math.floor(Number(process.env.POSTGRES_QUERY_RETRY_BASE_MS || 500))
+);
+const POSTGRES_QUERY_RETRY_MAX_MS = Math.max(
+  POSTGRES_QUERY_RETRY_BASE_MS,
+  Math.floor(Number(process.env.POSTGRES_QUERY_RETRY_MAX_MS || 5000))
 );
 
 const preferIpv4 = () => {
@@ -372,6 +376,12 @@ const prepareMutationValue = (table: string, column: string, value: unknown) => 
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const getPostgresRetryDelayMs = (attempt: number) => {
+  if (POSTGRES_QUERY_RETRY_BASE_MS <= 0) return 0;
+  const exponentialDelay = POSTGRES_QUERY_RETRY_BASE_MS * (2 ** Math.max(attempt - 1, 0));
+  return Math.min(exponentialDelay, POSTGRES_QUERY_RETRY_MAX_MS);
+};
+
 const runPostgresQuery = async (
   pool: PgPool,
   sql: string,
@@ -386,7 +396,7 @@ const runPostgresQuery = async (
         throw error;
       }
       attempt += 1;
-      const delayMs = POSTGRES_QUERY_RETRY_BASE_MS * attempt;
+      const delayMs = getPostgresRetryDelayMs(attempt);
       if (delayMs > 0) {
         await sleep(delayMs);
       }

@@ -20,6 +20,7 @@ describe('postgresCompat query builder', () => {
       ...originalEnv,
       DATABASE_URL: 'postgresql://example.com/test',
       DB_PROVIDER: 'postgres',
+      POSTGRES_QUERY_RETRIES: '2',
       POSTGRES_QUERY_RETRY_BASE_MS: '0'
     };
     fakeQuery.mockResolvedValue({ rows: [] });

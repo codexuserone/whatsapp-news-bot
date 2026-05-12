@@ -28,7 +28,15 @@ const main = async () => {
     throw new Error('DATABASE_URL or SUPABASE_DB_URL is required to check migration status.');
   }
 
-  const client = new Client({ connectionString: databaseUrl });
+  const parsedDatabaseUrl = new URL(databaseUrl);
+  const sslRequired =
+    parsedDatabaseUrl.searchParams.get('sslmode') === 'require' ||
+    parsedDatabaseUrl.hostname.endsWith('.render.com') ||
+    parsedDatabaseUrl.hostname.endsWith('.render.com:5432');
+  const client = new Client({
+    connectionString: databaseUrl,
+    ...(sslRequired ? { ssl: { rejectUnauthorized: false } } : {})
+  });
   await client.connect();
 
   try {

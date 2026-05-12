@@ -24,6 +24,10 @@ services:
         sync: false
       - key: POSTGRES_POOL_MAX
         value: "1"
+      - key: POSTGRES_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: POSTGRES_CONNECTION_TIMEOUT_MS
+        value: "15000"
       - key: POSTGRES_QUERY_RETRIES
         value: "20"
       - key: POSTGRES_QUERY_RETRY_BASE_MS
@@ -34,6 +38,10 @@ services:
         value: "5000"
       - key: AUTH_STATE_POOL_MAX
         value: "1"
+      - key: AUTH_STATE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: AUTH_STATE_CONNECTION_TIMEOUT_MS
+        value: "15000"
       - key: AUTH_STATE_QUERY_RETRIES
         value: "20"
       - key: AUTH_STATE_QUERY_RETRY_BASE_MS

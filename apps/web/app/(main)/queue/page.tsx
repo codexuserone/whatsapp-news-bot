@@ -870,7 +870,7 @@ const QueueInner = () => {
 
                     {editing ? (
                       <div className="space-y-2 rounded-md bg-muted p-3">
-                        <p className="text-xs text-muted-foreground">Edit queued content. Recently sent text-only messages can be edited inside WhatsApp's edit window.</p>
+                        <p className="text-xs text-muted-foreground">Edit queued content. Recently sent text-only messages can be edited inside WhatsApp&apos;s edit window.</p>
                         <Textarea
                           value={draftMessage}
                           onChange={(event) => setDraftMessage(event.target.value)}
@@ -1064,7 +1064,7 @@ const QueueInner = () => {
                       {item.correction_error ? <p className="text-[11px] text-warning-foreground">Correction: {item.correction_error}</p> : null}
                       {editing ? (
                         <div className="rounded-md border bg-muted/30 p-2 space-y-2">
-                          <p className="text-[11px] text-muted-foreground">Edit queued content. Recently sent text-only messages can be edited inside WhatsApp's edit window.</p>
+                          <p className="text-[11px] text-muted-foreground">Edit queued content. Recently sent text-only messages can be edited inside WhatsApp&apos;s edit window.</p>
                           <Textarea
                             value={draftMessage}
                             onChange={(event) => setDraftMessage(event.target.value)}

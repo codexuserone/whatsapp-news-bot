@@ -135,6 +135,21 @@ const preferIpv4 = () => {
   }
 };
 
+const resolvePositiveInt = (value: unknown, fallback: number, min = 1_000, max = 120_000) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.max(Math.floor(parsed), min), max);
+};
+
+const getAuthStateIdleTimeoutMs = () =>
+  resolvePositiveInt(process.env.AUTH_STATE_IDLE_TIMEOUT_MS || process.env.POSTGRES_IDLE_TIMEOUT_MS, 30_000);
+
+const getAuthStateConnectionTimeoutMs = () =>
+  resolvePositiveInt(
+    process.env.AUTH_STATE_CONNECTION_TIMEOUT_MS || process.env.POSTGRES_CONNECTION_TIMEOUT_MS,
+    15_000
+  );
+
 const getAuthStatePool = (): InstanceType<typeof Pool> | null => {
   if (authStatePool !== undefined) {
     return authStatePool;
@@ -152,8 +167,8 @@ const getAuthStatePool = (): InstanceType<typeof Pool> | null => {
     connectionString,
     ssl: { rejectUnauthorized: false },
     max: getAuthStatePoolMax(),
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 15_000,
+    idleTimeoutMillis: getAuthStateIdleTimeoutMs(),
+    connectionTimeoutMillis: getAuthStateConnectionTimeoutMs(),
     keepAlive: true
   });
 

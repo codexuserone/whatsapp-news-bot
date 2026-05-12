@@ -107,6 +107,13 @@ const POSTGRES_POOL_MAX = Math.max(
   1,
   Math.floor(Number(process.env.POSTGRES_POOL_MAX || process.env.POSTGRES_MAX_POOL || 2))
 );
+const resolvePositiveInt = (value: unknown, fallback: number, min = 1_000, max = 120_000) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.max(Math.floor(parsed), min), max);
+};
+const POSTGRES_IDLE_TIMEOUT_MS = resolvePositiveInt(process.env.POSTGRES_IDLE_TIMEOUT_MS, 30_000);
+const POSTGRES_CONNECTION_TIMEOUT_MS = resolvePositiveInt(process.env.POSTGRES_CONNECTION_TIMEOUT_MS, 15_000);
 
 const preferIpv4 = () => {
   try {
@@ -173,8 +180,8 @@ const getPostgresPool = (): PgPool | null => {
     connectionString,
     ssl: { rejectUnauthorized: false },
     max: POSTGRES_POOL_MAX,
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 15_000,
+    idleTimeoutMillis: POSTGRES_IDLE_TIMEOUT_MS,
+    connectionTimeoutMillis: POSTGRES_CONNECTION_TIMEOUT_MS,
     keepAlive: true
   });
 

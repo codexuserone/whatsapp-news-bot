@@ -17,10 +17,18 @@ import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
 import { AlertTriangle, Rss, TestTube, Pencil, Trash2, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 
+const FEED_TYPES = ['rss', 'atom', 'json', 'html'] as const;
+type FeedType = (typeof FEED_TYPES)[number];
+
+const normalizeFeedType = (value: unknown): FeedType | undefined => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return (FEED_TYPES as readonly string[]).includes(normalized) ? (normalized as FeedType) : undefined;
+};
+
 const schema = z.object({
   name: z.string().min(1),
   url: z.string().url(),
-  type: z.enum(['rss', 'atom', 'json', 'html']).optional(),
+  type: z.preprocess(normalizeFeedType, z.enum(FEED_TYPES).optional()),
   fetch_interval: z.coerce.number().min(300),
   parse_config: z
     .object({
@@ -192,16 +200,19 @@ const FeedsPage = () => {
         normalizeComparableUrl(originalCheckedUrl) === normalizeComparableUrl(payload.url)
           ? sourceUrl
           : payload.url;
+      const existingFeed = feeds.find((feed) => normalizeComparableUrl(feed.url) === normalizeComparableUrl(saveUrl));
+      const targetFeedId = feedId || existingFeed?.id || null;
+      const normalizedType = normalizeFeedType(payload.type);
       const body: Record<string, unknown> = {
         name: payload.name,
         url: saveUrl,
-        ...(payload.type ? { type: payload.type } : {}),
+        ...(normalizedType ? { type: normalizedType } : {}),
         fetch_interval: payload.fetch_interval,
         ...(parse_config ? { parse_config } : {}),
         ...(cleaning ? { cleaning } : {}),
-        active: active ? Boolean(active.active) : true
+        active: active ? Boolean(active.active) : existingFeed ? Boolean(existingFeed.active) : true
       };
-      return feedId ? api.put<Feed>(`/api/feeds/${feedId}`, body) : api.post<Feed>('/api/feeds', body);
+      return targetFeedId ? api.put<Feed>(`/api/feeds/${targetFeedId}`, body) : api.post<Feed>('/api/feeds', body);
     },
     onSuccess: (savedFeed: Feed) => {
       setSaveError(null);
@@ -294,17 +305,13 @@ const FeedsPage = () => {
         ...(parse_config ? { parse_config } : {}),
         ...(cleaning ? { cleaning } : {})
       });
-      setTestResult(result);
+      const detectedType = normalizeFeedType(result.detectedType);
+      setTestResult({ ...result, detectedType: detectedType || result.detectedType || null });
       if (!form.getValues('name') && result.feedTitle) {
         form.setValue('name', result.feedTitle);
       }
-      if (
-        result.detectedType === 'rss' ||
-        result.detectedType === 'atom' ||
-        result.detectedType === 'json' ||
-        result.detectedType === 'html'
-      ) {
-        form.setValue('type', result.detectedType);
+      if (detectedType) {
+        form.setValue('type', detectedType);
       }
       if (
         result.sourceUrl &&

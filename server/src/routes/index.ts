@@ -20,6 +20,16 @@ const manualRoutes = require('./manual');
 const READY_DB_CACHE_TTL_MS = Math.max(Number(process.env.READY_DB_CACHE_TTL_MS || 30_000), 5_000);
 let readyDbCache: { checkedAtMs: number; ok: boolean; state: unknown } | null = null;
 
+const buildInfo = {
+  commit: String(
+    process.env.RENDER_GIT_COMMIT ||
+      process.env.SOURCE_VERSION ||
+      process.env.GIT_COMMIT ||
+      process.env.COMMIT_SHA ||
+      ''
+  ).trim() || null
+};
+
 const getReadyDbState = async () => {
   const now = Date.now();
   if (readyDbCache && now - readyDbCache.checkedAtMs < READY_DB_CACHE_TTL_MS) {
@@ -38,12 +48,12 @@ const getReadyDbState = async () => {
 const registerRoutes = (app: Express) => {
   const router = express.Router();
 
-  router.get('/health', (_req: Request, res: Response) => res.json({ ok: true }));
-  router.get('/ping', (_req: Request, res: Response) => res.json({ ok: true, uptime: process.uptime() }));
+  router.get('/health', (_req: Request, res: Response) => res.json({ ok: true, build: buildInfo }));
+  router.get('/ping', (_req: Request, res: Response) => res.json({ ok: true, uptime: process.uptime(), build: buildInfo }));
 
   // Keep these probe endpoints in sync with middleware/publicProbePaths.ts
-  router.get('/api/health', (_req: Request, res: Response) => res.json({ ok: true }));
-  router.get('/api/ping', (_req: Request, res: Response) => res.json({ ok: true, uptime: process.uptime() }));
+  router.get('/api/health', (_req: Request, res: Response) => res.json({ ok: true, build: buildInfo }));
+  router.get('/api/ping', (_req: Request, res: Response) => res.json({ ok: true, uptime: process.uptime(), build: buildInfo }));
   router.get('/ready', async (req: Request, res: Response) => {
     const dbReady = await getReadyDbState();
     const dbOk = dbReady.ok;
@@ -53,7 +63,8 @@ const registerRoutes = (app: Express) => {
       ok: dbOk && whatsappOk,
       db: dbOk,
       dbState: dbReady.state,
-      whatsapp: whatsappStatus?.status || 'unknown'
+      whatsapp: whatsappStatus?.status || 'unknown',
+      build: buildInfo
     });
   });
 

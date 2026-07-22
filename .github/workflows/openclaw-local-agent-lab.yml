@@ -1,0 +1,210 @@
+name: OpenClaw Local Agent Lab
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local-agent-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    env:
+      OLLAMA_HOST: 127.0.0.1:11434
+      OLLAMA_CONTEXT_LENGTH: "32768"
+      OLLAMA_KEEP_ALIVE: "60m"
+      OLLAMA_API_KEY: ollama-local
+      OPENCLAW_STATE_DIR: ${{ github.workspace }}/.openclaw-state
+      OPENCLAW_CONFIG_PATH: ${{ github.workspace }}/.openclaw-state/openclaw.json
+      NO_COLOR: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Prepare benchmark workspace
+        run: |
+          set -euo pipefail
+          mkdir -p evidence lab/bugfix lab/organize/inbox "$OPENCLAW_STATE_DIR"
+          python -m pip install --quiet pytest
+          node --version | tee evidence/node-version.txt
+          python --version | tee evidence/python-version.txt
+          free -h | tee evidence/memory-before.txt
+          lscpu > evidence/cpu.txt
+
+      - name: Install OpenClaw
+        run: |
+          set -o pipefail
+          npm install -g openclaw@latest 2>&1 | tee evidence/openclaw-install.log
+          openclaw --version | tee evidence/openclaw-version.txt
+          openclaw --help > evidence/openclaw-help.txt
+
+      - name: Install and start Ollama
+        run: |
+          set -o pipefail
+          curl -fsSL https://ollama.com/install.sh | sh 2>&1 | tee evidence/ollama-install.log
+          nohup ollama serve > evidence/ollama-serve.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then break; fi
+            sleep 2
+          done
+          ollama --version | tee evidence/ollama-version.txt
+
+      - name: Pull local tool-capable model
+        run: |
+          set -o pipefail
+          ollama pull qwen3:4b 2>&1 | tee evidence/model-pull.log
+          ollama list | tee evidence/model-list.txt
+          curl -fsS http://127.0.0.1:11434/api/show -d '{"model":"qwen3:4b"}' > evidence/model-show.json
+
+      - name: Configure OpenClaw for local-only operation
+        run: |
+          set -euo pipefail
+          cat > "$OPENCLAW_CONFIG_PATH" <<JSON
+          {
+            "agents": {
+              "defaults": {
+                "workspace": "${GITHUB_WORKSPACE}/lab",
+                "model": { "primary": "ollama/qwen3:4b" },
+                "localModelLean": true,
+                "thinkingDefault": "off"
+              }
+            },
+            "tools": {
+              "allow": ["read", "write", "edit", "exec"],
+              "exec": { "mode": "full" }
+            }
+          }
+          JSON
+          openclaw config validate 2>&1 | tee evidence/config-validate.txt
+          openclaw models list --provider ollama --json > evidence/models-list.json 2> evidence/models-list.stderr
+          openclaw models status --json > evidence/models-status.json 2> evidence/models-status.stderr
+
+      - name: Verify local inference before agent tasks
+        run: |
+          set +e
+          timeout 600 openclaw infer model run --local --model ollama/qwen3:4b --prompt "Reply with exactly: LOCAL_MODEL_READY" --json > evidence/infer-smoke.json 2> evidence/infer-smoke.stderr
+          echo "$?" > evidence/infer-smoke.exit
+          cat evidence/infer-smoke.json || true
+          cat evidence/infer-smoke.stderr || true
+          exit 0
+
+      - name: Build autonomous bug-fix challenge
+        run: |
+          cat > lab/bugfix/inventory.py <<'PY'
+          from pathlib import Path
+
+          def summarize(rows):
+              totals = {}
+              for row in rows:
+                  sku = row["sku"]
+                  totals[sku] = totals.get(sku, "0") + row["quantity"]
+              return totals
+
+          def write_summary(totals, output):
+              Path(output).write_text("\n".join(f"{sku},{qty}" for sku, qty in totals.items()))
+          PY
+          cat > lab/bugfix/test_inventory.py <<'PY'
+          from inventory import summarize, write_summary
+
+          def test_summarize_combines_numeric_quantities():
+              assert summarize([
+                  {"sku": "A", "quantity": "2"},
+                  {"sku": "B", "quantity": "4"},
+                  {"sku": "A", "quantity": "3"},
+              ]) == {"A": 5, "B": 4}
+
+          def test_summarize_rejects_invalid_quantity():
+              try:
+                  summarize([{"sku": "A", "quantity": "oops"}])
+              except ValueError as exc:
+                  assert "quantity" in str(exc).lower()
+              else:
+                  raise AssertionError("Expected ValueError")
+
+          def test_write_summary_is_sorted_and_has_final_newline(tmp_path):
+              target = tmp_path / "summary.csv"
+              write_summary({"B": 4, "A": 5}, target)
+              assert target.read_text() == "A,5\nB,4\n"
+          PY
+          cat > lab/bugfix/TASK.md <<'MD'
+          Repair production code only. Preserve public function names. Run the tests, diagnose failures, edit the implementation, and keep testing until every test passes. Create AGENT_REPORT.md with the diagnosis, edits, and final verification.
+          MD
+
+      - name: Run autonomous bug-fix agent
+        run: |
+          set +e
+          timeout 1500 openclaw agent --local --message "Work autonomously on the bugfix directory inside your workspace. Read TASK.md, inspect the files, run the tests, diagnose every failure, edit production code only, rerun tests until all pass, and create AGENT_REPORT.md. Do not merely explain or propose a plan. Use the provided tools and finish the task." --json > evidence/bugfix-agent.json 2> evidence/bugfix-agent.stderr
+          echo "$?" > evidence/bugfix-agent.exit
+          (cd lab/bugfix && python -m pytest -q) > evidence/bugfix-final-tests.txt 2>&1
+          echo "$?" > evidence/bugfix-final-tests.exit
+          find lab/bugfix -maxdepth 2 -type f -print -exec sed -n '1,260p' {} \; > evidence/bugfix-final-files.txt
+          exit 0
+
+      - name: Build autonomous file-organization challenge
+        run: |
+          printf 'Invoice 1001\nAmount: 45\n' > lab/organize/inbox/invoice-1001.txt
+          cp lab/organize/inbox/invoice-1001.txt lab/organize/inbox/copy-of-invoice.txt
+          printf 'Meeting notes\nAction: call supplier\n' > lab/organize/inbox/notes-random.txt
+          printf '{"customer":"Ada","status":"open"}\n' > lab/organize/inbox/customer-record.json
+          printf 'not really a jpeg\n' > lab/organize/inbox/photo.jpg
+          cat > lab/organize/TASK.md <<'MD'
+          Organize inbox into sensible subdirectories. Inspect actual contents rather than trusting extensions. Detect exact duplicates by SHA-256, preserve one canonical copy, move duplicates to quarantine, and never delete data. Create manifest.csv with original path, final path, SHA-256, size, and classification. Verify counts and hashes, then create ORGANIZATION_REPORT.md describing decisions and checks.
+          MD
+
+      - name: Run autonomous organization agent
+        run: |
+          set +e
+          timeout 1500 openclaw agent --local --message "Work autonomously on the organize directory inside your workspace. Read TASK.md and complete it. Inspect file contents, use terminal and filesystem tools, calculate and verify hashes and counts, move files safely, create manifest.csv, and write ORGANIZATION_REPORT.md. Do not stop at a plan." --json > evidence/organize-agent.json 2> evidence/organize-agent.stderr
+          echo "$?" > evidence/organize-agent.exit
+          find lab/organize -maxdepth 5 -type f -printf '%p\t%s bytes\n' | sort > evidence/organize-final-tree.txt
+          (cd lab/organize && sha256sum $(find . -type f -not -path './.git/*' | sort)) > evidence/organize-final-hashes.txt 2>&1 || true
+          exit 0
+
+      - name: Build final evidence summary
+        if: always()
+        run: |
+          set +e
+          free -h > evidence/memory-after.txt
+          ollama ps > evidence/ollama-ps.txt 2>&1
+          cp -a "$OPENCLAW_STATE_DIR" evidence/openclaw-state || true
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          evidence = Path("evidence")
+          def read(name):
+              path = evidence / name
+              return path.read_text(errors="replace").strip() if path.exists() else "MISSING"
+
+          summary = {
+              "openclaw_version": read("openclaw-version.txt"),
+              "ollama_version": read("ollama-version.txt"),
+              "model_list": read("model-list.txt"),
+              "infer_smoke_exit": read("infer-smoke.exit"),
+              "bugfix_agent_exit": read("bugfix-agent.exit"),
+              "bugfix_tests_exit": read("bugfix-final-tests.exit"),
+              "bugfix_tests": read("bugfix-final-tests.txt"),
+              "bugfix_report_created": Path("lab/bugfix/AGENT_REPORT.md").exists(),
+              "organize_agent_exit": read("organize-agent.exit"),
+              "organize_report_created": Path("lab/organize/ORGANIZATION_REPORT.md").exists(),
+              "manifest_created": Path("lab/organize/manifest.csv").exists(),
+          }
+          evidence.joinpath("SUMMARY.json").write_text(json.dumps(summary, indent=2))
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Upload complete benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-local-agent-lab-evidence
+          path: |
+            evidence
+            lab
+          retention-days: 3

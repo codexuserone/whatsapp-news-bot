@@ -1,0 +1,1 @@
+[Temporary Qwen3 model relay](https://v5.airtableusercontent.com/v3/u/55/55/1784779200000/7mp8KBGfRKwUx9KxikyEQw/694_CBJ3qB1NS499Jh1uZivHLXWSwgQ1W98hu8w2c435yNIAix7beEHHGsH3DWDYfTu1DtConlL1VEUbiTK7-psBL5oNZhKXWM3fXYYUHzVTqR0ZrlUB9rWd3aOGxDibXTHcOfwHndtRvUNIHAlr1A/hSNpnby24yfaUe8iOyRjTV6z1aBV5e63sQyWRpWh21M)

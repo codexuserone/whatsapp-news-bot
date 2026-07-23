@@ -1,0 +1,23 @@
+name: Runner Probe
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Probe runner
+        run: |
+          uname -a
+          echo RUNNER_OK > runner-ok.txt
+      - name: Upload probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-probe
+          path: runner-ok.txt

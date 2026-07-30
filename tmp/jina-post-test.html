@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>Jina POST test</title><pre id="out">Loading</pre><script>
+(async()=>{
+  const form=new FormData();
+  form.append('url','https://www.bethrivkah.edu/summer');
+  form.append('injectPageScript',`document.body.insertAdjacentHTML('afterbegin','<div id="jina-test">INJECTED_MARKER</div>')`);
+  form.append('timeout','30');
+  form.append('noCache','true');
+  const r=await fetch('https://r.jina.ai/',{method:'POST',body:form,headers:{'Accept':'text/plain'}});
+  document.getElementById('out').textContent=await r.text();
+})().catch(e=>document.getElementById('out').textContent='ERROR '+e.stack);
+</script>

@@ -1,0 +1,46 @@
+name: Temporary Beth Rivkah PR Runner
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tmp/run-beth-rivkah-live-photos.txt'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install browser and image tools
+        run: |
+          python -m pip install --disable-pip-version-check playwright requests pillow
+          python -m playwright install --with-deps chromium
+
+      - name: Extract current live gallery and download originals
+        shell: bash
+        run: |
+          awk '
+            /python - <<'"'"'PY'"'"'/ { capture=1; next }
+            capture && /^          PY$/ { exit }
+            capture { sub(/^          /, ""); print }
+          ' .github/workflows/temp-beth-rivkah-live-photos.yml > /tmp/beth_rivkah_live.py
+          test -s /tmp/beth_rivkah_live.py
+          python /tmp/beth_rivkah_live.py
+
+      - name: Upload finished ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Beth_Rivkah_Summer_Photos
+          path: Beth_Rivkah_Summer_Photos/
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 1

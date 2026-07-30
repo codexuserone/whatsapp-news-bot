@@ -1,0 +1,186 @@
+name: Temporary Beth Rivkah photo download
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/temp-beth-rivkah-photos.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-photo-zip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check requests pillow
+
+      - name: Download and validate gallery photos
+        shell: bash
+        run: |
+          python - <<'PY'
+          import html
+          import io
+          import json
+          import re
+          import shutil
+          import sys
+          import time
+          from pathlib import Path
+          from urllib.parse import quote
+
+          import requests
+          from PIL import Image
+
+          PAGE = 'https://www.bethrivkah.edu/summer'
+          OUT = Path('Beth_Rivkah_Summer_Photos')
+          OUT.mkdir(exist_ok=True)
+
+          fallback = [
+              ('e6fd16_b938708ce74e4b928c025206606658fd~mv2.jpg', 'SBP09851'),
+              ('e6fd16_c0b3ac96bb07491dbd0f1069bcca6463~mv2.jpg', 'SBP09838'),
+              ('e6fd16_acb181fe61bf42b6a90d278482fd3761~mv2.jpg', 'SBP09446'),
+              ('e6fd16_f2d72a339f4445c499623a388f438daa~mv2.jpg', 'SBP09433'),
+              ('e6fd16_72480f046bc7422ab21c52c66d3cb46f~mv2.jpg', 'SBP09431'),
+              ('e6fd16_c5257c66bcaf44db83a8ca565b9c55ff~mv2.jpg', 'SBP09345'),
+              ('e6fd16_6fe4c7bc419d41508c9322b2efe65ba1~mv2.jpg', 'SBP09341'),
+              ('e6fd16_d157f1a21c784dc6941cd3b1d2986669~mv2.jpg', 'SBP09336'),
+              ('e6fd16_b2f4049c3a6d4577867cdf2fbf70118e~mv2.jpg', 'SBP09264'),
+              ('e6fd16_a6dafeb04e6d4e628369acf71fea5860~mv2.jpg', 'SBP09191'),
+              ('e6fd16_185f0164cb2540c29f07aa27a54c23cb~mv2.jpg', 'SBP09072'),
+              ('e6fd16_3d05633e5dbb4b39809a9499404a3aaf~mv2.jpg', 'SBP09064'),
+              ('e6fd16_85de8d94dfc548b8b41fc02dae7cd0bf~mv2.jpg', 'SBP09061'),
+              ('e6fd16_f8b0b3aba7894b5e90dc37f464373155~mv2.jpg', 'SBP09057'),
+              ('e6fd16_3d822b011f9142939fcbde05ac02756e~mv2.jpg', 'SBP08946'),
+              ('e6fd16_5fb6c84f88474bbebb85783a32eba01a~mv2.jpg', 'SBP08789'),
+              ('e6fd16_80ae9b6bb112476a9883a0546666929d~mv2.jpg', 'SBP08369'),
+              ('e6fd16_8e887c6728af4a1ab8435495f59a7dad~mv2.jpg', 'SBP08365'),
+              ('e6fd16_3b6ca75b9f70430f8e21d5bb72df11ee~mv2.jpg', 'SBP08357'),
+              ('e6fd16_9d3476b5f7174be7b11eca37c466e02c~mv2.jpg', 'SBP08354'),
+              ('e6fd16_ee0a147e272e4eaea56de6889e7348de~mv2.jpg', 'SBP08351'),
+              ('e6fd16_c78e3520f25c45d8830968d5aceba979~mv2.jpg', 'SBP08346'),
+              ('e6fd16_a4e2eaf34a3748d4bfb284712b9f833e~mv2.jpg', 'SBP08342'),
+              ('e6fd16_bc92649827aa40098c730fdc1054389d~mv2.jpg', 'SBP08337'),
+              ('e6fd16_fd9f6f9e9b8b4c7fbeb7a48b4e450925~mv2.jpg', 'SBP08336'),
+              ('e6fd16_8ad3eb4e3a7944128a0ef8887e85ab47~mv2.jpg', 'SBP08331'),
+              ('e6fd16_b851ab587d6f4f8fa0473b025f12b62a~mv2.jpg', 'SBP08326'),
+              ('e6fd16_4fec67c1b5f14ff5aebe5e9d036cb17a~mv2.jpg', 'SBP08320'),
+              ('e6fd16_95ad18eaa54941ae87baf6cffa1fe516~mv2.jpg', 'SBP08319'),
+          ]
+
+          session = requests.Session()
+          session.headers.update({
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150 Safari/537.36',
+              'Referer': PAGE,
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+          })
+
+          discovered = []
+          try:
+              response = session.get(PAGE, timeout=45)
+              response.raise_for_status()
+              source = html.unescape(response.text).replace('\\/', '/')
+
+              # Gallery items are serialized with an SBP title close to each Wix media URI.
+              candidates = []
+              for match in re.finditer(r'e6fd16_[0-9a-f]+~mv2\.jpg', source, re.I):
+                  media_id = match.group(0)
+                  around = source[max(0, match.start()-1200):match.end()+1200]
+                  titles = re.findall(r'SBP\d{5}', around, re.I)
+                  if titles:
+                      distance_title = min(titles, key=lambda t: abs(around.find(t) - 1200))
+                      candidates.append((media_id, distance_title.upper()))
+
+              seen = set()
+              for item in candidates:
+                  if item[0] not in seen:
+                      seen.add(item[0])
+                      discovered.append(item)
+
+              # Prefer the exact 29 gallery entries only when page parsing is decisive.
+              if len(discovered) != 29:
+                  print(f'Page parser found {len(discovered)} titled image IDs, using verified 29-item fallback list.')
+                  discovered = fallback
+              else:
+                  print('Discovered all 29 gallery images from the live page.')
+          except Exception as exc:
+              print(f'Live page discovery failed ({exc!r}); using verified 29-item fallback list.')
+              discovered = fallback
+
+          def fetch_image(media_id: str) -> bytes:
+              origin = f'static.wixstatic.com/media/{media_id}'
+              urls = [
+                  f'https://images.weserv.nl/?url={quote(origin, safe="/:~")}&w=2400&output=jpg&q=92',
+                  f'https://static.wixstatic.com/media/{media_id}/v1/fit/w_2400,h_1800,q_92/{media_id}',
+                  f'https://static.wixstatic.com/media/{media_id}',
+              ]
+              errors = []
+              for url in urls:
+                  for attempt in range(3):
+                      try:
+                          r = session.get(url, timeout=90)
+                          if r.status_code != 200:
+                              raise RuntimeError(f'HTTP {r.status_code}')
+                          data = r.content
+                          with Image.open(io.BytesIO(data)) as image:
+                              image.verify()
+                          with Image.open(io.BytesIO(data)) as image:
+                              if image.width < 600 or image.height < 400:
+                                  raise RuntimeError(f'image too small: {image.size}')
+                              # Normalize all output to standard high-quality JPEG.
+                              image = image.convert('RGB')
+                              target = io.BytesIO()
+                              image.save(target, format='JPEG', quality=92, optimize=True)
+                              return target.getvalue()
+                      except Exception as exc:
+                          errors.append(f'{url} attempt {attempt+1}: {exc}')
+                          time.sleep(1.5 * (attempt + 1))
+              raise RuntimeError('; '.join(errors))
+
+          manifest = []
+          for index, (media_id, title) in enumerate(discovered, 1):
+              safe_title = re.sub(r'[^A-Za-z0-9_-]+', '_', title).strip('_') or f'photo_{index:02d}'
+              filename = f'{index:02d}_{safe_title}.jpg'
+              print(f'[{index:02d}/29] Downloading {filename}')
+              data = fetch_image(media_id)
+              (OUT / filename).write_bytes(data)
+              manifest.append({
+                  'number': index,
+                  'filename': filename,
+                  'title': title,
+                  'wix_media_id': media_id,
+                  'bytes': len(data),
+              })
+
+          files = sorted(OUT.glob('*.jpg'))
+          if len(files) != 29:
+              raise SystemExit(f'Expected 29 JPEG files, created {len(files)}')
+
+          # Verify every file again after writing it to disk.
+          for path in files:
+              with Image.open(path) as image:
+                  image.load()
+                  if image.width < 600 or image.height < 400:
+                      raise SystemExit(f'Invalid image dimensions for {path}: {image.size}')
+
+          (OUT / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+          total = sum(path.stat().st_size for path in files)
+          print(f'Validated 29 photos, total JPEG size {total / 1024 / 1024:.1f} MB')
+          PY
+
+      - name: Upload completed photo ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Beth_Rivkah_Summer_Photos
+          path: Beth_Rivkah_Summer_Photos/
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 1

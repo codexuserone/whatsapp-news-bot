@@ -1,0 +1,286 @@
+name: Temporary Beth Rivkah Live Photos
+
+on:
+  push:
+    paths:
+      - '.github/workflows/temp-beth-rivkah-live-photos.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install browser and image tools
+        run: |
+          python -m pip install --disable-pip-version-check playwright requests pillow
+          python -m playwright install --with-deps chromium
+
+      - name: Extract current live gallery and download originals
+        shell: bash
+        run: |
+          python - <<'PY'
+          import html as html_lib
+          import io
+          import json
+          import re
+          import time
+          from pathlib import Path
+          from urllib.parse import quote
+
+          import requests
+          from PIL import Image
+          from playwright.sync_api import sync_playwright
+
+          PAGE_URL = 'https://www.bethrivkah.edu/summer'
+          OUT = Path('Beth_Rivkah_Summer_Photos')
+          OUT.mkdir(exist_ok=True)
+
+          def title_near(source, start, end):
+              chunk = source[max(0, start - 2500):min(len(source), end + 2500)]
+              matches = list(re.finditer(r'SBP\d{5}', chunk, re.I))
+              if not matches:
+                  return None
+              center = start - max(0, start - 2500)
+              best = min(matches, key=lambda m: abs(m.start() - center))
+              return best.group(0).upper()
+
+          found = []
+          resource_ids = []
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True)
+              page = browser.new_page(viewport={'width': 1440, 'height': 1000}, device_scale_factor=1)
+
+              def remember_response(response):
+                  m = re.search(r'(e6fd16_[0-9a-f]+~mv2\.jpg)', response.url, re.I)
+                  if m:
+                      resource_ids.append(m.group(1))
+
+              page.on('response', remember_response)
+              page.goto(PAGE_URL, wait_until='domcontentloaded', timeout=120000)
+              page.wait_for_timeout(12000)
+
+              source = html_lib.unescape(page.content()).replace('\\/', '/')
+              print(f'Loaded live page HTML: {len(source):,} characters')
+
+              # The Wix component state normally serializes all gallery items in order.
+              matches = list(re.finditer(r'e6fd16_[0-9a-f]+~mv2\.jpg', source, re.I))
+              for match in matches:
+                  media_id = match.group(0)
+                  title = title_near(source, match.start(), match.end())
+                  if title and not any(existing[0] == media_id for existing in found):
+                      found.append((media_id, title))
+
+              print(f'Found {len(found)} titled unique media IDs in live DOM state')
+
+              # If Wix did not expose all items in the initial state, advance through the slideshow.
+              seen_states = set()
+              for step in range(45):
+                  page.wait_for_timeout(900)
+                  state = page.evaluate("""
+                  () => {
+                    const visible = el => {
+                      const r = el.getBoundingClientRect();
+                      const s = getComputedStyle(el);
+                      return r.width > 1 && r.height > 1 && s.visibility !== 'hidden' && s.display !== 'none';
+                    };
+                    const images = [...document.querySelectorAll('img')]
+                      .filter(visible)
+                      .map(img => ({
+                        src: img.currentSrc || img.src || '',
+                        alt: img.alt || '',
+                        title: img.title || ''
+                      }));
+                    const count = (document.body.innerText.match(/\b\d+\/29\b/) || [null])[0];
+                    return {images, count};
+                  }
+                  """)
+                  key = json.dumps(state, sort_keys=True)
+                  if key not in seen_states:
+                      seen_states.add(key)
+                      print(f'Carousel state {step + 1}: {state.get("count")}, {len(state.get("images", []))} visible images')
+
+                  for image in state.get('images', []):
+                      text = f"{image.get('alt','')} {image.get('title','')}"
+                      title_match = re.search(r'SBP\d{5}', text, re.I)
+                      id_match = re.search(r'e6fd16_[0-9a-f]+~mv2\.jpg', image.get('src', ''), re.I)
+                      if title_match and id_match:
+                          pair = (id_match.group(0), title_match.group(0).upper())
+                          if not any(existing[0] == pair[0] for existing in found):
+                              found.append(pair)
+
+                  if len(found) >= 29:
+                      break
+
+                  clicked = False
+                  selectors = [
+                      '[data-hook="nav-arrow-next"]',
+                      '[data-hook*="next" i]',
+                      'button[aria-label*="next" i]',
+                      '[role="button"][aria-label*="next" i]',
+                      '[title*="next" i]'
+                  ]
+                  for selector in selectors:
+                      locator = page.locator(selector)
+                      for idx in range(locator.count()):
+                          candidate = locator.nth(idx)
+                          try:
+                              if candidate.is_visible():
+                                  candidate.click(timeout=2500, force=True)
+                                  clicked = True
+                                  break
+                          except Exception:
+                              pass
+                      if clicked:
+                          break
+
+                  if not clicked:
+                      # Use the gallery counter to find the nearest right-side clickable control.
+                      clicked = page.evaluate("""
+                      () => {
+                        const nodes = [...document.querySelectorAll('*')];
+                        let counter = nodes.find(el => /^\d+\/29$/.test((el.textContent || '').trim()));
+                        if (!counter) return false;
+                        let root = counter;
+                        for (let level = 0; level < 10 && root; level++, root = root.parentElement) {
+                          const controls = [...root.querySelectorAll('button,[role="button"],[tabindex="0"]')]
+                            .filter(el => {
+                              const r = el.getBoundingClientRect();
+                              return r.width > 4 && r.height > 4 && getComputedStyle(el).display !== 'none';
+                            });
+                          if (controls.length >= 2) {
+                            controls.sort((a,b) => b.getBoundingClientRect().right - a.getBoundingClientRect().right);
+                            controls[0].click();
+                            return true;
+                          }
+                        }
+                        return false;
+                      }
+                      """)
+
+                  if not clicked:
+                      page.keyboard.press('ArrowRight')
+
+              # Network resources may include items without currently visible alt text. Pair them from source context.
+              for media_id in resource_ids:
+                  if any(existing[0] == media_id for existing in found):
+                      continue
+                  pos = source.find(media_id)
+                  if pos >= 0:
+                      title = title_near(source, pos, pos + len(media_id))
+                      if title:
+                          found.append((media_id, title))
+
+              browser.close()
+
+          # Deduplicate by title and media ID while preserving the live gallery order.
+          clean = []
+          seen_ids = set()
+          seen_titles = set()
+          for media_id, title in found:
+              if media_id in seen_ids or title in seen_titles:
+                  continue
+              seen_ids.add(media_id)
+              seen_titles.add(title)
+              clean.append((media_id, title))
+
+          print('Extracted candidates:')
+          for index, pair in enumerate(clean, 1):
+              print(index, pair)
+
+          if len(clean) != 29:
+              raise SystemExit(f'Expected exactly 29 current gallery photos, extracted {len(clean)}. Refusing to create an incomplete ZIP.')
+
+          session = requests.Session()
+          session.headers.update({
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150 Safari/537.36',
+              'Referer': PAGE_URL,
+              'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          })
+
+          manifest = []
+          for index, (media_id, title) in enumerate(clean, 1):
+              filename = f'{index:02d}_{title}.jpg'
+              target = OUT / filename
+              direct = f'https://static.wixstatic.com/media/{media_id}'
+              proxy = f'https://images.weserv.nl/?url={quote("static.wixstatic.com/media/" + media_id, safe="/:~")}&output=jpg&q=95'
+              transformed = f'https://static.wixstatic.com/media/{media_id}/v1/fit/w_5000,h_5000,q_95/{media_id}'
+              attempts = [direct, transformed, proxy]
+              errors = []
+              payload = None
+
+              for url in attempts:
+                  for attempt in range(3):
+                      try:
+                          response = session.get(url, timeout=120)
+                          if response.status_code != 200:
+                              raise RuntimeError(f'HTTP {response.status_code}')
+                          data = response.content
+                          with Image.open(io.BytesIO(data)) as image:
+                              image.load()
+                              width, height = image.size
+                              if width < 900 or height < 600:
+                                  raise RuntimeError(f'Unexpectedly small image {image.size}')
+                              if image.format not in {'JPEG', 'PNG', 'WEBP'}:
+                                  raise RuntimeError(f'Unexpected image format {image.format}')
+                          payload = data
+                          print(f'[{index:02d}/29] {filename}: {width}x{height}, {len(data)/1024/1024:.2f} MB')
+                          break
+                      except Exception as exc:
+                          errors.append(f'{url} try {attempt + 1}: {exc}')
+                          time.sleep(1.5 * (attempt + 1))
+                  if payload is not None:
+                      break
+
+              if payload is None:
+                  raise SystemExit('Failed to download ' + filename + '\n' + '\n'.join(errors))
+
+              # Normalize non-JPEG responses while retaining their full dimensions.
+              with Image.open(io.BytesIO(payload)) as image:
+                  image.load()
+                  width, height = image.size
+                  if image.format == 'JPEG':
+                      target.write_bytes(payload)
+                  else:
+                      image.convert('RGB').save(target, 'JPEG', quality=95, optimize=True)
+
+              manifest.append({
+                  'number': index,
+                  'filename': filename,
+                  'title': title,
+                  'wix_media_id': media_id,
+                  'width': width,
+                  'height': height,
+                  'bytes': target.stat().st_size,
+              })
+
+          photos = sorted(OUT.glob('*.jpg'))
+          if len(photos) != 29:
+              raise SystemExit(f'Expected 29 files, created {len(photos)}')
+
+          for photo in photos:
+              with Image.open(photo) as image:
+                  image.verify()
+
+          (OUT / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+          total = sum(photo.stat().st_size for photo in photos)
+          print(f'Finished and verified 29 current photos. Total: {total / 1024 / 1024:.1f} MB')
+          PY
+
+      - name: Upload finished ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Beth_Rivkah_Summer_Photos
+          path: Beth_Rivkah_Summer_Photos/
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 1
